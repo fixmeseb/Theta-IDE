@@ -37,6 +37,7 @@ if str(PROJECT_ROOT / "src") not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from src.app.dataset_utils import DatasetWriter
+from src.usr.eval.competency_tiers import fit_tiered_gaussians, sample_rows
 
 META_COLS = [
     "feature_recordID", "answerID", "time", "userID", "problem",
@@ -62,11 +63,7 @@ def fit_gmm_for_problem(norm_states, feat_cols, p_low=35, p_high=92, sample_size
     feat_cols = list(feat_cols)
     feat_indices = [feat_cols.index(f) for f in CLUSTER_FEATS if f in feat_cols]
     used_names = [feat_cols[i] for i in feat_indices]
-
-    rng = np.random.default_rng(42)
-    n_samples = len(norm_states)
-    idx = rng.choice(n_samples, size=min(sample_size, n_samples), replace=False)
-    X_feat = norm_states[idx][:, feat_indices]
+    X_feat = sample_rows(norm_states, feat_indices, sample_size)
 
     # Composite competency metric: accuracy + error recovery - hint reliance - step time
     # Weights aligned with feature positions
@@ -88,41 +85,10 @@ def fit_gmm_for_problem(norm_states, feat_cols, p_low=35, p_high=92, sample_size
         else:
             score_parts.append(0.5 * X_feat[:, i])
 
-    scores = np.sum(score_parts, axis=0)
-    p_l = np.percentile(scores, p_low)
-    p_h = np.percentile(scores, p_high)
-
-    labels = np.zeros(len(scores), dtype=int)
-    labels[scores > p_l] = 1
-    labels[scores > p_h] = 2
-
-    n_feats = len(feat_indices)
-    means = np.zeros((3, n_feats))
-    covariances = np.zeros((3, n_feats, n_feats))
-    weights = np.zeros(3)
-
-    for k in range(3):
-        X_k = X_feat[labels == k]
-        if len(X_k) == 0:
-            means[k] = np.zeros(n_feats)
-            covariances[k] = np.eye(n_feats)
-            weights[k] = 1.0 / 3.0
-        else:
-            means[k] = X_k.mean(axis=0)
-            covariances[k] = np.cov(X_k, rowvar=False) + 1e-4 * np.eye(n_feats)
-            weights[k] = len(X_k) / len(X_feat)
-
-    precisions = np.array([np.linalg.inv(c) for c in covariances])
-    log_dets = np.array([np.linalg.slogdet(c)[1] for c in covariances])
-    log_weights = np.log(weights + 1e-12)
-
+    model = fit_tiered_gaussians(X_feat, np.sum(score_parts, axis=0), p_low, p_high)
+    labels = model.pop("labels")
     return {
-        "means": means,
-        "covariances": covariances,
-        "precisions": precisions,
-        "log_dets": log_dets,
-        "log_weights": log_weights,
-        "weights": weights,
+        **model,
         "feature_indices": np.array(feat_indices),
         "feature_names": np.array(used_names),
         "X_sub": X_feat,

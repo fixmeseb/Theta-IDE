@@ -112,6 +112,18 @@ def available_metrics(run):
     return {key for m in run["metrics"] for key, value in m.items() if key != "step" and value is not None}
 
 
+def run_name(run):
+    """The name a run is listed under: the experiment ID the backend wrote results to, or the demo name."""
+    return run["config"]["name"] if run["simulated"] else run["backend"]["experiment_id"]
+
+
+# Format of episode rewards in cards, tables and the run picker.
+REWARD_FORMAT = ".1f"
+# Chart series colours, in the order they are assigned (legacy palette values the theme maps to its roles).
+SERIES_COLORS = ("#b8bb26", "#83a598", "#fabd2f", "#d3869b", "#8ec07c")
+BASELINE_COLOR = "#d3869b"  # pinned baseline run
+
+
 def latest(run, key):
     """The most recent non-missing value of a metric, or None."""
     return next((m[key] for m in reversed(run["metrics"]) if m.get(key) is not None), None)

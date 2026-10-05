@@ -11,6 +11,7 @@ import torch
 from lightning.pytorch.callbacks import Callback, ModelCheckpoint
 from lightning.pytorch.loggers import CSVLogger, TensorBoardLogger
 from omegaconf import DictConfig, OmegaConf
+from src.app.pipeline import runtime
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +38,7 @@ class SaveInitialCheckpointCallback(Callback):
         except Exception as e:
             logger.debug("Unexpected error getting Hydra original cwd (%s), using os.getcwd()", e)
             base_root = os.getcwd()
-        parent_ckpt_root = os.path.join(base_root, "results/checkpoints", self.cfg.group, self.cfg.experiment_id)
+        parent_ckpt_root = os.path.join(base_root, runtime.CHECKPOINTS_DIR, self.cfg.group, self.cfg.experiment_id)
         os.makedirs(parent_ckpt_root, exist_ok=True)
         named_ckpt = os.path.join(parent_ckpt_root, f"{self.cfg.agent.name}.ckpt")
         if os.path.exists(init_ckpt):
@@ -96,7 +97,7 @@ def infer_dynamic_timesteps(cfg):
 
 
 def setup_loggers(cfg, base_root):
-    log_dir = os.path.join(base_root, "results/logs", cfg.group, cfg.experiment_id)
+    log_dir = os.path.join(base_root, runtime.LOGS_DIR, cfg.group, cfg.experiment_id)
     loggers = [CSVLogger(log_dir, name=cfg.agent.name)]
 
     use_tb = False
@@ -106,7 +107,7 @@ def setup_loggers(cfg, base_root):
         use_tb = bool(cfg.agent.tensorboard)
 
     if use_tb:
-        tb_dir = os.path.join(base_root, "results/tensorboard", cfg.group, cfg.experiment_id)
+        tb_dir = os.path.join(base_root, runtime.TENSORBOARD_DIR, cfg.group, cfg.experiment_id)
         tb_logger = TensorBoardLogger(tb_dir, name=cfg.agent.name, default_hp_metric=False)
         _ = tb_logger.experiment
         loggers.append(tb_logger)
@@ -143,7 +144,7 @@ def build_trainer(cfg, model=None):
             trial_id = str(HydraConfig.get().job.num)
         except Exception as e:
             logger.debug("Could not inspect Hydra job num: %s", e)
-    ckpt_dir = os.path.join(base_root, "results/checkpoints", cfg.group, cfg.experiment_id, cfg.agent.name, trial_id)
+    ckpt_dir = os.path.join(base_root, runtime.CHECKPOINTS_DIR, cfg.group, cfg.experiment_id, cfg.agent.name, trial_id)
 
     def graceful_shutdown(signum, frame):
         print(f"\n[SIGTERM] Received termination signal {signum}. Attempting graceful shutdown...")
@@ -362,7 +363,7 @@ def finalize_training(trainer, cfg, ckpt_dir, training_time, start_time, end_tim
 
     try:
         atomic_yaml_save(cfg, os.path.join(ckpt_dir, "config.yaml"))
-        exp_ckpt_root = os.path.join("results/checkpoints", cfg.group, cfg.experiment_id)
+        exp_ckpt_root = os.path.join(runtime.CHECKPOINTS_DIR, cfg.group, cfg.experiment_id)
         os.makedirs(exp_ckpt_root, exist_ok=True)
         atomic_yaml_save(cfg, os.path.join(exp_ckpt_root, "config.yaml"))
 
@@ -395,7 +396,7 @@ def finalize_training(trainer, cfg, ckpt_dir, training_time, start_time, end_tim
             except Exception as e:
                 logger.warning("Failed to save/flush logger %s: %s", lg, e)
 
-    exp_log_root = os.path.join("results/logs", cfg.group, cfg.experiment_id)
+    exp_log_root = os.path.join(runtime.LOGS_DIR, cfg.group, cfg.experiment_id)
     os.makedirs(exp_log_root, exist_ok=True)
     try:
         atomic_yaml_save(cfg, os.path.join(exp_log_root, "config.yaml"))

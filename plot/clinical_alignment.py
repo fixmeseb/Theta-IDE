@@ -39,6 +39,8 @@ from sklearn.metrics import average_precision_score, precision_recall_curve, roc
 
 from plot.base import BasePlotter, clean_label, get_canonical_method_name, get_method_aliases
 from src.usr.methods.method_registry import get_style as get_method_style
+from src.app.pipeline import runtime
+from src.usr.eval.checkpoint_inference import get_probs_and_actions, load_agent
 
 
 def compute_trajectory_agreement(
@@ -96,9 +98,9 @@ class ClinicalAlignmentPlotter(BasePlotter):
         self._run_mimic_eval(exp_id, cfg, group, clean_exp, output_dir)
 
     def _discover_checkpoints(self, exp_id: str, group: str, clean_exp: str):
-        ckpt_root = Path("results/checkpoints") / group / clean_exp
+        ckpt_root = Path(runtime.CHECKPOINTS_DIR) / group / clean_exp
         if not ckpt_root.exists():
-            ckpt_root = Path("results/checkpoints") / clean_exp
+            ckpt_root = Path(runtime.CHECKPOINTS_DIR) / clean_exp
         if not ckpt_root.exists():
             return {}, {}
 
@@ -175,95 +177,10 @@ class ClinicalAlignmentPlotter(BasePlotter):
         return method_ckpts, method_interval_ckpts
 
     def _load_agent(self, path, dev):
-        from src.usr.methods.cew_agent import CEWAgent
-        from src.usr.methods.cql_agent import CQLAgent
-        from src.usr.methods.iql_agent import IQLAgent
-
-        last_error = None
-        for cls in [CQLAgent, CEWAgent, IQLAgent]:
-            try:
-                ag = cls.load_from_checkpoint(str(path), map_location=dev, weights_only=False)
-                ag.to(dev)
-                ag.eval()
-                return ag
-            except Exception as e:
-                last_error = e
-                try:
-                    ag = cls.load_from_checkpoint(str(path), map_location=dev, weights_only=False, strict=False)
-                    ag.to(dev)
-                    ag.eval()
-                    return ag
-                except Exception as e2:
-                    last_error = e2
-                    continue
-        if last_error is not None:
-            print(f"  [clinical_alignment] Checkpoint load error for {path}: {last_error}")
-        return None
+        return load_agent(path, dev, "clinical_alignment")
 
     def _get_probs_and_actions(self, ag, obs_b):
-        if hasattr(ag, "get_action_probs"):
-            probs = ag.get_action_probs(obs_b)
-            acts = ag.get_action(obs_b) if hasattr(ag, "get_action") else torch.argmax(probs, dim=-1)
-            return probs, acts
-
-        # Fallback for unmigrated or raw models
-        is_cql = ag.__class__.__name__ == "CQLAgent" or "cql" in str(getattr(ag, "algorithm", "")).lower()
-        use_actor = bool(ag.get_cfg("use_actor", False)) if hasattr(ag, "get_cfg") else getattr(ag, "use_actor", False)
-
-        if hasattr(ag, "is_modular") and ag.is_modular:
-            logic_obs = (
-                ag._prepare_logic_obs(obs_b)
-                if hasattr(ag, "_prepare_logic_obs")
-                else obs_b.unsqueeze(1).repeat(1, 2, 1)
-            )
-            if is_cql and not use_actor and hasattr(ag.model, "get_q_values"):
-                q_vals = ag.model.get_q_values(obs_b, logic_obs)
-                probs = torch.softmax(q_vals, dim=-1)
-                acts = torch.argmax(q_vals, dim=-1)
-                return probs, acts
-            elif use_actor and hasattr(ag.model, "actor"):
-                probs, _ = ag.model.actor(obs_b, logic_obs)
-                acts = torch.argmax(probs, dim=-1)
-                return probs, acts
-            elif hasattr(ag.model, "get_q_values"):
-                q_vals = ag.model.get_q_values(obs_b, logic_obs)
-                probs = torch.softmax(q_vals, dim=-1)
-                acts = torch.argmax(q_vals, dim=-1)
-                return probs, acts
-        elif is_cql and not use_actor and hasattr(ag, "q_network"):
-            q = ag.q_network.get_q_values(obs_b) if hasattr(ag.q_network, "get_q_values") else ag.q_network(obs_b)
-            probs = torch.softmax(q, dim=-1)
-            acts = torch.argmax(probs, dim=-1)
-            return probs, acts
-        elif hasattr(ag, "actor") and hasattr(ag.actor, "get_action_probs"):
-            probs = ag.actor.get_action_probs(obs_b)
-            acts = torch.argmax(probs, dim=-1)
-            return probs, acts
-        elif hasattr(ag, "fuzzy_model") and ag.fuzzy_model is not None:
-            q = ag.fuzzy_model(obs_b.to("cpu"))
-            probs = torch.softmax(q, dim=-1).to(obs_b.device)
-            acts = torch.argmax(probs, dim=-1)
-            return probs, acts
-        elif hasattr(ag, "q_network"):
-            if hasattr(ag.q_network, "get_action_probs"):
-                probs = ag.q_network.get_action_probs(obs_b)
-            else:
-                q = ag.q_network(obs_b)
-                probs = torch.softmax(q, dim=-1)
-            acts = torch.argmax(probs, dim=-1)
-            return probs, acts
-        elif hasattr(ag, "model") and hasattr(ag.model, "get_q_values"):
-            q = ag.model.get_q_values(obs_b)
-            probs = torch.softmax(q, dim=-1)
-            acts = torch.argmax(probs, dim=-1)
-            return probs, acts
-        else:
-            out = ag.get_action_and_value(obs_b)
-            act = out[0] if isinstance(out, (tuple, list)) else out
-            n_acts = 3 if obs_b.shape[-1] >= 123 else 2
-            probs = torch.zeros((obs_b.shape[0], n_acts), device=obs_b.device)
-            probs.scatter_(1, act.unsqueeze(1).long(), 1.0)
-            return probs, act
+        return get_probs_and_actions(ag, obs_b)
 
     def _run_mimic_eval(self, exp_id: str, cfg: dict, group: str, clean_exp: str, output_dir: Path):
         """Clinical policy alignment and septic shock evaluation for MIMIC datasets."""
@@ -272,7 +189,7 @@ class ClinicalAlignmentPlotter(BasePlotter):
             if isinstance(cfg.get("env"), dict)
             else "mimic_lazy_0_interventions_balanced.npz"
         )
-        npz_candidate = Path("in/datasets/mimic") / env_ds
+        npz_candidate = Path(f"{runtime.DATASETS_DIR}/mimic") / env_ds
         if not npz_candidate.exists():
             mode_path = cfg.get("mode", {}).get("dataset_path", "")
             if mode_path:

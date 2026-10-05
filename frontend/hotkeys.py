@@ -32,6 +32,8 @@ from PyQt6.QtCore import QEvent, QObject, Qt, QTimer
 from PyQt6.QtGui import QKeyEvent
 from PyQt6.QtWidgets import QApplication, QWidget
 
+from .panels import DEFAULT_HOTKEY_PANES
+
 if TYPE_CHECKING:
     from .app import Window
     from .settings import SettingsManager
@@ -43,29 +45,22 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 PANE_ALIASES: dict[str, str] = {
-    "settings": "settings",
+    # Every pane id maps to itself (ids come from frontend/panels.py) ...
+    **{pane: pane for pane in DEFAULT_HOTKEY_PANES},
+    # ... plus the other names a settings.toml may use for them.
     "settings_about": "settings",
     "about": "settings",
-    "components": "components",
-    "config": "config",
     "experiment": "config",
     "experiments": "config",
     "builder": "config",
-    "monitor": "monitor",
     "training_monitor": "monitor",
-    "results": "results",
     "results_browser": "results",
     "history": "results",
-    "plots": "plots",
     "plot": "plots",
     "plot_viewer": "plots",
-    "tensorboard": "tensorboard",
     "tb": "tensorboard",
-    "queue": "queue",
     "job_queue": "queue",
-    "terminal": "terminal",
     "term": "terminal",
-    "console": "console",
 }
 
 # ---------------------------------------------------------------------------

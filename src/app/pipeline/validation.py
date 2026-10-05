@@ -19,12 +19,13 @@ from src.app.pipeline.config import normalize_agent_name, parse_methods_dict, re
 from src.app.pipeline.datasets import resolve_dataset_path
 from src.app.pipeline.exceptions import ConfigurationError
 from src.usr.methods.method_registry import METHOD_STYLE
+from src.app.pipeline import runtime
 
 # ---------------------------------------------------------------------------
 # Paradigm registry loading
 # ---------------------------------------------------------------------------
 
-_PARADIGMS_DIR = Path("in/config/paradigms")
+_PARADIGMS_DIR = Path(f"{runtime.CONFIG_DIR}/paradigms")
 
 
 def _load_all_paradigms() -> dict[str, dict]:
@@ -134,7 +135,7 @@ def _check_paradigm_constraints(cfg: Any, paradigm_name: str, constraints: dict,
 def _load_raw_experiment_yaml(experiment_name: str) -> dict:
     """Return the raw (pre-Hydra-composition) experiment YAML as a dict, or {} on failure."""
     rel_path = resolve_experiment_config_name(experiment_name)
-    exp_path = Path("in/config/experiment") / f"{rel_path}.yaml"
+    exp_path = Path(f"{runtime.CONFIG_DIR}/experiment") / f"{rel_path}.yaml"
     if not exp_path.exists():
         return {}
     with open(exp_path) as f:

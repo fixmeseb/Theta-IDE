@@ -29,6 +29,7 @@ from src.app.pipeline.task_registry import register_task
 from src.usr.eval.early_prediction.data_module import EPSepsisDataModule
 from src.usr.eval.early_prediction.lightning_module import EPSepsisLightningModule
 from src.usr.eval.early_prediction.model import load_target_params
+from src.app.pipeline import runtime
 
 log = logging.getLogger(__name__)
 
@@ -64,7 +65,7 @@ def run_early_prediction_task(
     if task_name == "early_prediction_sweep":
         if not cfg.get("recover", False):
             clean_exp = Path(cfg.experiment_id).stem
-            plot_dir = Path("results/plots") / cfg.group / clean_exp
+            plot_dir = Path(runtime.PLOTS_DIR) / cfg.group / clean_exp
             fast_purge_dir(plot_dir)
             plot_dir.mkdir(parents=True, exist_ok=True)
 
@@ -80,7 +81,7 @@ def run_early_prediction_task(
                 )
             sys.exit(0)
         else:
-            slurm_dir = Path("results/logs/slurm") / cfg.group / cfg.experiment_id
+            slurm_dir = Path(f"{runtime.LOGS_DIR}/slurm") / cfg.group / cfg.experiment_id
             slurm_dir.mkdir(parents=True, exist_ok=True)
 
             target_models = ["lstm_no_v", "lstm_with_v", "transformer_no_v", "transformer_with_v"]
@@ -89,7 +90,7 @@ def run_early_prediction_task(
             job_ids = []
             for tm in target_models:
                 slurm_script_path = slurm_dir / f"early_pred_sweep_{tm}.slurm"
-                log_dir = Path("results/logs/slurm") / cfg.group / cfg.experiment_id
+                log_dir = Path(f"{runtime.LOGS_DIR}/slurm") / cfg.group / cfg.experiment_id
 
                 from omegaconf import OmegaConf
 

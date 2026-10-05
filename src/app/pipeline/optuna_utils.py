@@ -20,6 +20,7 @@ DEFAULT_OPTUNA_DB_URL = "sqlite:///results/optuna/optuna.db"
 
 
 from src.app.pipeline.runtime import get_python_executable
+from src.app.pipeline import runtime
 
 
 def is_valid_storage_url(storage_url) -> bool:
@@ -121,7 +122,7 @@ def launch_optuna_dashboard(storage_url):
                 break
 
         # Ensure logging directory exists
-        log_file_path = "results/optuna/dashboard.log"
+        log_file_path = f"{runtime.OPTUNA_DIR}/dashboard.log"
         os.makedirs(os.path.dirname(log_file_path), exist_ok=True)
         log_file = open(log_file_path, "w")
 
@@ -188,8 +189,8 @@ def get_next_study_name(group: str, experiment_id: str, agent_name: str, storage
     base_prefix = f"{experiment_id}_{agent_name}"
     from pathlib import Path
 
-    log_dir = Path("results/logs") / group / experiment_id / agent_name
-    ckpt_dir = Path("results/checkpoints") / group / experiment_id / agent_name
+    log_dir = Path(runtime.LOGS_DIR) / group / experiment_id / agent_name
+    ckpt_dir = Path(runtime.CHECKPOINTS_DIR) / group / experiment_id / agent_name
 
     existing_versions = [0]
     for d in [log_dir, ckpt_dir]:
@@ -240,7 +241,7 @@ def find_best_trial_from_logs(group: str, experiment_id: str, agent_name: str, d
 
     import pandas as pd
 
-    log_dir = Path("results/logs") / group / experiment_id / agent_name
+    log_dir = Path(runtime.LOGS_DIR) / group / experiment_id / agent_name
     best_id = "0"
     best_val = float("inf") if direction == "minimize" else float("-inf")
 
@@ -288,7 +289,7 @@ def promote_best_trial_checkpoint(
 
     import yaml
 
-    ckpt_root = Path("results/checkpoints") / group / experiment_id / agent_name
+    ckpt_root = Path(runtime.CHECKPOINTS_DIR) / group / experiment_id / agent_name
     ckpt_root.mkdir(parents=True, exist_ok=True)
     target_ckpt_path = ckpt_root / "best_model.ckpt"
 
@@ -319,7 +320,7 @@ def promote_best_trial_checkpoint(
         best_info["direction"] = "minimize"
 
         # Copy hparams if available
-        hparams_src = Path("results/logs") / group / experiment_id / agent_name / f"version_{best_id}" / "hparams.yaml"
+        hparams_src = Path(runtime.LOGS_DIR) / group / experiment_id / agent_name / f"version_{best_id}" / "hparams.yaml"
         if hparams_src.exists():
             shutil.copy2(hparams_src, ckpt_root / "best_params.yaml")
 
@@ -331,7 +332,7 @@ def promote_best_trial_checkpoint(
         # Also save explicitly named checkpoint in both local folder and parent experiment root
         named_ckpt_path = ckpt_root / f"{agent_name}.ckpt"
         shutil.copy2(trial_ckpt_path, named_ckpt_path)
-        parent_ckpt_root = Path("results/checkpoints") / group / experiment_id
+        parent_ckpt_root = Path(runtime.CHECKPOINTS_DIR) / group / experiment_id
         shutil.copy2(trial_ckpt_path, parent_ckpt_root / f"{agent_name}.ckpt")
         print(f"\n[Optuna Winner] Promoted Best Trial #{best_id} -> {named_ckpt_path.name}")
         if "best_value" in best_info and best_info["best_value"] is not None:
@@ -344,7 +345,7 @@ def promote_best_trial_checkpoint(
             shutil.copy2(all_ckpts[0], target_ckpt_path)
             named_ckpt_path = ckpt_root / f"{agent_name}.ckpt"
             shutil.copy2(all_ckpts[0], named_ckpt_path)
-            parent_ckpt_root = Path("results/checkpoints") / group / experiment_id
+            parent_ckpt_root = Path(runtime.CHECKPOINTS_DIR) / group / experiment_id
             shutil.copy2(all_ckpts[0], parent_ckpt_root / f"{agent_name}.ckpt")
             print(f"\n[Optuna Fallback] Promoted checkpoint -> {named_ckpt_path.name}")
 

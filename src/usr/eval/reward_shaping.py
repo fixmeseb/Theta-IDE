@@ -23,6 +23,7 @@ from typing import Dict, List, Optional, Tuple
 import numpy as np
 import torch
 import torch.nn as nn
+from src.app.pipeline import runtime
 
 PROJECT_ROOT = str(Path(__file__).resolve().parents[3])
 if PROJECT_ROOT not in sys.path:
@@ -48,7 +49,7 @@ class EPRewardShaper:
 
     def __init__(
         self,
-        ep_ckpt_dir: str = "results/checkpoints/early_prediction",
+        ep_ckpt_dir: str = f"{runtime.CHECKPOINTS_DIR}/early_prediction",
         device: torch.device | None = None,
         lambda_coef: float = 1.0,
         gamma: float = 0.99,
@@ -381,7 +382,7 @@ def shape_rewards_ep(reader, cfg=None):
     rs_cfg = cfg.env.get("reward_shaping", {}) if cfg and hasattr(cfg, "env") else {}
 
     ep_ckpt_dir = rs_cfg.get("ep_ckpt_dir") or os.environ.get(
-        "EP_SHAPE_CKPT_DIR", "results/checkpoints/early_prediction"
+        "EP_SHAPE_CKPT_DIR", f"{runtime.CHECKPOINTS_DIR}/early_prediction"
     )
     lambda_coef = float(rs_cfg.get("lambda_coef", os.environ.get("EP_SHAPE_LAMBDA", "1.0")))
     gamma = float(rs_cfg.get("gamma", os.environ.get("EP_SHAPE_GAMMA", "0.99")))

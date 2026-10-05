@@ -13,6 +13,7 @@ import uuid
 from pathlib import Path
 
 from src.app.pipeline.runtime import get_python_executable
+from src.app.pipeline import runtime
 
 logger = logging.getLogger(__name__)
 
@@ -40,9 +41,9 @@ def ensure_online_dataset_path(group: str, experiment_id: str, agent_name_intern
         tuple[str, bool]: (dataset_path, has_existing_dataset)
     """
     if is_sweep:
-        dataset_path = f"in/datasets/{experiment_id}/{agent_name_internal}"
+        dataset_path = f"{runtime.DATASETS_DIR}/{experiment_id}/{agent_name_internal}"
     else:
-        dataset_path = f"in/datasets/{group}/{experiment_id}/{agent_name_internal}"
+        dataset_path = f"{runtime.DATASETS_DIR}/{group}/{experiment_id}/{agent_name_internal}"
 
     has_pkl = False
     if os.path.exists(dataset_path):
@@ -77,22 +78,22 @@ def resolve_dataset_path(
     for aid in alt_ids:
         aid_clean = aid.replace("/", "_")
         if group and experiment_id:
-            candidates.append(Path("in/datasets") / group / experiment_id / aid_clean)
-            candidates.append(Path("in/datasets") / group / experiment_id / aid)
+            candidates.append(Path(runtime.DATASETS_DIR) / group / experiment_id / aid_clean)
+            candidates.append(Path(runtime.DATASETS_DIR) / group / experiment_id / aid)
         if group:
-            candidates.append(Path("in/datasets") / group / "per_problem" / aid / "cql")
-            candidates.append(Path("in/datasets") / group / "per_problem" / aid_clean / "cql")
-            candidates.append(Path("in/datasets") / group / "per_problem" / aid)
-            candidates.append(Path("in/datasets") / group / "per_problem" / aid_clean)
-            candidates.append(Path("in/datasets") / group / aid / "cql")
-            candidates.append(Path("in/datasets") / group / aid_clean / "cql")
-            candidates.append(Path("in/datasets") / group / aid_clean)
-            candidates.append(Path("in/datasets") / group / aid)
+            candidates.append(Path(runtime.DATASETS_DIR) / group / "per_problem" / aid / "cql")
+            candidates.append(Path(runtime.DATASETS_DIR) / group / "per_problem" / aid_clean / "cql")
+            candidates.append(Path(runtime.DATASETS_DIR) / group / "per_problem" / aid)
+            candidates.append(Path(runtime.DATASETS_DIR) / group / "per_problem" / aid_clean)
+            candidates.append(Path(runtime.DATASETS_DIR) / group / aid / "cql")
+            candidates.append(Path(runtime.DATASETS_DIR) / group / aid_clean / "cql")
+            candidates.append(Path(runtime.DATASETS_DIR) / group / aid_clean)
+            candidates.append(Path(runtime.DATASETS_DIR) / group / aid)
         candidates.extend(
             [
-                Path("in/datasets") / "per_problem" / aid / "cql",
-                Path("in/datasets") / aid_clean,
-                Path("in/datasets") / aid,
+                Path(runtime.DATASETS_DIR) / "per_problem" / aid / "cql",
+                Path(runtime.DATASETS_DIR) / aid_clean,
+                Path(runtime.DATASETS_DIR) / aid,
             ]
         )
     if yaml_ds_path:
@@ -110,9 +111,43 @@ def resolve_dataset_path(
         return Path(yaml_ds_path)
 
     if group:
-        return Path("in/datasets") / group / dataset_name_internal
+        return Path(runtime.DATASETS_DIR) / group / dataset_name_internal
 
-    return Path("in/datasets") / dataset_name_internal
+    return Path(runtime.DATASETS_DIR) / dataset_name_internal
+
+
+def resolve_method_dataset(method_name, method_cfg, cfg):
+    """Resolve the dataset path for an offline method (shared by the local and Slurm runners)."""
+    explicit_ds = method_cfg.get("dataset_path") or cfg.get("dataset_path")
+    if explicit_ds and Path(explicit_ds).exists():
+        return Path(explicit_ds)
+
+    # For offline paradigms, dataset comes from the environment config
+    env_dataset = None
+    env_name = None
+    if hasattr(cfg, "env"):
+        env_dataset = cfg.env.get("dataset_name", None)
+        env_name = cfg.env.get("name", None)
+        if env_dataset:
+            try:
+                return resolve_dataset_path(
+                    dataset_id=str(env_dataset).replace(".npz", ""),
+                    group=env_name or cfg.get("group", ""),
+                    experiment_id=cfg.get("experiment_id", ""),
+                    yaml_ds_path=str(explicit_ds) if explicit_ds else None,
+                )
+            except FileNotFoundError:
+                pass
+
+    # Fallback: look in standard dataset directories
+    ds_root = Path(runtime.DATASETS_DIR) / cfg.group / cfg.experiment_id
+    if ds_root.exists():
+        return ds_root
+
+    raise FileNotFoundError(
+        f"Cannot resolve dataset for method '{method_name}'. "
+        f"No dataset_name in env config and no datasets found at {ds_root}."
+    )
 
 
 def resolve_mimic_npz_path(filename_or_path: str | None = None, site_cfg=None) -> Path:
@@ -140,8 +175,8 @@ def resolve_mimic_npz_path(filename_or_path: str | None = None, site_cfg=None) -
 
     candidate_dirs: list[Path] = [
         Path(os.environ.get("MIMIC_DATASET_DIR", "")),
-        PROJECT_ROOT / "in/datasets/mimic",
-        PROJECT_ROOT / "in/datasets",
+        PROJECT_ROOT / f"{runtime.DATASETS_DIR}/mimic",
+        PROJECT_ROOT / runtime.DATASETS_DIR,
     ]
     # Add site-specific search dirs (replaces hardcoded /hpc/home/cegbert1/... paths)
     if site_cfg:

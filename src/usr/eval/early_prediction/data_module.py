@@ -22,6 +22,7 @@ from torch.utils.data import DataLoader, Dataset
 
 from src.app.core.interfaces import BaseDataModule
 from src.usr.eval.early_prediction.model import compute_volatility_features, normalize_features
+from src.app.pipeline import runtime
 
 log = logging.getLogger(__name__)
 
@@ -104,7 +105,7 @@ class EPSepsisDataModule(L.LightningDataModule, BaseDataModule):
         if not dataset_path and hasattr(cfg, "env"):
             ds_name = cfg.env.get("dataset_name", "")
             if ds_name:
-                dataset_path = f"in/datasets/mimic/{ds_name}"
+                dataset_path = f"{runtime.DATASETS_DIR}/mimic/{ds_name}"
         if not dataset_path:
             raise ValueError(
                 "Dataset path is required for supervised sepsis learning. "

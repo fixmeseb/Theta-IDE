@@ -1,15 +1,16 @@
 import os
 import pickle
 from pathlib import Path
+from src.app.pipeline import runtime
 
 
 def get_ep_eval_data(exp_id, cfg, group, output_dir):
     cache_path = Path(output_dir) / "ep_eval_cache.pkl"
     remake = cfg.get("remake", False)
 
-    ckpt_dir = Path("results/checkpoints") / group / exp_id
+    ckpt_dir = Path(runtime.CHECKPOINTS_DIR) / group / exp_id
     if not ckpt_dir.exists():
-        matches = list(Path("results/checkpoints").glob(f"**/{exp_id}"))
+        matches = list(Path(runtime.CHECKPOINTS_DIR).glob(f"**/{exp_id}"))
         if matches:
             ckpt_dir = matches[0]
 
@@ -36,7 +37,7 @@ def get_ep_eval_data(exp_id, cfg, group, output_dir):
     data = compute_ep_eval_data(
         checkpoint_root=str(ckpt_dir),
         dataset_path=cfg.get("dataset_path", None),
-        ep_ckpt_root=cfg.get("ep_ckpt_root", "results/checkpoints/early_prediction"),
+        ep_ckpt_root=cfg.get("ep_ckpt_root", f"{runtime.CHECKPOINTS_DIR}/early_prediction"),
         n_splits=cfg.get("n_splits", 20),
         use_volatility=cfg.get("use_volatility", True),
     )

@@ -13,6 +13,7 @@ import pkgutil
 import shutil
 
 from plot.base import BasePlotter
+from src.app.pipeline import runtime
 
 FALLBACK_PLOTS = ["convergence", "losses", "reports"]
 
@@ -91,7 +92,7 @@ def run_experiment_plots(
         custom_dir = str(exp_cfg["output_dir"]).format(group=group, exp_id=exp_id, clean_exp=clean_exp)
         output_dir = Path(custom_dir)
     else:
-        output_dir = Path("results/plots") / group / clean_exp
+        output_dir = Path(runtime.PLOTS_DIR) / group / clean_exp
 
     if wipe and output_dir.exists():
         print(f"Wiping existing plot directory: {output_dir}")

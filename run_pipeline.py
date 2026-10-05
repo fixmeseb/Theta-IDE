@@ -31,6 +31,7 @@ from src.app.pipeline.datasets import run_plotting
 from src.app.pipeline.exceptions import ConfigurationError
 from src.app.pipeline.optuna_utils import launch_optuna_dashboard
 from src.app.pipeline.slurm import generate_sbatch_header, submit_sbatch
+from src.app.pipeline import runtime
 
 
 def main():
@@ -137,7 +138,7 @@ def main():
     if storage_url:
         storage_url = str(storage_url).replace("${experiment_id}", cfg.experiment_id)
     import os
-    os.makedirs("results/optuna", exist_ok=True)
+    os.makedirs(runtime.OPTUNA_DIR, exist_ok=True)
 
     if is_interactive and storage_url and (cfg.get("dash") or cfg.get("dash_only")):
         launch_optuna_dashboard(storage_url)

@@ -41,6 +41,7 @@ except ImportError:
     psutil = None
 
 from src.app.api.job_store import JobStore
+from src.app.pipeline import runtime
 
 app = FastAPI(title="NeSyRL API")
 
@@ -66,7 +67,7 @@ def health():
 @app.get("/api/environments")
 def list_environments():
     envs = []
-    env_dir = Path("in/config/env")
+    env_dir = Path(f"{runtime.CONFIG_DIR}/env")
     if env_dir.exists():
         for f in env_dir.glob("*.yaml"):
             if f.name.startswith("_"):
@@ -90,7 +91,7 @@ def list_methods():
 @app.get("/api/experiments")
 def list_experiments():
     exps = []
-    exp_dir = Path("in/config/experiment")
+    exp_dir = Path(f"{runtime.CONFIG_DIR}/experiment")
     if exp_dir.exists():
         for f in sorted(exp_dir.glob("**/*.yaml")):
             # Ignore internal base / template configs
@@ -114,7 +115,7 @@ def list_experiments():
 @app.get("/api/runs")
 def list_runs():
     runs = []
-    logs_dir = Path("results/logs")
+    logs_dir = Path(runtime.LOGS_DIR)
     if logs_dir.exists():
         for run_dir in logs_dir.glob("*/*"):
             if run_dir.is_dir():
@@ -138,7 +139,7 @@ def list_runs():
 
 @app.get("/api/runs/{group}/{experiment_id}/{agent}/metrics")
 def get_metrics(group: str, experiment_id: str, agent: str):
-    agent_dir = Path(f"results/logs/{group}/{experiment_id}/{agent}")
+    agent_dir = Path(f"{runtime.LOGS_DIR}/{group}/{experiment_id}/{agent}")
     # Metrics live in version_N subdirectories
     metrics_file = None
     if agent_dir.exists():
@@ -162,7 +163,7 @@ def get_metrics(group: str, experiment_id: str, agent: str):
 @app.get("/api/runs/{group}/{experiment_id}/plots")
 def list_plots(group: str, experiment_id: str):
     plots = []
-    plot_dir = Path(f"results/plots/{group}/{experiment_id}")
+    plot_dir = Path(f"{runtime.PLOTS_DIR}/{group}/{experiment_id}")
     if plot_dir.exists():
         for f in plot_dir.glob("*"):
             if f.is_file():
@@ -172,7 +173,7 @@ def list_plots(group: str, experiment_id: str):
 
 @app.get("/api/runs/{group}/{experiment_id}/plots/{filename}")
 def get_plot_image(group: str, experiment_id: str, filename: str):
-    file_path = Path(f"results/plots/{group}/{experiment_id}/{filename}")
+    file_path = Path(f"{runtime.PLOTS_DIR}/{group}/{experiment_id}/{filename}")
     if not file_path.exists() or not file_path.is_file():
         raise HTTPException(status_code=404, detail="Plot not found")
     return FileResponse(file_path)
@@ -295,8 +296,8 @@ class MoveRequest(BaseModel):
     """New 0-based position among the queued jobs (clamped to the queue's length)."""
 
 
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
-JOBS_DIR = Path("results/jobs")
+PROJECT_ROOT = runtime.PROJECT_ROOT
+JOBS_DIR = Path(runtime.JOBS_DIR)
 TERMINAL_STATUSES = ("completed", "failed", "cancelled", "error")
 MAX_LOG_LINES = 20000
 ACTIVE_STATUSES = ("pending", "running")
@@ -429,7 +430,7 @@ def launch_experiment(req: LaunchRequest):
         raise HTTPException(status_code=422, detail=str(e).strip())
 
     cfg = composed.cfg
-    log_dir = Path("results/logs") / cfg.group / cfg.experiment_id
+    log_dir = Path(runtime.LOGS_DIR) / cfg.group / cfg.experiment_id
     if log_dir.exists() and any(log_dir.iterdir()) and not req.overwrite and not cfg.get("recover", False):
         raise HTTPException(
             status_code=409,
@@ -605,7 +606,7 @@ def job_metrics(job_id: str, since: int = 0, since_byte: int = 0):
     job = jobs[job_id]
     agents = {}
     for agent in job.get("agents", []):
-        path = _latest_metrics_csv(Path("results/logs") / job["group"] / job["experiment_id"] / agent)
+        path = _latest_metrics_csv(Path(runtime.LOGS_DIR) / job["group"] / job["experiment_id"] / agent)
         if since_byte > 0 and path:
             rows, next_byte, reset = _read_metrics_incremental(path, last_byte=since_byte)
             agents[agent] = {"source": str(path), "total": len(rows), "next_byte": next_byte, "reset": reset, "rows": rows}
@@ -753,7 +754,7 @@ def job_telemetry(job_id: str, since_log: int = 0, since_byte: int = 0):
     # Incremental metrics for each agent
     agents = {}
     for agent in job.get("agents", []):
-        path = _latest_metrics_csv(Path("results/logs") / job["group"] / job["experiment_id"] / agent)
+        path = _latest_metrics_csv(Path(runtime.LOGS_DIR) / job["group"] / job["experiment_id"] / agent)
         if path:
             rows, next_byte, reset = _read_metrics_incremental(path, last_byte=since_byte)
             agents[agent] = {
@@ -808,7 +809,7 @@ def cancel_experiment(job_id: str):
 # One local TensorBoard server over results/tensorboard/ (runs launched with tensorboard=true),
 # managed here so GUI clients need no TensorBoard install of their own.
 
-TENSORBOARD_DIR = Path("results/tensorboard")
+TENSORBOARD_DIR = Path(runtime.TENSORBOARD_DIR)
 _tensorboard: dict[str, Any] = {}
 _tensorboard_lock = threading.Lock()
 

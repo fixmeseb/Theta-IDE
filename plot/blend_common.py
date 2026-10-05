@@ -15,6 +15,7 @@ from sklearn.neighbors import NearestNeighbors
 
 from plot.base import clean_label, get_canonical_method_name
 from src.usr.eval.pyrenees_evaluator import PyreneesEvaluator
+from src.app.pipeline import runtime
 
 KNOWN_PYRENEES_PROBLEMS = [
     "problem",
@@ -33,9 +34,9 @@ KNOWN_PYRENEES_PROBLEMS = [
 
 def discover_blendrl_checkpoints(exp_id: str, group: str, clean_exp: str) -> dict:
     """Discovers only modular BlendRL checkpoints that output blending weights."""
-    ckpt_root = Path("results/checkpoints") / group / clean_exp
+    ckpt_root = Path(runtime.CHECKPOINTS_DIR) / group / clean_exp
     if not ckpt_root.exists():
-        ckpt_root = Path("results/checkpoints") / clean_exp
+        ckpt_root = Path(runtime.CHECKPOINTS_DIR) / clean_exp
     if not ckpt_root.exists():
         return {}
 
@@ -113,9 +114,9 @@ def extract_model_routing_data(discovered: dict, sample_size: int = 4000) -> dic
         if agent is None:
             continue
 
-        clean_path = Path(f"in/datasets/pyrenees/per_problem/{prob_name}/clean.npz")
+        clean_path = Path(f"{runtime.DATASETS_DIR}/pyrenees/per_problem/{prob_name}/clean.npz")
         if not clean_path.exists() and prob_name == "problem":
-            clean_path = Path("in/datasets/pyrenees/pyrenees_clean.npz")
+            clean_path = Path(f"{runtime.DATASETS_DIR}/pyrenees/pyrenees_clean.npz")
         if not clean_path.exists():
             continue
 
@@ -158,9 +159,9 @@ def extract_model_routing_data(discovered: dict, sample_size: int = 4000) -> dic
             else weights[:, neural_idx]
         )
 
-        gmm_path = Path(f"in/datasets/pyrenees/per_problem/{prob_name}/gmm_scaler.npz")
+        gmm_path = Path(f"{runtime.DATASETS_DIR}/pyrenees/per_problem/{prob_name}/gmm_scaler.npz")
         if not gmm_path.exists():
-            gmm_path = Path("in/datasets/pyrenees/pyrenees_gmm_scaler.npz")
+            gmm_path = Path(f"{runtime.DATASETS_DIR}/pyrenees/pyrenees_gmm_scaler.npz")
         tiers = evaluator._compute_gmm_tiers(states, gmm_path)
 
         # 1. Authority

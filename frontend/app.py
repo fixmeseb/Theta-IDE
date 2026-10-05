@@ -23,8 +23,9 @@ from PyQt6.QtWidgets import (
 )
 from .api import DEFAULT_URL, Backend
 from .app_icon import DESKTOP_FILE_NAME, ICON_PATH, app_icon, install_desktop_entry, set_windows_app_id
-from .model import (BASE_EXPERIMENT, FINAL_STATUSES, LIVE_STATUSES, Config, Store, available_metrics, example_runs,
-                    latest, metric_points, new_run, sample)
+from .model import (BASE_EXPERIMENT, BASELINE_COLOR, FINAL_STATUSES, LIVE_STATUSES, REWARD_FORMAT, SERIES_COLORS,
+                    Config, Store, available_metrics, example_runs, latest, metric_points, new_run, run_name, sample)
+from .panels import PANEL_IDS, PANELS, PANELS_BY_ID, SETTINGS_TITLE, panel_title
 from .settings import SettingsManager
 from .theme import STYLE, ThemeManager, theme_color
 from .theme_builder import ThemeBuilder
@@ -164,7 +165,7 @@ class Window(QMainWindow):
 
         # 1. Components Panel
         self.components_panel = ComponentsPanel(log_fn=self.log, parent=self)
-        self.tabs.addTab(self.components_panel, "Components", "components", "Components", tab_id="components")
+        self.add_panel(self.components_panel, "components")
 
         # 2. Experiment (Config) Panel
         config_panel = QWidget()
@@ -256,7 +257,7 @@ class Window(QMainWindow):
         splitter.setSizes([260, 1000, 0])
         config_layout.addWidget(splitter, 1)
         self.config_panel = config_panel
-        self.tabs.addTab(self.config_panel, "Experiment", "config", "Experiment", tab_id="config")
+        self.add_panel(self.config_panel, "config")
 
         # 3. Training Monitor Panel
         monitor = QWidget()
@@ -348,7 +349,7 @@ class Window(QMainWindow):
         monitor_footer.addWidget(self.button("Open TensorBoard  →", self.show_tensorboard))
         layout.addLayout(monitor_footer)
         self.monitor_panel = monitor
-        self.tabs.addTab(self.monitor_panel, "Training monitor", "monitor", "Monitor", tab_id="monitor")
+        self.add_panel(self.monitor_panel, "monitor")
 
         # 4. Results Browser Panel
         results = QWidget()
@@ -381,27 +382,27 @@ class Window(QMainWindow):
         actions.addStretch()
         results_layout.addLayout(actions)
         self.results_panel = results
-        self.tabs.addTab(self.results_panel, "Results browser", "results", "Results", tab_id="results")
+        self.add_panel(self.results_panel, "results")
 
         # 5. Plot Viewer
         self.plot_viewer = PlotViewer()
-        self.tabs.addTab(self.plot_viewer, "Plot viewer", "plots", "Plots", tab_id="plots")
+        self.add_panel(self.plot_viewer, "plots")
 
         # 6. TensorBoard Panel
         self.tensorboard_panel = TensorBoardPanel(self.backend, self.log)
-        self.tabs.addTab(self.tensorboard_panel, "TensorBoard", "tensorboard", "TensorBoard", tab_id="tensorboard")
+        self.add_panel(self.tensorboard_panel, "tensorboard")
 
         # 7. Job Queue Panel
         self.queue_panel = QueuePanel(self.move_queued, self.remove_queued, self.open_job, self.set_queue_running)
-        self.tabs.addTab(self.queue_panel, "Job queue", "queue", "Queue", tab_id="queue")
+        self.add_panel(self.queue_panel, "queue")
 
         # 8. Terminal Panel
         self.terminal_panel = TerminalPanel(cwd=str(Path.cwd()), parent=self)
-        self.tabs.addTab(self.terminal_panel, "Terminal", "terminal", "Terminal", tab_id="terminal")
+        self.add_panel(self.terminal_panel, "terminal")
 
         # 9. Console Panel
         self.console_panel = self.make_console()
-        self.tabs.addTab(self.console_panel, "Console", "console", "Console", tab_id="console")
+        self.add_panel(self.console_panel, "console")
 
         self.settings_panel = self.make_settings()
         self.tabs.set_settings_widget(self.settings_panel)
@@ -559,17 +560,7 @@ class Window(QMainWindow):
         panes_grid = QVBoxLayout()
         panes_grid.setSpacing(8)
 
-        pane_metadata = [
-            ("components", "Components", "Modular configs (agent, env, model, paradigms, site, hydra)"),
-            ("config", "Experiment builder", "Hydra configurations & hyperparameter tuner"),
-            ("monitor", "Training monitor", "Overview charts & live training curves"),
-            ("results", "Results browser", "Experiment runs, comparison, & metrics"),
-            ("plots", "Plot viewer", "Saved figure plots & multi-seed comparisons"),
-            ("tensorboard", "TensorBoard", "Interactive TensorBoard event visualizer"),
-            ("queue", "Job queue", "Local sequential run scheduler & manager"),
-            ("terminal", "Terminal", "Embedded terminal shell"),
-            ("console", "Console", "Live Theta IDE system log & command line"),
-        ]
+        pane_metadata = [(panel.id, panel.title, panel.description) for panel in PANELS]
 
         self.pane_sliders = {}
         for pid, name, desc in pane_metadata:
@@ -665,20 +656,15 @@ class Window(QMainWindow):
         ak_row.addWidget(self.settings_action_key_combo, 1)
         hk_layout.addLayout(ak_row)
 
-        hk_table = QLabel(
-            "<table style='font-size: 11px; line-height: 1.6; color: rgba(255,255,255,0.75);'>"
-            "<tr><td style='padding-right: 20px;'><code>Action + 0</code> ➔ Settings & About</td>"
-            "<td><code>Action + 5</code> ➔ Plot viewer</td></tr>"
-            "<tr><td style='padding-right: 20px;'><code>Action + 1</code> ➔ Components</td>"
-            "<td><code>Action + 6</code> ➔ TensorBoard</td></tr>"
-            "<tr><td style='padding-right: 20px;'><code>Action + 2</code> ➔ Experiment builder</td>"
-            "<td><code>Action + 7</code> ➔ Job queue</td></tr>"
-            "<tr><td style='padding-right: 20px;'><code>Action + 3</code> ➔ Training monitor</td>"
-            "<td><code>Action + 8</code> ➔ Terminal</td></tr>"
-            "<tr><td style='padding-right: 20px;'><code>Action + 4</code> ➔ Results browser</td>"
-            "<td><code>Action + 9</code> ➔ Console</td></tr>"
-            "</table>"
+        panes = self.settings_manager.hotkey_panes[:10]
+        half = (len(panes) + 1) // 2
+        cell = "<td style='padding-right: 20px;'><code>Action + {}</code> ➔ {}</td>"
+        rows = "".join(
+            "<tr>" + "".join(cell.format(n, panel_title(panes[n])) for n in (row, row + half) if n < len(panes)) + "</tr>"
+            for row in range(half)
         )
+        hk_table = QLabel("<table style='font-size: 11px; line-height: 1.6; color: rgba(255,255,255,0.75);'>"
+                          + rows + "</table>")
         hk_table.setStyleSheet("padding: 2px 0;")
         hk_layout.addWidget(hk_table)
 
@@ -1079,7 +1065,7 @@ class Window(QMainWindow):
                 s.setToolTip("Show or hide this panel in the sidebar")
 
     def reset_sidebar_layout(self):
-        default_order = ["components", "config", "monitor", "results", "plots", "tensorboard", "queue", "terminal", "console"]
+        default_order = list(PANEL_IDS)
         self.tabs.apply_tab_order(default_order)
         for pid, slider in self.pane_sliders.items():
             slider.blockSignals(True)
@@ -1186,16 +1172,9 @@ class Window(QMainWindow):
         self.themes_menu = view_menu.addMenu("Themes")
         self.themes_menu.aboutToShow.connect(self.populate_themes_menu)
         view_menu.addAction("Theme builder…", self.show_theme_builder)
-        view_menu.addAction("Components", lambda: self.tabs.setCurrentWidget(self.components_panel))
-        view_menu.addAction("Experiment config", lambda: self.tabs.setCurrentWidget(self.config_panel))
-        view_menu.addAction("Training monitor", lambda: self.tabs.setCurrentWidget(self.monitor_panel))
-        view_menu.addAction("Results browser", lambda: self.tabs.setCurrentWidget(self.results_panel))
-        view_menu.addAction("Plot viewer", lambda: self.tabs.setCurrentWidget(self.plot_viewer))
-        view_menu.addAction("TensorBoard", self.show_tensorboard)
-        view_menu.addAction("Job queue", lambda: self.tabs.setCurrentWidget(self.queue_panel))
-        view_menu.addAction("Terminal", lambda: self.tabs.setCurrentWidget(self.terminal_panel))
-        view_menu.addAction("Console", lambda: self.tabs.setCurrentWidget(self.console_panel))
-        view_menu.addAction("Settings & About", lambda: self.tabs.setCurrentWidget(self.settings_panel))
+        for panel in PANELS:
+            view_menu.addAction(panel.title, lambda *_, pid=panel.id: self.show_panel(pid))
+        view_menu.addAction(SETTINGS_TITLE, lambda: self.tabs.setCurrentWidget(self.settings_panel))
         view_menu.addAction("Restore default layout", lambda: self.restoreState(self.default_layout))
         view_menu.addSeparator()
         view_menu.addAction("Preferences: Open Settings File", self.open_settings_file)
@@ -1207,6 +1186,14 @@ class Window(QMainWindow):
         path = self.settings_manager.workspace_settings_path
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
         self.statusBar().showMessage(f"Opened {path.name} — changes apply automatically on save.", 6000)
+
+    def add_panel(self, widget, panel_id):
+        """Add a sidebar tab for one of the panels in frontend/panels.py."""
+        panel = PANELS_BY_ID[panel_id]
+        self.tabs.addTab(widget, panel.title, panel.icon, panel.short, tab_id=panel.id)
+
+    def show_panel(self, panel_id):
+        self.tabs.setCurrentWidget(self.tabs.tabs[panel_id]["widget"])
 
     def show_tensorboard(self):
         self.tabs.setCurrentWidget(self.tensorboard_panel)
@@ -1921,7 +1908,7 @@ class Window(QMainWindow):
         # Update Live Jump button
         if hasattr(self, "btn_live_jump"):
             if self.active and self.selected != self.active:
-                live_id = self.active["backend"]["experiment_id"] if not self.active["simulated"] else self.active["config"]["name"]
+                live_id = run_name(self.active)
                 chip_text = f"🟢 Jump to Live ({live_id[:14]}…)" if len(live_id) > 14 else f"🟢 Jump to Live ({live_id})"
                 self.btn_live_jump.setText(chip_text)
                 self.btn_live_jump.show()
@@ -1940,7 +1927,7 @@ class Window(QMainWindow):
                 self.btn_pin_baseline.setToolTip("This run is currently pinned as the baseline. Click to unpin.")
             else:
                 self.btn_pin_baseline.setChecked(False)
-                p_name = self.pinned_baseline_run["backend"]["experiment_id"] if not self.pinned_baseline_run["simulated"] else self.pinned_baseline_run["config"]["name"]
+                p_name = run_name(self.pinned_baseline_run)
                 label_name = (p_name[:12] + "…") if len(p_name) > 12 else p_name
                 self.btn_pin_baseline.setText(f"📌 Replace Baseline ({label_name})")
                 self.btn_pin_baseline.setToolTip(f"Baseline '{p_name}' is pinned. Click to replace it with this run.")
@@ -1960,7 +1947,7 @@ class Window(QMainWindow):
         # PPO trains whole rollouts, so the real budget can exceed the requested one (10,000 -> 10,240).
         # Records from before the backend reported it fall back to the steps actually run.
         budget = (run["backend"].get("effective_timesteps") or max(step, requested)) if live else requested
-        self.reward_card.value.setText("—" if reward is None else f"{reward:.1f}")
+        self.reward_card.value.setText("—" if reward is None else format(reward, REWARD_FORMAT))
         self.loss_card.title.setText(card_title)
         self.loss_card.value.setText("—" if second_value is None else format(second_value, fmt))
         self.loss_card.subtitle.setText(subtitle if live else "synthetic training loss")
@@ -1997,17 +1984,17 @@ class Window(QMainWindow):
         has_spread = any(m.get("reward_std") is not None for m in metrics)
         self.reward_chart.set_metric("reward", "Episode reward  ·  mean ± 1 std over evaluation episodes"
                                      if has_spread else "Episode reward")
-        self.reward_chart.set_series([(title, metrics, "#b8bb26")], xmax, ENV_MAX_REWARD.get(config["env"]))
+        self.reward_chart.set_series([(title, metrics, SERIES_COLORS[0])], xmax, ENV_MAX_REWARD.get(config["env"]))
         self.loss_chart.set_metric(second, chart_title)
-        self.loss_chart.set_series([(title, metrics, "#83a598")], xmax)
+        self.loss_chart.set_series([(title, metrics, SERIES_COLORS[1])], xmax)
 
         # Baseline overlay
         if self.pinned_baseline_run and self.pinned_baseline_run is not run:
             b_metrics = self.pinned_baseline_run["metrics"]
-            b_name = self.pinned_baseline_run["backend"]["experiment_id"] if not self.pinned_baseline_run["simulated"] else self.pinned_baseline_run["config"]["name"]
+            b_name = run_name(self.pinned_baseline_run)
             b_title = f"{b_name} (baseline)"
-            self.reward_chart.set_baseline_series([(b_title, b_metrics, "#d3869b")])
-            self.loss_chart.set_baseline_series([(b_title, b_metrics, "#d3869b")])
+            self.reward_chart.set_baseline_series([(b_title, b_metrics, BASELINE_COLOR)])
+            self.loss_chart.set_baseline_series([(b_title, b_metrics, BASELINE_COLOR)])
         else:
             self.reward_chart.set_baseline_series([])
             self.loss_chart.set_baseline_series([])
@@ -2021,13 +2008,13 @@ class Window(QMainWindow):
         self.table.setRowCount(0)
         for run in self.runs:
             config = run["config"]
-            name = config["name"] if run["simulated"] else run["backend"]["experiment_id"]
+            name = run_name(run)
             if query not in f"{name} {config['seed']} {run['status']}".lower():
                 continue
             row = self.table.rowCount()
             self.table.insertRow(row)
             last_reward = latest(run, "reward")
-            reward = "—" if last_reward is None else f"{last_reward:.1f}"
+            reward = "—" if last_reward is None else format(last_reward, REWARD_FORMAT)
             source = "Simulated" if run["simulated"] else "Trained"
             for col, value in enumerate((name, str(config["seed"]), run["status"], reward, source)):
                 cell = QTableWidgetItem(value)
@@ -2044,7 +2031,7 @@ class Window(QMainWindow):
             self.run_combo.clear()
             for run in self.runs:
                 config = run["config"]
-                name = config["name"] if run["simulated"] else run["backend"]["experiment_id"]
+                name = run_name(run)
                 status = run.get("status", "")
                 if status in LIVE_STATUSES:
                     icon = "🟢 "
@@ -2055,7 +2042,7 @@ class Window(QMainWindow):
                 else:
                     icon = "○ "
                 last_reward = latest(run, "reward")
-                rew_str = f"  ·  {last_reward:.1f} rew" if last_reward is not None else ""
+                rew_str = f"  ·  {format(last_reward, REWARD_FORMAT)} rew" if last_reward is not None else ""
                 seed_str = f" (seed {config['seed']})"
                 self.run_combo.addItem(f"{icon}{name}{seed_str}{rew_str}", run["id"])
 
@@ -2091,7 +2078,7 @@ class Window(QMainWindow):
             runs = [self.by_id(self.table.item(r.row(), 0).data(Qt.ItemDataRole.UserRole)) for r in rows]
             runs = [r for r in runs if r is not None]
             if runs:
-                palette = ("#b8bb26", "#83a598", "#fabd2f", "#d3869b", "#8ec07c")
+                palette = SERIES_COLORS
                 series = []
                 for i, r in enumerate(runs[:5]):
                     name = f"{r['config'].get('name', r['id'])} (seed {r['config'].get('seed', 0)})"
@@ -2132,10 +2119,10 @@ class Window(QMainWindow):
         layout.addWidget(label("Two runs. One question.", "heading"))
         chart = Chart("reward", "Episode reward", band="reward_std")
         chart.set_series([(run["config"]["name"], run["metrics"], color)
-                          for run, color in zip(runs, ("#b8bb26", "#83a598"))],
+                          for run, color in zip(runs, SERIES_COLORS[:2])],
                          reference=ENV_MAX_REWARD.get(runs[0]["config"]["env"]))
         layout.addWidget(chart, 1)
-        for run, color in zip(runs, ("#b8bb26", "#83a598")):
+        for run, color in zip(runs, SERIES_COLORS[:2]):
             legend = label(f"●  {run['config']['name']} · seed {run['config']['seed']} · {run['id']}")
             legend.setStyleSheet(f"color: {theme_color(color)}")
             layout.addWidget(legend)

@@ -51,6 +51,7 @@ from src.usr.eval.early_prediction.model import (
 #  Method Style Registry — imported from the unified source of truth
 # ---------------------------------------------------------------------------
 from src.usr.methods.method_registry import get_style as get_method_style
+from src.app.pipeline import runtime
 
 
 def pretty(name: str) -> str:
@@ -584,7 +585,7 @@ def write_counterfactual_table(cf_data, csv_path, txt_path):
 def compute_ep_eval_data(
     checkpoint_root,
     dataset_path,
-    ep_ckpt_root="results/checkpoints/early_prediction",
+    ep_ckpt_root=f"{runtime.CHECKPOINTS_DIR}/early_prediction",
     n_splits=20,
     tau_min=1,
     tau_max=33,

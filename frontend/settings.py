@@ -25,6 +25,8 @@ from typing import Any
 
 from PyQt6.QtCore import QFileSystemWatcher, QObject, pyqtSignal
 
+from .panels import DEFAULT_HOTKEY_PANES, DEFAULT_VISIBLE, PANEL_IDS, panel_title, toml_list
+
 
 # ---------------------------------------------------------------------------
 # Default settings — these are written verbatim into a fresh settings.toml
@@ -61,27 +63,11 @@ timeout = 5
 
 [sidebar]
 # Canonical panel IDs, in left-to-right display order.
-order = [
-    "components",
-    "config",
-    "monitor",
-    "results",
-    "plots",
-    "tensorboard",
-    "queue",
-    "terminal",
-    "console",
-]
+order = @@SIDEBAR_ORDER@@
 
 # Subset of order that is shown by default.  Hidden panels are still available
 # via View → <Panel Name>.
-visible = [
-    "components",
-    "config",
-    "monitor",
-    "terminal",
-    "console",
-]
+visible = @@SIDEBAR_VISIBLE@@
 
 [plugins]
 # List of plugin IDs that are currently enabled.
@@ -105,29 +91,16 @@ terminal_precedence = true
 
 # Pane navigation shortcuts (Action key + number):
 # Maps numbers [0, 1, 2, ...] to pane IDs.
-#   0 -> "settings"
-#   1 -> "components"
-#   2 -> "config" (experiments)
-#   3 -> "monitor"
-#   4 -> "results"
-#   5 -> "plots"
-#   6 -> "tensorboard"
-#   7 -> "queue"
-#   8 -> "terminal"
-#   9 -> "console"
-panes = [
-    "settings",
-    "components",
-    "config",
-    "monitor",
-    "results",
-    "plots",
-    "tensorboard",
-    "queue",
-    "terminal",
-    "console",
-]
+@@HOTKEY_PANES_COMMENT@@panes = @@HOTKEY_PANES@@
 """
+# Panel lists come from frontend/panels.py, the single definition of the sidebar panels.
+_DEFAULT_TOML = (
+    _DEFAULT_TOML.replace("@@SIDEBAR_ORDER@@", toml_list(PANEL_IDS))
+    .replace("@@SIDEBAR_VISIBLE@@", toml_list(DEFAULT_VISIBLE))
+    .replace("@@HOTKEY_PANES_COMMENT@@",
+             "".join(f'#   {n} -> "{pane}" ({panel_title(pane)})\n' for n, pane in enumerate(DEFAULT_HOTKEY_PANES)))
+    .replace("@@HOTKEY_PANES@@", toml_list(DEFAULT_HOTKEY_PANES))
+)
 
 
 # ---------------------------------------------------------------------------
@@ -356,18 +329,7 @@ class SettingsManager(QObject):
         if isinstance(v, list) and v:
             return list(v)
         # Default order: settings, followed by sidebar panels in order
-        return [
-            "settings",
-            "components",
-            "config",
-            "monitor",
-            "results",
-            "plots",
-            "tensorboard",
-            "queue",
-            "terminal",
-            "console",
-        ]
+        return list(DEFAULT_HOTKEY_PANES)
 
     @property
     def workspace_settings_path(self) -> Path:

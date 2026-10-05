@@ -227,35 +227,58 @@ def get_style_info(name: str, style_override: dict | None = None) -> tuple[str |
     return s["color"], s["linestyle"], s["marker"]
 
 
+# Method-name aliases, each stated once; get_canonical_method_name and get_method_aliases both read them.
+# Base methods and their short names. Each canonical name is also known in "algo/model" form (e.g. "cql/dnn").
+_SHORT_NAMES = {
+    "cql_dnn": ("cql", "dnn"),
+    "cql_dueling_resnet": ("dueling_resnet",),
+    "cql_transformer": ("transformer",),
+    "iql_dnn": ("iql",),
+    "ppo_dnn": ("ppo",),
+}
+# Historical display names.
+_DISPLAY_NAMES = {
+    "cql (standard mlp)": "cql_dnn",
+    "cql (dueling resnet)": "cql_dueling_resnet",
+    "cql (transformer)": "cql_transformer",
+}
+# BlendRL methods registered as "<algo>_blendrl_<variant>" but also written "blendrl_<algo>_<variant>".
+_BLENDRL_REORDERED = (
+    "cql_blendrl_human_neural",
+    "cql_blendrl_human_transformer",
+    "cql_blendrl_human_cew",
+    "cql_blendrl_cew_only",
+    "cql_blendrl_cew_dueling_resnet",
+    "cql_blendrl_cew_fyd_dueling_resnet",
+    "iql_blendrl_human_neural",
+    "ppo_blendrl_human_neural",
+)
+
+
+def _blendrl_first(canonical: str) -> str:
+    """'cql_blendrl_human_neural' -> 'blendrl_cql_human_neural'."""
+    algo, rest = canonical.split("_blendrl_", 1)
+    return f"blendrl_{algo}_{rest}"
+
+
+_ALIASES = {
+    **{_blendrl_first(canonical): canonical for canonical in _BLENDRL_REORDERED},
+    **{short: canonical for canonical, shorts in _SHORT_NAMES.items() for short in shorts},
+    **_DISPLAY_NAMES,
+    # Two canonical names were also listed as keys; that only matters for upper-case input ("CQL_TRANSFORMER").
+    "cql_dueling_resnet": "cql_dueling_resnet",
+    "cql_transformer": "cql_transformer",
+}
+
+
 def get_canonical_method_name(name: str) -> str:
     """Map method aliases and historical display names to canonical registered name."""
     s = str(name).replace("/", "_")
-    alias_map = {
-        "blendrl_cql_human_neural": "cql_blendrl_human_neural",
-        "blendrl_cql_human_transformer": "cql_blendrl_human_transformer",
-        "blendrl_cql_human_cew": "cql_blendrl_human_cew",
-        "blendrl_cql_cew_only": "cql_blendrl_cew_only",
-        "blendrl_cql_cew_dueling_resnet": "cql_blendrl_cew_dueling_resnet",
-        "blendrl_cql_cew_fyd_dueling_resnet": "cql_blendrl_cew_fyd_dueling_resnet",
-        "blendrl_iql_human_neural": "iql_blendrl_human_neural",
-        "blendrl_ppo_human_neural": "ppo_blendrl_human_neural",
-        "cql": "cql_dnn",
-        "dnn": "cql_dnn",
-        "cql (standard mlp)": "cql_dnn",
-        "cql (dueling resnet)": "cql_dueling_resnet",
-        "cql (transformer)": "cql_transformer",
-        "dueling_resnet": "cql_dueling_resnet",
-        "cql_dueling_resnet": "cql_dueling_resnet",
-        "transformer": "cql_transformer",
-        "cql_transformer": "cql_transformer",
-        "iql": "iql_dnn",
-        "ppo": "ppo_dnn",
-    }
-    if s in alias_map:
-        return alias_map[s]
+    if s in _ALIASES:
+        return _ALIASES[s]
     s_lower = s.lower()
-    if s_lower in alias_map:
-        return alias_map[s_lower]
+    if s_lower in _ALIASES:
+        return _ALIASES[s_lower]
     return s
 
 
@@ -268,14 +291,7 @@ def get_method_aliases(name: str) -> set:
         aliases.add(canon.replace("cql_blendrl_", "blendrl_cql_"))
     elif "blendrl_cql_" in canon:
         aliases.add(canon.replace("blendrl_cql_", "cql_blendrl_"))
-    if canon == "cql_dnn":
-        aliases.update({"cql", "dnn", "cql/dnn"})
-    elif canon == "cql_dueling_resnet":
-        aliases.update({"dueling_resnet", "cql/dueling_resnet"})
-    elif canon == "cql_transformer":
-        aliases.update({"transformer", "cql/transformer"})
-    elif canon == "iql_dnn":
-        aliases.update({"iql", "iql/dnn"})
-    elif canon == "ppo_dnn":
-        aliases.update({"ppo", "ppo/dnn"})
+    if canon in _SHORT_NAMES:
+        aliases.update(_SHORT_NAMES[canon])
+        aliases.add(canon.replace("_", "/", 1))
     return aliases

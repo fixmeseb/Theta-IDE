@@ -35,6 +35,7 @@ from src.app.pipeline.config import parse_methods_dict
 from src.app.pipeline.datasets import fast_purge_dir
 from src.app.pipeline.runtime import get_python_executable, get_subprocess_env
 from src.app.pipeline.task_registry import register_task
+from src.app.pipeline import runtime
 
 
 @register_task("reciprocal_refinement")
@@ -66,9 +67,9 @@ def run_reciprocal_refinement(cfg, local_val):
     python_exe = get_python_executable(site_cfg)
 
     # Standard paths
-    base_ckpt_dir = Path("results/checkpoints") / group / exp_id
-    base_ep_ckpt_dir = Path("results/checkpoints/early_prediction")
-    base_results_dir = Path("results/plots") / group / exp_id
+    base_ckpt_dir = Path(runtime.CHECKPOINTS_DIR) / group / exp_id
+    base_ep_ckpt_dir = Path(f"{runtime.CHECKPOINTS_DIR}/early_prediction")
+    base_results_dir = Path(runtime.PLOTS_DIR) / group / exp_id
     convergence_log = base_results_dir / "convergence_log.json"
 
     # Hard-overwrite checkpoints and plots on re-run unless recover=true is explicitly set
@@ -280,8 +281,8 @@ def _copy_best_checkpoint(cfg, round_exp_id, dest_dir):
 
     # Search for checkpoints in standard locations
     search_dirs = [
-        Path("results/checkpoints") / group / round_exp_id,
-        Path("results/logs") / group / round_exp_id,
+        Path(runtime.CHECKPOINTS_DIR) / group / round_exp_id,
+        Path(runtime.LOGS_DIR) / group / round_exp_id,
     ]
 
     for search_dir in search_dirs:

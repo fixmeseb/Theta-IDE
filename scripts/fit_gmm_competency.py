@@ -23,6 +23,7 @@ Usage:
 import os
 import sys
 import numpy as np
+from src.usr.eval.competency_tiers import fit_tiered_gaussians, sample_rows
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -120,9 +121,7 @@ def fit_final_gmm(X, p_low=35, p_high=92, sample_size=100000):
       - High Competency (~10-15%): Top mastery (>90th percentile), long error-free streaks, minimal hints.
     """
     print(f"\nFitting calibrated 3-tier competency model on sample of {sample_size:,} steps...", flush=True)
-    rng = np.random.default_rng(42)
-    idx = rng.choice(len(X), size=min(sample_size, len(X)), replace=False)
-    X_feat = X[idx][:, FEATURE_INDICES]
+    X_feat = sample_rows(X, FEATURE_INDICES, sample_size)
 
     # Composite competency metric across accuracy, error recovery, assistance, and pacing
     scores = (
@@ -133,28 +132,8 @@ def fit_final_gmm(X, p_low=35, p_high=92, sample_size=100000):
         - 0.5 * X_feat[:, 4] # nTotalHintSession
         - 0.3 * X_feat[:, 5] # avgTimeOnStep
     )
-
-    p_l = np.percentile(scores, p_low)
-    p_h = np.percentile(scores, p_high)
-
-    labels = np.zeros(len(scores), dtype=int)
-    labels[scores > p_l] = 1
-    labels[scores > p_h] = 2
-
-    n_feats = len(FEATURE_INDICES)
-    means = np.zeros((3, n_feats))
-    covariances = np.zeros((3, n_feats, n_feats))
-    weights = np.zeros(3)
-
-    for k in range(3):
-        X_k = X_feat[labels == k]
-        means[k] = X_k.mean(axis=0)
-        covariances[k] = np.cov(X_k, rowvar=False) + 1e-4 * np.eye(n_feats)
-        weights[k] = len(X_k) / len(X_feat)
-
-    precisions = np.array([np.linalg.inv(c) for c in covariances])
-    log_dets = np.array([np.linalg.slogdet(c)[1] for c in covariances])
-    log_weights = np.log(weights + 1e-12)
+    model = fit_tiered_gaussians(X_feat, scores, p_low, p_high)
+    labels, means, weights = model["labels"], model["means"], model["weights"]
 
     print("Calibrated 3-Tier Competency Centroids (z-scores):", flush=True)
     tier_names = ["Low Competency", "Med Competency", "High Competency (Top ~10%)"]
@@ -164,7 +143,8 @@ def fit_final_gmm(X, p_low=35, p_high=92, sample_size=100000):
             print(f"      {fname:20s}: {val:+.3f}", flush=True)
 
     order = np.array([0, 1, 2])
-    return means, covariances, precisions, log_dets, log_weights, weights, order
+    return (means, model["covariances"], model["precisions"], model["log_dets"], model["log_weights"], weights,
+            order)
 
 
 def validate_clusters_statistically(X, rewards, means, precisions, log_dets, log_weights, feature_indices, order, sample_size=100000):

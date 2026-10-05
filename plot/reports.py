@@ -15,6 +15,7 @@ import pandas as pd
 import yaml
 
 from plot.base import BasePlotter, clean_label, get_method_aliases
+from src.app.pipeline import runtime
 
 
 def format_duration(seconds: float) -> str:
@@ -46,7 +47,7 @@ class ReportsPlotter(BasePlotter):
 
         for alias in aliases:
             # 1. Check method-specific checkpoint directory
-            ckpt_method_dir = Path("results/checkpoints") / group / clean_exp / alias
+            ckpt_method_dir = Path(runtime.CHECKPOINTS_DIR) / group / clean_exp / alias
             if ckpt_method_dir.exists():
                 for cfg_path in sorted(ckpt_method_dir.rglob("config.yaml")):
                     try:
@@ -58,7 +59,7 @@ class ReportsPlotter(BasePlotter):
                         pass
 
             # 2. Check method-specific logs directory
-            log_method_dir = Path("results/logs") / group / clean_exp / alias
+            log_method_dir = Path(runtime.LOGS_DIR) / group / clean_exp / alias
             if log_method_dir.exists():
                 for cfg_path in sorted(log_method_dir.rglob("config.yaml")):
                     try:
@@ -83,8 +84,8 @@ class ReportsPlotter(BasePlotter):
 
         # 3. Check experiment root configs
         for root_cand in [
-            Path("results/checkpoints") / group / clean_exp / "config.yaml",
-            Path("results/logs") / group / clean_exp / "config.yaml",
+            Path(runtime.CHECKPOINTS_DIR) / group / clean_exp / "config.yaml",
+            Path(runtime.LOGS_DIR) / group / clean_exp / "config.yaml",
         ]:
             if root_cand.exists():
                 try:
@@ -96,7 +97,7 @@ class ReportsPlotter(BasePlotter):
                     pass
 
         # 4. Check in/config/agent/ directly
-        for agent_file in Path("in/config/agent").rglob("*.yaml"):
+        for agent_file in Path(f"{runtime.CONFIG_DIR}/agent").rglob("*.yaml"):
             try:
                 with open(agent_file) as f:
                     data = yaml.safe_load(f)
@@ -106,7 +107,7 @@ class ReportsPlotter(BasePlotter):
                 pass
 
         # 5. Search recent Hydra outputs
-        hydra_base = Path("results/hydra/outputs")
+        hydra_base = Path(f"{runtime.HYDRA_DIR}/outputs")
         if hydra_base.exists():
             for date_dir in sorted(hydra_base.iterdir(), reverse=True):
                 if not date_dir.is_dir():
@@ -265,11 +266,11 @@ class ReportsPlotter(BasePlotter):
                     for alias in aliases:
                         json_candidates.extend(
                             [
-                                Path("results/logs") / group / clean_exp / alias / v_name / "runtime.json",
-                                Path("results/checkpoints") / group / clean_exp / alias / v_num / "runtime.json",
-                                Path("results/logs") / group / clean_exp / alias / "runtime.json",
-                                Path("results/checkpoints") / group / clean_exp / alias / "runtime.json",
-                                Path("results/checkpoints") / group / clean_exp / alias / "0" / "runtime.json",
+                                Path(runtime.LOGS_DIR) / group / clean_exp / alias / v_name / "runtime.json",
+                                Path(runtime.CHECKPOINTS_DIR) / group / clean_exp / alias / v_num / "runtime.json",
+                                Path(runtime.LOGS_DIR) / group / clean_exp / alias / "runtime.json",
+                                Path(runtime.CHECKPOINTS_DIR) / group / clean_exp / alias / "runtime.json",
+                                Path(runtime.CHECKPOINTS_DIR) / group / clean_exp / alias / "0" / "runtime.json",
                             ]
                         )
 
@@ -303,8 +304,8 @@ class ReportsPlotter(BasePlotter):
                 if not times:
                     for alias in aliases:
                         for scan_dir in [
-                            Path("results/checkpoints") / group / clean_exp / alias,
-                            Path("results/logs") / group / clean_exp / alias,
+                            Path(runtime.CHECKPOINTS_DIR) / group / clean_exp / alias,
+                            Path(runtime.LOGS_DIR) / group / clean_exp / alias,
                         ]:
                             if scan_dir.exists():
                                 for r_json in sorted(scan_dir.rglob("runtime.json")):
@@ -326,8 +327,8 @@ class ReportsPlotter(BasePlotter):
                 # If still no times found, check Slurm output logs for execution time
                 if not times:
                     for slurm_dir in [
-                        Path("results/logs/slurm") / group / clean_exp,
-                        Path("results/logs/slurm") / clean_exp,
+                        Path(f"{runtime.LOGS_DIR}/slurm") / group / clean_exp,
+                        Path(f"{runtime.LOGS_DIR}/slurm") / clean_exp,
                     ]:
                         if slurm_dir.exists():
                             for alias in aliases:

@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import yaml
+from src.app.pipeline import runtime
 
 
 def normalize_agent_name(agent_config: str) -> str:
@@ -9,6 +10,29 @@ def normalize_agent_name(agent_config: str) -> str:
          'ex132(w)' -> 'ex132_w'
     This must match agent.name as set in the Hydra overrides."""
     return agent_config.replace("/", "_").replace("(", "_").replace(")", "").replace("__", "_").rstrip("_")
+
+
+def infer_experiment_id(cfg) -> None:
+    """Default cfg.experiment_id to the experiment recipe's file name when it was not set explicitly.
+
+    Entry points run through Hydra (e.g. `... +experiment=group/name`) start with experiment_id
+    "default_exp"; this sets it from the experiment override in Hydra's task overrides, if there is one.
+    Shared by src/app/train.py and the early-prediction training and tuning scripts.
+    """
+    if cfg.get("experiment_id", "default_exp") != "default_exp":
+        return
+    try:
+        from hydra.core.hydra_config import HydraConfig
+
+        if HydraConfig.initialized():
+            for override in HydraConfig.get().overrides.task:
+                if override.startswith("+experiment=") or override.startswith("experiment="):
+                    cfg.experiment_id = Path(override.split("=")[-1]).stem
+                    break
+    except Exception as e:
+        import logging
+
+        logging.getLogger(__name__).debug("Could not infer experiment_id from Hydra task overrides: %s", e)
 
 
 def parse_method_list(val):
@@ -74,14 +98,14 @@ def resolve_study_best_params(from_study: str, method_name: str, group: str | No
     clean_agent = normalize_agent_name(method_name)
     candidates = [
         Path(from_study),
-        Path("results/checkpoints") / from_study / clean_agent / "best_params.yaml",
-        Path("results/checkpoints") / from_study / method_name / "best_params.yaml",
-        Path("results/checkpoints") / from_study / "best_params.yaml",
+        Path(runtime.CHECKPOINTS_DIR) / from_study / clean_agent / "best_params.yaml",
+        Path(runtime.CHECKPOINTS_DIR) / from_study / method_name / "best_params.yaml",
+        Path(runtime.CHECKPOINTS_DIR) / from_study / "best_params.yaml",
     ]
     if group and "/" not in from_study:
-        candidates.append(Path("results/checkpoints") / group / from_study / clean_agent / "best_params.yaml")
-        candidates.append(Path("results/checkpoints") / group / from_study / method_name / "best_params.yaml")
-        candidates.append(Path("results/checkpoints") / group / from_study / "best_params.yaml")
+        candidates.append(Path(runtime.CHECKPOINTS_DIR) / group / from_study / clean_agent / "best_params.yaml")
+        candidates.append(Path(runtime.CHECKPOINTS_DIR) / group / from_study / method_name / "best_params.yaml")
+        candidates.append(Path(runtime.CHECKPOINTS_DIR) / group / from_study / "best_params.yaml")
 
     for cand in candidates:
         if cand.is_file() and cand.suffix in (".yaml", ".yml"):
@@ -129,10 +153,10 @@ def find_group_method_config(method_name: str, group: str | None = None) -> dict
 
     clean_name = normalize_agent_name(method_name)
     candidates = [
-        Path("in/config/experiment") / group / "methods" / f"{clean_name}.yaml",
+        Path(f"{runtime.CONFIG_DIR}/experiment") / group / "methods" / f"{clean_name}.yaml",
     ]
     if method_name != clean_name:
-        candidates.append(Path("in/config/experiment") / group / "methods" / f"{method_name}.yaml")
+        candidates.append(Path(f"{runtime.CONFIG_DIR}/experiment") / group / "methods" / f"{method_name}.yaml")
 
     for path in candidates:
         if path.is_file():
@@ -206,7 +230,7 @@ def load_model_base_config(model_name: str, config_dir=None) -> dict:
     import yaml
 
     if config_dir is None:
-        base_dir = Path("in/config/model")
+        base_dir = Path(f"{runtime.CONFIG_DIR}/model")
         if not base_dir.exists():
             base_dir = Path(__file__).resolve().parents[3] / "in" / "config" / "model"
         config_dir = base_dir
@@ -667,7 +691,7 @@ def resolve_experiment_config_name(exp_input: str) -> str:
     to its relative Hydra config path inside in/config/experiment/."""
     from pathlib import Path
 
-    exp_dir = Path("in/config/experiment")
+    exp_dir = Path(f"{runtime.CONFIG_DIR}/experiment")
     if not exp_dir.exists():
         return exp_input
 

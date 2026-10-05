@@ -8,6 +8,7 @@ import torch
 
 from src.app.core.utils import load_module
 from src.usr.models.neural.architectures import CNNActor, NeuralBlenderActor, NeuralBlenderMLP
+from src.app.pipeline import runtime
 
 logger = logging.getLogger(__name__)
 
@@ -38,7 +39,7 @@ def get_neural_agent(
             logger.debug("Could not infer num_in_features by instantiating %s: %s", env_name, e)
 
     if arch_name in ["cross_attention", "cross_attention_transformer", "sepsis_cross_attention"]:
-        transformer_module_path = f"in/envs/{env_name}/transformer.py"
+        transformer_module_path = f"{runtime.ENVS_DIR}/{env_name}/transformer.py"
         if not os.path.exists(transformer_module_path):
             raise FileNotFoundError(f"Requested transformer architecture but {transformer_module_path} does not exist.")
         module = load_module(transformer_module_path)
@@ -48,7 +49,7 @@ def get_neural_agent(
         )
 
     if arch_name in ["transformer", "sepsis_transformer"]:
-        transformer_module_path = f"in/envs/{env_name}/transformer.py"
+        transformer_module_path = f"{runtime.ENVS_DIR}/{env_name}/transformer.py"
         if not os.path.exists(transformer_module_path):
             raise FileNotFoundError(f"Requested transformer architecture but {transformer_module_path} does not exist.")
         module = load_module(transformer_module_path)
@@ -58,7 +59,7 @@ def get_neural_agent(
         )
 
     if arch_name in ["dueling_resnet", "resnet"]:
-        mlp_module_path = f"in/envs/{env_name}/mlp.py"
+        mlp_module_path = f"{runtime.ENVS_DIR}/{env_name}/mlp.py"
         if not os.path.exists(mlp_module_path):
             raise FileNotFoundError(f"Requested resnet architecture but {mlp_module_path} does not exist.")
         module = load_module(mlp_module_path)
@@ -68,7 +69,7 @@ def get_neural_agent(
         ).to(device)
 
     if arch_name in ["mlp", "dnn", "standard_mlp"]:
-        mlp_module_path = f"in/envs/{env_name}/mlp.py"
+        mlp_module_path = f"{runtime.ENVS_DIR}/{env_name}/mlp.py"
         if not os.path.exists(mlp_module_path):
             raise FileNotFoundError(f"Requested MLP architecture but {mlp_module_path} does not exist.")
         module = load_module(mlp_module_path)

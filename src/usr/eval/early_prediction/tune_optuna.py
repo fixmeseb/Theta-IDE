@@ -23,6 +23,7 @@ if os.path.join(PROJECT_ROOT, "src") not in sys.path:
 
 from src.app.pipeline.datasets import resolve_mimic_npz_path
 from src.usr.eval.early_prediction.model import (
+    Dict2Obj,
     SepsisLSTM,
     SepsisTransformer,
     compute_volatility_features,
@@ -33,6 +34,8 @@ from src.usr.eval.early_prediction.model import (
     train_lstm_model,
     train_transformer_model,
 )
+from src.app.pipeline import runtime
+from src.app.pipeline.config import infer_experiment_id
 
 
 def compute_metric(y_true, probs, metric_name="auprc"):
@@ -168,30 +171,9 @@ def objective(trial, seq_data_dict, y_cohort, c_indices, args):
     return mean_score
 
 
-class Dict2Obj:
-    def __init__(self, d, defaults=None):
-        if defaults:
-            for k, v in defaults.items():
-                setattr(self, k, v)
-        for k, v in d.items():
-            setattr(self, k, v)
-
-
 @hydra.main(version_base=None, config_path="../../../../in/config", config_name="config")
 def main(cfg: DictConfig):
-    # Auto-infer experiment_id from Hydra task override if not explicitly specified
-    if cfg.get("experiment_id", "default_exp") == "default_exp":
-        try:
-            from hydra.core.hydra_config import HydraConfig
-
-            if HydraConfig.initialized():
-                for override in HydraConfig.get().overrides.task:
-                    if override.startswith("+experiment=") or override.startswith("experiment="):
-                        exp_stem = Path(override.split("=")[-1]).stem
-                        cfg.experiment_id = exp_stem
-                        break
-        except Exception:
-            pass
+    infer_experiment_id(cfg)
 
     ep_cfg = cfg.get("early_prediction", {})
     if isinstance(ep_cfg, DictConfig):
@@ -201,12 +183,12 @@ def main(cfg: DictConfig):
         "n_trials": 30,
         "model_target": "all",
         "dataset_path": str(resolve_mimic_npz_path()),
-        "checkpoint": "results/checkpoints/mimic/tune_mimic_cql",
+        "checkpoint": f"{runtime.CHECKPOINTS_DIR}/mimic/tune_mimic_cql",
         "window_hours": 12,
         "use_volatility": True,
         "metric": "auprc",
         "n_eval_splits": 5,
-        "out_dir": "results/plots/early_prediction/tune_early_pred",
+        "out_dir": f"{runtime.PLOTS_DIR}/early_prediction/tune_early_pred",
     }
 
     # Check for CLI overrides mapped through the task pipeline

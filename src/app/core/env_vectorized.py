@@ -7,6 +7,7 @@ from typing import Any
 import torch
 
 from src.app.core.utils import load_module
+from src.app.pipeline import runtime
 
 
 class VectorizedBaseEnv(ABC):
@@ -49,7 +50,7 @@ class VectorizedBaseEnv(ABC):
     @staticmethod
     def from_name(name: str, **kwargs):
         """Factory to load environment by name from in/envs/<name>/env_vectorized.py."""
-        env_path = f"in/envs/{name}/env_vectorized.py"
+        env_path = f"{runtime.ENVS_DIR}/{name}/env_vectorized.py"
         env_module = load_module(env_path)
         cls = getattr(env_module, "VectorizedEnv", None) or getattr(env_module, "VectorizedNudgeEnv")
         return cls(**kwargs)

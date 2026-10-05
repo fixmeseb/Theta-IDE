@@ -18,7 +18,6 @@ for p in [
 
 import logging
 import time
-from pathlib import Path
 
 import hydra
 import omegaconf
@@ -43,23 +42,13 @@ except Exception as e:
 
 from src.app.core.lightning_builder import build_trainer, finalize_training
 from src.app.data.rl_data_module import RLDataModule
+from src.app.pipeline.config import infer_experiment_id
 from src.usr.methods.registry import auto_discover, get_agent_class
 
 
 @hydra.main(version_base=None, config_path="../../in/config", config_name="config")
 def main(cfg: DictConfig):
-    if cfg.get("experiment_id", "default_exp") == "default_exp":
-        try:
-            from hydra.core.hydra_config import HydraConfig
-
-            if HydraConfig.initialized():
-                for override in HydraConfig.get().overrides.task:
-                    if override.startswith("+experiment=") or override.startswith("experiment="):
-                        exp_stem = Path(override.split("=")[-1]).stem
-                        cfg.experiment_id = exp_stem
-                        break
-        except Exception as e:
-            logger.debug("Could not infer experiment_id from Hydra task overrides: %s", e)
+    infer_experiment_id(cfg)
 
     print(OmegaConf.to_yaml(cfg))
 

@@ -31,6 +31,7 @@ import matplotlib.pyplot as plt
 
 # Import styling and alias resolution from the unified method registry
 from src.usr.methods.method_registry import clean_label, get_canonical_method_name, get_method_aliases, get_style_info
+from src.app.pipeline import runtime
 
 
 def moving_average(a: np.ndarray, n: int = 5) -> np.ndarray:
@@ -88,20 +89,20 @@ class BasePlotter:
                 # Handle override patterns
                 if item_str.startswith("override /env:"):
                     env_name = item_str.split(":", 1)[1].strip()
-                    env_path = Path(f"in/config/env/{env_name}.yaml")
+                    env_path = Path(f"{runtime.CONFIG_DIR}/env/{env_name}.yaml")
                     if env_path.exists():
                         base_acc["env"] = self._load_yaml(env_path)
                     continue
                 if item_str.startswith("override /agent:"):
                     agent_name = item_str.split(":", 1)[1].strip()
-                    agent_path = Path(f"in/config/agent/{agent_name}.yaml")
+                    agent_path = Path(f"{runtime.CONFIG_DIR}/agent/{agent_name}.yaml")
                     if agent_path.exists():
                         base_acc["agent"] = self._load_yaml(agent_path)
                     continue
                 # Experiment base config (e.g. mimic/_base or cartpole/_base)
                 base_cands = [
-                    Path(f"in/config/experiment/{item_str}.yaml"),
-                    Path(f"in/config/experiment/{Path(item_str).stem}.yaml"),
+                    Path(f"{runtime.CONFIG_DIR}/experiment/{item_str}.yaml"),
+                    Path(f"{runtime.CONFIG_DIR}/experiment/{Path(item_str).stem}.yaml"),
                 ]
                 for bcand in base_cands:
                     if bcand.exists() and str(bcand) not in visited:
@@ -113,15 +114,15 @@ class BasePlotter:
             elif isinstance(item, dict):
                 for k, v in item.items():
                     if k.startswith("override /env"):
-                        env_path = Path(f"in/config/env/{v}.yaml")
+                        env_path = Path(f"{runtime.CONFIG_DIR}/env/{v}.yaml")
                         if env_path.exists():
                             base_acc["env"] = self._load_yaml(env_path)
                     elif k.startswith("override /agent"):
-                        agent_path = Path(f"in/config/agent/{v}.yaml")
+                        agent_path = Path(f"{runtime.CONFIG_DIR}/agent/{v}.yaml")
                         if agent_path.exists():
                             base_acc["agent"] = self._load_yaml(agent_path)
                     elif isinstance(v, str):
-                        base_cand = Path(f"in/config/experiment/{v}.yaml")
+                        base_cand = Path(f"{runtime.CONFIG_DIR}/experiment/{v}.yaml")
                         if base_cand.exists() and str(base_cand) not in visited:
                             visited.add(str(base_cand))
                             parent_raw = self._load_yaml(base_cand)
@@ -143,7 +144,7 @@ class BasePlotter:
         # 1. Check saved config.yaml from the experiment's log or checkpoint directory first
         # to ensure we capture the true group and execution hyperparameters
         saved_cfg = {}
-        for base_dir in [Path("results/logs"), Path("results/checkpoints")]:
+        for base_dir in [Path(runtime.LOGS_DIR), Path(runtime.CHECKPOINTS_DIR)]:
             if base_dir.exists():
                 if group_hint:
                     target_direct = base_dir / group_hint / clean_exp / "config.yaml"
@@ -167,7 +168,7 @@ class BasePlotter:
             if saved_cfg and saved_cfg.get("group"):
                 group_hint = str(saved_cfg.get("group"))
             else:
-                for base_dir in [Path("results/logs"), Path("results/checkpoints"), Path("results/plots")]:
+                for base_dir in [Path(runtime.LOGS_DIR), Path(runtime.CHECKPOINTS_DIR), Path(runtime.PLOTS_DIR)]:
                     if base_dir.exists():
                         for g_dir in base_dir.iterdir():
                             if g_dir.is_dir() and (g_dir / clean_exp).exists():
@@ -182,24 +183,24 @@ class BasePlotter:
             clean_base = Path(exp_config_name).stem
             candidates.extend(
                 [
-                    Path(f"in/config/experiment/{exp_config_name}.yaml"),
-                    Path(f"in/config/experiment/{clean_base}.yaml"),
+                    Path(f"{runtime.CONFIG_DIR}/experiment/{exp_config_name}.yaml"),
+                    Path(f"{runtime.CONFIG_DIR}/experiment/{clean_base}.yaml"),
                 ]
             )
             if group_hint:
-                candidates.append(Path(f"in/config/experiment/{group_hint}/{clean_base}.yaml"))
-            candidates.extend(list(Path("in/config/experiment").glob(f"**/{clean_base}.yaml")))
+                candidates.append(Path(f"{runtime.CONFIG_DIR}/experiment/{group_hint}/{clean_base}.yaml"))
+            candidates.extend(list(Path(f"{runtime.CONFIG_DIR}/experiment").glob(f"**/{clean_base}.yaml")))
 
         if group_hint:
-            candidates.append(Path(f"in/config/experiment/{group_hint}/{clean_exp}.yaml"))
+            candidates.append(Path(f"{runtime.CONFIG_DIR}/experiment/{group_hint}/{clean_exp}.yaml"))
         candidates.extend(
             [
-                Path(f"in/config/experiment/{exp_id}.yaml"),
-                Path(f"in/config/experiment/{clean_exp}.yaml"),
+                Path(f"{runtime.CONFIG_DIR}/experiment/{exp_id}.yaml"),
+                Path(f"{runtime.CONFIG_DIR}/experiment/{clean_exp}.yaml"),
             ]
         )
         if not group_hint:
-            candidates.extend(list(Path("in/config/experiment").glob(f"**/{clean_exp}.yaml")))
+            candidates.extend(list(Path(f"{runtime.CONFIG_DIR}/experiment").glob(f"**/{clean_exp}.yaml")))
 
         live_cfg = {}
         for cand in candidates:
@@ -237,7 +238,7 @@ class BasePlotter:
 
         clean_exp = Path(exp_id).stem
         # Scan results/logs/*/clean_exp and results/checkpoints/*/clean_exp
-        for base_dir in [Path("results/logs"), Path("results/checkpoints"), Path("results/plots")]:
+        for base_dir in [Path(runtime.LOGS_DIR), Path(runtime.CHECKPOINTS_DIR), Path(runtime.PLOTS_DIR)]:
             if base_dir.exists():
                 for g_dir in base_dir.iterdir():
                     if g_dir.is_dir() and (g_dir / clean_exp).exists():
@@ -276,7 +277,7 @@ class BasePlotter:
             custom_dir = str(exp_cfg["output_dir"]).format(group=group, exp_id=exp_id, clean_exp=clean_exp)
             output_dir = Path(custom_dir)
         else:
-            output_dir = Path("results/plots") / group / clean_exp
+            output_dir = Path(runtime.PLOTS_DIR) / group / clean_exp
         output_dir.mkdir(parents=True, exist_ok=True)
         return merged, group, output_dir
 
@@ -287,7 +288,7 @@ class BasePlotter:
         Returns dict: { method_name: { version_str: df } }
         """
         clean_exp = Path(exp_id).stem
-        exp_dir = Path("results/logs") / group / clean_exp
+        exp_dir = Path(runtime.LOGS_DIR) / group / clean_exp
         if not exp_dir.exists():
             print(f"Warning: Log directory {exp_dir} not found.")
             return {}

@@ -14,6 +14,8 @@ import yaml
 from omegaconf import DictConfig, OmegaConf
 from sklearn.metrics import auc, f1_score, precision_recall_curve, roc_auc_score
 from sklearn.model_selection import train_test_split
+from src.app.pipeline import runtime
+from src.app.pipeline.config import infer_experiment_id
 
 # Add project root and src to PYTHONPATH
 PROJECT_ROOT = str(Path(__file__).resolve().parents[4])
@@ -572,19 +574,7 @@ class Dict2Obj:
 
 @hydra.main(version_base=None, config_path="../../../../in/config", config_name="config")
 def main(cfg: DictConfig):
-    # Auto-infer experiment_id from Hydra task override if not explicitly specified
-    if cfg.get("experiment_id", "default_exp") == "default_exp":
-        try:
-            from hydra.core.hydra_config import HydraConfig
-
-            if HydraConfig.initialized():
-                for override in HydraConfig.get().overrides.task:
-                    if override.startswith("+experiment=") or override.startswith("experiment="):
-                        exp_stem = Path(override.split("=")[-1]).stem
-                        cfg.experiment_id = exp_stem
-                        break
-        except Exception:
-            pass
+    infer_experiment_id(cfg)
 
     ep_cfg = cfg.get("early_prediction", {})
     if isinstance(ep_cfg, DictConfig):
@@ -592,9 +582,9 @@ def main(cfg: DictConfig):
 
     defaults = {
         "exp_id": cfg.experiment_id,
-        "checkpoint": "results/checkpoints/mimic/cql_literature",
+        "checkpoint": f"{runtime.CHECKPOINTS_DIR}/mimic/cql_literature",
         "dataset_path": None,  # Must be set explicitly in experiment config early_prediction.dataset_path
-        "tune_dir": "results/plots/early_prediction/tune_early_pred",
+        "tune_dir": f"{runtime.PLOTS_DIR}/early_prediction/tune_early_pred",
         "use_tuned_params": True,
         "save_checkpoints": True,
         "target_model": "all",
@@ -616,7 +606,7 @@ def main(cfg: DictConfig):
         "hidden_dim": 64,
         "use_volatility": True,
         "n_splits": 20,
-        "output_dir": "results/plots/early_prediction",
+        "output_dir": f"{runtime.PLOTS_DIR}/early_prediction",
     }
     args = Dict2Obj(ep_cfg, defaults)
 
@@ -860,7 +850,7 @@ def main(cfg: DictConfig):
             opt_thresh = tr_thresh[best_tr_idx] if best_tr_idx < len(tr_thresh) else 0.5
 
             if args.save_checkpoints:
-                ckpt_dir = Path("results/checkpoints/early_prediction") / (args.exp_id or "default")
+                ckpt_dir = Path(f"{runtime.CHECKPOINTS_DIR}/early_prediction") / (args.exp_id or "default")
                 ckpt_dir.mkdir(parents=True, exist_ok=True)
                 clean_name = m_cfg_name.lower().replace(" ", "_").replace("(", "").replace(")", "")
                 ckpt_path = ckpt_dir / f"{clean_name}_split{m_idx}.pt"

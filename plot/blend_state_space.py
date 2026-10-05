@@ -26,6 +26,7 @@ from sklearn.manifold import TSNE
 
 from plot.base import BasePlotter
 from plot.blend_common import discover_blendrl_checkpoints, extract_model_routing_data
+from src.app.pipeline import runtime
 
 
 class BlendStateSpacePlotter(BasePlotter):
@@ -58,9 +59,9 @@ class BlendStateSpacePlotter(BasePlotter):
         sub_w = data["w_logic"]
 
         # 1. Pedagogical Competency Simplex (GMM Posteriors)
-        gmm_path = Path(f"in/datasets/pyrenees/per_problem/{target_name}/gmm_scaler.npz")
+        gmm_path = Path(f"{runtime.DATASETS_DIR}/pyrenees/per_problem/{target_name}/gmm_scaler.npz")
         if not gmm_path.exists():
-            gmm_path = Path("in/datasets/pyrenees/pyrenees_gmm_scaler.npz")
+            gmm_path = Path(f"{runtime.DATASETS_DIR}/pyrenees/pyrenees_gmm_scaler.npz")
 
         have_gmm = False
         if gmm_path.exists():

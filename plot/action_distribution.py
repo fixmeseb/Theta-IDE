@@ -29,6 +29,7 @@ from plot.base import BasePlotter, clean_label, get_canonical_method_name, get_m
 from plot.pyrenees_reporter import PyreneesReporter
 from src.usr.eval.pyrenees_evaluator import PyreneesEvaluator
 from src.usr.methods.method_registry import get_style as get_method_style
+from src.app.pipeline import runtime
 
 
 class ActionDistributionPlotter(BasePlotter):
@@ -43,9 +44,9 @@ class ActionDistributionPlotter(BasePlotter):
 
     def _discover_checkpoints(self, exp_id: str, group: str, clean_exp: str):
         """Discovers all Pyrenees checkpoints (single models, multi-dataset runs, per-problem models)."""
-        ckpt_root = Path("results/checkpoints") / group / clean_exp
+        ckpt_root = Path(runtime.CHECKPOINTS_DIR) / group / clean_exp
         if not ckpt_root.exists():
-            ckpt_root = Path("results/checkpoints") / clean_exp
+            ckpt_root = Path(runtime.CHECKPOINTS_DIR) / clean_exp
         if not ckpt_root.exists():
             return {}
 

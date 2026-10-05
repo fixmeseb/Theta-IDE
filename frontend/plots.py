@@ -9,6 +9,7 @@ from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QComboBox, QPushButton, QFileDialog,
     QMessageBox, QStackedWidget, QGraphicsView, QGraphicsScene,
 )
+from .model import SERIES_COLORS
 from .widgets import label
 from .theme import theme_color
 
@@ -352,10 +353,10 @@ class PlotViewer(QWidget):
         x, y = self.xaxis.currentText(), self.yaxis.currentText()
         series = []
         warnings = []
-        sources = [(name, data, "#b8bb26")]
+        sources = [(name, data, SERIES_COLORS[0])]
         if self.compare.currentData() and self.compare.currentData() != self.source.currentData():
             other_name, other_data = self.data_for(self.compare.currentData())
-            sources.append((other_name, other_data, "#83a598"))
+            sources.append((other_name, other_data, SERIES_COLORS[1]))
         for title, columns, color in sources:
             if x not in columns or y not in columns:
                 warnings.append(f"{title}: chosen axes unavailable")

@@ -5,6 +5,8 @@ import pandas as pd
 import torch
 
 from plot.base import clean_label
+from src.app.pipeline import runtime
+from src.usr.eval.checkpoint_inference import get_probs_and_actions, load_agent
 
 
 class PyreneesEvaluator:
@@ -16,95 +18,10 @@ class PyreneesEvaluator:
         self.tier_names = [("Low Tier", 0), ("Med Tier", 1), ("High Tier", 2)]
 
     def _load_agent(self, path):
-        from src.usr.methods.cew_agent import CEWAgent
-        from src.usr.methods.cql_agent import CQLAgent
-        from src.usr.methods.iql_agent import IQLAgent
-
-        last_error = None
-        for cls in [CQLAgent, CEWAgent, IQLAgent]:
-            try:
-                ag = cls.load_from_checkpoint(str(path), map_location=self.device, weights_only=False)
-                ag.to(self.device)
-                ag.eval()
-                return ag
-            except Exception as e:
-                last_error = e
-                try:
-                    ag = cls.load_from_checkpoint(str(path), map_location=self.device, weights_only=False, strict=False)
-                    ag.to(self.device)
-                    ag.eval()
-                    return ag
-                except Exception as e2:
-                    last_error = e2
-                    continue
-        if last_error is not None:
-            print(f"  [PyreneesEvaluator] Checkpoint load error for {path}: {last_error}")
-        return None
+        return load_agent(path, self.device, "PyreneesEvaluator")
 
     def _get_probs_and_actions(self, ag, obs_b):
-        if hasattr(ag, "get_action_probs"):
-            probs = ag.get_action_probs(obs_b)
-            acts = ag.get_action(obs_b) if hasattr(ag, "get_action") else torch.argmax(probs, dim=-1)
-            return probs, acts
-
-        # Fallback for unmigrated or raw models
-        is_cql = ag.__class__.__name__ == "CQLAgent" or "cql" in str(getattr(ag, "algorithm", "")).lower()
-        use_actor = bool(ag.get_cfg("use_actor", False)) if hasattr(ag, "get_cfg") else getattr(ag, "use_actor", False)
-
-        if hasattr(ag, "is_modular") and ag.is_modular:
-            logic_obs = (
-                ag._prepare_logic_obs(obs_b)
-                if hasattr(ag, "_prepare_logic_obs")
-                else obs_b.unsqueeze(1).repeat(1, 2, 1)
-            )
-            if is_cql and not use_actor and hasattr(ag.model, "get_q_values"):
-                q_vals = ag.model.get_q_values(obs_b, logic_obs)
-                probs = torch.softmax(q_vals, dim=-1)
-                acts = torch.argmax(q_vals, dim=-1)
-                return probs, acts
-            elif use_actor and hasattr(ag.model, "actor"):
-                probs, _ = ag.model.actor(obs_b, logic_obs)
-                acts = torch.argmax(probs, dim=-1)
-                return probs, acts
-            elif hasattr(ag.model, "get_q_values"):
-                q_vals = ag.model.get_q_values(obs_b, logic_obs)
-                probs = torch.softmax(q_vals, dim=-1)
-                acts = torch.argmax(q_vals, dim=-1)
-                return probs, acts
-        elif is_cql and not use_actor and hasattr(ag, "q_network"):
-            q = ag.q_network.get_q_values(obs_b) if hasattr(ag.q_network, "get_q_values") else ag.q_network(obs_b)
-            probs = torch.softmax(q, dim=-1)
-            acts = torch.argmax(probs, dim=-1)
-            return probs, acts
-        elif hasattr(ag, "actor") and hasattr(ag.actor, "get_action_probs"):
-            probs = ag.actor.get_action_probs(obs_b)
-            acts = torch.argmax(probs, dim=-1)
-            return probs, acts
-        elif hasattr(ag, "fuzzy_model") and ag.fuzzy_model is not None:
-            q = ag.fuzzy_model(obs_b.to("cpu"))
-            probs = torch.softmax(q, dim=-1).to(obs_b.device)
-            acts = torch.argmax(probs, dim=-1)
-            return probs, acts
-        elif hasattr(ag, "q_network"):
-            if hasattr(ag.q_network, "get_action_probs"):
-                probs = ag.q_network.get_action_probs(obs_b)
-            else:
-                q = ag.q_network(obs_b)
-                probs = torch.softmax(q, dim=-1)
-            acts = torch.argmax(probs, dim=-1)
-            return probs, acts
-        elif hasattr(ag, "model") and hasattr(ag.model, "get_q_values"):
-            q = ag.model.get_q_values(obs_b)
-            probs = torch.softmax(q, dim=-1)
-            acts = torch.argmax(probs, dim=-1)
-            return probs, acts
-        else:
-            out = ag.get_action_and_value(obs_b)
-            act = out[0] if isinstance(out, (tuple, list)) else out
-            n_acts = 3 if obs_b.shape[-1] >= 123 else 2
-            probs = torch.zeros((obs_b.shape[0], n_acts), device=obs_b.device)
-            probs.scatter_(1, act.unsqueeze(1).long(), 1.0)
-            return probs, act
+        return get_probs_and_actions(ag, obs_b)
 
     def _compute_gmm_tiers(self, obs_matrix: np.ndarray, gmm_path: Path) -> np.ndarray:
         """Computes 3-tier competency segmentation (0=Low, 1=Med, 2=High) using GMM parameters."""
@@ -158,10 +75,10 @@ class PyreneesEvaluator:
         return problem_rows, step_rows, tidy_tier_rows
 
     def _load_problem_data(self):
-        prob_clean_path = Path("in/datasets/pyrenees/per_problem/problem/clean.npz")
-        prob_gmm_path = Path("in/datasets/pyrenees/per_problem/problem/gmm_scaler.npz")
+        prob_clean_path = Path(f"{runtime.DATASETS_DIR}/pyrenees/per_problem/problem/clean.npz")
+        prob_gmm_path = Path(f"{runtime.DATASETS_DIR}/pyrenees/per_problem/problem/gmm_scaler.npz")
         if not prob_gmm_path.exists():
-            prob_gmm_path = Path("in/datasets/pyrenees/pyrenees_gmm_scaler.npz")
+            prob_gmm_path = Path(f"{runtime.DATASETS_DIR}/pyrenees/pyrenees_gmm_scaler.npz")
 
         if prob_clean_path.exists():
             try:
@@ -177,8 +94,8 @@ class PyreneesEvaluator:
 
     def _load_step_data(self):
         step_exercises = {}
-        per_problem_dir = Path("in/datasets/pyrenees/per_problem")
-        prob_gmm_path = Path("in/datasets/pyrenees/pyrenees_gmm_scaler.npz")
+        per_problem_dir = Path(f"{runtime.DATASETS_DIR}/pyrenees/per_problem")
+        prob_gmm_path = Path(f"{runtime.DATASETS_DIR}/pyrenees/pyrenees_gmm_scaler.npz")
 
         if per_problem_dir.exists():
             for pdir in sorted(per_problem_dir.iterdir()):
@@ -214,7 +131,7 @@ class PyreneesEvaluator:
             s_rews = np.hstack(s_rews_list)
             s_tiers = np.hstack(s_tiers_list)
         else:
-            fallback_step = Path("in/datasets/pyrenees/pyrenees_clean.npz")
+            fallback_step = Path(f"{runtime.DATASETS_DIR}/pyrenees/pyrenees_clean.npz")
             if fallback_step.exists():
                 fb_data = np.load(fallback_step, allow_pickle=True)
                 s_obs = np.vstack(fb_data["states"]).astype(np.float32)

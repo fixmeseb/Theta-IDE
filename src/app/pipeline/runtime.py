@@ -2,6 +2,7 @@
 
 Single source of truth for:
   - PROJECT_ROOT
+  - The project's folder layout (results/ and in/ subfolders)
   - Python executable path
   - PYTHONPATH for subprocesses
   - Shell-embeddable environment setup block for Slurm scripts
@@ -13,6 +14,24 @@ from pathlib import Path
 
 # Resolved once at import time — always points to the repo root
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
+
+# Folder layout, relative to the working directory (the pipeline, API and plots run from the repo root).
+# Plain strings with forward slashes, so paths built from them (f-strings, os.path.join, Path) are
+# exactly what the literal paths produced before.
+RESULTS_DIR = "results"
+CHECKPOINTS_DIR = f"{RESULTS_DIR}/checkpoints"
+LOGS_DIR = f"{RESULTS_DIR}/logs"
+PLOTS_DIR = f"{RESULTS_DIR}/plots"
+TENSORBOARD_DIR = f"{RESULTS_DIR}/tensorboard"
+JOBS_DIR = f"{RESULTS_DIR}/jobs"
+OPTUNA_DIR = f"{RESULTS_DIR}/optuna"
+HYDRA_DIR = f"{RESULTS_DIR}/hydra"
+RESULT_DATASETS_DIR = f"{RESULTS_DIR}/datasets"
+INPUT_DIR = "in"
+DATASETS_DIR = f"{INPUT_DIR}/datasets"
+CONFIG_DIR = f"{INPUT_DIR}/config"
+RULES_DIR = f"{INPUT_DIR}/rules"
+ENVS_DIR = f"{INPUT_DIR}/envs"
 
 
 def get_python_executable(site_cfg=None) -> str:
