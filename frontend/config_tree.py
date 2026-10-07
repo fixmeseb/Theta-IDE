@@ -377,8 +377,15 @@ class ConfigTreeWidget(QWidget):
         rel_path = file_path.relative_to(self.root_dir).as_posix()
         is_exp = rel_path.startswith("experiment/") and not name.startswith("_")
 
-        node = QTreeWidgetItem(parent_node, [name])
-        node.setIcon(0, self.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon))
+        display_name = name
+        if display_name.endswith(".yaml"):
+            display_name = display_name[:-5]
+        elif display_name.endswith(".yml"):
+            display_name = display_name[:-4]
+
+        node = QTreeWidgetItem(parent_node, [display_name])
+        if file_path.suffix not in (".yaml", ".yml"):
+            node.setIcon(0, self.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon))
         node.setData(0, Qt.ItemDataRole.UserRole, {
             "type": "file",
             "path": str(file_path),
@@ -430,7 +437,12 @@ class ConfigTreeWidget(QWidget):
                 data = item.data(0, Qt.ItemDataRole.UserRole)
                 if data and data.get("type") == "file":
                     item_rel = str(Path(data.get("rel_path", ""))).replace("\\", "/")
-                    if item_rel == target_norm or item_rel.endswith(target_norm):
+                    if (
+                        item_rel == target_norm
+                        or item_rel.endswith(target_norm)
+                        or item_rel.removesuffix(".yaml") == target_norm
+                        or item_rel.removesuffix(".yaml").endswith(target_norm)
+                    ):
                         return item
                 found = find_item(item)
                 if found:

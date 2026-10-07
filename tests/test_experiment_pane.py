@@ -17,7 +17,7 @@ os.environ["QT_QPA_PLATFORM"] = "offscreen"
 try:
     from PyQt6 import QtWebEngineWidgets
     from PyQt6.QtCore import Qt
-    from PyQt6.QtWidgets import QApplication
+    from PyQt6.QtWidgets import QApplication, QTreeWidget
     app = QApplication.instance() or QApplication(sys.argv[:1])
     from frontend.app import Window
     from frontend.components_panel import ComponentsPanel
@@ -60,7 +60,7 @@ class TestConfigTree(unittest.TestCase):
         top_texts = [self.tree_widget.tree.topLevelItem(i).text(0) for i in range(top_count)]
         self.assertTrue(any("experiment" in t for t in top_texts))
         self.assertTrue(any("agent" in t for t in top_texts))
-        self.assertTrue(any("config.yaml" in t for t in top_texts))
+        self.assertTrue(any("config" in t for t in top_texts))
 
     def test_experiment_expanded_by_default(self):
         for i in range(self.tree_widget.tree.topLevelItemCount()):
@@ -100,7 +100,7 @@ class TestConfigTree(unittest.TestCase):
             top_texts = [exp_tree.tree.topLevelItem(i).text(0) for i in range(top_count)]
             self.assertFalse(any("agent" in t for t in top_texts))
             self.assertFalse(any("env" in t for t in top_texts))
-            self.assertFalse(any("config.yaml" in t for t in top_texts))
+            self.assertFalse(any(t == "config" for t in top_texts))
         finally:
             exp_tree.close()
 
@@ -111,10 +111,40 @@ class TestConfigTree(unittest.TestCase):
             top_texts = [comp_tree.tree.topLevelItem(i).text(0) for i in range(top_count)]
             self.assertTrue(any("agent" in t for t in top_texts))
             self.assertTrue(any("env" in t for t in top_texts))
-            self.assertTrue(any("config.yaml" in t for t in top_texts))
+            self.assertTrue(any(t == "config" for t in top_texts))
             self.assertFalse(any("experiment" in t for t in top_texts))
         finally:
             comp_tree.close()
+
+    def test_yaml_files_have_no_icon_and_no_yaml_extension_in_tree(self):
+        """YAML files must not display the .yaml extension and must not have a file icon."""
+        def find_file_items(parent):
+            items = []
+            count = parent.topLevelItemCount() if isinstance(parent, QTreeWidget) else parent.childCount()
+            for i in range(count):
+                child = parent.topLevelItem(i) if isinstance(parent, QTreeWidget) else parent.child(i)
+                data = child.data(0, Qt.ItemDataRole.UserRole)
+                if data and data.get("type") == "file":
+                    items.append(child)
+                items.extend(find_file_items(child))
+            return items
+
+        file_items = find_file_items(self.tree_widget.tree)
+        self.assertGreater(len(file_items), 0)
+        for item in file_items:
+            # No .yaml or .yml extension in displayed text
+            self.assertFalse(item.text(0).endswith(".yaml"))
+            self.assertFalse(item.text(0).endswith(".yml"))
+            # No icon / emoji next to yaml files
+            self.assertTrue(item.icon(0).isNull())
+
+    def test_directory_nodes_retain_folder_icons(self):
+        """Directory nodes in the tree should still display folder icons."""
+        for i in range(self.tree_widget.tree.topLevelItemCount()):
+            item = self.tree_widget.tree.topLevelItem(i)
+            data = item.data(0, Qt.ItemDataRole.UserRole)
+            if data and data.get("type") == "dir":
+                self.assertFalse(item.icon(0).isNull())
 
     def test_collapse_and_expand_all(self):
         exp_tree = ConfigTreeWidget(root_dir=self.root, mode="experiments")
