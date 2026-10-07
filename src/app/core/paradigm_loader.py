@@ -27,10 +27,12 @@ def register_component(*names: str):
         class OfflineRLRunner(BaseParadigmRunner):
             ...
     """
+
     def decorator(cls):
         for name in names:
             _COMPONENT_REGISTRY[name] = cls
         return cls
+
     return decorator
 
 
@@ -49,8 +51,7 @@ def get_component(name: str | None) -> Type[Any] | None:
         _discovered = True
     if name not in _COMPONENT_REGISTRY:
         raise KeyError(
-            f"Component '{name}' is not registered. "
-            f"Registered components: {sorted(_COMPONENT_REGISTRY.keys())}"
+            f"Component '{name}' is not registered. Registered components: {sorted(_COMPONENT_REGISTRY.keys())}"
         )
     return _COMPONENT_REGISTRY[name]
 
@@ -86,11 +87,13 @@ def _auto_discover_components():
 # ParadigmDefinition dataclass
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class ParadigmDefinition:
     """Fully resolved paradigm definition with concrete class references."""
+
     name: str
-    type: str                         # 'base' or 'meta'
+    type: str  # 'base' or 'meta'
     description: str = ""
     runner_cls: Type[Any] | None = None
     data_module_cls: Type[Any] | None = None

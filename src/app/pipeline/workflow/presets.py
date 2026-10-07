@@ -24,8 +24,12 @@ def create_transfer_learning_preset() -> WorkflowGraph:
         name="Transfer Learning (CartPole -> MountainCar)",
         description="Trains a source policy on CartPole, then wires the checkpoint weights to warm-start fine-tuning on MountainCar.",
     )
-    n1 = make_online_rl_node("source_trainer", "CartPole PPO (Source)", experiment_ref="csc510/cartpole_demo", pos_x=60, pos_y=120)
-    n2 = make_online_rl_node("target_fine_tuner", "MountainCar PPO (Target)", experiment_ref="cartpole/quick_test", pos_x=440, pos_y=120)
+    n1 = make_online_rl_node(
+        "source_trainer", "CartPole PPO (Source)", experiment_ref="csc510/cartpole_demo", pos_x=60, pos_y=120
+    )
+    n2 = make_online_rl_node(
+        "target_fine_tuner", "MountainCar PPO (Target)", experiment_ref="cartpole/quick_test", pos_x=440, pos_y=120
+    )
     n2.overrides = ["env=mountaincar", "++train.freeze_backbone=false"]
 
     graph.add_node(n1)
@@ -41,8 +45,12 @@ def create_online_vs_offline_preset() -> WorkflowGraph:
         name="Online vs. Offline RL Comparison",
         description="Exploration buffer collected by online PPO is piped to offline IQL, and both performance curves are compared.",
     )
-    n1 = make_online_rl_node("online_ppo", "CartPole PPO (Online)", experiment_ref="csc510/cartpole_demo", pos_x=60, pos_y=80)
-    n2 = make_offline_rl_node("offline_iql", "CartPole IQL (Offline)", experiment_ref="cartpole/offline_cartpole", pos_x=440, pos_y=80)
+    n1 = make_online_rl_node(
+        "online_ppo", "CartPole PPO (Online)", experiment_ref="csc510/cartpole_demo", pos_x=60, pos_y=80
+    )
+    n2 = make_offline_rl_node(
+        "offline_iql", "CartPole IQL (Offline)", experiment_ref="cartpole/offline_cartpole", pos_x=440, pos_y=80
+    )
     n3 = make_plot_evaluator_node("comparator", "Convergence Comparator", pos_x=800, pos_y=150)
 
     graph.add_node(n1)
@@ -62,7 +70,9 @@ def create_model_distillation_preset() -> WorkflowGraph:
         name="Model Distillation (NeSy Teacher -> Student MLP)",
         description="A large hybrid BlendRL teacher model generates rollout transitions with soft action logits to train a fast student MLP.",
     )
-    teacher = make_online_rl_node("teacher_model", "Pretrained BlendRL (Teacher)", experiment_ref="seaquest/quick_test", pos_x=60, pos_y=120)
+    teacher = make_online_rl_node(
+        "teacher_model", "Pretrained BlendRL (Teacher)", experiment_ref="seaquest/quick_test", pos_x=60, pos_y=120
+    )
 
     # Rollout generator node
     generator = WorkflowNode(
@@ -73,19 +83,23 @@ def create_model_distillation_preset() -> WorkflowGraph:
         pos_x=420,
         pos_y=120,
     )
-    generator.add_input(Port(
-        name="teacher_checkpoint",
-        direction=PortDirection.INPUT,
-        port_type=PortType.CHECKPOINT,
-        description="Teacher model checkpoint",
-        required=True,
-    ))
-    generator.add_output(Port(
-        name="soft_dataset",
-        direction=PortDirection.OUTPUT,
-        port_type=PortType.DATASET,
-        description="Dataset with soft targets and state visits",
-    ))
+    generator.add_input(
+        Port(
+            name="teacher_checkpoint",
+            direction=PortDirection.INPUT,
+            port_type=PortType.CHECKPOINT,
+            description="Teacher model checkpoint",
+            required=True,
+        )
+    )
+    generator.add_output(
+        Port(
+            name="soft_dataset",
+            direction=PortDirection.OUTPUT,
+            port_type=PortType.DATASET,
+            description="Dataset with soft targets and state visits",
+        )
+    )
 
     student = make_distillation_node("student_mlp", "Compact Student MLP", pos_x=780, pos_y=120)
 
@@ -105,18 +119,30 @@ def create_sepsis_reciprocal_preset() -> WorkflowGraph:
         name="Sepsis Clinician Behavior ↔ Early Prediction",
         description="CQL clinician policy outputs V(s) to augment MIMIC patient records for Early Prediction, whose shock risk Phi(s) shapes CQL rewards.",
     )
-    cql = make_offline_rl_node("cql_clinician", "MIMIC CQL Clinician Model", experiment_ref="mimic/cql_literature", pos_x=60, pos_y=80)
+    cql = make_offline_rl_node(
+        "cql_clinician", "MIMIC CQL Clinician Model", experiment_ref="mimic/cql_literature", pos_x=60, pos_y=80
+    )
     # Add value_estimator output to CQL
-    cql.add_output(Port(
-        name="value_estimator",
-        direction=PortDirection.OUTPUT,
-        port_type=PortType.VALUE_ESTIMATOR,
-        description="State-value estimates V(s) and action Q-values",
-    ))
+    cql.add_output(
+        Port(
+            name="value_estimator",
+            direction=PortDirection.OUTPUT,
+            port_type=PortType.VALUE_ESTIMATOR,
+            description="State-value estimates V(s) and action Q-values",
+        )
+    )
 
-    mimic_data = make_dataset_source_node("mimic_dataset", "MIMIC Patient Transitions", "in/datasets/mimic", pos_x=60, pos_y=300)
+    mimic_data = make_dataset_source_node(
+        "mimic_dataset", "MIMIC Patient Transitions", "in/datasets/mimic", pos_x=60, pos_y=300
+    )
     augmenter = make_feature_augmenter_node("feature_augmenter", "V(s) Feature Augmenter", pos_x=440, pos_y=80)
-    ep = make_supervised_node("ep_transformer", "Early Prediction (Transformer)", experiment_ref="early_prediction/quick_test", pos_x=800, pos_y=80)
+    ep = make_supervised_node(
+        "ep_transformer",
+        "Early Prediction (Transformer)",
+        experiment_ref="early_prediction/quick_test",
+        pos_x=800,
+        pos_y=80,
+    )
     shaper = make_reward_shaper_node("reward_shaper", "Potential Reward Shaper", pos_x=440, pos_y=300)
 
     graph.add_node(cql)

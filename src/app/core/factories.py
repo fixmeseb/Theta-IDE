@@ -12,9 +12,7 @@ from src.usr.models.neural.architectures import CNNActor, NeuralBlenderActor, Ne
 logger = logging.getLogger(__name__)
 
 
-def get_neural_agent(
-    env_name, n_actions, device, arch_name=None, hidden_sizes=None, num_in_features=None, **kwargs
-):
+def get_neural_agent(env_name, n_actions, device, arch_name=None, hidden_sizes=None, num_in_features=None, **kwargs):
     from src.app.core.model_registry import build_model
 
     if hidden_sizes is None:
@@ -100,4 +98,3 @@ def load_cleanrl_agent(
             raise RuntimeError(f"Failed loading CleanRL weights from '{model_path}': {e}")
     agent.to(device)
     return agent
-

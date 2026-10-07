@@ -108,7 +108,16 @@ def main(cfg: DictConfig):
 
         kwargs = {}
         if hasattr(model_cfg, "items"):
-            reserved = {"architecture", "name", "lightning_module", "module", "lr", "type", "epochs_per_interval", "eval_interval_epochs"}
+            reserved = {
+                "architecture",
+                "name",
+                "lightning_module",
+                "module",
+                "lr",
+                "type",
+                "epochs_per_interval",
+                "eval_interval_epochs",
+            }
             for k, v in model_cfg.items():
                 if k not in reserved and v is not None:
                     kwargs[k] = v
@@ -133,7 +142,9 @@ def main(cfg: DictConfig):
             if k not in kwargs and hasattr(cfg, "get") and cfg.get(k) is not None:
                 kwargs[k] = cfg.get(k)
 
-        print(f"Supervised Paradigm: constructing {SupervisedModelCls.__name__} ({arch_name.upper()}, input_dim={input_dim}, lr={lr})")
+        print(
+            f"Supervised Paradigm: constructing {SupervisedModelCls.__name__} ({arch_name.upper()}, input_dim={input_dim}, lr={lr})"
+        )
         model = SupervisedModelCls(architecture_name=arch_name, input_dim=input_dim, lr=lr, **kwargs)
     else:
         auto_discover()

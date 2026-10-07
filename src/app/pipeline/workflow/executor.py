@@ -27,11 +27,7 @@ def load_workflow(workflow_ref: Any):
     from src.app.pipeline.workflow.model import WorkflowGraph
 
     if isinstance(workflow_ref, (dict, DictConfig)):
-        w_id = (
-            workflow_ref.get("id")
-            if hasattr(workflow_ref, "get")
-            else getattr(workflow_ref, "id", None)
-        )
+        w_id = workflow_ref.get("id") if hasattr(workflow_ref, "get") else getattr(workflow_ref, "id", None)
         if w_id and (_WORKFLOW_CONFIG_DIR / f"{w_id}.yaml").exists():
             return WorkflowGraph.load_yaml(_WORKFLOW_CONFIG_DIR / f"{w_id}.yaml")
 
@@ -73,11 +69,11 @@ def run_workflow(workflow_id: str, cfg: Any, context: dict) -> None:
     levels = graph.topological_levels()
     is_interactive = context.get("is_interactive", True)
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"  WORKFLOW: {graph.name}")
     print(f"  {graph.description}")
     print(f"  Execution order: {levels}")
-    print(f"{'='*60}\n")
+    print(f"{'=' * 60}\n")
 
     for level_idx, node_ids in enumerate(levels):
         print(f"--- Workflow Level {level_idx}: {node_ids} ---")
@@ -106,8 +102,10 @@ def _execute_node(node, graph, cfg, context, is_interactive: bool) -> None:
     if category == "transform":
         # Transform nodes delegate to their bound experiment subprocess
         log.info("Transform node '%s': bindings will be applied by the engine in future iteration.", node.id)
-        print(f"  [WARNING] Transform node '{node.id}' execution not yet automated. "
-              f"Apply param bindings manually or implement WorkflowExecutor.execute_transform().")
+        print(
+            f"  [WARNING] Transform node '{node.id}' execution not yet automated. "
+            f"Apply param bindings manually or implement WorkflowExecutor.execute_transform()."
+        )
         return
 
     if category == "paradigm" and experiment_ref:

@@ -91,7 +91,12 @@ def auto_discover():
             sys.path.insert(0, p)
 
     for module_info in pkgutil.iter_modules([methods_dir]):
-        if module_info.name.startswith("_") or module_info.name in ("agent_registry", "base_agent", "method_style_registry", "cew_utils"):
+        if module_info.name.startswith("_") or module_info.name in (
+            "agent_registry",
+            "base_agent",
+            "method_style_registry",
+            "cew_utils",
+        ):
             continue
         try:
             importlib.import_module(f"src.usr.methods.{module_info.name}")

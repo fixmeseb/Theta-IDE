@@ -102,6 +102,7 @@ def main():
     paradigm_def = None
     try:
         from src.app.core.paradigm_loader import load_paradigm_definition
+
         paradigm_name = cfg.get("paradigm", None)
         if paradigm_name:
             paradigm_def = load_paradigm_definition(paradigm_name)
@@ -120,6 +121,7 @@ def main():
 
     if hasattr(cfg, "site") and OmegaConf.is_config(cfg.site) and "name" not in cfg.site:
         import omegaconf
+
         with omegaconf.open_dict(cfg.site):
             cfg.site.name = site_name
 
@@ -129,14 +131,22 @@ def main():
     storage_url = None
     if "hydra" in cfg and "sweeper" in cfg.hydra and "storage" in cfg.hydra.sweeper:
         storage_url = cfg.hydra.sweeper.storage
-    if not storage_url and hasattr(cfg, "tuning") and cfg.tuning and hasattr(cfg.tuning, "get") and cfg.tuning.get("storage"):
+    if (
+        not storage_url
+        and hasattr(cfg, "tuning")
+        and cfg.tuning
+        and hasattr(cfg.tuning, "get")
+        and cfg.tuning.get("storage")
+    ):
         storage_url = cfg.tuning.storage
     if not storage_url:
         from src.app.pipeline.optuna_utils import DEFAULT_OPTUNA_DB_URL
+
         storage_url = DEFAULT_OPTUNA_DB_URL
     if storage_url:
         storage_url = str(storage_url).replace("${experiment_id}", cfg.experiment_id)
     import os
+
     os.makedirs("results/optuna", exist_ok=True)
 
     if is_interactive and storage_url and (cfg.get("dash") or cfg.get("dash_only")):
@@ -167,14 +177,13 @@ def main():
     for legacy_key in ("online_methods", "offline_methods", "offline_datasets"):
         if cfg.get(legacy_key, None):
             raise ConfigurationError(
-                f"[ConfigurationError] Legacy key '{legacy_key}' found in config. "
-                f"Use the 'methods:' dict instead."
+                f"[ConfigurationError] Legacy key '{legacy_key}' found in config. Use the 'methods:' dict instead."
             )
 
     print("Declared Methods:")
     has_any_tune = is_sweep
     for name, mcfg in methods_dict.items():
-        agent_str = f"agent={mcfg.get('agent')}, " if mcfg.get('agent') else ""
+        agent_str = f"agent={mcfg.get('agent')}, " if mcfg.get("agent") else ""
         tune_str = " [Optuna Sweep]" if (is_sweep or mcfg.get("tune")) else ""
         if mcfg.get("tune"):
             has_any_tune = True
@@ -204,12 +213,15 @@ def main():
     workflow_id = cfg.get("workflow", None)
     if workflow_id:
         from src.app.pipeline.workflow.executor import run_workflow
+
         run_workflow(workflow_id, cfg, context)
     elif is_interactive:
         from src.app.pipeline.local_runner import run_local_training
+
         run_local_training(cfg, context)
     else:
         from src.app.pipeline.slurm_runner import run_slurm_training
+
         run_slurm_training(cfg, context)
 
 

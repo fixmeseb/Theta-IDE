@@ -86,9 +86,7 @@ class PPOAgent(BaseAgent):
 
             model_arch = self.resolve_model_name(default=default_arch)
             obs_dim = (
-                self.observation_space[-1]
-                if hasattr(self, "observation_space") and self.observation_space
-                else None
+                self.observation_space[-1] if hasattr(self, "observation_space") and self.observation_space else None
             )
             self.model = build_model(
                 model_arch,

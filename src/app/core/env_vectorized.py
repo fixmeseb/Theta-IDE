@@ -111,7 +111,9 @@ class StandardGymVectorEnv(VectorizedBaseEnv):
         self.seed = seed
         self.venv = gym.make_vec(env_id, num_envs=self.n_envs, vectorization_mode="sync")
 
-        obs_space = getattr(self.venv, "single_observation_space", None) or getattr(self.venv, "observation_space", None)
+        obs_space = getattr(self.venv, "single_observation_space", None) or getattr(
+            self.venv, "observation_space", None
+        )
         self.observation_space = getattr(obs_space, "shape", (1,))
 
         act_space = getattr(self.venv, "single_action_space", None) or getattr(self.venv, "action_space", None)

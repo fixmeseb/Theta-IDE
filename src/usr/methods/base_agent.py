@@ -127,11 +127,7 @@ class BaseAgent(L.LightningModule, ABC):
         if isinstance(model_cfg, (dict, DictConfig)):
             if "blendrl" in model_cfg or "blender" in model_cfg:
                 return True
-            name = (
-                model_cfg.get("name")
-                or model_cfg.get("architecture")
-                or model_cfg.get("type")
-            )
+            name = model_cfg.get("name") or model_cfg.get("architecture") or model_cfg.get("type")
             if name and str(name).strip().lower() in ("blendrl", "blender", "hybrid"):
                 return True
 
@@ -167,11 +163,7 @@ class BaseAgent(L.LightningModule, ABC):
                         if keys:
                             return str(keys[0]).strip()
                     return str(neural_arch).strip()
-            name = (
-                model_cfg.get("architecture")
-                or model_cfg.get("name")
-                or model_cfg.get("type")
-            )
+            name = model_cfg.get("architecture") or model_cfg.get("name") or model_cfg.get("type")
             if name:
                 name_str = str(name).strip()
                 if name_str.lower() in ("blendrl", "blender", "hybrid"):

@@ -18,6 +18,7 @@ import yaml
 
 class PortType(str, Enum):
     """Artifact types carried by strings (wires) in the workflow diagram."""
+
     DATASET = "dataset"
     CHECKPOINT = "checkpoint"
     VALUE_ESTIMATOR = "value_estimator"
@@ -29,12 +30,12 @@ class PortType(str, Enum):
     def color(self) -> str:
         """Hex color for rendering ports and bezier strings."""
         colors = {
-            PortType.DATASET: "#06b6d4",          # Cyan
-            PortType.CHECKPOINT: "#a855f7",       # Purple
-            PortType.VALUE_ESTIMATOR: "#f59e0b",   # Amber
-            PortType.METRICS: "#10b981",          # Emerald
-            PortType.LOGIC_RULES: "#f43f5e",      # Rose/Coral
-            PortType.GENERIC: "#ebdbb2",          # Warm Text
+            PortType.DATASET: "#06b6d4",  # Cyan
+            PortType.CHECKPOINT: "#a855f7",  # Purple
+            PortType.VALUE_ESTIMATOR: "#f59e0b",  # Amber
+            PortType.METRICS: "#10b981",  # Emerald
+            PortType.LOGIC_RULES: "#f43f5e",  # Rose/Coral
+            PortType.GENERIC: "#ebdbb2",  # Warm Text
         }
         return colors.get(self, "#ebdbb2")
 
@@ -59,6 +60,7 @@ class PortDirection(str, Enum):
 @dataclass
 class Port:
     """A typed communication port on an experiment or task node."""
+
     name: str
     direction: PortDirection
     port_type: PortType
@@ -91,11 +93,12 @@ class Port:
 @dataclass
 class WorkflowNode:
     """A computation node (morphism) in the workflow diagram."""
+
     id: str
     label: str
     category: str = "paradigm"  # "paradigm" | "task" | "experiment" | "transform"
     paradigm: str = "online_rl"  # online_rl, offline_rl, supervised, eval, etc.
-    experiment_ref: str = ""     # e.g. "cartpole/final_cartpole"
+    experiment_ref: str = ""  # e.g. "cartpole/final_cartpole"
     overrides: list[str] = field(default_factory=list)
     pos_x: float = 0.0
     pos_y: float = 0.0
@@ -149,6 +152,7 @@ class WorkflowNode:
 @dataclass
 class WorkflowString:
     """A typed connection wire representing artifact transfer between ports."""
+
     id: str
     source_node_id: str
     source_port_name: str
@@ -200,6 +204,7 @@ class WorkflowString:
 @dataclass
 class WorkflowGraph:
     """Complete string diagram workflow graph with nodes and typed strings."""
+
     id: str
     name: str
     description: str = ""
@@ -213,10 +218,7 @@ class WorkflowGraph:
         if node_id in self.nodes:
             del self.nodes[node_id]
         # Remove any strings connected to this node
-        self.strings = [
-            s for s in self.strings
-            if s.source_node_id != node_id and s.target_node_id != node_id
-        ]
+        self.strings = [s for s in self.strings if s.source_node_id != node_id and s.target_node_id != node_id]
 
     def connect(
         self,
@@ -244,8 +246,7 @@ class WorkflowGraph:
         # Type checking
         if not self.is_type_compatible(src_port.port_type, tgt_port.port_type):
             raise TypeError(
-                f"Cannot connect {src_port.port_type.value} to {tgt_port.port_type.value}: "
-                f"port types are incompatible."
+                f"Cannot connect {src_port.port_type.value} to {tgt_port.port_type.value}: port types are incompatible."
             )
 
         # Use port's default param_binding if not provided
@@ -253,7 +254,11 @@ class WorkflowGraph:
 
         wire_id = f"wire_{source_node_id}_{source_port_name}_to_{target_node_id}_{target_port_name}"
         # Remove existing wire if it connects the same target port
-        self.strings = [s for s in self.strings if not (s.target_node_id == target_node_id and s.target_port_name == target_port_name)]
+        self.strings = [
+            s
+            for s in self.strings
+            if not (s.target_node_id == target_node_id and s.target_port_name == target_port_name)
+        ]
 
         new_wire = WorkflowString(
             id=wire_id,
@@ -311,11 +316,12 @@ class WorkflowGraph:
             for port in node.inputs.values():
                 if port.required:
                     connected = any(
-                        s.target_node_id == node.id and s.target_port_name == port.name
-                        for s in self.strings
+                        s.target_node_id == node.id and s.target_port_name == port.name for s in self.strings
                     )
                     if not connected:
-                        issues.append(f"Required input '{node.id}.{port.name}' ({port.port_type.value}) is not connected.")
+                        issues.append(
+                            f"Required input '{node.id}.{port.name}' ({port.port_type.value}) is not connected."
+                        )
 
         return issues
 

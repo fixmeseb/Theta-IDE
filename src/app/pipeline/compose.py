@@ -130,8 +130,13 @@ def ppo_rollout(cfg: DictConfig, settings: dict[str, Any]) -> dict[str, int] | N
     num_steps = int(settings.get("num_steps", defaults.get("num_steps", 128)))
     size = num_envs * num_steps
     rollouts = max(1, -(-int(cfg.total_timesteps) // size))
-    return {"num_envs": num_envs, "num_steps": num_steps, "size": size, "rollouts": rollouts,
-            "timesteps": rollouts * size}
+    return {
+        "num_envs": num_envs,
+        "num_steps": num_steps,
+        "size": size,
+        "rollouts": rollouts,
+        "timesteps": rollouts * size,
+    }
 
 
 def effective_config(cfg: DictConfig) -> dict[str, Any]:

@@ -65,6 +65,7 @@ def load_paradigm(paradigm_name: str) -> dict:
 # Constraint checking helpers
 # ---------------------------------------------------------------------------
 
+
 def _deep_get(cfg: Any, dotted_key: str, default=None):
     """Resolve a dotted key path against a Hydra cfg or plain dict.
 
@@ -131,6 +132,7 @@ def _check_paradigm_constraints(cfg: Any, paradigm_name: str, constraints: dict,
 # Raw experiment YAML loader (for explicit override checks)
 # ---------------------------------------------------------------------------
 
+
 def _load_raw_experiment_yaml(experiment_name: str) -> dict:
     """Return the raw (pre-Hydra-composition) experiment YAML as a dict, or {} on failure."""
     rel_path = resolve_experiment_config_name(experiment_name)
@@ -144,6 +146,7 @@ def _load_raw_experiment_yaml(experiment_name: str) -> dict:
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
 
 def validate_experiment_config(cfg: Any, experiment_name: str, is_sweep: bool = False) -> list[str]:
     """Validate experiment configuration against its declared paradigm.
@@ -168,7 +171,6 @@ def validate_experiment_config(cfg: Any, experiment_name: str, is_sweep: bool = 
     paradigm_def = load_paradigm(paradigm_name)  # raises ConfigurationError if unknown
     constraints = paradigm_def.get("constraints", {})
 
-    
     # --- intervals_count: check raw YAML for explicit override ---
     # Only enforce if the paradigm does not allow intervals > 1.
     # Currently only paradigms with offline data disallow intervals.
@@ -315,9 +317,10 @@ def _validate_method_registrations(cfg: Any, notices: list[str]) -> None:
         ag = method_cfg.get("agent")
         base_algo = ag.get("name") if isinstance(ag, dict) else (ag or "")
         if base_algo and base_algo not in registered and method_name not in registered:
-            notices.append(f"Notice: Method '{method_name}' uses agent '{base_algo}' which might not match a registered agent style.")
+            notices.append(
+                f"Notice: Method '{method_name}' uses agent '{base_algo}' which might not match a registered agent style."
+            )
 
 
 def _validate_offline_dataset_paths(cfg: Any, notices: list[str]) -> None:
     pass
-

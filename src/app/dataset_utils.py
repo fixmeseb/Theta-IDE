@@ -571,4 +571,3 @@ def convert_mimic_npz_to_transitions(
     writer.close()
     print(f"Successfully converted {len(X)} patients and saved {total_transitions} transitions to {out_dir}")
     return total_transitions
-

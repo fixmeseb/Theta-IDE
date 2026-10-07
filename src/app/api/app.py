@@ -35,6 +35,7 @@ except ImportError:
     def list_registered_agents():
         return []
 
+
 try:
     import psutil
 except ImportError:
@@ -183,20 +184,68 @@ def get_plot_image(group: str, experiment_id: str, filename: str):
 GUI_BASE_EXPERIMENT = "thetaide/_base"
 GUI_METHOD = {"name": "ppo", "agent": "ppo", "model": "dnn"}
 GUI_FIELDS = [
-    {"key": "experiment_id", "label": "Experiment name", "type": "str", "default": "cartpole_ppo_experiment",
-     "pattern": r"^[A-Za-z0-9_\-]+$", "help": "Results directory name. Letters, digits, '_' and '-' only."},
-    {"key": "seed", "label": "Random seed", "type": "int", "default_from": "seed", "min": 0, "max": 2147483647,
-     "help": "Seeds environments and network initialization."},
-    {"key": "total_timesteps", "label": "Total timesteps", "type": "int", "default_from": "total_timesteps",
-     "min": 1000, "max": 10000000, "step": 1000, "help": "Environment steps across all training intervals."},
-    {"key": "methods.ppo.lr", "label": "Learning rate", "type": "float", "default_from": "agent.lr",
-     "min": 1e-6, "max": 1.0, "step": 1e-4, "help": "Adam learning rate for the PPO policy."},
-    {"key": "methods.ppo.batch_size", "label": "Batch size", "type": "int", "default_from": "agent.batch_size",
-     "choices": [32, 64, 128, 256], "help": "Minibatch size for each PPO update."},
-    {"key": "methods.ppo.gamma", "label": "Discount factor · γ", "type": "float", "default_from": "env.gamma",
-     "min": 0.0, "max": 1.0, "step": 0.01, "help": "Weight of future rewards."},
-    {"key": "tensorboard", "label": "Log to TensorBoard", "type": "bool", "default_from": "tensorboard",
-     "help": "Also write TensorBoard logs to results/tensorboard/ for the TensorBoard tab."},
+    {
+        "key": "experiment_id",
+        "label": "Experiment name",
+        "type": "str",
+        "default": "cartpole_ppo_experiment",
+        "pattern": r"^[A-Za-z0-9_\-]+$",
+        "help": "Results directory name. Letters, digits, '_' and '-' only.",
+    },
+    {
+        "key": "seed",
+        "label": "Random seed",
+        "type": "int",
+        "default_from": "seed",
+        "min": 0,
+        "max": 2147483647,
+        "help": "Seeds environments and network initialization.",
+    },
+    {
+        "key": "total_timesteps",
+        "label": "Total timesteps",
+        "type": "int",
+        "default_from": "total_timesteps",
+        "min": 1000,
+        "max": 10000000,
+        "step": 1000,
+        "help": "Environment steps across all training intervals.",
+    },
+    {
+        "key": "methods.ppo.lr",
+        "label": "Learning rate",
+        "type": "float",
+        "default_from": "agent.lr",
+        "min": 1e-6,
+        "max": 1.0,
+        "step": 1e-4,
+        "help": "Adam learning rate for the PPO policy.",
+    },
+    {
+        "key": "methods.ppo.batch_size",
+        "label": "Batch size",
+        "type": "int",
+        "default_from": "agent.batch_size",
+        "choices": [32, 64, 128, 256],
+        "help": "Minibatch size for each PPO update.",
+    },
+    {
+        "key": "methods.ppo.gamma",
+        "label": "Discount factor · γ",
+        "type": "float",
+        "default_from": "env.gamma",
+        "min": 0.0,
+        "max": 1.0,
+        "step": 0.01,
+        "help": "Weight of future rewards.",
+    },
+    {
+        "key": "tensorboard",
+        "label": "Log to TensorBoard",
+        "type": "bool",
+        "default_from": "tensorboard",
+        "help": "Also write TensorBoard logs to results/tensorboard/ for the TensorBoard tab.",
+    },
 ]
 
 
@@ -240,8 +289,10 @@ def config_schema():
         "paradigm": composed.cfg.get("paradigm"),
         "environment": {"name": composed.cfg.env.name, "env_id": composed.cfg.env.get("env_id")},
         "method": GUI_METHOD,
-        "fixed_overrides": [f"++{method_prefix}.agent={GUI_METHOD['agent']}",
-                            f"++{method_prefix}.model={GUI_METHOD['model']}"],
+        "fixed_overrides": [
+            f"++{method_prefix}.agent={GUI_METHOD['agent']}",
+            f"++{method_prefix}.model={GUI_METHOD['model']}",
+        ],
         "fields": fields,
     }
 
@@ -253,8 +304,15 @@ def compose_config(req: ComposeRequest):
     try:
         composed = compose_experiment(req.experiment, req.overrides)
     except Exception as e:
-        return {"valid": False, "experiment": req.experiment, "argv": argv, "config": None, "config_yaml": "",
-                "notices": [], "errors": [{"stage": "compose", "message": str(e)}]}
+        return {
+            "valid": False,
+            "experiment": req.experiment,
+            "argv": argv,
+            "config": None,
+            "config_yaml": "",
+            "notices": [],
+            "errors": [{"stage": "compose", "message": str(e)}],
+        }
 
     errors, notices, methods = [], [], {}
     try:
@@ -382,8 +440,16 @@ def run_experiment_task(job_id: str, req: LaunchRequest):
             if job["status"] == "cancelled":
                 return  # cancelled before it started
             process = subprocess.Popen(
-                cmd, cwd=PROJECT_ROOT, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-                text=True, encoding="utf-8", errors="replace", bufsize=1, **popen_kwargs,
+                cmd,
+                cwd=PROJECT_ROOT,
+                env=env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                bufsize=1,
+                **popen_kwargs,
             )
             job.update(status="running", pid=process.pid, _process=process, started=time.time())
             _sync_job(job_id)
@@ -437,8 +503,15 @@ def launch_experiment(req: LaunchRequest):
         )
 
     with _jobs_lock:
-        clash = next((j for j in jobs.values() if j.get("status") in ("queued", *ACTIVE_STATUSES)
-                      and (j.get("group"), j.get("experiment_id")) == (cfg.group, cfg.experiment_id)), None)
+        clash = next(
+            (
+                j
+                for j in jobs.values()
+                if j.get("status") in ("queued", *ACTIVE_STATUSES)
+                and (j.get("group"), j.get("experiment_id")) == (cfg.group, cfg.experiment_id)
+            ),
+            None,
+        )
     if clash:
         raise HTTPException(
             status_code=409,
@@ -447,8 +520,10 @@ def launch_experiment(req: LaunchRequest):
         )
 
     job_id = str(uuid.uuid4())
-    agents = [settings.get("name", normalize_agent_name(name)) for name, settings in
-              ((name, plan["settings"]) for name, plan in plans.items())]
+    agents = [
+        settings.get("name", normalize_agent_name(name))
+        for name, settings in ((name, plan["settings"]) for name, plan in plans.items())
+    ]
     jobs[job_id] = {
         "job_id": job_id,
         "status": "pending",
@@ -471,8 +546,7 @@ def launch_experiment(req: LaunchRequest):
             job_store.set_queue(queue_order)
             _ensure_queue_worker()
             _jobs_changed.notify_all()
-            return dict(_public(jobs[job_id]), position=queue_order.index(job_id),
-                        queue_running=queue_state["running"])
+            return dict(_public(jobs[job_id]), position=queue_order.index(job_id), queue_running=queue_state["running"])
 
     thread = threading.Thread(target=run_experiment_task, args=(job_id, req))
     thread.daemon = True
@@ -482,6 +556,7 @@ def launch_experiment(req: LaunchRequest):
 
 
 # ── Job queue ────────────────────────────────────────────────────────────────
+
 
 def _ensure_queue_worker() -> None:
     """Start the queue worker thread once. Call with _jobs_lock held."""
@@ -523,10 +598,17 @@ def queue_status():
     with _jobs_lock:
         active = [_public(j) for j in jobs.values() if j.get("status") in ACTIVE_STATUSES]
         queued = [dict(_public(jobs[job_id]), position=n) for n, job_id in enumerate(queue_order) if job_id in jobs]
-        finished = sorted((j for j in jobs.values() if j.get("status") in TERMINAL_STATUSES),
-                          key=lambda j: j.get("finished") or 0, reverse=True)[:10]
-        return {"running": queue_state["running"], "active": active, "queued": queued,
-                "finished": [_public(j) for j in finished]}
+        finished = sorted(
+            (j for j in jobs.values() if j.get("status") in TERMINAL_STATUSES),
+            key=lambda j: j.get("finished") or 0,
+            reverse=True,
+        )[:10]
+        return {
+            "running": queue_state["running"],
+            "active": active,
+            "queued": queued,
+            "finished": [_public(j) for j in finished],
+        }
 
 
 @app.post("/api/queue/start")
@@ -582,7 +664,7 @@ def check_status(job_id: str, since: int = 0):
         log = job.get("_log", [])
         dropped = job.get("log_dropped", 0)
         job_info = _public(job)
-        job_info["log"] = log[max(since - dropped, 0):]
+        job_info["log"] = log[max(since - dropped, 0) :]
         job_info["log_total"] = dropped + len(log)
         job_info["stdout"] = "\n".join(log[-40:])[-1000:]
     return job_info
@@ -608,12 +690,22 @@ def job_metrics(job_id: str, since: int = 0, since_byte: int = 0):
         path = _latest_metrics_csv(PROJECT_ROOT / "results" / "logs" / job["group"] / job["experiment_id"] / agent)
         if since_byte > 0 and path:
             rows, next_byte, reset = _read_metrics_incremental(path, last_byte=since_byte)
-            agents[agent] = {"source": str(path), "total": len(rows), "next_byte": next_byte, "reset": reset, "rows": rows}
+            agents[agent] = {
+                "source": str(path),
+                "total": len(rows),
+                "next_byte": next_byte,
+                "reset": reset,
+                "rows": rows,
+            }
         else:
             rows = _read_metrics_rows(path) if path else []
             reset = since > len(rows)
-            agents[agent] = {"source": str(path) if path else None, "total": len(rows), "reset": reset,
-                             "rows": rows if reset else rows[since:]}
+            agents[agent] = {
+                "source": str(path) if path else None,
+                "total": len(rows),
+                "reset": reset,
+                "rows": rows if reset else rows[since:],
+            }
     return {"job_id": job_id, "status": job.get("status"), "agents": agents}
 
 
@@ -664,7 +756,7 @@ def _read_metrics_incremental(path: Path, last_byte: int = 0) -> tuple[list[dict
             if last_nl == -1:
                 return [], last_byte, reset
 
-            valid_chunk = raw[:last_nl + 1]
+            valid_chunk = raw[: last_nl + 1]
             next_byte = last_byte + len(valid_chunk)
 
             text = valid_chunk.decode("utf-8", errors="replace")
@@ -733,7 +825,7 @@ def job_telemetry(job_id: str, since_log: int = 0, since_byte: int = 0):
         log = job.get("_log", [])
         dropped = job.get("log_dropped", 0)
         job_info = _public(job)
-        job_info["log"] = log[max(since_log - dropped, 0):]
+        job_info["log"] = log[max(since_log - dropped, 0) :]
         job_info["log_total"] = dropped + len(log)
         job_info["stdout"] = "\n".join(log[-40:])[-1000:]
 
@@ -841,8 +933,10 @@ def _tensorboard_state() -> dict[str, Any]:
         state.update(url=_tensorboard["url"], pid=process.pid, ready=_tensorboard_ready(_tensorboard["url"]))
     elif process is not None and not _tensorboard.get("stopped"):  # it exited on its own
         state["exit_code"] = process.returncode
-        state["error"] = _tensorboard.get("log_path") and Path(_tensorboard["log_path"]).read_text(
-            encoding="utf-8", errors="replace")[-1500:]
+        state["error"] = (
+            _tensorboard.get("log_path")
+            and Path(_tensorboard["log_path"]).read_text(encoding="utf-8", errors="replace")[-1500:]
+        )
     return state
 
 
@@ -867,16 +961,26 @@ def tensorboard_start():
         JOBS_DIR.mkdir(parents=True, exist_ok=True)
         port = _free_port()
         log_path = JOBS_DIR / "tensorboard.log"
-        cmd = [sys.executable, "-m", "tensorboard.main", "--logdir", str(logdir),
-               "--host", "127.0.0.1", "--port", str(port), "--reload_interval", "5"]
+        cmd = [
+            sys.executable,
+            "-m",
+            "tensorboard.main",
+            "--logdir",
+            str(logdir),
+            "--host",
+            "127.0.0.1",
+            "--port",
+            str(port),
+            "--reload_interval",
+            "5",
+        ]
         popen_kwargs: dict[str, Any] = {}
         if sys.platform == "win32":
             popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
         else:
             popen_kwargs["start_new_session"] = True
         with open(log_path, "w", encoding="utf-8") as log_file:
-            process = subprocess.Popen(cmd, cwd=PROJECT_ROOT, stdout=log_file, stderr=subprocess.STDOUT,
-                                       **popen_kwargs)
+            process = subprocess.Popen(cmd, cwd=PROJECT_ROOT, stdout=log_file, stderr=subprocess.STDOUT, **popen_kwargs)
         _tensorboard.update(process=process, url=f"http://127.0.0.1:{port}/", log_path=str(log_path), stopped=False)
         return _tensorboard_state()
 

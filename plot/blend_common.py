@@ -84,6 +84,7 @@ def load_modular_agent(path: Path):
     classes = [CQLAgent, IQLAgent]
     try:
         from src.usr.methods.cew_agent import CEWAgent
+
         classes.insert(1, CEWAgent)
     except ImportError:
         pass

@@ -85,9 +85,7 @@ def get_model_class(model_name: str) -> Any:
     if matches:
         return max(matches, key=lambda x: len(x[0]))[1]
 
-    raise ValueError(
-        f"Unknown model architecture: '{model_name}'. Registered models: {sorted(MODEL_REGISTRY.keys())}"
-    )
+    raise ValueError(f"Unknown model architecture: '{model_name}'. Registered models: {sorted(MODEL_REGISTRY.keys())}")
 
 
 def build_model(
@@ -125,13 +123,19 @@ def build_model(
     if isinstance(model_spec, str):
         model_name = model_spec
     elif isinstance(model_spec, (dict, DictConfig)):
-        cfg_dict = OmegaConf.to_container(model_spec, resolve=True) if isinstance(model_spec, DictConfig) else dict(model_spec)
+        cfg_dict = (
+            OmegaConf.to_container(model_spec, resolve=True) if isinstance(model_spec, DictConfig) else dict(model_spec)
+        )
         # Check standard config naming conventions
         model_name = (
             cfg_dict.get("name")
             or cfg_dict.get("architecture")
             or cfg_dict.get("type")
-            or (list(cfg_dict.keys())[0] if len(cfg_dict) == 1 and isinstance(list(cfg_dict.values())[0], dict) else "mlp")
+            or (
+                list(cfg_dict.keys())[0]
+                if len(cfg_dict) == 1 and isinstance(list(cfg_dict.values())[0], dict)
+                else "mlp"
+            )
         )
         # If wrapped under model name (e.g. {blendrl: {...}})
         if model_name in cfg_dict and isinstance(cfg_dict[model_name], dict):
@@ -214,4 +218,3 @@ def _safe_instantiate(cls_or_fn: Any, **kwargs) -> Any:
 
     valid_kwargs = {k: v for k, v in kwargs.items() if k in params}
     return cls_or_fn(**valid_kwargs)
-

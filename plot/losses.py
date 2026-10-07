@@ -108,7 +108,7 @@ class LossesPlotter(BasePlotter):
 
                     xlabel = cfg.get("xlabel") or used_xlabel or "Training Steps"
                     plt.xlabel(xlabel)
-                    
+
                     metric_clean_name = metric.split("/")[-1].replace("_", " ").title()
                     if isinstance(cfg.get("ylabel"), dict):
                         ylabel = cfg["ylabel"].get(metric, metric_clean_name)

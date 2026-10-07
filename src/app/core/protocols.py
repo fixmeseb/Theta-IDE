@@ -97,7 +97,9 @@ def walk_model_modules(root: Any) -> list[Any]:
                     continue
             sub_m = getattr(obj, attr, None)
             if sub_m is not None:
-                has_pol = hasattr(sub_m, "policy_modules") and isinstance(getattr(sub_m, "policy_modules", None), (list, tuple))
+                has_pol = hasattr(sub_m, "policy_modules") and isinstance(
+                    getattr(sub_m, "policy_modules", None), (list, tuple)
+                )
                 if isinstance(sub_m, nn.Module) or has_pol:
                     _traverse(sub_m)
 

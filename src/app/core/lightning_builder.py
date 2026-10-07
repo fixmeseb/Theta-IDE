@@ -249,7 +249,9 @@ def build_trainer(cfg, model=None):
             if hasattr(cfg, "agent") and cfg.agent is not None and hasattr(cfg.agent, "get")
             else cfg.get("epochs_per_interval", 1)
         )
-        intervals_count = 1 if (is_offline_only or cfg.get("paradigm") == "offline_rl") else cfg.get("intervals_count", 1)
+        intervals_count = (
+            1 if (is_offline_only or cfg.get("paradigm") == "offline_rl") else cfg.get("intervals_count", 1)
+        )
         max_epochs = intervals_count * epochs_per_interval
         eval_interval_epochs = (
             cfg.agent.get("eval_interval_epochs", 1)
@@ -446,6 +448,7 @@ def finalize_training(trainer, cfg, ckpt_dir, training_time, start_time, end_tim
     if os.path.abspath(final_ckpt_target) != os.path.abspath(parent_ckpt_target) and os.path.exists(final_ckpt_target):
         try:
             import shutil
+
             os.makedirs(parent_ckpt_dir, exist_ok=True)
             shutil.copy2(final_ckpt_target, parent_ckpt_target)
             named_ckpt = os.path.join(parent_ckpt_dir, f"{method_name}.ckpt")

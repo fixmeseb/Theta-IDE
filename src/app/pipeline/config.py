@@ -89,6 +89,8 @@ def get_known_models() -> set[str]:
     except Exception:
         pass
     return models
+
+
 _MODEL_KEYS = {
     "architecture",
     "modules",

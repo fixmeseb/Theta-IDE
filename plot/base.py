@@ -439,6 +439,7 @@ class BasePlotter:
                             method_style = m_entry["style"]
                     if method_style is None:
                         from src.app.pipeline.config import find_group_method_config
+
                         gm_cfg = find_group_method_config(method_name, group=group)
                         if gm_cfg and "style" in gm_cfg:
                             method_style = gm_cfg["style"]
@@ -467,7 +468,7 @@ class BasePlotter:
 
             if has_data:
                 out_dir.mkdir(parents=True, exist_ok=True)
-                
+
                 # Resolve xlabel: explicit config > detected used_xlabel > fallback
                 xlabel = cfg.get("xlabel") or used_xlabel or "Training Steps"
                 plt.xlabel(xlabel)

@@ -109,8 +109,7 @@ class EPSepsisDataModule(L.LightningDataModule, BaseDataModule):
                 dataset_path = f"in/datasets/mimic/{ds_name}"
         if not dataset_path:
             raise ValueError(
-                "Dataset path is required for supervised sepsis learning. "
-                "Specify dataset_path in the config."
+                "Dataset path is required for supervised sepsis learning. Specify dataset_path in the config."
             )
         if not os.path.exists(dataset_path) and os.path.exists(f"{dataset_path}.npz"):
             dataset_path = f"{dataset_path}.npz"
@@ -278,7 +277,8 @@ class EPSepsisDataModule(L.LightningDataModule, BaseDataModule):
 
         steps_early_tau = 2 * tau
         valid_mask = [
-            i for i, g_idx in enumerate(test_global_patient_indices)
+            i
+            for i, g_idx in enumerate(test_global_patient_indices)
             if self.patient_lengths[g_idx] - steps_early_tau >= 1
         ]
         if not valid_mask:
@@ -309,16 +309,28 @@ class EPSepsisDataModule(L.LightningDataModule, BaseDataModule):
 
     def train_dataloader(self) -> DataLoader:
         batch_size = 64
-        if self.cfg and hasattr(self.cfg, "agent") and hasattr(self.cfg.agent, "get") and self.cfg.agent.get("batch_size"):
+        if (
+            self.cfg
+            and hasattr(self.cfg, "agent")
+            and hasattr(self.cfg.agent, "get")
+            and self.cfg.agent.get("batch_size")
+        ):
             batch_size = int(self.cfg.agent.get("batch_size"))
         loader, _, _, _ = self.get_train_dataloader(split_idx=0, batch_size=batch_size)
         return loader
 
     def val_dataloader(self) -> DataLoader | None:
         batch_size = 64
-        if self.cfg and hasattr(self.cfg, "agent") and hasattr(self.cfg.agent, "get") and self.cfg.agent.get("batch_size"):
+        if (
+            self.cfg
+            and hasattr(self.cfg, "agent")
+            and hasattr(self.cfg.agent, "get")
+            and self.cfg.agent.get("batch_size")
+        ):
             batch_size = int(self.cfg.agent.get("batch_size"))
         tr_idxs, _ = self.get_split_indices(0)
         seqs, input_dim = self.get_training_sequences()
         x_train = [seqs[i] for i in tr_idxs]
-        return self.get_eval_dataloader(split_idx=0, tau=self.tau_train, x_train=x_train, input_dim=input_dim, batch_size=batch_size)
+        return self.get_eval_dataloader(
+            split_idx=0, tau=self.tau_train, x_train=x_train, input_dim=input_dim, batch_size=batch_size
+        )

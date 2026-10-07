@@ -29,6 +29,7 @@ log = logging.getLogger(__name__)
 # 1. Generic Supervised Data Module
 # ---------------------------------------------------------------------------
 
+
 @register_component("SupervisedDataModule", "CrossValidationDataModule")
 class SupervisedDataModule(L.LightningDataModule, BaseDataModule):
     """Domain-independent data module wrapping train, val, and test DataLoaders."""
@@ -62,9 +63,7 @@ class SupervisedDataModule(L.LightningDataModule, BaseDataModule):
             self._cfg = stage
         if self._train_loader is None and self._cfg is not None:
             dm_name = (
-                self._cfg.get("data_module")
-                if hasattr(self._cfg, "get")
-                else getattr(self._cfg, "data_module", None)
+                self._cfg.get("data_module") if hasattr(self._cfg, "get") else getattr(self._cfg, "data_module", None)
             )
             if dm_name and dm_name != "SupervisedDataModule":
                 from src.app.core.paradigm_loader import get_component
@@ -120,6 +119,7 @@ class SupervisedDataModule(L.LightningDataModule, BaseDataModule):
 # ---------------------------------------------------------------------------
 # 2. Generic Classification Evaluation Protocol
 # ---------------------------------------------------------------------------
+
 
 @register_component("ClassificationEvalProtocol")
 class ClassificationEvalProtocol(BaseEvalProtocol):
@@ -243,6 +243,7 @@ class ClassificationEvalProtocol(BaseEvalProtocol):
 # ---------------------------------------------------------------------------
 # 3. Generic Supervised Runner
 # ---------------------------------------------------------------------------
+
 
 @register_component("SupervisedRunner")
 class SupervisedRunner(BaseParadigmRunner):

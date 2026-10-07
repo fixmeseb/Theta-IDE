@@ -55,7 +55,7 @@ def run_slurm_training(cfg, context):
         for method_name, method_cfg in methods.items():
             agent_name = normalize_agent_name(method_name)
             dataset_path = None
-            
+
             if paradigm in ("offline_rl", "supervised"):
                 try:
                     dataset_path = resolve_dataset_for_method(method_name, method_cfg, cfg)
@@ -66,7 +66,7 @@ def run_slurm_training(cfg, context):
             method_tune = method_cfg.get("tune") or method_cfg.get("search_space") or {}
             method_is_sweep = bool(is_sweep) or bool(method_tune)
             study_name = get_next_study_name(cfg.group, cfg.experiment_id, agent_name) if method_is_sweep else None
-            
+
             cmd_args = build_method_overrides(
                 method_name=method_name,
                 method_cfg=method_cfg,
@@ -76,12 +76,10 @@ def run_slurm_training(cfg, context):
                 study_name=study_name,
                 is_sweep=method_is_sweep,
             )
-            
+
             if method_is_sweep:
                 direction = (
-                    cfg.get("tuning", {}).get("direction")
-                    if hasattr(cfg, "get") and cfg.get("tuning")
-                    else None
+                    cfg.get("tuning", {}).get("direction") if hasattr(cfg, "get") and cfg.get("tuning") else None
                 ) or get_sweep_direction(cfg, paradigm)
                 create_optuna_study(storage_url, study_name, direction=direction)
 
@@ -118,7 +116,7 @@ def run_slurm_training(cfg, context):
     for method_name, method_cfg in methods.items():
         agent_name = normalize_agent_name(method_name)
         dataset_path = None
-        
+
         if paradigm in ("offline_rl", "supervised"):
             try:
                 dataset_path = resolve_dataset_for_method(method_name, method_cfg, cfg)
@@ -130,7 +128,7 @@ def run_slurm_training(cfg, context):
         method_is_sweep = bool(is_sweep) or bool(method_tune)
         job_name = f"{agent_name}_{cfg.experiment_id}"
         study_name = get_next_study_name(cfg.group, cfg.experiment_id, agent_name) if method_is_sweep else None
-        
+
         cmd_args = build_method_overrides(
             method_name=method_name,
             method_cfg=method_cfg,
@@ -152,9 +150,7 @@ def run_slurm_training(cfg, context):
 
         if method_is_sweep:
             direction = (
-                cfg.get("tuning", {}).get("direction")
-                if hasattr(cfg, "get") and cfg.get("tuning")
-                else None
+                cfg.get("tuning", {}).get("direction") if hasattr(cfg, "get") and cfg.get("tuning") else None
             ) or get_sweep_direction(cfg, paradigm)
             create_optuna_study(storage_url, study_name, direction=direction)
 

@@ -21,6 +21,7 @@ from src.app.pipeline.optuna_utils import (
 # Shared setup
 # ---------------------------------------------------------------------------
 
+
 def _setup_output_dirs(cfg) -> None:
     """Purge and recreate checkpoint, log, and plot directories unless recovering."""
     if cfg.get("recover", False):
@@ -44,6 +45,7 @@ def _setup_output_dirs(cfg) -> None:
 # Method dispatch
 # ---------------------------------------------------------------------------
 
+
 def run_methods(cfg, context) -> None:
     """Execute all methods declared in cfg.methods."""
     methods = context["methods"]
@@ -55,6 +57,7 @@ def run_methods(cfg, context) -> None:
     for method_name, method_cfg in methods.items():
         if hasattr(method_cfg, "items"):
             from omegaconf import DictConfig, OmegaConf
+
             if isinstance(method_cfg, DictConfig):
                 method_cfg = OmegaConf.to_container(method_cfg, resolve=True)
             else:
@@ -78,7 +81,7 @@ def run_methods(cfg, context) -> None:
                 sys.exit(1)
             print(f"Using dataset from: {dataset_path}")
 
-        agent_str = f"agent={method_cfg.get('agent')}, " if method_cfg.get('agent') else ""
+        agent_str = f"agent={method_cfg.get('agent')}, " if method_cfg.get("agent") else ""
         mode_str = " [Optuna Sweep]" if method_is_sweep else ""
         print(f"\n=== Training: {method_name} ({agent_str}model={method_cfg.get('model')}){mode_str} ===")
 
@@ -96,23 +99,20 @@ def run_methods(cfg, context) -> None:
             if cfg.get("remake", False):
                 delete_optuna_study(storage_url, study_name)
             direction = (
-                cfg.get("tuning", {}).get("direction")
-                if hasattr(cfg, "get") and cfg.get("tuning")
-                else None
+                cfg.get("tuning", {}).get("direction") if hasattr(cfg, "get") and cfg.get("tuning") else None
             ) or get_sweep_direction(cfg, paradigm)
             create_optuna_study(storage_url, study_name, direction=direction)
 
         run_experiment(overrides)
 
         if method_is_sweep:
-            promote_best_trial_checkpoint(
-                cfg.group, cfg.experiment_id, agent_name, storage_url, study_name
-            )
+            promote_best_trial_checkpoint(cfg.group, cfg.experiment_id, agent_name, storage_url, study_name)
 
 
 # ---------------------------------------------------------------------------
 # Plotting
 # ---------------------------------------------------------------------------
+
 
 def run_plotting_phase(cfg, context) -> None:
     """Run automated plotting after training completes."""
@@ -130,6 +130,7 @@ def run_plotting_phase(cfg, context) -> None:
 # ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
+
 
 def run_local_training(cfg, context) -> None:
     """Execute all phases sequentially: setup → methods → plot."""

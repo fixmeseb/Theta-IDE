@@ -150,7 +150,6 @@ def resolve_dataset_for_method(method_name: str, method_cfg: dict, cfg: Any) -> 
     )
 
 
-
 def resolve_mimic_npz_path(filename_or_path: str | None = None, site_cfg=None) -> Path:
     """Robustly resolve the filesystem path for a MIMIC NPZ dataset file.
 

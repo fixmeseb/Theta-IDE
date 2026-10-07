@@ -277,7 +277,6 @@ def normalize_features(X_train_list, X_test_list):
     return [(s - mean) / std for s in X_train_list], [(s - mean) / std for s in X_test_list]
 
 
-
 # --- Evaluation Helper Functions ---
 
 

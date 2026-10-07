@@ -1,4 +1,5 @@
 """SQLite persistence layer for experiment jobs and execution queue."""
+
 from __future__ import annotations
 
 import json
@@ -90,29 +91,32 @@ class JobStore:
         if not actual_job_id:
             return
         with self._lock, self._connection() as conn:
-            conn.execute("""
+            conn.execute(
+                """
                 INSERT OR REPLACE INTO jobs (
                     job_id, experiment, group_name, experiment_id, status, pid,
                     created, started, finished, returncode, error,
                     total_timesteps, effective_timesteps, agents_json, request_json
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                actual_job_id,
-                job.get("experiment"),
-                job.get("group"),
-                job.get("experiment_id"),
-                job.get("status", "pending"),
-                job.get("pid"),
-                job.get("created", time.time()),
-                job.get("started"),
-                job.get("finished"),
-                job.get("returncode"),
-                job.get("error"),
-                job.get("total_timesteps"),
-                job.get("effective_timesteps"),
-                json.dumps(job.get("agents", [])),
-                json.dumps(job.get("request", {})),
-            ))
+            """,
+                (
+                    actual_job_id,
+                    job.get("experiment"),
+                    job.get("group"),
+                    job.get("experiment_id"),
+                    job.get("status", "pending"),
+                    job.get("pid"),
+                    job.get("created", time.time()),
+                    job.get("started"),
+                    job.get("finished"),
+                    job.get("returncode"),
+                    job.get("error"),
+                    job.get("total_timesteps"),
+                    job.get("effective_timesteps"),
+                    json.dumps(job.get("agents", [])),
+                    json.dumps(job.get("request", {})),
+                ),
+            )
             conn.commit()
 
     def update_job(self, job_id: str, **kwargs: Any) -> None:
@@ -202,11 +206,14 @@ class JobStore:
                     recovered.append(job["job_id"])
                 else:
                     logger.info("Marking dead job %s as failed (pid %s no longer active)", job["job_id"], pid)
-                    conn.execute("""
+                    conn.execute(
+                        """
                         UPDATE jobs
                         SET status = 'failed', returncode = -1, finished = ?, error = ?
                         WHERE job_id = ?
-                    """, (time.time(), "Process terminated while server was stopped", job["job_id"]))
+                    """,
+                        (time.time(), "Process terminated while server was stopped", job["job_id"]),
+                    )
 
             conn.commit()
         return recovered

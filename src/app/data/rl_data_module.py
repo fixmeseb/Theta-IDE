@@ -92,14 +92,18 @@ class RLDataModule(L.LightningDataModule, BaseDataModule):
         agent_cfg = getattr(self.cfg, "agent", {}) if hasattr(self.cfg, "agent") else {}
         if agent_cfg is None:
             agent_cfg = {}
-        batch_size = (
-            agent_cfg.get("batch_size", 1024)
-            if is_offline
-            else agent_cfg.get("batch_size", 1)
-        )
+        batch_size = agent_cfg.get("batch_size", 1024) if is_offline else agent_cfg.get("batch_size", 1)
         default_workers = 0 if is_offline else (2 if torch.cuda.is_available() else 0)
-        num_workers = self.cfg.get("num_workers", agent_cfg.get("num_workers", default_workers)) if hasattr(self.cfg, "get") else default_workers
-        pin_memory = self.cfg.get("pin_memory", torch.cuda.is_available() and num_workers > 0) if hasattr(self.cfg, "get") else False
+        num_workers = (
+            self.cfg.get("num_workers", agent_cfg.get("num_workers", default_workers))
+            if hasattr(self.cfg, "get")
+            else default_workers
+        )
+        pin_memory = (
+            self.cfg.get("pin_memory", torch.cuda.is_available() and num_workers > 0)
+            if hasattr(self.cfg, "get")
+            else False
+        )
         persistent_workers = num_workers > 0
         if self.reader is not None:
             return DataLoader(
@@ -126,7 +130,11 @@ class RLDataModule(L.LightningDataModule, BaseDataModule):
         if self.val_dataset is not None and self.val_reader is not None:
             batch_size = agent_cfg.get("batch_size", 1024)
             default_workers = 0 if is_offline else (2 if torch.cuda.is_available() else 0)
-            num_workers = self.cfg.get("num_workers", agent_cfg.get("num_workers", default_workers)) if hasattr(self.cfg, "get") else default_workers
+            num_workers = (
+                self.cfg.get("num_workers", agent_cfg.get("num_workers", default_workers))
+                if hasattr(self.cfg, "get")
+                else default_workers
+            )
             pin_memory = self.cfg.get("pin_memory", torch.cuda.is_available() and num_workers > 0)
             persistent_workers = num_workers > 0
             return DataLoader(
