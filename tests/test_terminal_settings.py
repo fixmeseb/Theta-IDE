@@ -26,6 +26,16 @@ except ImportError:
     HAS_PTY = False
 
 
+def quoted_executable() -> str:
+    """The interpreter path as a single shell word.
+
+    Quoting is not Windows-specific: on POSIX, shlex splits an unquoted path
+    containing a space into two words, so a checkout under something like
+    "Application Support" makes the parser report it cannot find the program.
+    Double quotes are understood on both platforms.
+    """
+    return f'"{sys.executable}"'
+
 @unittest.skipIf(not HAS_PYQT6, "PyQt6 not installed in current environment")
 class TestShellHelpers(unittest.TestCase):
     def test_empty_setting_means_auto_detect(self):
@@ -36,8 +46,7 @@ class TestShellHelpers(unittest.TestCase):
         self.assertIsNone(parse_shell_command("no-such-shell-xyz --flag"))
 
     def test_absolute_path_with_arguments(self):
-        quoted = f'"{sys.executable}" -i' if sys.platform == "win32" else f"{sys.executable} -i"
-        self.assertEqual(parse_shell_command(quoted), [sys.executable, "-i"])
+        self.assertEqual(parse_shell_command(f"{quoted_executable()} -i"), [sys.executable, "-i"])
 
     def test_detected_shells_round_trip_through_the_parser(self):
         shells = available_shells()
@@ -81,7 +90,7 @@ class TestTerminalSettings(unittest.TestCase):
 
     def test_settings_reach_the_terminal_config(self):
         folder = Path(self.temp_dir.name)
-        self.sm.set("terminal", "shell", f'"{sys.executable}"' if sys.platform == "win32" else sys.executable)
+        self.sm.set("terminal", "shell", quoted_executable())
         self.sm.set("terminal", "cwd", str(folder))
         self.sm.set("terminal", "activate_venv", False)
         command, cwd, env = self.window.terminal_config()
