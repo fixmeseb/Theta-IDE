@@ -1058,7 +1058,7 @@ class Window(QMainWindow):
     def toggle_ascii_animation(self, paused):
         if hasattr(self, "settings_ascii"):
             self.settings_ascii.set_paused(paused)
-        if hasattr(self, "anim_toggle_btn") and hasattr(self.anim_toggle_btn, "isCheckable") and self.anim_toggle_btn.isCheckable():
+        if hasattr(self, "anim_toggle_btn") and getattr(self.anim_toggle_btn, "tab_id", None) != "animation" and hasattr(self.anim_toggle_btn, "isCheckable") and self.anim_toggle_btn.isCheckable():
             self.anim_toggle_btn.setText("Resume animation" if paused else "Pause animation")
 
     def make_menus(self):

@@ -21,6 +21,7 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QSlider,
     QStackedLayout,
     QStackedWidget,
     QStyle,
@@ -114,6 +115,15 @@ TAB_SPECS = [
         "icon": "storage",
     },
 ]
+
+ANIMATION_TAB_SPEC = {
+    "id": "animation",
+    "title": "Animation Settings",
+    "subtitle": "Configure 3D ASCII Theta playback, speed, dimensions, and perspective",
+    "icon": "gear",
+}
+
+ALL_TAB_SPECS = TAB_SPECS + [ANIMATION_TAB_SPEC]
  
 DEFAULT_PANES = [
     "settings",
@@ -180,7 +190,7 @@ class SettingsSideTabButton(QToolButton):
         self.setCheckable(True)
         self.setAutoRaise(True)
         self.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-        self.setText(f"  {title}")
+        self.setText(title)
         self.setToolTip(f"Configure {title}")
         self.setIconSize(QSize(20, 20))
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
@@ -195,41 +205,25 @@ class SettingsSideTabButton(QToolButton):
 
 
 class AsciiThetaSplash(QWidget):
-    """Base welcome view: prominent rotating ASCII Theta sculpture and branding."""
+    """Base welcome view: prominent rotating ASCII Theta sculpture."""
 
     def __init__(self, window: Window, parent=None):
         super().__init__(parent)
         self.window = window
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 20, 24, 20)
-        layout.setSpacing(10)
-
-        # Header branding
-        header_row = QHBoxLayout()
-        title_lbl = label("ThetaIDE", "brand")
-        title_lbl.setStyleSheet("font-size: 26px; font-weight: 700;")
-        header_row.addWidget(title_lbl)
-        header_row.addStretch()
-
-        self.anim_settings_btn = QPushButton("Animation Settings")
-        self.anim_settings_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.anim_settings_btn.setToolTip("Configure ASCII Theta animation speed, size, thickness, and 3D effects")
-        self.anim_settings_btn.clicked.connect(self.open_animation_settings)
-        header_row.addWidget(self.anim_settings_btn)
-        self.anim_toggle_btn = self.anim_settings_btn  # Backward-compatible alias
-        layout.addLayout(header_row)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(0)
 
         # 3D ASCII Sculpture
         self.ascii_sculpture = AsciiTheta(self, settings_manager=getattr(window, "settings_manager", None))
         layout.addWidget(self.ascii_sculpture, 1)
 
+        self.anim_settings_btn = None
+        self.anim_toggle_btn = None
+
     def open_animation_settings(self):
-        dialog = AnimationSettingsDialog(
-            target=self.ascii_sculpture,
-            settings_manager=getattr(self.window, "settings_manager", None),
-            parent=self,
-        )
-        dialog.exec()
+        if hasattr(self.window, "settings_view") and self.window.settings_view:
+            self.window.settings_view.show_tab("animation")
 
 
 TAB_SIZES = {
@@ -239,6 +233,7 @@ TAB_SIZES = {
     "hotkeys": (940, 760),
     "backend": (760, 460),
     "storage": (780, 480),
+    "animation": (740, 560),
 }
 
 
@@ -269,15 +264,17 @@ class SettingsDetailWindow(QFrame):
 
         self.current_tab_id = "appearance"
         self.target_size = (840, 680)
+        self.dock_position = "top_left"
 
-        # Top-left layout: Page is docked flush with the sidebar & top, leaving margins to the right & underneath
-        outer_layout = QVBoxLayout(self)
-        outer_layout.setContentsMargins(0, 0, 0, 0)
-        outer_layout.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        # Outer layout: Page is docked flush with the sidebar & top (or bottom for animation)
+        self.outer_layout = QVBoxLayout(self)
+        self.outer_layout.setContentsMargins(0, 0, 0, 0)
+        self.outer_layout.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
 
         # Settings Page Frame
         self.card = QFrame(self)
         self.card.setObjectName("settingsDetailCard")
+        self.card.setProperty("dock", "top-left")
 
         self.shadow = QGraphicsDropShadowEffect(self.card)
         self.shadow.setBlurRadius(24)
@@ -339,7 +336,7 @@ class SettingsDetailWindow(QFrame):
         self.scroll_area.setWidget(self.pages_stack)
         card_layout.addWidget(self.scroll_area, 1)
 
-        outer_layout.addWidget(self.card)
+        self.outer_layout.addWidget(self.card)
 
     def set_header(self, title: str, subtitle: str, icon_name: str):
         self.title_label.setText(title)
@@ -355,6 +352,21 @@ class SettingsDetailWindow(QFrame):
     def apply_tab_size(self, tab_id: str):
         self.current_tab_id = tab_id
         self.target_size = TAB_SIZES.get(tab_id, (840, 680))
+        is_bottom = (tab_id == "animation")
+        self.dock_position = "bottom_left" if is_bottom else "top_left"
+        if is_bottom:
+            self.outer_layout.setAlignment(Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignLeft)
+            self.card.setProperty("dock", "bottom-left")
+            if hasattr(self, "shadow") and self.shadow:
+                self.shadow.setOffset(4, -4)
+        else:
+            self.outer_layout.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+            self.card.setProperty("dock", "top-left")
+            if hasattr(self, "shadow") and self.shadow:
+                self.shadow.setOffset(4, 4)
+        self.card.style().unpolish(self.card)
+        self.card.style().polish(self.card)
+        self.card.update()
         self._update_card_geometry()
 
     def resizeEvent(self, event):
@@ -518,6 +530,21 @@ class SettingsView(QWidget):
 
         sb_layout.addStretch()
 
+        anim_sep = QFrame()
+        anim_sep.setFrameShape(QFrame.Shape.HLine)
+        anim_sep.setObjectName("settingsSidebarSeparator")
+        sb_layout.addWidget(anim_sep)
+
+        self.anim_settings_btn = SettingsSideTabButton(
+            "animation", "Animation Settings", "gear", self.sidebar_frame
+        )
+        self.anim_settings_btn.setToolTip("Configure ASCII Theta animation speed, size, thickness, and 3D effects")
+        self.anim_settings_btn.clicked.connect(lambda: self.on_tab_button_clicked("animation"))
+        self.tab_buttons["animation"] = self.anim_settings_btn
+        sb_layout.addWidget(self.anim_settings_btn)
+
+        self.anim_toggle_btn = self.anim_settings_btn
+
         layout.addWidget(self.sidebar_frame)
 
         # ── 2. Right Content Area: Stacked ASCII Splash (0) & Settings (1) ────
@@ -529,10 +556,12 @@ class SettingsView(QWidget):
         self.ascii_splash = AsciiThetaSplash(self.window, self.content_stack)
         self.content_stack.addWidget(self.ascii_splash)
 
-        # Bind Window references so window.settings_ascii, window.anim_settings_btn, and window.anim_toggle_btn work
+        # Bind Window and Splash references
+        self.ascii_splash.anim_settings_btn = self.anim_settings_btn
+        self.ascii_splash.anim_toggle_btn = self.anim_settings_btn
         self.window.settings_ascii = self.ascii_splash.ascii_sculpture
-        self.window.anim_settings_btn = self.ascii_splash.anim_settings_btn
-        self.window.anim_toggle_btn = self.ascii_splash.anim_toggle_btn
+        self.window.anim_settings_btn = self.anim_settings_btn
+        self.window.anim_toggle_btn = self.anim_settings_btn
 
         # Page 1: Settings Detail Window (appears on top when a tab is clicked)
         self.settings_window = SettingsDetailWindow(self.content_stack)
@@ -591,6 +620,11 @@ class SettingsView(QWidget):
         p_storage = self._build_storage_page()
         stack.addWidget(p_storage)
         self.page_widgets["storage"] = p_storage
+
+        # Page 6: Animation Settings
+        p_anim = self._build_animation_page()
+        stack.addWidget(p_anim)
+        self.page_widgets["animation"] = p_anim
 
     def _build_appearance_page(self) -> QWidget:
         container = QWidget()
@@ -742,22 +776,19 @@ class SettingsView(QWidget):
         return container
 
     def _open_animation_settings_dialog(self):
-        target = getattr(self.window, "settings_ascii", None) or self.ascii_splash.ascii_sculpture
-        dialog = AnimationSettingsDialog(
-            target=target,
-            settings_manager=getattr(self.window, "settings_manager", None),
-            parent=self,
-        )
-        dialog.exec()
+        self.show_tab("animation")
 
     def _on_ascii_setting_toggled(self, checked: bool):
-        if hasattr(self.window, "settings_manager"):
+        if hasattr(self.window, "settings_manager") and self.window.settings_manager:
             self.window.settings_manager.set("appearance", "ascii_animation", checked)
-        if hasattr(self.window, "settings_ascii"):
+        if hasattr(self.window, "settings_ascii") and self.window.settings_ascii:
             self.window.settings_ascii.set_paused(not checked)
-        if hasattr(self.window, "anim_toggle_btn") and hasattr(self.window.anim_toggle_btn, "isCheckable") and self.window.anim_toggle_btn.isCheckable():
-            self.window.anim_toggle_btn.setChecked(not checked)
-            self.window.anim_toggle_btn.setText("Resume animation" if not checked else "Pause animation")
+        if hasattr(self, "anim_toggle_active") and self.anim_toggle_active:
+            self.anim_toggle_active.blockSignals(True)
+            self.anim_toggle_active.setChecked(checked)
+            self.anim_toggle_active.blockSignals(False)
+            if hasattr(self, "anim_status_lbl") and self.anim_status_lbl:
+                self.anim_status_lbl.setText("Running" if checked else "Paused")
 
     def _build_core_plugins_page(self) -> QWidget:
         container = QWidget()
@@ -1450,6 +1481,15 @@ class SettingsView(QWidget):
                     edit.setKeySequence(seq)
                     edit.blockSignals(False)
 
+        # 5. Animation playback toggle
+        if hasattr(self, "anim_toggle_active") and self.anim_toggle_active:
+            is_anim = bool(sm.get("appearance", "ascii_animation", default=True))
+            self.anim_toggle_active.blockSignals(True)
+            self.anim_toggle_active.setChecked(is_anim)
+            self.anim_toggle_active.blockSignals(False)
+            if hasattr(self, "anim_status_lbl") and self.anim_status_lbl:
+                self.anim_status_lbl.setText("Running" if is_anim else "Paused")
+
     def _build_backend_page(self) -> QWidget:
         container = QWidget()
         layout = QVBoxLayout(container)
@@ -1596,6 +1636,256 @@ class SettingsView(QWidget):
         layout.addStretch()
         return container
 
+    def _build_animation_page(self) -> QWidget:
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(14)
+
+        target = getattr(self.window, "settings_ascii", None) or self.ascii_splash.ascii_sculpture
+        self._updating_anim_preset = False
+
+        # Card 1: Playback & Presets
+        ctrl_card = QFrame()
+        ctrl_card.setObjectName("card")
+        ctrl_layout = QVBoxLayout(ctrl_card)
+        ctrl_layout.setContentsMargins(18, 16, 18, 16)
+        ctrl_layout.setSpacing(12)
+
+        ctrl_layout.addWidget(label("Animation Playback & Presets", "cardTitle"))
+        sub1 = label("Control real-time rotation playback and select curated motion presets.", "muted")
+        sub1.setWordWrap(True)
+        ctrl_layout.addWidget(sub1)
+
+        row_active = QHBoxLayout()
+        row_active.addWidget(label("Animation Playback:", "muted"))
+        self.anim_status_lbl = label("Running" if not target.paused else "Paused", "muted")
+        self.anim_status_lbl.setStyleSheet("font-weight: 600; font-size: 12px;")
+        row_active.addWidget(self.anim_status_lbl)
+        row_active.addStretch()
+
+        self.anim_toggle_active = ToggleSlider(checked=not target.paused)
+        self.anim_toggle_active.setToolTip("Toggle ASCII Theta animation playback")
+        self.anim_toggle_active.toggled.connect(self._on_anim_active_toggled)
+        row_active.addWidget(self.anim_toggle_active)
+        ctrl_layout.addLayout(row_active)
+
+        row_preset = QHBoxLayout()
+        lbl_preset = label("Preset Style:", "muted")
+        row_preset.addWidget(lbl_preset)
+        self.anim_preset_combo = QComboBox()
+        self.anim_preset_combo.addItems(["Custom"] + list(AnimationSettingsDialog.PRESETS.keys()))
+        self.anim_preset_combo.setCurrentText(self._match_initial_anim_preset())
+        self.anim_preset_combo.currentTextChanged.connect(self._on_anim_preset_changed)
+        self.anim_preset_combo.setMaximumWidth(280)
+        row_preset.addWidget(self.anim_preset_combo, 1)
+        ctrl_layout.addLayout(row_preset)
+
+        layout.addWidget(ctrl_card)
+
+        # Card 2: 3D Sculpture Parameters
+        sliders_card = QFrame()
+        sliders_card.setObjectName("card")
+        sliders_layout = QVBoxLayout(sliders_card)
+        sliders_layout.setContentsMargins(18, 16, 18, 16)
+        sliders_layout.setSpacing(12)
+
+        sliders_layout.addWidget(label("3D Sculpture Parameters", "cardTitle"))
+        sub2 = label("Fine-tune rotation speed, dimensions, tube thickness, and camera focal depth.", "muted")
+        sub2.setWordWrap(True)
+        sliders_layout.addWidget(sub2)
+
+        # 1. Speed Slider
+        speed_init = int(round(target.speed * 100))
+        speed_widget, self.anim_slider_speed, self.anim_val_speed = self._make_anim_slider_row(
+            "Rotation Speed", 0, 300, speed_init,
+            lambda v: f"{v/100:.2f}x" if v > 0 else "0.00x (Frozen)",
+            tooltip="Control the rotation speed multiplier",
+        )
+        self.anim_slider_speed.valueChanged.connect(self._on_anim_speed_changed)
+        sliders_layout.addWidget(speed_widget)
+
+        # 2. Size / Scale Slider
+        size_init = int(round(target.scale * 100))
+        size_widget, self.anim_slider_size, self.anim_val_size = self._make_anim_slider_row(
+            "Sculpture Size", 40, 180, size_init,
+            lambda v: f"{v}%",
+            tooltip="Control the overall scale of the 3D Theta",
+        )
+        self.anim_slider_size.valueChanged.connect(self._on_anim_size_changed)
+        sliders_layout.addWidget(size_widget)
+
+        # 3. Thickness Slider
+        thick_init = int(round(target.thickness * 100))
+        thick_widget, self.anim_slider_thickness, self.anim_val_thickness = self._make_anim_slider_row(
+            "Ring & Bar Thickness", 30, 250, thick_init,
+            lambda v: f"{v}%",
+            tooltip="Adjust the tube thickness of the outer ring and central crossbar",
+        )
+        self.anim_slider_thickness.valueChanged.connect(self._on_anim_thickness_changed)
+        sliders_layout.addWidget(thick_widget)
+
+        # 4. Tilt Angle Slider
+        tilt_init = int(round(target.tilt_factor * 100))
+        tilt_widget, self.anim_slider_tilt, self.anim_val_tilt = self._make_anim_slider_row(
+            "Forward Tilt", 0, 250, tilt_init,
+            lambda v: f"{v/100:.2f}x",
+            tooltip="Adjust the forward tilt angle toward the viewer",
+        )
+        self.anim_slider_tilt.valueChanged.connect(self._on_anim_tilt_changed)
+        sliders_layout.addWidget(tilt_widget)
+
+        # 5. Distance / Perspective Slider
+        dist_init = int(round(target.distance * 10))
+        dist_widget, self.anim_slider_dist, self.anim_val_dist = self._make_anim_slider_row(
+            "Perspective Depth", 25, 100, dist_init,
+            lambda v: f"{v/10:.1f}",
+            tooltip="Control 3D perspective projection focal depth",
+        )
+        self.anim_slider_dist.valueChanged.connect(self._on_anim_dist_changed)
+        sliders_layout.addWidget(dist_widget)
+
+        layout.addWidget(sliders_card)
+
+        # Card 3: Reset Defaults
+        actions_card = QFrame()
+        actions_card.setObjectName("card")
+        actions_layout = QVBoxLayout(actions_card)
+        actions_layout.setContentsMargins(18, 16, 18, 16)
+        actions_layout.setSpacing(10)
+
+        actions_layout.addWidget(label("Restore Factory Defaults", "cardTitle"))
+        sub3 = label("Restore default animation speed, dimensions, and camera perspective.", "muted")
+        sub3.setWordWrap(True)
+        actions_layout.addWidget(sub3)
+
+        btn_row = QHBoxLayout()
+        btn_reset = QPushButton("Reset Defaults")
+        btn_reset.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_reset.setToolTip("Reset all animation parameters to default values")
+        btn_reset.clicked.connect(self._reset_anim_defaults)
+        btn_row.addWidget(btn_reset)
+        btn_row.addStretch()
+        actions_layout.addLayout(btn_row)
+
+        layout.addWidget(actions_card)
+        layout.addStretch()
+        return container
+
+    def _make_anim_slider_row(self, title: str, min_val: int, max_val: int, init_val: int, fmt_fn, tooltip: str = ""):
+        container = QWidget()
+        vbox = QVBoxLayout(container)
+        vbox.setContentsMargins(0, 2, 0, 2)
+        vbox.setSpacing(4)
+
+        hdr = QHBoxLayout()
+        name_lbl = QLabel(title)
+        name_lbl.setStyleSheet("font-weight: 600; font-size: 12px;")
+        val_lbl = QLabel(fmt_fn(init_val))
+        val_lbl.setStyleSheet(f"font-family: monospace; font-size: 12px; font-weight: 600; color: {theme_color('primary')};")
+        hdr.addWidget(name_lbl)
+        hdr.addStretch()
+        hdr.addWidget(val_lbl)
+        vbox.addLayout(hdr)
+
+        slider = QSlider(Qt.Orientation.Horizontal)
+        slider.setRange(min_val, max_val)
+        slider.setValue(init_val)
+        slider.setCursor(Qt.CursorShape.PointingHandCursor)
+        if tooltip:
+            slider.setToolTip(tooltip)
+        vbox.addWidget(slider)
+
+        return container, slider, val_lbl
+
+    def _match_initial_anim_preset(self) -> str:
+        target = getattr(self.window, "settings_ascii", None) or self.ascii_splash.ascii_sculpture
+        s = int(round(target.speed * 100))
+        sz = int(round(target.scale * 100))
+        th = int(round(target.thickness * 100))
+        ti = int(round(target.tilt_factor * 100))
+        di = int(round(target.distance * 10))
+        for name, cfg in AnimationSettingsDialog.PRESETS.items():
+            if (cfg["speed"] == s and cfg["size"] == sz and cfg["thickness"] == th
+                    and cfg["tilt"] == ti and cfg["dist"] == di):
+                return name
+        return "Custom"
+
+    def _mark_anim_custom(self):
+        if not getattr(self, "_updating_anim_preset", False):
+            if hasattr(self, "anim_preset_combo"):
+                self.anim_preset_combo.blockSignals(True)
+                self.anim_preset_combo.setCurrentText("Custom")
+                self.anim_preset_combo.blockSignals(False)
+
+    def _on_anim_active_toggled(self, active: bool):
+        target = getattr(self.window, "settings_ascii", None) or self.ascii_splash.ascii_sculpture
+        target.set_paused(not active)
+        if hasattr(self, "anim_status_lbl"):
+            self.anim_status_lbl.setText("Running" if active else "Paused")
+        if hasattr(self.window, "settings_manager") and self.window.settings_manager:
+            self.window.settings_manager.set("appearance", "ascii_animation", active)
+
+    def _on_anim_preset_changed(self, name: str):
+        if name in AnimationSettingsDialog.PRESETS:
+            cfg = AnimationSettingsDialog.PRESETS[name]
+            self._updating_anim_preset = True
+            try:
+                self.anim_slider_speed.setValue(cfg["speed"])
+                self.anim_slider_size.setValue(cfg["size"])
+                self.anim_slider_thickness.setValue(cfg["thickness"])
+                self.anim_slider_tilt.setValue(cfg["tilt"])
+                self.anim_slider_dist.setValue(cfg["dist"])
+            finally:
+                self._updating_anim_preset = False
+
+    def _on_anim_speed_changed(self, val: int):
+        self._mark_anim_custom()
+        self.anim_val_speed.setText(f"{val/100:.2f}x" if val > 0 else "0.00x (Frozen)")
+        target = getattr(self.window, "settings_ascii", None) or self.ascii_splash.ascii_sculpture
+        target.set_speed(val / 100.0)
+
+    def _on_anim_size_changed(self, val: int):
+        self._mark_anim_custom()
+        self.anim_val_size.setText(f"{val}%")
+        target = getattr(self.window, "settings_ascii", None) or self.ascii_splash.ascii_sculpture
+        target.set_scale(val / 100.0)
+
+    def _on_anim_thickness_changed(self, val: int):
+        self._mark_anim_custom()
+        self.anim_val_thickness.setText(f"{val}%")
+        target = getattr(self.window, "settings_ascii", None) or self.ascii_splash.ascii_sculpture
+        target.set_thickness(val / 100.0)
+
+    def _on_anim_tilt_changed(self, val: int):
+        self._mark_anim_custom()
+        self.anim_val_tilt.setText(f"{val/100:.2f}x")
+        target = getattr(self.window, "settings_ascii", None) or self.ascii_splash.ascii_sculpture
+        target.set_tilt(val / 100.0)
+
+    def _on_anim_dist_changed(self, val: int):
+        self._mark_anim_custom()
+        self.anim_val_dist.setText(f"{val/10:.1f}")
+        target = getattr(self.window, "settings_ascii", None) or self.ascii_splash.ascii_sculpture
+        target.set_distance(val / 10.0)
+
+    def _reset_anim_defaults(self):
+        self._updating_anim_preset = True
+        try:
+            self.anim_slider_speed.setValue(100)
+            self.anim_slider_size.setValue(100)
+            self.anim_slider_thickness.setValue(100)
+            self.anim_slider_tilt.setValue(100)
+            self.anim_slider_dist.setValue(48)
+        finally:
+            self._updating_anim_preset = False
+        if hasattr(self, "anim_preset_combo"):
+            self.anim_preset_combo.setCurrentText("Default (Balanced)")
+        if hasattr(self, "anim_toggle_active") and self.anim_toggle_active:
+            self.anim_toggle_active.setChecked(True)
+        target = getattr(self.window, "settings_ascii", None) or self.ascii_splash.ascii_sculpture
+        target.reset_defaults()
+
     # ── Interaction & View Control ───────────────────────────────────────────
 
     def showEvent(self, event):
@@ -1625,7 +1915,7 @@ class SettingsView(QWidget):
             btn.setChecked(tid == tab_id)
 
         # Find tab spec for titles & icons
-        spec = next((s for s in TAB_SPECS if s["id"] == tab_id), None)
+        spec = next((s for s in ALL_TAB_SPECS if s["id"] == tab_id), None)
         title = spec["title"] if spec else tab_id.title()
         subtitle = spec["subtitle"] if spec else ""
         icon_name = spec["icon"] if spec else "settings"
@@ -1691,6 +1981,13 @@ class SettingsView(QWidget):
                 color: {accent_col};
                 font-weight: 600;
             }}
+            QFrame#settingsSidebarSeparator {{
+                color: {border_col};
+                background-color: {border_col};
+                max-height: 1px;
+                margin-top: 4px;
+                margin-bottom: 4px;
+            }}
         """)
 
         # Settings detail window styling
@@ -1705,6 +2002,24 @@ class SettingsView(QWidget):
                 border-left: none;
                 border-right: 1px solid {border_col};
                 border-bottom: 1px solid {border_col};
+                border-bottom-right-radius: 12px;
+            }}
+            QFrame#settingsDetailCard[dock="bottom-left"] {{
+                background-color: {panel_col};
+                border-top: 1px solid {border_col};
+                border-left: none;
+                border-right: 1px solid {border_col};
+                border-bottom: none;
+                border-top-right-radius: 12px;
+                border-bottom-right-radius: 0px;
+            }}
+            QFrame#settingsDetailCard[dock="top-left"] {{
+                background-color: {panel_col};
+                border-top: none;
+                border-left: none;
+                border-right: 1px solid {border_col};
+                border-bottom: 1px solid {border_col};
+                border-top-right-radius: 0px;
                 border-bottom-right-radius: 12px;
             }}
             QFrame#card {{
@@ -1763,14 +2078,16 @@ class SettingsView(QWidget):
         """)
 
         if hasattr(self.settings_window, "shadow") and self.settings_window.shadow:
+            is_bottom = getattr(self.settings_window, "dock_position", "top_left") == "bottom_left"
             self.settings_window.shadow.setColor(QColor(0, 0, 0, 160))
+            self.settings_window.shadow.setOffset(4, -4 if is_bottom else 4)
 
         # Refresh icons on buttons
         for btn in self.tab_buttons.values():
             btn.refresh_icon()
 
         if self.active_tab_id:
-            spec = next((s for s in TAB_SPECS if s["id"] == self.active_tab_id), None)
+            spec = next((s for s in ALL_TAB_SPECS if s["id"] == self.active_tab_id), None)
             if spec:
                 self.settings_window.set_header(spec["title"], spec["subtitle"], spec["icon"])
 
