@@ -344,6 +344,73 @@ class TestComponentsPanel(unittest.TestCase):
         self.panel.toggle_raw_preview(False)
         self.assertTrue(self.panel.raw_panel.isHidden())
 
+    def test_component_hub_replaces_parameters_panels_and_restores_on_selection(self):
+        # Initially on parameters view
+        self.assertFalse(self.panel.is_hub_active)
+        self.assertFalse(self.panel.btn_hub.isChecked())
+        self.assertFalse(self.panel.btn_toggle_raw.isHidden())
+        self.assertEqual(self.panel.content_stack.currentWidget(), self.panel.content_splitter)
+
+        # Click Component Hub button in top right
+        self.panel.btn_hub.click()
+        self.assertTrue(self.panel.is_hub_active)
+        self.assertTrue(self.panel.btn_hub.isChecked())
+        self.assertTrue(self.panel.btn_toggle_raw.isHidden())
+        self.assertEqual(self.panel.content_stack.currentWidget(), self.panel.hub_view)
+
+        # Click on a component again in the tree
+        self.panel.components_tree.select_file("env/cartpole.yaml")
+        # Brought back to parameters view
+        self.assertFalse(self.panel.is_hub_active)
+        self.assertFalse(self.panel.btn_hub.isChecked())
+        self.assertFalse(self.panel.btn_toggle_raw.isHidden())
+        self.assertEqual(self.panel.content_stack.currentWidget(), self.panel.content_splitter)
+        self.assertEqual(self.panel.viewer.file_title.text(), "cartpole.yaml")
+
+    def test_component_hub_toggle_and_close_button(self):
+        # Open hub
+        self.panel.btn_hub.click()
+        self.assertTrue(self.panel.is_hub_active)
+
+        # Click btn_hub again to toggle back
+        self.panel.btn_hub.click()
+        self.assertFalse(self.panel.is_hub_active)
+        self.assertEqual(self.panel.content_stack.currentWidget(), self.panel.content_splitter)
+
+        # Open hub again
+        self.panel.btn_hub.click()
+        self.assertTrue(self.panel.is_hub_active)
+
+        # Click Back to Parameters button in Hub footer
+        self.panel.hub_view.btn_close.click()
+        self.assertFalse(self.panel.is_hub_active)
+        self.assertEqual(self.panel.content_stack.currentWidget(), self.panel.content_splitter)
+
+    def test_reload_components_preserves_hub_view_on_install_and_uninstall(self):
+        # Open hub
+        self.panel.btn_hub.click()
+        self.assertTrue(self.panel.is_hub_active)
+        self.assertEqual(self.panel.content_stack.currentWidget(), self.panel.hub_view)
+
+        # Simulate install: new component created and reload_components called
+        (self.root / "agent" / "new_dqn.yaml").write_text("gamma: 0.99\n", encoding="utf-8")
+        self.panel.reload_components(target_rel_path="agent/new_dqn.yaml", ensure_expanded="agent")
+        # Must still be in the Hub!
+        self.assertTrue(self.panel.is_hub_active)
+        self.assertEqual(self.panel.content_stack.currentWidget(), self.panel.hub_view)
+
+        # Simulate uninstall: component deleted and reload_components called
+        (self.root / "agent" / "new_dqn.yaml").unlink()
+        self.panel.reload_components(target_rel_path=None, ensure_expanded="agent")
+        # Must still be in the Hub!
+        self.assertTrue(self.panel.is_hub_active)
+        self.assertEqual(self.panel.content_stack.currentWidget(), self.panel.hub_view)
+
+        # Only clicking a component in the tree brings you back to params
+        self.panel.components_tree.select_file("agent/ppo.yaml")
+        self.assertFalse(self.panel.is_hub_active)
+        self.assertEqual(self.panel.content_stack.currentWidget(), self.panel.content_splitter)
+
 
 @unittest.skipIf(not HAS_PYQT6, "PyQt6 not installed in current environment")
 class TestExperimentPaneWindowIntegration(unittest.TestCase):

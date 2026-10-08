@@ -138,6 +138,7 @@ class Window(QMainWindow):
             workspace_dir=workspace_dir,
             data_dir=ide_data_dir,
             on_change_callback=self._on_hub_component_changed,
+            settings_manager=self.settings_manager,
         )
         saved, errors = self.store.load()
         self.runs = saved or example_runs()
@@ -220,7 +221,7 @@ class Window(QMainWindow):
         self.setCentralWidget(self.tabs)
 
         # 1. Components Panel
-        self.components_panel = ComponentsPanel(log_fn=self.log, parent=self)
+        self.components_panel = ComponentsPanel(hub_client=self.hub_client, log_fn=self.log, parent=self)
         self.tabs.addTab(self.components_panel, "Components", "components", "Components", tab_id="components")
 
         # 2. Experiment (Config) Panel

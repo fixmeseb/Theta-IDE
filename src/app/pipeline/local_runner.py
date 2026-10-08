@@ -10,6 +10,7 @@ from pathlib import Path
 from src.app.pipeline.commands import build_method_overrides, get_sweep_direction
 from src.app.pipeline.config import normalize_agent_name
 from src.app.pipeline.datasets import fast_purge_dir, resolve_dataset_for_method, run_experiment
+from src.app.pipeline.engine import resolve_engine
 from src.app.pipeline.optuna_utils import (
     create_optuna_study,
     delete_optuna_study,
@@ -103,7 +104,13 @@ def run_methods(cfg, context) -> None:
             ) or get_sweep_direction(cfg, paradigm)
             create_optuna_study(storage_url, study_name, direction=direction)
 
-        run_experiment(overrides)
+        engine_script, engine_python = resolve_engine(method_cfg, cfg)
+        run_experiment(
+            overrides,
+            site_cfg=getattr(cfg, "site", None),
+            script_entrypoint=engine_script,
+            python_executable=engine_python,
+        )
 
         if method_is_sweep:
             promote_best_trial_checkpoint(cfg.group, cfg.experiment_id, agent_name, storage_url, study_name)

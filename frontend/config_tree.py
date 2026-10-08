@@ -1,4 +1,5 @@
 """Tree widget mirroring in/config/ directory for Theta-IDE."""
+import shutil
 from pathlib import Path
 
 import yaml
@@ -133,6 +134,67 @@ class NewExperimentDialog(QDialog):
     def values(self):
         return (self.group.currentText().strip(), self.name.text().strip(),
                 self.paradigm.currentText(), self.env.currentText())
+
+
+class ComponentDeleteDialog(QDialog):
+    """Dialog displayed when a user deletes a folder or file belonging to a Hub component."""
+
+    def __init__(self, rel_path: str, comp_name: str, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Uninstall Component?")
+        self.setFixedWidth(460)
+        self.choice = "cancel"
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(14)
+        layout.setContentsMargins(20, 20, 20, 20)
+
+        title = QLabel(f"Managed Hub Component: {comp_name}")
+        title.setStyleSheet("font-size: 15px; font-weight: bold; color: #ebdbb2;")
+        layout.addWidget(title)
+
+        desc = QLabel(
+            f"<b>'{rel_path}'</b> is managed by Theta Hub (<b>{comp_name}</b>).<br><br>"
+            f"Would you like to completely uninstall this component from your workspace, "
+            f"or only delete this folder?"
+        )
+        desc.setWordWrap(True)
+        desc.setStyleSheet("color: #a89984; font-size: 12px; line-height: 1.4;")
+        layout.addWidget(desc)
+
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(8)
+
+        btn_cancel = QPushButton("Cancel")
+        btn_cancel.clicked.connect(self._on_cancel)
+        btn_row.addWidget(btn_cancel)
+
+        btn_row.addStretch()
+
+        btn_delete_only = QPushButton("Delete Folder Only")
+        btn_delete_only.setToolTip("Deletes only this folder from disk without uninstalling the component source code")
+        btn_delete_only.clicked.connect(self._on_delete_only)
+        btn_row.addWidget(btn_delete_only)
+
+        btn_uninstall = QPushButton("Uninstall Completely")
+        btn_uninstall.setStyleSheet("background-color: #cc241d; color: #ebdbb2; font-weight: bold;")
+        btn_uninstall.setToolTip("Completely uninstalls the component and removes both its source code and configurations")
+        btn_uninstall.clicked.connect(self._on_uninstall)
+        btn_row.addWidget(btn_uninstall)
+
+        layout.addLayout(btn_row)
+
+    def _on_cancel(self):
+        self.choice = "cancel"
+        self.reject()
+
+    def _on_delete_only(self):
+        self.choice = "delete_only"
+        self.accept()
+
+    def _on_uninstall(self):
+        self.choice = "uninstall"
+        self.accept()
 
 
 def find_config_root():
@@ -334,9 +396,9 @@ class ConfigTreeWidget(QWidget):
             for f in top_files:
                 self._add_file_node(self.tree, f)
 
-        # Re-apply current selection if possible
+        # Re-apply current selection if possible without triggering external selection signals
         if self.current_rel_path:
-            self.select_file(self.current_rel_path)
+            self.select_file(self.current_rel_path, emit_signal=False)
 
     def _tool_button(self, icon_name, text=None):
         """Square header button with a themed SVG icon; text, if any, becomes its accessible name."""
@@ -482,7 +544,7 @@ class ConfigTreeWidget(QWidget):
                 return True
         return super().eventFilter(obj, event)
 
-    def select_file(self, target_rel_path: str):
+    def select_file(self, target_rel_path: str, emit_signal: bool = True):
         """Find and select an item by its relative path."""
         target_norm = str(Path(target_rel_path)).replace("\\", "/")
 
@@ -515,7 +577,8 @@ class ConfigTreeWidget(QWidget):
                 curr = curr.parent()
             data = found.data(0, Qt.ItemDataRole.UserRole)
             self.current_rel_path = data["rel_path"]
-            self.file_selected.emit(Path(data["path"]), data["rel_path"])
+            if emit_signal:
+                self.file_selected.emit(Path(data["path"]), data["rel_path"])
             return True
         return False
 
@@ -714,6 +777,63 @@ class ConfigTreeWidget(QWidget):
         if not removed:
             QMessageBox.critical(self, "Delete failed", error or "Unknown error")
 
+    def _get_installer(self):
+        try:
+            from frontend.hub.installer import HubInstaller
+            workspace_dir = self.root_dir.parent.parent
+            data_dir = workspace_dir / ".thetaide"
+            return HubInstaller(workspace_dir=workspace_dir, data_dir=data_dir)
+        except Exception:
+            return None
+
+    def prompt_delete_dir(self, rel_path):
+        full_path = self.root_dir / rel_path
+        if not full_path.exists():
+            QMessageBox.warning(self, "Cannot delete", f"Folder '{rel_path}' does not exist.")
+            return
+
+        installer = self._get_installer()
+        comp_meta = installer.find_component_for_path(full_path) if installer else None
+
+        if comp_meta:
+            comp_name = comp_meta.get("name") or comp_meta.get("id")
+            dlg = ComponentDeleteDialog(rel_path, comp_name, parent=self)
+            if dlg.exec() != QDialog.DialogCode.Accepted or dlg.choice == "cancel":
+                return
+            if dlg.choice == "uninstall":
+                installer.uninstall_by_metadata(comp_meta, remove_configs=True)
+                self.populate()
+                return
+            elif dlg.choice == "delete_only":
+                try:
+                    shutil.rmtree(full_path)
+                except OSError as exc:
+                    QMessageBox.critical(self, "Delete failed", str(exc))
+                self.populate()
+                return
+
+        blocked = deletion_blocked_reason(full_path)
+        if blocked:
+            QMessageBox.warning(self, "Cannot delete", blocked)
+            return
+
+        files_count = len(list(full_path.rglob("*")))
+        answer = QMessageBox.question(
+            self,
+            "Delete folder",
+            f"Delete folder '{rel_path}' and all contents ({files_count} items)?\n\n"
+            f"This removes the folder from your working tree.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            shutil.rmtree(full_path)
+        except OSError as exc:
+            QMessageBox.critical(self, "Delete failed", str(exc))
+        self.populate()
+
     def prompt_rename(self, rel_path):
         current = Path(rel_path).stem
         name, ok = QInputDialog.getText(
@@ -754,6 +874,9 @@ class ConfigTreeWidget(QWidget):
                 action_new = menu.addAction("New Component in this category…")
                 cat_name = Path(data["rel_path"]).name
                 action_new.triggered.connect(lambda: self._create_in_specific_component_category(cat_name))
+
+            action_delete_dir = menu.addAction("Delete Folder…")
+            action_delete_dir.triggered.connect(lambda: self.prompt_delete_dir(rel))
 
         menu.addSeparator()
         action_collapse = menu.addAction("Collapse All")

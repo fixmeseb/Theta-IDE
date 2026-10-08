@@ -10,6 +10,7 @@ from PyQt6.QtCore import QObject, pyqtSignal
 
 from .base import Plugin, PluginManifest
 from .context import PluginContext
+from .dependencies import check_missing_dependencies, load_requirements_from_file
 
 if TYPE_CHECKING:
     from ..app import Window
@@ -233,6 +234,24 @@ class PluginManager(QObject):
 
         manifest = self.manifests[plugin_id]
         plugin_dir = manifest.plugin_dir
+
+        # Verify declared dependencies before loading Python module
+        declared_deps = []
+        if isinstance(manifest.extra, dict):
+            declared_deps.extend(manifest.extra.get("dependencies", {}).get("pip", []))
+        if plugin_dir:
+            req_file = plugin_dir / "requirements.txt"
+            if req_file.exists():
+                declared_deps.extend(load_requirements_from_file(req_file))
+
+        missing = check_missing_dependencies(declared_deps)
+        if missing:
+            self.window.log(
+                f"Cannot activate plugin '{manifest.name}' ({plugin_id}): "
+                f"Missing Python dependencies: {', '.join(missing)}. "
+                f"Please install them via pip or the Theta Hub."
+            )
+            return False
 
         try:
             # Load the plugin module.

@@ -838,6 +838,40 @@ class SettingsView(QWidget):
         self.window.refresh_plugins_ui()
 
         layout.addWidget(plugins_card)
+
+        # ── Card 2: Theta Hub Preferences ──────────────────────────────────
+        hub_card = QFrame()
+        hub_card.setObjectName("card")
+        hc_layout = QVBoxLayout(hub_card)
+        hc_layout.setContentsMargins(18, 16, 18, 16)
+        hc_layout.setSpacing(12)
+
+        hc_layout.addWidget(label("Theta Hub Preferences", "cardTitle"))
+        hc_sub = label("Configure default behavior when managing community components.", "muted")
+        hc_sub.setWordWrap(True)
+        hc_layout.addWidget(hc_sub)
+
+        row = QHBoxLayout()
+        lbl_uninstall = label("When uninstalling components:")
+        row.addWidget(lbl_uninstall, 1)
+
+        combo_uninstall = QComboBox()
+        combo_uninstall.addItem("Ask every time", "ask")
+        combo_uninstall.addItem("Keep configuration files", "keep")
+        combo_uninstall.addItem("Remove configuration files", "remove")
+
+        current_pref = getattr(self.window.settings_manager, "hub_uninstall_configs", "ask")
+        idx = combo_uninstall.findData(current_pref)
+        if idx >= 0:
+            combo_uninstall.setCurrentIndex(idx)
+
+        combo_uninstall.currentIndexChanged.connect(
+            lambda i: self.window.settings_manager.set("hub", "uninstall_configs", combo_uninstall.itemData(i))
+        )
+        row.addWidget(combo_uninstall)
+        hc_layout.addLayout(row)
+
+        layout.addWidget(hub_card)
         layout.addStretch()
         return container
 

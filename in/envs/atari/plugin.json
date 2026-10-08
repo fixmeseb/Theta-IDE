@@ -1,0 +1,12 @@
+{
+  "id": "atari",
+  "name": "Atari 2600 Environment Suite",
+  "version": "1.0.0",
+  "kind": "env",
+  "description": "Standard Arcade Learning Environment (ALE) Atari 2600 benchmarks for Gymnasium.",
+  "author": "Farama Foundation",
+  "tags": ["atari", "ale", "reinforcement-learning", "benchmark"],
+  "dependencies": {
+    "pip": ["gymnasium[atari]", "ale-py"]
+  }
+}

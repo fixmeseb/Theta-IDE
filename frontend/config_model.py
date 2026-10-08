@@ -38,7 +38,10 @@ def _read_yaml(path: Path) -> dict[str, Any]:
 def _yaml_files(directory: Path) -> list[Path]:
     if not directory.is_dir():
         return []
-    return sorted(p for p in directory.glob("*.yaml") if not p.name.startswith("_"))
+    return sorted(
+        p for p in directory.rglob("*.yaml")
+        if not p.name.startswith("_") and not any(part.startswith(".") for part in p.parts)
+    )
 
 
 @dataclass(frozen=True)
@@ -48,10 +51,25 @@ class Environment:
     raw: Mapping[str, Any] = field(default_factory=dict, repr=False)
 
     @classmethod
-    def from_file(cls, path: Path) -> Environment:
+    def from_file(cls, path: Path, root: Path | None = None) -> Environment:
         raw = _read_yaml(path)
+        rel_name = path.stem
+        if root is not None:
+            try:
+                rel_name = path.relative_to(root).with_suffix("").as_posix()
+            except ValueError:
+                rel_name = path.stem
+
+        env_name = raw.get("name")
+        if env_name and "/" in env_name:
+            chosen_name = env_name
+        elif "/" in rel_name:
+            chosen_name = rel_name
+        else:
+            chosen_name = env_name or rel_name
+
         return cls(
-            name=raw.get("name") or path.stem,
+            name=chosen_name,
             offline_only=bool(raw.get("offline_only", False)),
             raw=raw,
         )
@@ -64,10 +82,16 @@ class Agent:
     hyperparameters: Mapping[str, Any] = field(default_factory=dict, repr=False)
 
     @classmethod
-    def from_file(cls, path: Path) -> Agent:
+    def from_file(cls, path: Path, root: Path | None = None) -> Agent:
         raw = _read_yaml(path)
+        name = path.stem
+        if root is not None:
+            try:
+                name = path.relative_to(root).with_suffix("").as_posix()
+            except ValueError:
+                name = path.stem
         return cls(
-            name=path.stem,
+            name=name,
             algorithm=raw.get("algorithm") or path.stem,
             hyperparameters={k: v for k, v in raw.items() if k != "algorithm"},
         )
@@ -80,10 +104,16 @@ class Model:
     parameters: Mapping[str, Any] = field(default_factory=dict, repr=False)
 
     @classmethod
-    def from_file(cls, path: Path) -> Model:
+    def from_file(cls, path: Path, root: Path | None = None) -> Model:
         raw = _read_yaml(path)
+        name = path.stem
+        if root is not None:
+            try:
+                name = path.relative_to(root).with_suffix("").as_posix()
+            except ValueError:
+                name = path.stem
         return cls(
-            name=path.stem,
+            name=name,
             architecture=raw.get("architecture") or path.stem,
             parameters={k: v for k, v in raw.items() if k != "architecture"},
         )
@@ -169,9 +199,33 @@ class ConfigTree:
     def __init__(self, config_root: Path):
         self.config_root = Path(config_root)
         self.paradigms = {p.stem: Paradigm.from_file(p) for p in _yaml_files(self.config_root / "paradigms")}
-        self.environments = {e.stem: Environment.from_file(e) for e in _yaml_files(self.config_root / "env")}
-        self.agents = {a.stem: Agent.from_file(a) for a in _yaml_files(self.config_root / "agent")}
-        self.models = {m.stem: Model.from_file(m) for m in _yaml_files(self.config_root / "model")}
+        agent_dir = self.config_root / "agent"
+        self.agents = {}
+        for a in _yaml_files(agent_dir):
+            rel_name = a.relative_to(agent_dir).with_suffix("").as_posix()
+            agent_obj = Agent.from_file(a, agent_dir)
+            self.agents[rel_name] = agent_obj
+            if a.stem not in self.agents:
+                self.agents[a.stem] = agent_obj
+
+        model_dir = self.config_root / "model"
+        self.models = {}
+        for m in _yaml_files(model_dir):
+            rel_name = m.relative_to(model_dir).with_suffix("").as_posix()
+            model_obj = Model.from_file(m, model_dir)
+            self.models[rel_name] = model_obj
+            if m.stem not in self.models:
+                self.models[m.stem] = model_obj
+
+        env_dir = self.config_root / "env"
+        self.environments = {}
+        for e in _yaml_files(env_dir):
+            rel_name = e.relative_to(env_dir).with_suffix("").as_posix()
+            env_obj = Environment.from_file(e, env_dir)
+            self.environments[rel_name] = env_obj
+            if e.stem not in self.environments:
+                self.environments[e.stem] = env_obj
+
         self.sites = tuple(s.stem for s in _yaml_files(self.config_root / "site"))
 
         experiment_root = self.config_root / "experiment"
@@ -195,11 +249,25 @@ class ConfigTree:
 
     def agents_for(self, paradigm: str) -> list[Agent]:
         rules = self.paradigms[paradigm]
-        return [a for a in self.agents.values() if rules.permits_agent(a)]
+        seen: set[int] = set()
+        result: list[Agent] = []
+        for a in self.agents.values():
+            if id(a) not in seen:
+                seen.add(id(a))
+                if rules.permits_agent(a):
+                    result.append(a)
+        return result
 
     def environments_for(self, paradigm: str) -> list[Environment]:
         rules = self.paradigms[paradigm]
-        return [e for e in self.environments.values() if rules.permits_environment(e)]
+        seen: set[int] = set()
+        result: list[Environment] = []
+        for e in self.environments.values():
+            if id(e) not in seen:
+                seen.add(id(e))
+                if rules.permits_environment(e):
+                    result.append(e)
+        return result
 
     def field_enabled(self, paradigm: str, name: str) -> bool:
         return self.paradigms[paradigm].field_enabled(name)

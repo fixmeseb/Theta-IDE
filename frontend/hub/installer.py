@@ -11,15 +11,27 @@ from typing import Callable, Optional, Tuple
 from zipfile import ZipFile
 
 from .models import HubComponent, ReleaseInfo
+from frontend.plugins.dependencies import (
+    check_missing_dependencies,
+    install_packages,
+    load_requirements_from_file,
+)
 
 
 class HubInstaller:
     """Manages the download, verification, extraction, and removal of Hub components."""
 
-    def __init__(self, workspace_dir: Path, data_dir: Path, on_change_callback: Optional[Callable[[str, str], None]] = None):
+    def __init__(
+        self,
+        workspace_dir: Path,
+        data_dir: Path,
+        on_change_callback: Optional[Callable[[str, str], None]] = None,
+        settings_manager: Optional[Any] = None,
+    ):
         self.workspace_dir = Path(workspace_dir)
         self.data_dir = Path(data_dir)
         self.on_change_callback = on_change_callback  # (component_id, action: "install" | "uninstall")
+        self.settings_manager = settings_manager
 
     def resolve_target_dir(self, component: HubComponent) -> Path:
         """Determine the filesystem destination for a component based on its kind."""
@@ -191,10 +203,21 @@ class HubInstaller:
             else:
                 source_dir = staging_dir
 
-            # Check for packaged default configuration YAML and deploy to in/config/
+            # Check for packaged configuration YAML(s) and deploy to in/config/
+            installed_config_paths = []
+            pkg_config_dir = source_dir / "config"
+            if pkg_config_dir.is_dir():
+                target_in_config = self.workspace_dir / "in" / "config"
+                for yaml_file in sorted(pkg_config_dir.rglob("*.yaml")):
+                    rel = yaml_file.relative_to(pkg_config_dir)
+                    dest_file = target_in_config / rel
+                    dest_file.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(str(yaml_file), str(dest_file))
+                    installed_config_paths.append(str(dest_file.relative_to(self.workspace_dir)))
+
             config_dest = self.resolve_config_path(component)
-            installed_config_rel = None
-            if config_dest:
+            installed_config_rel = installed_config_paths[0] if installed_config_paths else None
+            if not installed_config_paths and config_dest:
                 config_candidates = [
                     source_dir / f"{component.id}.yaml",
                     source_dir / f"{component.id}.yml",
@@ -213,6 +236,7 @@ class HubInstaller:
                         config_dest.parent.mkdir(parents=True, exist_ok=True)
                         shutil.copy2(str(cand), str(config_dest))
                         installed_config_rel = str(config_dest.relative_to(self.workspace_dir))
+                        installed_config_paths.append(installed_config_rel)
                         break
 
             # Write component tracking metadata
@@ -224,6 +248,7 @@ class HubInstaller:
                 "installed_from": release.url,
                 "sha256": release.sha256,
                 "config_path": installed_config_rel,
+                "config_paths": installed_config_paths,
             }
             (source_dir / ".theta_component.json").write_text(
                 json.dumps(meta, indent=2) + "\n", encoding="utf-8"
@@ -247,6 +272,30 @@ class HubInstaller:
             else:
                 target_dir.parent.mkdir(parents=True, exist_ok=True)
                 shutil.move(str(source_dir), str(target_dir))
+
+            # Inspect and install declared Python dependencies
+            declared_deps = []
+            if hasattr(component, "extra") and isinstance(component.extra, dict):
+                declared_deps.extend(component.extra.get("dependencies", {}).get("pip", []))
+
+            plugin_file = target_dir / "plugin.json"
+            if plugin_file.exists():
+                try:
+                    pdata = json.loads(plugin_file.read_text(encoding="utf-8"))
+                    declared_deps.extend(pdata.get("dependencies", {}).get("pip", []))
+                except Exception:
+                    pass
+
+            req_file = target_dir / "requirements.txt"
+            if req_file.exists():
+                declared_deps.extend(load_requirements_from_file(req_file))
+
+            # Deduplicate
+            declared_deps = list(dict.fromkeys(declared_deps))
+            if declared_deps:
+                missing = check_missing_dependencies(declared_deps)
+                if missing:
+                    install_packages(missing)
 
             # Update component object state
             component.is_installed = True
@@ -276,37 +325,134 @@ class HubInstaller:
             if staging_dir.exists():
                 shutil.rmtree(staging_dir, ignore_errors=True)
 
-    def uninstall(self, component: HubComponent) -> bool:
-        """Remove an installed component and its packaged configuration from disk."""
+    def has_configs(self, component: HubComponent) -> bool:
+        """Check if any configuration files for this component exist on disk."""
         target_dir = self.resolve_target_dir(component)
-        config_path = self.resolve_config_path(component)
-
-        # Check .theta_component.json for recorded config path before removing target_dir
-        recorded_config = None
         meta_file = target_dir / ".theta_component.json"
         if meta_file.exists():
             try:
                 mdata = json.loads(meta_file.read_text(encoding="utf-8"))
-                recorded_config = mdata.get("config_path")
+                for cfg_rel in mdata.get("config_paths", []):
+                    if (self.workspace_dir / cfg_rel).is_file():
+                        return True
+                if mdata.get("config_path") and (self.workspace_dir / mdata["config_path"]).is_file():
+                    return True
+            except Exception:
+                pass
+        config_path = self.resolve_config_path(component)
+        if config_path and config_path.is_file():
+            return True
+        return False
+
+    def find_component_for_path(self, path: Union[str, Path]) -> Optional[Dict[str, Any]]:
+        """Given a file or directory path, determine if it belongs to an installed Hub component.
+
+        Returns a dictionary with metadata ('id', 'name', 'kind', 'version', 'target_dir', 'config_paths')
+        or None if the path does not belong to an installed component.
+        """
+        target_path = Path(path)
+        if not target_path.is_absolute():
+            target_path = (self.workspace_dir / target_path).resolve()
+        else:
+            target_path = target_path.resolve()
+
+        scan_roots = [
+            self.workspace_dir / "in" / "envs",
+            self.workspace_dir / "src" / "usr" / "methods",
+            self.workspace_dir / "src" / "usr" / "models",
+            self.workspace_dir / "plugins",
+            self.data_dir / "plugins",
+        ]
+        for root in scan_roots:
+            if not root.is_dir():
+                continue
+            for meta_file in root.rglob(".theta_component.json"):
+                try:
+                    data = json.loads(meta_file.read_text(encoding="utf-8"))
+                    comp_dir = meta_file.parent.resolve()
+                    # Check 1: path is the component directory or inside it
+                    if target_path == comp_dir or comp_dir in target_path.parents:
+                        data["target_dir"] = comp_dir
+                        return data
+                    # Check 2: path is one of the recorded configs or their parent folder
+                    for cfg_rel in data.get("config_paths", []):
+                        cfg_full = (self.workspace_dir / cfg_rel).resolve()
+                        if target_path == cfg_full or target_path in cfg_full.parents:
+                            data["target_dir"] = comp_dir
+                            return data
+                    if data.get("config_path"):
+                        cfg_full = (self.workspace_dir / data["config_path"]).resolve()
+                        if target_path == cfg_full or target_path in cfg_full.parents:
+                            data["target_dir"] = comp_dir
+                            return data
+                except Exception:
+                    continue
+        return None
+
+    def uninstall_by_metadata(self, meta: Dict[str, Any], remove_configs: bool = True) -> bool:
+        """Uninstall an installed component given its metadata dict."""
+        target_dir = Path(meta["target_dir"])
+        recorded_configs = meta.get("config_paths") or ([meta["config_path"]] if meta.get("config_path") else [])
+
+        if target_dir.exists():
+            shutil.rmtree(target_dir)
+
+        if remove_configs and recorded_configs:
+            for cfg_rel in recorded_configs:
+                p = self.workspace_dir / cfg_rel
+                if p.is_file():
+                    try:
+                        p.unlink()
+                        if p.parent.is_dir() and not any(p.parent.iterdir()):
+                            p.parent.rmdir()
+                    except Exception:
+                        pass
+
+        if self.on_change_callback:
+            comp_id = meta.get("id") or target_dir.name
+            self.on_change_callback(comp_id, "uninstall")
+
+        return True
+
+    def uninstall(self, component: HubComponent, remove_configs: bool = True) -> bool:
+        """Remove an installed component and optionally its packaged configuration from disk."""
+        target_dir = self.resolve_target_dir(component)
+        config_path = self.resolve_config_path(component)
+
+        # Check .theta_component.json for recorded config paths before removing target_dir
+        recorded_configs = []
+        meta_file = target_dir / ".theta_component.json"
+        if meta_file.exists():
+            try:
+                mdata = json.loads(meta_file.read_text(encoding="utf-8"))
+                if mdata.get("config_paths"):
+                    recorded_configs.extend(mdata["config_paths"])
+                elif mdata.get("config_path"):
+                    recorded_configs.append(mdata["config_path"])
             except Exception:
                 pass
 
         if target_dir.exists():
             shutil.rmtree(target_dir)
 
-        # Remove deployed config YAML in in/config/
-        if recorded_config:
-            p = self.workspace_dir / recorded_config
-            if p.is_file():
+        # Remove deployed config YAML(s) in in/config/ if remove_configs is True
+        if remove_configs:
+            if recorded_configs:
+                for cfg_rel in recorded_configs:
+                    p = self.workspace_dir / cfg_rel
+                    if p.is_file():
+                        try:
+                            p.unlink()
+                            # If parent directory is now empty, remove it (e.g. in/config/agent/sb3/)
+                            if p.parent.is_dir() and not any(p.parent.iterdir()):
+                                p.parent.rmdir()
+                        except Exception:
+                            pass
+            elif config_path and config_path.is_file():
                 try:
-                    p.unlink()
+                    config_path.unlink()
                 except Exception:
                     pass
-        elif config_path and config_path.is_file():
-            try:
-                config_path.unlink()
-            except Exception:
-                pass
 
         component.is_installed = False
         component.installed_version = None

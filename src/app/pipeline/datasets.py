@@ -195,14 +195,15 @@ def resolve_mimic_npz_path(filename_or_path: str | None = None, site_cfg=None) -
     raise FileNotFoundError(f"MIMIC dataset '{filename}' not found. Searched existing directories: {searched}")
 
 
-def run_experiment(overrides, site_cfg=None):
-    """Run src/train.py as a subprocess with the given Hydra overrides."""
+def run_experiment(overrides, site_cfg=None, script_entrypoint: str | None = None, python_executable: str | None = None):
+    """Run target training script as a subprocess with the given Hydra overrides."""
     from src.app.pipeline.runtime import get_subprocess_env
 
     env = get_subprocess_env(site_cfg)
 
-    venv_python = get_python_executable()
-    cmd = [venv_python, "src/app/train.py"] + list(overrides)
+    venv_python = python_executable or get_python_executable(site_cfg)
+    target_script = script_entrypoint or "src/app/train.py"
+    cmd = [venv_python, str(target_script)] + list(overrides)
     print(f"Running: {' '.join(cmd)}")
     subprocess.run(cmd, check=True, env=env)
 
