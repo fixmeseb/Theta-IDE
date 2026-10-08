@@ -227,7 +227,23 @@ class Window(QMainWindow):
         config_panel = QWidget()
         config_layout = QVBoxLayout(config_panel)
         config_layout.setContentsMargins(18, 14, 18, 14)
-        config_layout.setSpacing(10)
+        config_layout.setSpacing(0)
+
+        splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.config_splitter = splitter
+
+        # 1. Config Tree (mirrors in/config/experiment/) - extends to top!
+        self.config_tree = ConfigTreeWidget(mode="experiments")
+        self.config_tree.setMinimumWidth(220)
+        self.tree = self.config_tree.tree  # backwards compatibility alias
+        self.config_tree.file_selected.connect(self.on_config_file_selected)
+        splitter.addWidget(self.config_tree)
+
+        # 2. Right Side Section (contains actions bar and viewer / preview)
+        right_panel = QWidget()
+        right_layout = QVBoxLayout(right_panel)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(10)
 
         actions_bar = QHBoxLayout()
         actions_bar.setSpacing(8)
@@ -252,25 +268,18 @@ class Window(QMainWindow):
         self.btn_toggle_yaml.clicked.connect(lambda: self.toggle_yaml_preview())
         actions_bar.addWidget(self.btn_toggle_yaml)
 
-        config_layout.addLayout(actions_bar)
+        right_layout.addLayout(actions_bar)
 
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        self.config_splitter = splitter
+        preview_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.preview_splitter = preview_splitter
 
-        # 1. Config Tree (mirrors in/config/experiment/)
-        self.config_tree = ConfigTreeWidget(mode="experiments")
-        self.config_tree.setMinimumWidth(220)
-        self.tree = self.config_tree.tree  # backwards compatibility alias
-        self.config_tree.file_selected.connect(self.on_config_file_selected)
-        splitter.addWidget(self.config_tree)
-
-        # 2. Boxed Config Viewer (takes up the main area of the screen)
+        # Boxed Config Viewer (takes up the main area of the screen)
         self.config_viewer = ConfigViewer()
         self.config_viewer.config_changed.connect(self.update_config)
         self.config_viewer.save_requested.connect(self.on_config_saved)
-        splitter.addWidget(self.config_viewer)
+        preview_splitter.addWidget(self.config_viewer)
 
-        # 3. Preview Panel (Hydra YAML - hidden by default!)
+        # Preview Panel (Hydra YAML - hidden by default!)
         preview_panel = QWidget()
         preview_layout = QVBoxLayout(preview_panel)
         preview_layout.setContentsMargins(0, 0, 0, 0)
@@ -305,9 +314,13 @@ class Window(QMainWindow):
 
         self.preview_panel = preview_panel
         self.preview_panel.hide()  # Hidden by default!
-        splitter.addWidget(preview_panel)
+        preview_splitter.addWidget(preview_panel)
 
-        splitter.setSizes([260, 1000, 0])
+        preview_splitter.setSizes([1000, 0])
+        right_layout.addWidget(preview_splitter, 1)
+
+        splitter.addWidget(right_panel)
+        splitter.setSizes([260, 1000])
         config_layout.addWidget(splitter, 1)
         self.config_panel = config_panel
         self.tabs.addTab(self.config_panel, "Experiment", "config", "Experiment", tab_id="config")
@@ -485,11 +498,12 @@ class Window(QMainWindow):
         else:
             self.btn_toggle_yaml.setChecked(checked)
         self.preview_panel.setVisible(checked)
-        if checked:
-            self.config_splitter.setSizes([240, 600, 420])
-            self.request_compose()
-        else:
-            self.config_splitter.setSizes([240, 1000, 0])
+        if hasattr(self, "preview_splitter"):
+            if checked:
+                self.preview_splitter.setSizes([600, 420])
+                self.request_compose()
+            else:
+                self.preview_splitter.setSizes([1000, 0])
 
     def on_config_file_selected(self, file_path, rel_path):
         self.active_config_path = file_path

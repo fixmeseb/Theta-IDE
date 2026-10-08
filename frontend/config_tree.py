@@ -38,6 +38,8 @@ TOOL_ICON_COLORS = {
     (QIcon.Mode.Normal, QIcon.State.Off): "text",
     (QIcon.Mode.Active, QIcon.State.Off): "accent",
     (QIcon.Mode.Disabled, QIcon.State.Off): "disabled",
+    (QIcon.Mode.Normal, QIcon.State.On): "accent",
+    (QIcon.Mode.Active, QIcon.State.On): "accent",
 }
 
 
@@ -159,18 +161,6 @@ class ConfigTreeWidget(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
 
-        # Title on its own row. With five buttons beside it the title elided to
-        # "EXPERIM" at the panel's 220px minimum, and the two widest buttons
-        # collapsed to "...".
-        if self.mode in ("experiments", "experiment"):
-            title_text = "EXPERIMENTS"
-        elif self.mode == "components":
-            title_text = "COMPONENTS"
-        else:
-            title_text = "CONFIG REPOSITORY"
-        title = label(title_text, "eyebrow")
-        layout.addWidget(title)
-
         header = QHBoxLayout()
         header.setSpacing(4)
 
@@ -190,6 +180,13 @@ class ConfigTreeWidget(QWidget):
         self.btn_expand.clicked.connect(self.expand_all)
         self.btn_expand_all = self.btn_expand  # alias
         header.addWidget(self.btn_expand)
+
+        self.btn_search = self._tool_button("search")
+        self.btn_search.setToolTip("Filter configurations")
+        self.btn_search.setCheckable(True)
+        self.btn_search.setChecked(False)
+        self.btn_search.clicked.connect(self.toggle_search)
+        header.addWidget(self.btn_search)
 
         header.addStretch()
 
@@ -215,7 +212,7 @@ class ConfigTreeWidget(QWidget):
 
         layout.addLayout(header)
 
-        # Search filter
+        # Search filter (hidden by default, toggled via magnifying glass button)
         self.search = QLineEdit()
         if self.mode in ("experiments", "experiment"):
             placeholder = "Filter experiments…"
@@ -225,6 +222,8 @@ class ConfigTreeWidget(QWidget):
             placeholder = "Filter configs…"
         self.search.setPlaceholderText(placeholder)
         self.search.textChanged.connect(self.filter_tree)
+        self.search.hide()
+        self.search.installEventFilter(self)
         layout.addWidget(self.search)
 
         # Tree widget
@@ -425,6 +424,25 @@ class ConfigTreeWidget(QWidget):
 
         for i in range(self.tree.topLevelItemCount()):
             match_and_filter(self.tree.topLevelItem(i))
+
+    def toggle_search(self, checked: bool | None = None):
+        """Toggle the visibility of the search/filter bar."""
+        if checked is None:
+            checked = self.search.isHidden()
+        self.btn_search.setChecked(checked)
+        self.search.setVisible(checked)
+        if checked:
+            self.search.setFocus()
+            self.search.selectAll()
+        else:
+            self.search.clear()
+
+    def eventFilter(self, obj, event):
+        if obj is self.search and event.type() == event.Type.KeyPress:
+            if event.key() == Qt.Key.Key_Escape:
+                self.toggle_search(False)
+                return True
+        return super().eventFilter(obj, event)
 
     def select_file(self, target_rel_path: str):
         """Find and select an item by its relative path."""

@@ -38,9 +38,24 @@ class ComponentsPanel(QWidget):
     def _init_ui(self):
         root_layout = QVBoxLayout(self)
         root_layout.setContentsMargins(18, 14, 18, 14)
-        root_layout.setSpacing(10)
+        root_layout.setSpacing(0)
 
-        # ── Actions bar ────────────────────────────────────────────────────────
+        # ── Horizontal Splitter ───────────────────────────────────────────────
+        self.splitter = QSplitter(Qt.Orientation.Horizontal)
+
+        # 1. Components Tree (extends to top on the left)
+        self.components_tree = ConfigTreeWidget(mode="components")
+        self.components_tree.setMinimumWidth(220)
+        self.components_tree.file_selected.connect(self.on_component_selected)
+        self.splitter.addWidget(self.components_tree)
+
+        # 2. Right Side Section (contains actions bar and viewer / preview)
+        right_panel = QWidget()
+        right_layout = QVBoxLayout(right_panel)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(10)
+
+        # ── Actions bar (lives in the right side section) ─────────────────────
         actions_bar = QHBoxLayout()
         actions_bar.setSpacing(8)
 
@@ -58,22 +73,15 @@ class ComponentsPanel(QWidget):
         self.btn_hub.clicked.connect(self._open_hub)
         actions_bar.addWidget(self.btn_hub)
 
-        root_layout.addLayout(actions_bar)
+        right_layout.addLayout(actions_bar)
 
-        # ── Horizontal Splitter ───────────────────────────────────────────────
-        self.splitter = QSplitter(Qt.Orientation.Horizontal)
+        # ── Inner Content Splitter (Viewer + Raw YAML Preview) ────────────────
+        self.content_splitter = QSplitter(Qt.Orientation.Horizontal)
 
-        # 1. Components Tree
-        self.components_tree = ConfigTreeWidget(mode="components")
-        self.components_tree.setMinimumWidth(220)
-        self.components_tree.file_selected.connect(self.on_component_selected)
-        self.splitter.addWidget(self.components_tree)
-
-        # 2. Boxed Config Viewer
         self.viewer = ConfigViewer()
         self.viewer.config_changed.connect(self._on_viewer_changed)
         self.viewer.save_requested.connect(self._on_viewer_saved)
-        self.splitter.addWidget(self.viewer)
+        self.content_splitter.addWidget(self.viewer)
 
         # 3. Raw YAML Preview Panel (hidden by default)
         raw_panel = QWidget()
@@ -103,9 +111,13 @@ class ComponentsPanel(QWidget):
 
         self.raw_panel = raw_panel
         self.raw_panel.hide()
-        self.splitter.addWidget(raw_panel)
+        self.content_splitter.addWidget(raw_panel)
 
-        self.splitter.setSizes([260, 1000, 0])
+        self.content_splitter.setSizes([1000, 0])
+        right_layout.addWidget(self.content_splitter, 1)
+
+        self.splitter.addWidget(right_panel)
+        self.splitter.setSizes([260, 1000])
         root_layout.addWidget(self.splitter, 1)
 
     def init_default_component(self):
@@ -211,11 +223,12 @@ class ComponentsPanel(QWidget):
         else:
             self.btn_toggle_raw.setChecked(checked)
         self.raw_panel.setVisible(checked)
-        if checked:
-            self.splitter.setSizes([240, 600, 420])
-            self._update_raw_yaml_view()
-        else:
-            self.splitter.setSizes([240, 1000, 0])
+        if hasattr(self, "content_splitter"):
+            if checked:
+                self.content_splitter.setSizes([600, 420])
+                self._update_raw_yaml_view()
+            else:
+                self.content_splitter.setSizes([1000, 0])
 
     def _open_hub(self):
         """Open the Community Hub filtered to RL methods and models."""

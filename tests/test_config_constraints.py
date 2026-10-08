@@ -298,17 +298,34 @@ class TestTreeToolbar(unittest.TestCase):
         self.addCleanup(self.widget.close)
 
     def test_icon_buttons_have_icons_not_unrenderable_glyphs(self):
-        for name in ("btn_refresh", "btn_collapse", "btn_expand"):
+        for name in ("btn_refresh", "btn_collapse", "btn_expand", "btn_search"):
             button = getattr(self.widget, name)
             self.assertFalse(button.icon().isNull(), f"{name} has no icon")
             self.assertEqual(button.text(), "", f"{name} still carries glyph text")
 
     def test_every_toolbar_button_explains_itself(self):
-        for name in ("btn_refresh", "btn_collapse", "btn_expand", "btn_new", "btn_duplicate"):
+        for name in ("btn_refresh", "btn_collapse", "btn_expand", "btn_search", "btn_new", "btn_duplicate"):
             self.assertTrue(getattr(self.widget, name).toolTip(), f"{name} has no tooltip")
 
-    def test_title_is_on_its_own_row(self):
-        self.assertEqual(self.widget.layout().itemAt(0).widget().text(), "EXPERIMENTS")
+    def test_toolbar_is_at_top_of_tree(self):
+        first_item = self.widget.layout().itemAt(0)
+        self.assertIsNotNone(first_item.layout())
+        self.assertIs(first_item.layout().itemAt(0).widget(), self.widget.btn_refresh)
+
+    def test_search_bar_hidden_by_default_and_toggled_by_magnifying_glass(self):
+        # Search bar is hidden initially
+        self.assertTrue(self.widget.search.isHidden())
+        self.assertFalse(self.widget.btn_search.isChecked())
+
+        # Click magnifying glass button to show search bar
+        self.widget.btn_search.click()
+        self.assertFalse(self.widget.search.isHidden())
+        self.assertTrue(self.widget.btn_search.isChecked())
+
+        # Click again to hide search bar
+        self.widget.btn_search.click()
+        self.assertTrue(self.widget.search.isHidden())
+        self.assertFalse(self.widget.btn_search.isChecked())
 
 
 @unittest.skipIf(not HAS_PYQT6, "PyQt6 not installed in current environment")
