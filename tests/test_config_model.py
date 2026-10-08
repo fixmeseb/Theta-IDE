@@ -116,10 +116,25 @@ def test_online_and_offline_environment_sets_are_disjoint(tree):
 
 
 def test_every_environment_is_offered_by_some_paradigm(tree):
+    """Compared by environment, not by dict key: a nested env such as
+    atari/pong is keyed twice, under its path and its bare stem, so the key
+    set is larger than the set of environments."""
     covered = set()
     for name in tree.paradigms:
         covered |= {e.name for e in tree.environments_for(name)}
-    assert covered == set(tree.environments)
+    assert covered == {e.name for e in tree.environments.values()}
+
+
+def test_a_nested_environment_is_reachable_by_path_and_by_stem(tree):
+    """Experiments write `override /env: pong`, the directory says atari/pong."""
+    assert tree.environments["atari/pong"] is tree.environments["pong"]
+
+
+def test_a_bare_stem_prefers_a_top_level_environment_over_a_nested_one(tree):
+    """env/seaquest.yaml and env/atari/seaquest.yaml both exist; the existing
+    experiments mean `seaquest` has to keep resolving to the top-level file."""
+    assert tree.environments["seaquest"].name == "seaquest"
+    assert tree.environments["atari/seaquest"].name == "atari/seaquest"
 
 
 def test_cartpole_is_available_for_online_rl(tree):
