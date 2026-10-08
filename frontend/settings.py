@@ -86,6 +86,7 @@ visible = [
     "config",
     "workflows",
     "monitor",
+    "results",
     "terminal",
     "console",
 ]
@@ -93,6 +94,11 @@ visible = [
 [plugins]
 # List of plugin IDs that are currently enabled.
 enabled = []
+
+[hub]
+# What to do with configuration files when uninstalling a component from Theta Hub.
+# Options: "ask" (prompt each time), "keep" (preserve configs), "remove" (delete configs)
+uninstall_configs = "ask"
 
 [hotkeys]
 # Enable custom keyboard shortcuts.
@@ -379,6 +385,14 @@ class SettingsManager(QObject):
     def plugins_enabled(self) -> list[str]:
         v = self.get("plugins", "enabled", default=[])
         return list(v) if isinstance(v, list) else []
+
+    @property
+    def hub_uninstall_configs(self) -> str:
+        return str(self.get("hub", "uninstall_configs", default="ask"))
+
+    @hub_uninstall_configs.setter
+    def hub_uninstall_configs(self, val: str) -> None:
+        self.set("hub", "uninstall_configs", val)
 
     @property
     def hotkeys_enabled(self) -> bool:

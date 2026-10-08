@@ -110,24 +110,14 @@ def _read_group_base(tree, group):
 
 class ConfigBox(QFrame):
     """Themed card container representing a section of configuration."""
-    def __init__(self, title, subtitle=None, parent=None):
+    def __init__(self, title=None, subtitle=None, parent=None):
         super().__init__(parent)
         self.setObjectName("card")
         self.layout = QVBoxLayout(self)
         self.layout.setContentsMargins(16, 14, 16, 14)
         self.layout.setSpacing(10)
-
-        header = QHBoxLayout()
-        header.setSpacing(8)
-        self.title_label = label(title.upper(), "eyebrow")
-        header.addWidget(self.title_label)
-        header.addStretch()
-        self.layout.addLayout(header)
-
-        if subtitle:
-            self.subtitle_label = label(subtitle, "muted")
-            self.subtitle_label.setWordWrap(True)
-            self.layout.addWidget(self.subtitle_label)
+        self.title_label = None
+        self.subtitle_label = None
 
     def add_widget(self, widget):
         self.layout.addWidget(widget)

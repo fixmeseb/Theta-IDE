@@ -10,6 +10,7 @@ from PyQt6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QSplitter,
+    QStackedWidget,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -17,6 +18,7 @@ from PyQt6.QtWidgets import (
 
 from .config_tree import ConfigTreeWidget
 from .config_viewer import ConfigViewer
+from .hub import HubClient, HubView
 from .widgets import YamlHighlighter, label
 
 
@@ -27,20 +29,38 @@ class ComponentsPanel(QWidget):
     """
     component_saved = pyqtSignal(str)  # rel_path
 
-    def __init__(self, log_fn=None, parent=None):
+    def __init__(self, hub_client=None, log_fn=None, parent=None):
         super().__init__(parent)
+        self.hub_client = hub_client
         self.log_fn = log_fn or (lambda msg: None)
         self.active_path = None
         self.active_rel_path = None
+        self.hub_view = None
+        self.is_hub_active = False
         self._init_ui()
         self.init_default_component()
 
     def _init_ui(self):
         root_layout = QVBoxLayout(self)
         root_layout.setContentsMargins(18, 14, 18, 14)
-        root_layout.setSpacing(10)
+        root_layout.setSpacing(0)
 
-        # ── Actions bar ────────────────────────────────────────────────────────
+        # ── Horizontal Splitter ───────────────────────────────────────────────
+        self.splitter = QSplitter(Qt.Orientation.Horizontal)
+
+        # 1. Components Tree (extends to top on the left)
+        self.components_tree = ConfigTreeWidget(mode="components")
+        self.components_tree.setMinimumWidth(220)
+        self.components_tree.file_selected.connect(self.on_component_selected)
+        self.splitter.addWidget(self.components_tree)
+
+        # 2. Right Side Section (contains actions bar and viewer / preview)
+        right_panel = QWidget()
+        right_layout = QVBoxLayout(right_panel)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(10)
+
+        # ── Actions bar (lives in the right side section) ─────────────────────
         actions_bar = QHBoxLayout()
         actions_bar.setSpacing(8)
 
@@ -53,27 +73,25 @@ class ComponentsPanel(QWidget):
         self.btn_toggle_raw.clicked.connect(lambda: self.toggle_raw_preview())
         actions_bar.addWidget(self.btn_toggle_raw)
 
-        self.btn_hub = QPushButton("Component Hub…")
+        self.btn_hub = QPushButton("Component Hub")
+        self.btn_hub.setCheckable(True)
+        self.btn_hub.setChecked(False)
         self.btn_hub.setToolTip("Browse and install new RL methods, models, and environments from the Community Hub")
-        self.btn_hub.clicked.connect(self._open_hub)
+        self.btn_hub.clicked.connect(self.toggle_hub)
         actions_bar.addWidget(self.btn_hub)
 
-        root_layout.addLayout(actions_bar)
+        right_layout.addLayout(actions_bar)
 
-        # ── Horizontal Splitter ───────────────────────────────────────────────
-        self.splitter = QSplitter(Qt.Orientation.Horizontal)
+        # ── Content Stack (Switch between Parameters and Component Hub) ──────
+        self.content_stack = QStackedWidget()
 
-        # 1. Components Tree
-        self.components_tree = ConfigTreeWidget(mode="components")
-        self.components_tree.setMinimumWidth(220)
-        self.components_tree.file_selected.connect(self.on_component_selected)
-        self.splitter.addWidget(self.components_tree)
+        # Page 0: Parameters configuring panels (Viewer + Raw YAML Preview)
+        self.content_splitter = QSplitter(Qt.Orientation.Horizontal)
 
-        # 2. Boxed Config Viewer
         self.viewer = ConfigViewer()
         self.viewer.config_changed.connect(self._on_viewer_changed)
         self.viewer.save_requested.connect(self._on_viewer_saved)
-        self.splitter.addWidget(self.viewer)
+        self.content_splitter.addWidget(self.viewer)
 
         # 3. Raw YAML Preview Panel (hidden by default)
         raw_panel = QWidget()
@@ -103,9 +121,15 @@ class ComponentsPanel(QWidget):
 
         self.raw_panel = raw_panel
         self.raw_panel.hide()
-        self.splitter.addWidget(raw_panel)
+        self.content_splitter.addWidget(raw_panel)
 
-        self.splitter.setSizes([260, 1000, 0])
+        self.content_splitter.setSizes([1000, 0])
+        self.content_stack.addWidget(self.content_splitter)
+
+        right_layout.addWidget(self.content_stack, 1)
+
+        self.splitter.addWidget(right_panel)
+        self.splitter.setSizes([260, 1000])
         root_layout.addWidget(self.splitter, 1)
 
     def init_default_component(self):
@@ -124,10 +148,69 @@ class ComponentsPanel(QWidget):
 
     def on_component_selected(self, file_path, rel_path):
         """Handle component file selection from the tree."""
+        self.show_params()
         self.active_path = Path(file_path)
         self.active_rel_path = rel_path
         self.viewer.load_file(self.active_path, rel_path)
         self._update_raw_yaml_view()
+
+    def get_hub_client(self):
+        """Resolve a HubClient instance from attributes, window, parent, or fallback."""
+        if self.hub_client is not None:
+            return self.hub_client
+        w = self.window()
+        if hasattr(w, "hub_client") and w.hub_client is not None:
+            return w.hub_client
+        parent = self.parent()
+        if parent is not None and hasattr(parent, "hub_client") and parent.hub_client is not None:
+            return parent.hub_client
+        workspace_dir = Path.cwd()
+        data_dir = Path.home() / ".thetaide"
+        self.hub_client = HubClient(
+            workspace_dir=workspace_dir,
+            data_dir=data_dir,
+        )
+        return self.hub_client
+
+    def _ensure_hub_view(self):
+        """Lazily initialize and embed the HubView widget into the content stack."""
+        if self.hub_view is not None:
+            return self.hub_view
+
+        client = self.get_hub_client()
+        self.hub_view = HubView(
+            client=client,
+            initial_kind=None,
+            close_button_text="Back to Parameters",
+            parent=self,
+        )
+        self.hub_view.close_requested.connect(self.show_params)
+        self.content_stack.addWidget(self.hub_view)
+        return self.hub_view
+
+    def show_hub(self, initial_kind: str | None = None):
+        """Switch view to the embedded Component Hub in place of the parameters panels."""
+        hub = self._ensure_hub_view()
+        if initial_kind:
+            hub._select_kind(initial_kind)
+        self.content_stack.setCurrentWidget(hub)
+        self.btn_toggle_raw.hide()
+        self.btn_hub.setChecked(True)
+        self.is_hub_active = True
+
+    def show_params(self):
+        """Switch view back to the parameters configuring panels."""
+        self.content_stack.setCurrentWidget(self.content_splitter)
+        self.btn_toggle_raw.show()
+        self.btn_hub.setChecked(False)
+        self.is_hub_active = False
+
+    def toggle_hub(self):
+        """Toggle between parameters view and embedded Component Hub."""
+        if self.is_hub_active:
+            self.show_params()
+        else:
+            self.show_hub()
 
     def _update_raw_yaml_view(self):
         """Refresh raw YAML editor content."""
@@ -187,7 +270,14 @@ class ComponentsPanel(QWidget):
 
         self.components_tree.populate(ensure_expanded=ensure_expanded)
         if curr and (self.components_tree.root_dir / curr).exists():
-            self.components_tree.select_file(curr)
+            if self.is_hub_active:
+                self.components_tree.select_file(curr, emit_signal=False)
+                self.active_path = self.components_tree.root_dir / curr
+                self.active_rel_path = curr
+                self.viewer.load_file(self.active_path, curr)
+                self._update_raw_yaml_view()
+            else:
+                self.components_tree.select_file(curr)
         else:
             # If the current active file no longer exists (e.g. was uninstalled),
             # try to select a sibling file in the same folder first so we don't jump away.
@@ -198,10 +288,22 @@ class ComponentsPanel(QWidget):
                     siblings = sorted([p for p in parent_dir.iterdir() if p.is_file() and p.suffix in (".yaml", ".yml")])
                     if siblings:
                         sibling_rel = str(siblings[0].relative_to(self.components_tree.root_dir)).replace("\\", "/")
-                        if self.components_tree.select_file(sibling_rel):
+                        if self.is_hub_active:
+                            self.components_tree.select_file(sibling_rel, emit_signal=False)
+                            self.active_path = self.components_tree.root_dir / sibling_rel
+                            self.active_rel_path = sibling_rel
+                            self.viewer.load_file(self.active_path, sibling_rel)
+                            self._update_raw_yaml_view()
                             selected_alt = True
-            if not selected_alt:
+                        else:
+                            if self.components_tree.select_file(sibling_rel):
+                                selected_alt = True
+            if not selected_alt and not self.is_hub_active:
                 self.init_default_component()
+
+        if self.is_hub_active and self.hub_view is not None:
+            self.content_stack.setCurrentWidget(self.hub_view)
+
         self.log_fn("Reloaded component files from disk.")
 
     def toggle_raw_preview(self, checked=None):
@@ -211,15 +313,14 @@ class ComponentsPanel(QWidget):
         else:
             self.btn_toggle_raw.setChecked(checked)
         self.raw_panel.setVisible(checked)
-        if checked:
-            self.splitter.setSizes([240, 600, 420])
-            self._update_raw_yaml_view()
-        else:
-            self.splitter.setSizes([240, 1000, 0])
+        if hasattr(self, "content_splitter"):
+            if checked:
+                self.content_splitter.setSizes([600, 420])
+                self._update_raw_yaml_view()
+            else:
+                self.content_splitter.setSizes([1000, 0])
 
     def _open_hub(self):
-        """Open the Community Hub filtered to RL methods and models."""
-        w = self.window()
-        if hasattr(w, "open_hub"):
-            w.open_hub(initial_kind="method")
+        """Show the embedded Component Hub."""
+        self.show_hub()
 

@@ -1,0 +1,18 @@
+{
+  "id": "atari-env",
+  "name": "Atari 2600 Environment Suite",
+  "kind": "env",
+  "version": "1.0.0",
+  "installed_from": "https://raw.githubusercontent.com/CameronEgb/theta-hub/main/packages/atari_env-1.0.0.zip",
+  "sha256": "32ab6a9dd226bb51f64c71083dd46098a1ba8cd0e088d45473109f434e97f862",
+  "config_path": "in/config/env/atari/beam_rider.yaml",
+  "config_paths": [
+    "in/config/env/atari/beam_rider.yaml",
+    "in/config/env/atari/breakout.yaml",
+    "in/config/env/atari/mspacman.yaml",
+    "in/config/env/atari/pong.yaml",
+    "in/config/env/atari/qbert.yaml",
+    "in/config/env/atari/seaquest.yaml",
+    "in/config/env/atari/space_invaders.yaml"
+  ]
+}

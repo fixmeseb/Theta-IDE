@@ -35,7 +35,7 @@ ARTICLES: List[DocArticle] = [
   <li><b>Hydra Configuration Layer (<code>in/config/</code>):</b> Declarative, three-tier hierarchical configuration defining environments, agents, models, cluster resources, and experiment recipes.</li>
   <li><b>FastAPI Backend Daemon (<code>src/app/api/</code>):</b> Decoupled API service managing local training subprocesses, Slurm cluster submissions, and job queue states.</li>
   <li><b>PyTorch Lightning Runtime (<code>src/app/train.py</code>):</b> Standardized training driver providing automated checkpointing, device acceleration (CUDA/MPS/CPU), and structured logging.</li>
-  <li><b>Modular Model &amp; Method Architecture:</b> Pluggable interfaces for standard deep learning architectures (MLPs, ResNets, Transformers, LSTMs, diffusion networks) and RL algorithms (PPO, SAC, DQN, CQL, IQL, TD3+BC), as well as composite and domain-specific models.</li>
+  <li><b>Modular Model &amp; Method Architecture:</b> Pluggable registries for RL algorithms and model architectures. Theta-IDE ships with the <b>PPO</b>, <b>CQL</b> and <b>IQL</b> algorithms and with MLP, CNN, Dueling ResNet, Transformer, Cross-Attention and CEW models, plus the composite BlendRL model. Other algorithms and architectures can be added as plugins (see <a href="authoring_plugins">Authoring Guide</a>).</li>
   <li><b>Extensible Component Hub &amp; Plugin System:</b> Core plugins shipping natively with zero overhead when toggled off, plus community plugins (UI tabs, RL methods, models, environments, and experiment recipes) installable directly from the Community Hub.</li>
 </ul>
 
@@ -49,14 +49,140 @@ ARTICLES: List[DocArticle] = [
 """,
     ),
     DocArticle(
+        id="launching",
+        title="Installing & Launching",
+        category="Getting Started",
+        summary="Set up the backend and frontend environments, then start Theta-IDE on macOS, Linux, or Windows.",
+        keywords=["install", "setup", "launch", "start", "run", "venv", "uvicorn", "backend", "windows", "powershell", "api url"],
+        html_content=r"""
+<h2>Installing & Launching</h2>
+<p>Theta-IDE has two parts, each with its own virtual environment. Run every command from the <b>repository root</b>.</p>
+
+<table border="1" cellpadding="8" cellspacing="0" style="border-collapse: collapse; width: 100%; border-color: rgba(255,255,255,0.15);">
+  <tr style="background-color: rgba(255,255,255,0.05); font-weight: bold;">
+    <td>Part</td>
+    <td>What it does</td>
+    <td>Environment</td>
+  </tr>
+  <tr><td><b>Backend API</b></td><td>Validates configs, runs training, serves TensorBoard</td><td><code>venv/</code></td></tr>
+  <tr><td><b>Frontend</b></td><td>This desktop app</td><td><code>frontend/.venv/</code> (PyQt6 only)</td></tr>
+</table>
+
+<h3>1. One-Time Setup</h3>
+<p><b>macOS / Linux:</b></p>
+<pre><code>python3 -m venv venv
+source venv/bin/activate
+pip install -e ".[api]"
+deactivate
+
+python3 -m venv frontend/.venv
+source frontend/.venv/bin/activate
+pip install -r frontend/requirements.txt</code></pre>
+
+<p><b>Windows (PowerShell):</b></p>
+<pre><code>Set-ExecutionPolicy -Scope CurrentUser RemoteSigned   # once, so venvs can activate
+
+py -m venv venv
+.\venv\Scripts\Activate.ps1
+pip install -e ".[api]"
+deactivate
+
+py -m venv frontend\.venv
+.\frontend\.venv\Scripts\Activate.ps1
+pip install -r frontend\requirements.txt</code></pre>
+
+<h3>2. Start the Backend (Terminal 1)</h3>
+<pre><code>source venv/bin/activate          # Windows: .\venv\Scripts\Activate.ps1
+uvicorn src.app.api.app:app --host 127.0.0.1 --port 8000</code></pre>
+<p>Leave it running. Its interactive API docs are at <code>http://127.0.0.1:8000/docs</code>.</p>
+
+<h3>3. Start the Frontend (Terminal 2)</h3>
+<pre><code>source frontend/.venv/bin/activate   # Windows: .\frontend\.venv\Scripts\Activate.ps1
+python -m frontend</code></pre>
+
+<h3>Launch Options</h3>
+<table border="1" cellpadding="8" cellspacing="0" style="border-collapse: collapse; width: 100%; border-color: rgba(255,255,255,0.15);">
+  <tr style="background-color: rgba(255,255,255,0.05); font-weight: bold;">
+    <td>Option</td>
+    <td>Default</td>
+    <td>Purpose</td>
+  </tr>
+  <tr><td><code>--api-url &lt;url&gt;</code></td><td><code>http://127.0.0.1:8000</code></td><td>Backend address. The <code>THETAIDE_API_URL</code> environment variable sets it too.</td></tr>
+  <tr><td><code>--data-dir &lt;path&gt;</code></td><td><code>.thetaide/runs/</code></td><td>Where run records are stored.</td></tr>
+  <tr><td><code>--install-desktop-entry</code></td><td></td><td><b>Linux only:</b> add Theta-IDE to the application menu, then exit.</td></tr>
+</table>
+
+<h3>Reloading While Developing</h3>
+<p>Press <code>Ctrl+R</code> in the terminal that launched the app to restart it with your latest code.</p>
+<ul>
+  <li><b>macOS / Linux:</b> works repeatedly.</li>
+  <li><b>Windows:</b> works once per launch. Windows can't replace a running program in place, so the reload starts a fresh copy and the terminal prompt returns; the new window no longer listens to the terminal. It also needs a real console (PowerShell, Windows Terminal, or Command Prompt), not Git Bash.</li>
+</ul>
+
+<h3>Without the Backend</h3>
+<p>The app still opens. You can browse and edit configs (the preview shows an unvalidated local draft) and run <i>Run &rarr; Start simulated demo</i>. Launching training, the job queue, and the TensorBoard tab need the backend.</p>
+
+<h3>Stopping</h3>
+<ul>
+  <li><b>Frontend:</b> close the window. Training that is already running keeps going, and reopening the app reconnects to it.</li>
+  <li><b>Backend:</b> press <code>Ctrl+C</code> in its terminal. This also stops TensorBoard.</li>
+</ul>
+""",
+    ),
+    DocArticle(
+        id="managing_experiments",
+        title="Creating, Renaming & Deleting Experiments",
+        category="Getting Started",
+        summary="Create new experiments and groups, rename or delete configs, and save or export your changes.",
+        keywords=["new", "create", "rename", "delete", "duplicate", "experiment", "group", "save", "export", "config tree"],
+        html_content=r"""
+<h2>Creating, Renaming & Deleting Experiments</h2>
+<p>Experiments live in <code>in/config/experiment/&lt;group&gt;/&lt;name&gt;.yaml</code>. Each group has a <code>_base.yaml</code> that sets the environment and paradigm its experiments inherit. Manage them from the config tree in the <a href="ide://config">Experiment Config</a> pane.</p>
+
+<h3>Creating an Experiment</h3>
+<ol>
+  <li>Choose <i>File &rarr; New experiment</i> (<code>Ctrl+N</code>), or right-click a group and choose <b>New Experiment in this group&hellip;</b>.</li>
+  <li>In the <b>New Experiment</b> dialog, pick a group and enter a name.</li>
+  <li>To start a <b>new group</b>, type a group name that doesn't exist yet. The dialog then asks for the <b>paradigm</b> and <b>environment</b>, and creates the group's <code>_base.yaml</code> for you. Only environments compatible with the chosen paradigm are offered.</li>
+</ol>
+<p>Right-click a component category and choose <b>New Component in this category&hellip;</b> to add an agent, model, or environment config the same way.</p>
+
+<h3>Right-Click Menu</h3>
+<table border="1" cellpadding="8" cellspacing="0" style="border-collapse: collapse; width: 100%; border-color: rgba(255,255,255,0.15);">
+  <tr style="background-color: rgba(255,255,255,0.05); font-weight: bold;">
+    <td>Action</td>
+    <td>What it does</td>
+  </tr>
+  <tr><td><b>Load in Config Viewer</b></td><td>Open the file in the form editor</td></tr>
+  <tr><td><b>Rename&hellip;</b></td><td>Rename the file. The <code>experiment_id</code> inside it is updated to match.</td></tr>
+  <tr><td><b>Delete&hellip;</b></td><td>Delete the file after confirmation</td></tr>
+  <tr><td><b>New Experiment in this group&hellip;</b></td><td>Create an experiment in the selected group</td></tr>
+  <tr><td><b>New Component in this category&hellip;</b></td><td>Create an agent, model, or environment config</td></tr>
+  <tr><td><b>Collapse All / Expand All</b></td><td>Fold or unfold the tree</td></tr>
+</table>
+
+<div style="background-color: rgba(251, 73, 52, 0.12); border-left: 4px solid #fb4934; padding: 10px 14px; margin: 12px 0; border-radius: 4px;">
+  <b>Protected base files:</b> A group's <code>_base.yaml</code> can't be deleted while experiments in that group still inherit from it, because Hydra could no longer load them. Delete or move those experiments first.
+</div>
+<p>Deleted files are removed from your working tree. If the file was committed to git, you can restore it with <code>git checkout -- &lt;path&gt;</code>.</p>
+
+<h3>Saving & Exporting</h3>
+<ul>
+  <li><b>Save configuration</b> (<code>Ctrl+S</code>): write your edits back to the experiment's YAML file.</li>
+  <li><b>Export draft YAML</b> (<code>Ctrl+Shift+S</code>): write a standalone recipe. Save it in <code>in/config/experiment/thetaide/</code> and run it with <code>python run_pipeline.py thetaide/&lt;name&gt;</code>.</li>
+</ul>
+""",
+    ),
+    DocArticle(
         id="ui_panels",
         title="IDE Panels & Navigation Guide",
         category="Interface",
-        summary="Detailed tour of all sidebar panels: Config, Monitor, Queue, Plots, Terminal, and Hub.",
+        summary="Tour of all ten sidebar panels, from Components and Config to the Terminal and Console.",
         keywords=["panels", "ui", "navigation", "sidebar", "tabs", "interface", "layout"],
         html_content="""
 <h2>IDE Panels & Navigation</h2>
 <p>Theta-IDE organizes its interface into vertical sidebar tabs. Each tab represents a specialized workstation for your experiments.</p>
+<p>Results, Plots, TensorBoard and Queue are hidden by default. Turn them on in <i>Settings &rarr; Appearance</i> (see <a href="sidebar_layout">Sidebar &amp; Layout</a>).</p>
 
 <h3>1. Experiment Config (<code>config</code>)</h3>
 <p>The primary workspace for configuring and launching experiments:</p>
@@ -79,12 +205,13 @@ ARTICLES: List[DocArticle] = [
 </ul>
 
 <h3>3. Job Queue (<code>queue</code>)</h3>
-<p>Batch management for multi-stage pipelines and cluster tasks:</p>
+<p>Line up several experiments and train them one after another:</p>
 <ul>
-  <li>Tracks <b>Active</b>, <b>Queued</b>, and <b>Finished</b> runs.</li>
-  <li>Displays job IDs, backend status, timestamps, and resource consumption.</li>
-  <li>Live log inspector: view stdout and stderr logs directly in the IDE.</li>
-  <li>Actions: Kill running jobs, Resubmit failed runs, or Clear finished entries.</li>
+  <li>Add the loaded experiment with <b>Run &rarr; Add to queue</b> (<code>Ctrl+Shift+Q</code>). Adding does not start it.</li>
+  <li><b>Start queue</b> (<code>Ctrl+Shift+R</code>) trains queued experiments one at a time, in order. The Training Monitor switches to each one as it starts.</li>
+  <li><b>Pause queue</b> stops the next job from starting; a job already training keeps running. The queue also pauses itself when it runs out of jobs.</li>
+  <li>The list shows running, queued and recent jobs. Select a job to <b>Move up</b>, <b>Move down</b>, <b>Remove from queue</b>, or <b>Open in monitor</b>.</li>
+  <li>The queue is kept by the backend, so it continues while Theta-IDE is closed, but it is lost if the backend restarts.</li>
 </ul>
 
 <h3>4. Plots & Visualizations (<code>plots</code>)</h3>
@@ -100,6 +227,7 @@ ARTICLES: List[DocArticle] = [
 <ul>
   <li>Full shell access with support for zsh, bash, and tmux.</li>
   <li>Terminal precedence mode: allows tmux prefix keys and terminal hotkeys to pass through uninterrupted.</li>
+  <li><b>macOS and Linux only.</b> The terminal needs a POSIX pseudo-terminal, so it is unavailable on Windows. Use a separate PowerShell window there.</li>
 </ul>
 
 <h3>6. Modular Components &amp; Community Hub (<code>components</code>)</h3>
@@ -108,6 +236,18 @@ ARTICLES: List[DocArticle] = [
   <li><b>Components Tree &amp; Viewer:</b> Browse and edit modular configurations outside experiments (<code>agent</code> profiles, <code>env</code> definitions, <code>model</code> architectures, <code>paradigms</code>, and <code>site</code> profiles).</li>
   <li><b>Community Hub Dialog:</b> Marketplace modal to discover, install, update, and uninstall community plugins, RL methods, models, and environments directly into your workspace.</li>
 </ul>
+
+<h3>7. Workflows (<code>workflows</code>)</h3>
+<p>Compose multi-stage experiments as string diagrams, wiring the outputs of one stage into the inputs of the next. See <a href="workflows_pane">Workflows Pane</a>.</p>
+
+<h3>8. Results Browser (<code>results</code>)</h3>
+<p>Every run you have launched, with its seed, status and reward. Reload a run's config, compare two runs, or open a run's plots. See <a href="results_browser">Results Browser</a>.</p>
+
+<h3>9. TensorBoard (<code>tensorboard</code>)</h3>
+<p>An embedded TensorBoard dashboard for runs logged with <i>Log to TensorBoard</i>. See <a href="tensorboard_tab">TensorBoard Tab</a>.</p>
+
+<h3>10. Console (<code>console</code>)</h3>
+<p>Streams the pipeline's output and accepts a few quick commands. See <a href="console_pane">Console</a>.</p>
 """,
     ),
     DocArticle(
@@ -129,19 +269,19 @@ ARTICLES: List[DocArticle] = [
   </tr>
   <tr>
     <td><b><code>online_rl</code></b></td>
-    <td>Online RL algorithms (e.g. PPO, SAC, DQN)</td>
+    <td>Online RL algorithms (PPO; others via plugins)</td>
     <td>Fixed-episode live simulator rollouts via <code>EnvironmentEvaluatorCallback</code></td>
     <td><code>offline_only: false</code>; generates transition datasets</td>
   </tr>
   <tr>
     <td><b><code>offline_rl</code></b></td>
-    <td>Offline RL algorithms (e.g. CQL, IQL, TD3+BC, AWAC)</td>
+    <td>Offline RL algorithms (CQL, IQL; others via plugins)</td>
     <td>Replay buffer data module; validation loss and Bellman error via Lightning</td>
     <td><code>intervals_count: 1</code>, <code>eval_episodes: 0</code>; requires static transition dataset</td>
   </tr>
   <tr>
     <td><b><code>supervised</code></b></td>
-    <td>Predictive architectures (DNN, CNN, ResNet, Transformer, ECM)</td>
+    <td>Predictive architectures (DNN, CNN, Dueling ResNet, Transformer, CEW)</td>
     <td>Validation cross-entropy / MSE / AUROC on held-out splits</td>
     <td>Standalone RL agents forbidden</td>
   </tr>
@@ -172,7 +312,7 @@ ARTICLES: List[DocArticle] = [
   <b>Standard Environments vs. Plugin Extensions:</b>
   <ul style="margin: 6px 0 0 0; padding-left: 18px;">
     <li><b>Standard environments do NOT emit domain-specific logic natively:</b> Gym, Gymnasium, and standard benchmark environments produce clean observation vectors or images.</li>
-    <li><b>Pure neural algorithms:</b> Baseline algorithms like PPO, SAC, IQL, and CQL train strictly on the core 5 fields and completely ignore auxiliary fields.</li>
+    <li><b>Pure neural algorithms:</b> Baseline algorithms like PPO, IQL, and CQL train strictly on the core 5 fields and completely ignore auxiliary fields.</li>
     <li><b>Extensible adapters:</b> Specialized plugins (such as hybrid reasoners) compute relational groundings or custom representations on the fly via their own internal wrappers, leaving the core dataset schema clean and universal.</li>
   </ul>
 </div>
@@ -250,7 +390,7 @@ ARTICLES: List[DocArticle] = [
   </tr>
   <tr>
     <td><code>Action + 1</code></td>
-    <td>Community Hub (Components)</td>
+    <td>Components (configs and Community Hub)</td>
   </tr>
   <tr>
     <td><code>Action + 2</code></td>
@@ -286,13 +426,33 @@ ARTICLES: List[DocArticle] = [
   </tr>
 </table>
 
-<h3>Global Action Hotkeys</h3>
+<p>The Workflows pane has no digit by default. Reach it from <i>View &rarr; Workflows</i>, or remap a digit in <i>Settings &rarr; Hotkeys &rarr; Pane Navigation Hotkey Menu</i>.</p>
+
+<h3>Menu Shortcuts</h3>
+<table border="1" cellpadding="8" cellspacing="0" style="border-collapse: collapse; width: 100%; border-color: rgba(255,255,255,0.15);">
+  <tr style="background-color: rgba(255,255,255,0.05); font-weight: bold;">
+    <td>Shortcut</td>
+    <td>Action</td>
+  </tr>
+  <tr><td><code>F5</code></td><td>Run &rarr; Launch training with the loaded experiment</td></tr>
+  <tr><td><code>Shift+F5</code></td><td>Run &rarr; Stop the active run</td></tr>
+  <tr><td><code>Ctrl+F5</code></td><td>Run &rarr; Start simulated demo (no backend needed)</td></tr>
+  <tr><td><code>Ctrl+Shift+Q</code></td><td>Run &rarr; Add to queue</td></tr>
+  <tr><td><code>Ctrl+Shift+R</code></td><td>Run &rarr; Start or pause queue</td></tr>
+  <tr><td><code>Ctrl+N</code></td><td>File &rarr; New experiment</td></tr>
+  <tr><td><code>Ctrl+S</code></td><td>File &rarr; Save configuration</td></tr>
+  <tr><td><code>Ctrl+Shift+S</code></td><td>File &rarr; Export draft YAML</td></tr>
+  <tr><td><code>Ctrl+Q</code></td><td>File &rarr; Quit</td></tr>
+</table>
+
+<h3>Changing Shortcuts</h3>
 <ul>
-  <li><code>F5</code>: Launch training immediately using the currently active experiment configuration.</li>
-  <li><code>Ctrl + Shift + Q</code>: Enqueue the loaded experiment to the background job queue.</li>
-  <li><code>Ctrl + S</code>: Save active configuration changes to disk.</li>
-  <li><code>Ctrl + R</code>: Reload component trees and refresh files from disk.</li>
+  <li>Rebind menu shortcuts in <i>Settings &rarr; Hotkeys &rarr; Application Menu Shortcuts</i>, or under <code>[shortcuts]</code> in <code>settings.toml</code> (for example <code>launch_training = "F6"</code>).</li>
+  <li>Change the Action key, leader timeout and digit-to-pane mapping under <code>[hotkeys]</code>.</li>
 </ul>
+
+<h3>Reloading the App (Developers)</h3>
+<p><code>Ctrl+R</code> is not an in-app shortcut. Pressed in the <b>terminal that launched Theta-IDE</b>, it restarts the app with your latest code changes. See <a href="launching">Installing &amp; Launching</a>.</p>
 """,
     ),
     DocArticle(
@@ -327,10 +487,10 @@ ARTICLES: List[DocArticle] = [
 <pre><code>methods:
   cql_baseline:
     agent: cql
-    model: mlp
+    model: dnn
   ppo_transformer:
     agent: ppo
-    model: decision_transformer
+    model: transformer
   cql_blendrl_hybrid: # Optional composite model plugin
     agent: cql
     model:
@@ -493,7 +653,7 @@ class MyPlugin(Plugin):
     <td><b><code>method</code></b></td>
     <td><code>src/usr/methods/&lt;id&gt;/</code></td>
     <td><code>in/config/agent/&lt;id&gt;.yaml</code></td>
-    <td><code>@register_agent("&lt;prefix&gt;")</code> in <code>registry.py</code></td>
+    <td><code>@register_agent("&lt;prefix&gt;")</code> from <code>src/usr/methods/agent_registry.py</code></td>
   </tr>
   <tr>
     <td><b><code>model</code></b></td>
@@ -771,45 +931,316 @@ eval_episodes: 20</code></pre>
         id="cli_workflows",
         title="Command-Line (CLI) Workflows",
         category="Workflow & Tools",
-        summary="Complete CLI reference for run_pipeline.py, standalone training, and auto-plotting.",
-        keywords=["cli", "terminal", "commands", "run_pipeline", "train.py", "optuna", "sweeps"],
+        summary="CLI reference for run_pipeline.py: running experiments, overrides, plotting, sweeps, and cluster submission.",
+        keywords=["cli", "terminal", "commands", "run_pipeline", "plot", "optuna", "sweeps", "overrides"],
         html_content="""
 <h2>CLI & Command Reference</h2>
-<p>Theta-IDE is backed by a fully scriptable CLI pipeline. All operations can be invoked directly from the terminal or embedded terminal emulator.</p>
+<p>Everything the IDE does is backed by a scriptable CLI. Run these from the repository root, in the backend's virtual environment.</p>
 
-<h3>Running Pipelines</h3>
-<pre><code># Run full end-to-end experiment pipeline (Online -> Offline -> Plotting)
-python run_pipeline.py cartpole/cp_final
+<h3>Running Experiments</h3>
+<p>Experiments are named <code>&lt;group&gt;/&lt;experiment&gt;</code>, matching their path under <code>in/config/experiment/</code>:</p>
+<pre><code># Quick CartPole smoke test
+python run_pipeline.py cartpole/quick_test
 
-# Run MIMIC offline comparison benchmark
-python run_pipeline.py mimic/mimic_comparison
+# Full CartPole experiment
+python run_pipeline.py cartpole/final_cartpole
 
-# Override experiment parameters via Hydra CLI
-python run_pipeline.py cartpole/cp_final total_timesteps=50000 eval_episodes=10
+# Override any config value with Hydra key=value syntax
+python run_pipeline.py cartpole/final_cartpole total_timesteps=50000 eval_episodes=10
 
-# Run in quick-check mode with local execution
-python run_pipeline.py quick_tests/smoke_test local=true</code></pre>
+# Check that a config composes and validates, without training
+python run_pipeline.py cartpole/quick_test dry_run=true</code></pre>
+<p>Run <code>python run_pipeline.py --help</code> for the full list of orchestration overrides.</p>
 
-<h3>Direct Training Execution</h3>
-<pre><code># Train PPO directly in online mode
-python src/app/train.py +experiment=cartpole/cp_final mode=online agent=ppo/cp_tuned
+<h3>Common Overrides</h3>
+<table border="1" cellpadding="8" cellspacing="0" style="border-collapse: collapse; width: 100%; border-color: rgba(255,255,255,0.15);">
+  <tr style="background-color: rgba(255,255,255,0.05); font-weight: bold;">
+    <td>Override</td>
+    <td>Effect</td>
+  </tr>
+  <tr><td><code>dry_run=true</code></td><td>Validate the config and exit</td></tr>
+  <tr><td><code>plot_only=true</code></td><td>Run only the plotting phase</td></tr>
+  <tr><td><code>no_plot=true</code></td><td>Skip automatic plotting</td></tr>
+  <tr><td><code>no_online=true</code> / <code>no_offline=true</code></td><td>Skip the online or offline training phase</td></tr>
+  <tr><td><code>experiment_id=&lt;name&gt;</code></td><td>Override the results directory name</td></tr>
+  <tr><td><code>site=ncshare</code> / <code>site=arc</code></td><td>Submit to a Slurm cluster instead of running locally (see <a href="cluster_slurm">Cluster Execution</a>)</td></tr>
+</table>
 
-# Train Offline IQL on CartPole replay buffer
-python src/app/train.py +experiment=cartpole/cp_final mode=offline agent=iql/cp_tuned mode.dataset_path=in/datasets/cartpole/cp_final/ppo_cp_tuned</code></pre>
+<h3>Plotting</h3>
+<pre><code># Re-run the plotting phase for an experiment
+python run_pipeline.py cartpole/final_cartpole plot_only=true
 
-<h3>Standalone Visualizations</h3>
-<pre><code># Dispatch all plotters configured for an experiment
-python plot/manager.py cartpole/cp_final
+# Or call the plot manager directly
+python plot/manager.py cartpole/final_cartpole
 
-# Generate convergence curves with custom smoothing
-python plot/convergence.py cartpole/cp_final --window 20 --dpi 300
-
-# Plot specific loss functions
-python plot/losses.py cartpole/cp_final --metrics losses/q_loss losses/actor_loss --window 15</code></pre>
+# Start from an empty plot directory
+python plot/manager.py cartpole/final_cartpole --wipe</code></pre>
 
 <h3>Optuna Hyperparameter Sweeps</h3>
-<pre><code># Launch multi-trial parameter sweep across all architectures
-python run_pipeline.py tune_mimic_all -m</code></pre>
+<p>Tuning experiments declare an Optuna sweeper in their config:</p>
+<pre><code>python run_pipeline.py mimic/tune_mimic_all sweep=true
+
+# Watch the sweep in the Optuna dashboard
+python run_pipeline.py mimic/tune_mimic_all sweep=true dash=true</code></pre>
+""",
+    ),
+    DocArticle(
+        id="workflows_pane",
+        title="Workflows Pane: String Diagrams",
+        category="Workflow & Tools",
+        summary="Compose multi-stage experiments as typed string diagrams, validate the wiring, and run them through the pipeline.",
+        keywords=["workflow", "workflows", "string diagram", "dag", "nodes", "wires", "ports", "preset", "pipeline", "distillation", "transfer"],
+        html_content=r"""
+<h2>Workflows Pane: String Diagrams</h2>
+<p>A <b>workflow</b> chains several training stages together. Each stage is a <b>node</b>, and typed <b>wires</b> (strings) carry artifacts such as datasets and checkpoints from one node's outputs to another's inputs. Open it from <a href="ide://workflows">View &rarr; Workflows</a>.</p>
+
+<h3>Building a Diagram</h3>
+<table border="1" cellpadding="8" cellspacing="0" style="border-collapse: collapse; width: 100%; border-color: rgba(255,255,255,0.15);">
+  <tr style="background-color: rgba(255,255,255,0.05); font-weight: bold;">
+    <td>Control</td>
+    <td>What it does</td>
+  </tr>
+  <tr><td><b>+ Add Node</b></td><td>Add a stage to the canvas</td></tr>
+  <tr><td>Drag between ports</td><td>Connect an output port to an input port with a wire</td></tr>
+  <tr><td><b>Validate Strings</b></td><td>Check every wire and required input (see below)</td></tr>
+  <tr><td><b>Zoom Fit</b></td><td>Fit the whole diagram in view</td></tr>
+  <tr><td><b>Load YAML&hellip; / Save YAML&hellip;</b></td><td>Open or save a diagram file</td></tr>
+  <tr><td><b>Delete Node / Disconnect Wire</b></td><td>Remove the selected node or wire</td></tr>
+  <tr><td><b>Clear</b></td><td>Empty the canvas</td></tr>
+</table>
+
+<h3>Node Types</h3>
+<ul>
+  <li><b>Training stages:</b> Online RL, Offline RL, and Supervised nodes. Each points at an existing experiment config.</li>
+  <li><b>Data:</b> Dataset Source supplies a stored transition dataset.</li>
+  <li><b>Transforms:</b> Feature Augmenter, Reward Shaper, and Distillation reshape data or models between stages.</li>
+  <li><b>Evaluation:</b> Plot Evaluator turns metrics into plots.</li>
+</ul>
+
+<h3>Port Types</h3>
+<p>Every port carries one artifact type, and wires only connect matching types: <code>dataset</code>, <code>checkpoint</code>, <code>value_estimator</code>, <code>metrics</code>, <code>logic_rules</code>, and <code>generic</code>. <b>Validate Strings</b> reports wires between mismatched types, wires to ports that don't exist, and required inputs that aren't connected.</p>
+
+<h3>Built-In Presets</h3>
+<table border="1" cellpadding="8" cellspacing="0" style="border-collapse: collapse; width: 100%; border-color: rgba(255,255,255,0.15);">
+  <tr style="background-color: rgba(255,255,255,0.05); font-weight: bold;">
+    <td>Preset</td>
+    <td>Pattern</td>
+  </tr>
+  <tr><td><code>transfer_learning</code></td><td>Train on one environment, then warm-start fine-tuning on another</td></tr>
+  <tr><td><code>online_vs_offline</code></td><td>Collect data online, then train offline methods on it for comparison</td></tr>
+  <tr><td><code>model_distillation</code></td><td>Distill a trained teacher into a smaller student model</td></tr>
+  <tr><td><code>sepsis_reciprocal</code></td><td>Alternate offline RL and early prediction, feeding each back into the other</td></tr>
+</table>
+<p>Their definitions live in <code>in/config/workflow/</code>.</p>
+
+<h3>Running a Workflow</h3>
+<p>Workflows aren't launched from this pane. Save the diagram to <code>in/config/workflow/&lt;id&gt;.yaml</code>, then reference it from an experiment:</p>
+<pre><code># in/config/experiment/mimic/reciprocal_refinement.yaml
+workflow: sepsis_reciprocal</code></pre>
+<p>Launching that experiment (<code>F5</code>, or <code>python run_pipeline.py mimic/reciprocal_refinement</code>) runs the nodes in dependency order. Nodes with no dependencies on each other run in the same stage.</p>
+""",
+    ),
+    DocArticle(
+        id="results_browser",
+        title="Results Browser",
+        category="Interface",
+        summary="Find past runs, reload their configs, compare two runs side by side, and open their plots.",
+        keywords=["results", "runs", "history", "compare", "diff", "reward", "seed", "plots", "records"],
+        html_content=r"""
+<h2>Results Browser</h2>
+<p>The <a href="ide://results">Results</a> pane lists every run launched from Theta-IDE. It is hidden by default; turn it on in <i>Settings &rarr; Appearance</i> or open it with <code>Action + 4</code>.</p>
+
+<h3>The Run Table</h3>
+<table border="1" cellpadding="8" cellspacing="0" style="border-collapse: collapse; width: 100%; border-color: rgba(255,255,255,0.15);">
+  <tr style="background-color: rgba(255,255,255,0.05); font-weight: bold;">
+    <td>Column</td>
+    <td>Meaning</td>
+  </tr>
+  <tr><td><b>Experiment</b></td><td>The run's experiment ID, <code>&lt;name&gt;_&lt;YYYYmmdd-HHMMSS&gt;</code></td></tr>
+  <tr><td><b>Seed</b></td><td>Random seed used for the run</td></tr>
+  <tr><td><b>Status</b></td><td>The run's current status, such as running or completed</td></tr>
+  <tr><td><b>Reward</b></td><td>The run's latest evaluation reward (<code>&mdash;</code> before the first evaluation)</td></tr>
+  <tr><td><b>Source</b></td><td><i>Trained</i> for a real backend run, <i>Simulated</i> for a demo run</td></tr>
+</table>
+<p>Type in the search box to filter runs by name, seed, or status.</p>
+<p>Double-click a row to open that run in the <a href="ide://monitor">Training Monitor</a>.</p>
+
+<h3>Actions</h3>
+<ul>
+  <li><b>Load saved config:</b> load the exact configuration the selected run used back into the config editor, so you can rerun or tweak it.</li>
+  <li><b>Compare two runs:</b> select two rows (Ctrl+click) to see a <i>Parameter / Run A / Run B</i> table of every setting that differs.</li>
+  <li><b>View plot:</b> open the selected run's plots in the Plot Viewer.</li>
+</ul>
+
+<h3>Where Records Are Stored</h3>
+<p>Run records are saved in <code>.thetaide/runs/</code> (change it with <code>--data-dir</code>). Training outputs such as metrics, checkpoints, and plots are under <code>results/</code>; see <a href="troubleshooting">Troubleshooting &amp; FAQ</a> for the layout.</p>
+""",
+    ),
+    DocArticle(
+        id="tensorboard_tab",
+        title="TensorBoard Tab",
+        category="Interface",
+        summary="View TensorBoard dashboards inside the IDE for runs launched with Log to TensorBoard.",
+        keywords=["tensorboard", "logs", "dashboard", "scalars", "webengine", "browser"],
+        html_content=r"""
+<h2>TensorBoard Tab</h2>
+<p>Runs launched with <b>Log to TensorBoard</b> (on by default) also write TensorBoard logs to <code>results/tensorboard/</code>. The <a href="ide://tensorboard">TensorBoard</a> tab shows them without leaving the IDE. It is hidden by default; open it with <code>Action + 6</code> or <i>View &rarr; TensorBoard</i>.</p>
+
+<h3>How It Works</h3>
+<ul>
+  <li>The first time you open the tab, the backend starts a local TensorBoard server, bound to <code>127.0.0.1</code> on a free port, and the tab embeds it.</li>
+  <li>The server keeps running while the backend runs, so later visits open instantly.</li>
+  <li><b>Stop</b> shuts the server down. <b>Open in browser</b> shows the same dashboard in your web browser.</li>
+</ul>
+
+<h3>Requirements</h3>
+<ul>
+  <li>The backend must be running. TensorBoard is started by the backend, not by the frontend.</li>
+  <li>The embedded view needs <code>PyQt6-WebEngine</code>, which <code>frontend/requirements.txt</code> installs. Without it, the tab only offers <b>Open in browser</b>.</li>
+</ul>
+
+<div style="background-color: rgba(254, 128, 25, 0.12); border-left: 4px solid #fe8019; padding: 10px 14px; margin: 12px 0; border-radius: 4px;">
+  <b>Stop the backend with Ctrl+C.</b> That also shuts TensorBoard down. Force-killing the backend leaves the TensorBoard server running; see <a href="troubleshooting">Troubleshooting &amp; FAQ</a> to stop it.
+</div>
+""",
+    ),
+    DocArticle(
+        id="console_pane",
+        title="Console",
+        category="Interface",
+        summary="The Console streams pipeline output and IDE messages, and accepts a few quick commands.",
+        keywords=["console", "log", "output", "commands", "status", "help"],
+        html_content=r"""
+<h2>Console</h2>
+<p>The <a href="ide://console">Console</a> pane is the IDE's log. It streams the training pipeline's output while a run is active, along with IDE messages such as saves, queue changes, and connection status.</p>
+<p>It is not a shell. For an interactive shell, use the <a href="ide://terminal">Terminal</a> tab (macOS and Linux only).</p>
+
+<h3>Commands</h3>
+<p>Type a command into the input line at the bottom and press Enter:</p>
+<table border="1" cellpadding="8" cellspacing="0" style="border-collapse: collapse; width: 100%; border-color: rgba(255,255,255,0.15);">
+  <tr style="background-color: rgba(255,255,255,0.05); font-weight: bold;">
+    <td>Command</td>
+    <td>What it does</td>
+  </tr>
+  <tr><td><code>help</code></td><td>List the available commands</td></tr>
+  <tr><td><code>status</code></td><td>Show the active run: its status, experiment ID, and backend job ID</td></tr>
+  <tr><td><code>config</code></td><td>Print the <code>run_pipeline.py</code> command equivalent to the loaded config, to run it outside the IDE</td></tr>
+  <tr><td><code>clear</code></td><td>Clear the console</td></tr>
+</table>
+""",
+    ),
+    DocArticle(
+        id="settings_guide",
+        title="Settings & settings.toml",
+        category="Customization",
+        summary="Tour of the six Settings pages, and how settings.toml files store and override your preferences.",
+        keywords=["settings", "preferences", "settings.toml", "toml", "backend", "storage", "plugins", "hotkeys", "config"],
+        html_content=r"""
+<h2>Settings & settings.toml</h2>
+<p>Open Settings with <code>Action + 0</code> or <i>View &rarr; Settings &amp; About</i>.</p>
+
+<h3>Settings Pages</h3>
+<table border="1" cellpadding="8" cellspacing="0" style="border-collapse: collapse; width: 100%; border-color: rgba(255,255,255,0.15);">
+  <tr style="background-color: rgba(255,255,255,0.05); font-weight: bold;">
+    <td>Page</td>
+    <td>What you can change</td>
+  </tr>
+  <tr><td><b>Appearance</b></td><td>Color theme, which sidebar panels are shown, auto-hide sidebar, and the sculpture animation</td></tr>
+  <tr><td><b>Core Plugins</b></td><td>Turn built-in plugins (such as this Documentation plugin) on or off</td></tr>
+  <tr><td><b>Community Plugins</b></td><td>Install, configure, or remove plugins from the Community Hub</td></tr>
+  <tr><td><b>Hotkeys</b></td><td>Action key, terminal precedence, the <code>Action + digit</code> pane mapping, and menu shortcuts</td></tr>
+  <tr><td><b>Backend API</b></td><td>Backend URL and connection status</td></tr>
+  <tr><td><b>Workspace &amp; Storage</b></td><td>Data and database locations, open the settings file, and reset the UI layout</td></tr>
+</table>
+
+<h3>Settings Files</h3>
+<p>Every setting is stored in a TOML file you can also edit by hand. Two files are read, and the workspace file wins:</p>
+<ol>
+  <li><code>~/.config/thetaide/settings.toml</code>: your defaults for every workspace (on Windows, <code>C:\Users\&lt;you&gt;\.config\thetaide\settings.toml</code>).</li>
+  <li><code>.thetaide/settings.toml</code> in the repository: this workspace. Created with defaults on first launch.</li>
+</ol>
+<p>Open the workspace file with <i>View &rarr; Preferences: Open Settings File</i>. Changes you save in an editor apply immediately, without restarting.</p>
+
+<h3>Sections</h3>
+<table border="1" cellpadding="8" cellspacing="0" style="border-collapse: collapse; width: 100%; border-color: rgba(255,255,255,0.15);">
+  <tr style="background-color: rgba(255,255,255,0.05); font-weight: bold;">
+    <td>Section</td>
+    <td>Keys</td>
+  </tr>
+  <tr><td><code>[appearance]</code></td><td><code>theme</code>, plus <code>ascii_*</code> animation settings</td></tr>
+  <tr><td><code>[backend]</code></td><td><code>url</code>, <code>timeout</code> (seconds)</td></tr>
+  <tr><td><code>[sidebar]</code></td><td><code>order</code> and <code>visible</code> pane lists</td></tr>
+  <tr><td><code>[plugins]</code></td><td><code>enabled</code> plugin IDs</td></tr>
+  <tr><td><code>[hotkeys]</code></td><td><code>enabled</code>, <code>action_key</code>, <code>leader_timeout</code>, <code>terminal_precedence</code>, <code>panes</code></td></tr>
+  <tr><td><code>[shortcuts]</code></td><td>Menu shortcut overrides, e.g. <code>launch_training = "F6"</code></td></tr>
+</table>
+
+<p>See also <a href="themes">Themes &amp; Theme Builder</a>, <a href="sidebar_layout">Sidebar &amp; Layout</a>, and <a href="hotkeys">Keyboard Shortcuts</a>.</p>
+""",
+    ),
+    DocArticle(
+        id="themes",
+        title="Themes & Theme Builder",
+        category="Customization",
+        summary="Switch between the built-in color themes or design your own with the Theme Builder.",
+        keywords=["theme", "themes", "colors", "palette", "dark", "light", "gruvbox", "catppuccin", "nord", "dracula", "theme builder"],
+        html_content=r"""
+<h2>Themes & Theme Builder</h2>
+
+<h3>Switching Themes</h3>
+<p>Pick a theme from <i>View &rarr; Themes</i>, or from <i>Settings &rarr; Appearance &rarr; Active Theme</i>. The change applies immediately and is saved as <code>theme</code> under <code>[appearance]</code> in <code>settings.toml</code>.</p>
+
+<h3>Built-In Themes</h3>
+<table border="1" cellpadding="8" cellspacing="0" style="border-collapse: collapse; width: 100%; border-color: rgba(255,255,255,0.15);">
+  <tr style="background-color: rgba(255,255,255,0.05); font-weight: bold;">
+    <td>Family</td>
+    <td>Themes</td>
+  </tr>
+  <tr><td>Catppuccin</td><td>Catppuccin (default), Catppuccin Macchiato, Catppuccin Latte</td></tr>
+  <tr><td>Gruvbox</td><td>Gruvbox Dark, Gruvbox Light</td></tr>
+  <tr><td>Classic</td><td>Nord, Dracula, Paper</td></tr>
+  <tr><td>Olympian</td><td>Apollo, Athena, Ares, Dionysus, Poseidon</td></tr>
+</table>
+
+<h3>Theme Builder</h3>
+<p>Open <i>View &rarr; Theme builder&hellip;</i> to create your own palette:</p>
+<ol>
+  <li>Under <b>Start from</b>, pick the preset to base your theme on.</li>
+  <li>Give it a <b>Theme name</b>.</li>
+  <li>Click <b>Choose&hellip;</b> next to any color role to change it. Valid edits preview across the whole app as you make them.</li>
+  <li>Click <b>Save &amp; apply</b>. Your theme then appears in the Themes menu alongside the built-in ones.</li>
+</ol>
+<p><b>Reset to preset</b> discards your edits, and <b>Cancel</b> restores the theme you had before opening the builder.</p>
+""",
+    ),
+    DocArticle(
+        id="sidebar_layout",
+        title="Sidebar & Layout",
+        category="Customization",
+        summary="Show or hide panels, reorder sidebar tabs, auto-hide the sidebar, and restore the default layout.",
+        keywords=["sidebar", "layout", "panels", "tabs", "hide", "show", "reorder", "auto-hide", "reset", "restore"],
+        html_content=r"""
+<h2>Sidebar & Layout</h2>
+
+<h3>Showing and Hiding Panels</h3>
+<p>To keep the sidebar short, four panels are <b>hidden by default</b>: Results, Plots, TensorBoard, and Queue. Turn any panel on or off with its switch in <i>Settings &rarr; Appearance &rarr; Sidebar Panels Visibility</i>. At least one panel must stay visible, so the last switch can't be turned off.</p>
+<p>A hidden panel is still reachable: choose it from the <i>View</i> menu, or press its <code>Action + digit</code> hotkey.</p>
+
+<h3>Reordering Tabs</h3>
+<p>Drag a sidebar tab up or down to move it. The new order is saved as <code>order</code> under <code>[sidebar]</code> in <code>settings.toml</code>.</p>
+
+<h3>Auto-Hide Sidebar</h3>
+<p>Turn on <i>View &rarr; Auto-hide sidebar</i> (or the switch in <i>Settings &rarr; Appearance</i>) to give the panels the full window width. Hover over the left edge of the window to bring the sidebar back.</p>
+
+<h3>Restoring Defaults</h3>
+<table border="1" cellpadding="8" cellspacing="0" style="border-collapse: collapse; width: 100%; border-color: rgba(255,255,255,0.15);">
+  <tr style="background-color: rgba(255,255,255,0.05); font-weight: bold;">
+    <td>To reset</td>
+    <td>Use</td>
+  </tr>
+  <tr><td>Tab order and visibility</td><td><i>Settings &rarr; Appearance &rarr; Restore default sidebar</i> (shows all panels)</td></tr>
+  <tr><td>Pane sizes and docking</td><td><i>View &rarr; Restore default layout</i>, or <i>Settings &rarr; Workspace &amp; Storage &rarr; Reset UI layout</i></td></tr>
+</table>
 """,
     ),
     DocArticle(
@@ -843,7 +1274,35 @@ python run_pipeline.py tune_mimic_all -m</code></pre>
 </ul>
 
 <h3>4. How do I reset the IDE's layout or cached settings?</h3>
-<p>Navigate to <i>Settings &rarr; Workspace & Storage</i> and click <b>Reset Sidebar Layout</b> to restore default panel visibility and tab ordering.</p>
+<ul>
+  <li><b>Sidebar tabs:</b> <i>Settings &rarr; Appearance &rarr; Restore default sidebar</i> shows all panels and restores the original tab order.</li>
+  <li><b>Pane sizes and docking:</b> <i>Settings &rarr; Workspace &amp; Storage &rarr; Reset UI layout</i>, or <i>View &rarr; Restore default layout</i>.</li>
+  <li><b>Everything else:</b> edit or delete <code>.thetaide/settings.toml</code>. Theta-IDE recreates it with defaults. See <a href="settings_guide">Settings &amp; settings.toml</a>.</li>
+</ul>
+
+<h3>5. Windows: <code>Activate.ps1 cannot be loaded because running scripts is disabled</code></h3>
+<p>PowerShell blocks the virtual environment's activation script by default. Allow it once for your account:</p>
+<pre><code>Set-ExecutionPolicy -Scope CurrentUser RemoteSigned</code></pre>
+
+<h3>6. Windows: <code>Python was not found; run without arguments to install from the Microsoft Store</code></h3>
+<p>Windows is using its Store shortcut instead of your Python install. Turn off the <code>python.exe</code> and <code>python3.exe</code> entries in <i>Settings &rarr; Apps &rarr; Advanced app settings &rarr; App execution aliases</i>, or activate the virtual environment first.</p>
+
+<h3>7. The Terminal tab doesn't work on Windows</h3>
+<p>The embedded terminal needs a POSIX pseudo-terminal, which Windows doesn't provide. Use a separate PowerShell window instead.</p>
+
+<h3>8. Linux: <code>libEGL.so.1: cannot open shared object file</code></h3>
+<p>Qt needs system graphics libraries that minimal Linux installs and CI runners often lack:</p>
+<pre><code>sudo apt-get install libegl1 libgl1 libxkbcommon0 libfontconfig1 libdbus-1-3</code></pre>
+
+<h3>9. TensorBoard keeps running after the backend was force-closed</h3>
+<p>Stop the backend with <code>Ctrl+C</code> so it shuts TensorBoard down too. If the backend was killed another way, find the leftover process. It runs as <code>python -m tensorboard.main</code>:</p>
+<pre><code># macOS / Linux
+pkill -f tensorboard.main
+
+# Windows PowerShell
+Get-CimInstance Win32_Process -Filter "Name = 'python.exe'" |
+    Where-Object CommandLine -like "*tensorboard.main*" |
+    ForEach-Object { Stop-Process -Id $_.ProcessId }</code></pre>
 """,
     ),
 ]

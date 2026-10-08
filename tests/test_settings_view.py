@@ -191,11 +191,78 @@ class TestSettingsViewStructureAndNavigation(unittest.TestCase):
             self.settings.settings_window.scroll_area.horizontalScrollBarPolicy(),
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff,
         )
-        for tab_id in ["appearance", "core_plugins", "community_plugins", "backend", "storage"]:
+        for tab_id in ["appearance", "core_plugins", "community_plugins", "backend", "storage", "animation"]:
             self.settings.tab_buttons[tab_id].click()
             QApplication.processEvents()
             h_bar = self.settings.settings_window.scroll_area.horizontalScrollBar()
             self.assertEqual(h_bar.maximum(), 0)
+
+    def test_splash_removes_thetaide_title_and_header(self):
+        """Splash view background contains the ASCII sculpture without ThetaIDE title header."""
+        from PyQt6.QtWidgets import QLabel
+        labels = self.settings.ascii_splash.findChildren(QLabel)
+        for lbl in labels:
+            self.assertNotEqual(lbl.text(), "ThetaIDE")
+        self.assertIsNotNone(self.settings.ascii_splash.ascii_sculpture)
+
+    def test_animation_settings_button_in_sidebar_bottom_left(self):
+        """Animation settings button is located in the settings sidebar at the bottom left."""
+        btn = self.settings.anim_settings_btn
+        self.assertIsNotNone(btn)
+        self.assertEqual(btn.text(), "Animation Settings")
+        self.assertIn("animation", self.settings.tab_buttons)
+        self.assertIs(self.settings.tab_buttons["animation"], btn)
+        # Check it is in sidebar_frame children
+        self.assertIn(btn, self.settings.sidebar_frame.findChildren(type(btn)))
+
+    def test_animation_settings_box_docks_bottom_left(self):
+        """Clicking animation settings opens the detail box docked in the bottom left."""
+        self.settings.anim_settings_btn.click()
+        self.assertEqual(self.settings.active_tab_id, "animation")
+        self.assertEqual(self.settings.content_stack.currentIndex(), 1)
+        self.assertTrue(self.settings.anim_settings_btn.isChecked())
+
+        # Check detail window docking and styling property
+        detail_win = self.settings.settings_window
+        self.assertEqual(detail_win.dock_position, "bottom_left")
+        self.assertEqual(detail_win.outer_layout.alignment(), Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignLeft)
+        self.assertEqual(detail_win.card.property("dock"), "bottom-left")
+        self.assertIn("Animation Settings", detail_win.title_label.text())
+
+        # Switching to another tab restores top-left docking
+        self.settings.tab_buttons["appearance"].click()
+        self.assertEqual(self.settings.active_tab_id, "appearance")
+        self.assertEqual(detail_win.dock_position, "top_left")
+        self.assertEqual(detail_win.outer_layout.alignment(), Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        self.assertEqual(detail_win.card.property("dock"), "top-left")
+
+    def test_animation_settings_controls_update_parameters(self):
+        """Animation settings sliders, preset selection, and reset defaults update live sculpture."""
+        self.settings.anim_settings_btn.click()
+        target = self.settings.ascii_splash.ascii_sculpture
+
+        # Slider speed
+        self.settings.anim_slider_speed.setValue(180)
+        self.assertAlmostEqual(target.speed, 1.8)
+        self.assertEqual(self.settings.anim_preset_combo.currentText(), "Custom")
+
+        # Preset selection
+        self.settings.anim_preset_combo.setCurrentText("Bold & Chunky")
+        self.assertAlmostEqual(target.speed, 0.8)
+        self.assertAlmostEqual(target.scale, 1.1)
+        self.assertAlmostEqual(target.thickness, 1.9)
+
+        # Toggle playback
+        self.settings.anim_toggle_active.setChecked(False)
+        self.assertTrue(target.paused)
+        self.assertEqual(self.settings.anim_status_lbl.text(), "Paused")
+
+        # Reset defaults
+        self.settings._reset_anim_defaults()
+        self.assertAlmostEqual(target.speed, 1.0)
+        self.assertAlmostEqual(target.scale, 1.0)
+        self.assertAlmostEqual(target.thickness, 1.0)
+        self.assertEqual(self.settings.anim_preset_combo.currentText(), "Default (Balanced)")
 
 
 @unittest.skipIf(not HAS_PYQT6, "PyQt6 not installed in current environment")

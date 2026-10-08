@@ -1,0 +1,12 @@
+{
+  "id": "sb3",
+  "name": "Stable-Baselines3 Suite",
+  "version": "1.0.0",
+  "kind": "method",
+  "description": "Standard reinforcement learning algorithms (PPO, DQN, A2C, SAC) powered by Stable-Baselines3.",
+  "author": "DLR-RM & SB3 Contributors",
+  "tags": ["rl", "baselines", "ppo", "dqn", "sb3"],
+  "dependencies": {
+    "pip": ["stable-baselines3", "gymnasium", "shimmy"]
+  }
+}

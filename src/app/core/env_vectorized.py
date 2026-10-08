@@ -71,11 +71,17 @@ class VectorizedBaseEnv(ABC):
         import os
 
         env_path = f"in/envs/{name}/env_vectorized.py"
+        if not os.path.exists(env_path) and "/" in name:
+            parent_cat = name.split("/")[0]
+            candidate = f"in/envs/{parent_cat}/env_vectorized.py"
+            if os.path.exists(candidate):
+                env_path = candidate
+
         if os.path.exists(env_path):
             env_module = load_module(env_path)
             cls = getattr(env_module, "VectorizedEnv", None) or getattr(env_module, "VectorizedNudgeEnv", None)
             if cls is not None:
-                return cls(**kwargs)
+                return cls(name=name, **kwargs)
 
         # Standard Gymnasium fallback
         env_id = kwargs.pop("env_id", None) or name

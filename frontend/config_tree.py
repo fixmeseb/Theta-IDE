@@ -1,4 +1,5 @@
 """Tree widget mirroring in/config/ directory for Theta-IDE."""
+import shutil
 from pathlib import Path
 
 import yaml
@@ -39,6 +40,18 @@ TOOL_ICON_COLORS = {
     (QIcon.Mode.Normal, QIcon.State.Off): "text",
     (QIcon.Mode.Active, QIcon.State.Off): "accent",
     (QIcon.Mode.Disabled, QIcon.State.Off): "disabled",
+    (QIcon.Mode.Normal, QIcon.State.On): "accent",
+    (QIcon.Mode.Active, QIcon.State.On): "accent",
+}
+
+TREE_GEAR_COLORS = {
+    (QIcon.Mode.Normal, QIcon.State.Off): "secondary",
+    (QIcon.Mode.Active, QIcon.State.Off): "accent",
+    (QIcon.Mode.Selected, QIcon.State.Off): "text",
+    (QIcon.Mode.Disabled, QIcon.State.Off): "disabled",
+    (QIcon.Mode.Normal, QIcon.State.On): "accent",
+    (QIcon.Mode.Active, QIcon.State.On): "accent",
+    (QIcon.Mode.Selected, QIcon.State.On): "accent",
 }
 
 
@@ -124,6 +137,67 @@ class NewExperimentDialog(QDialog):
                 self.paradigm.currentText(), self.env.currentText())
 
 
+class ComponentDeleteDialog(QDialog):
+    """Dialog displayed when a user deletes a folder or file belonging to a Hub component."""
+
+    def __init__(self, rel_path: str, comp_name: str, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Uninstall Component?")
+        self.setFixedWidth(460)
+        self.choice = "cancel"
+
+        layout = QVBoxLayout(self)
+        layout.setSpacing(14)
+        layout.setContentsMargins(20, 20, 20, 20)
+
+        title = QLabel(f"Managed Hub Component: {comp_name}")
+        title.setStyleSheet("font-size: 15px; font-weight: bold; color: #ebdbb2;")
+        layout.addWidget(title)
+
+        desc = QLabel(
+            f"<b>'{rel_path}'</b> is managed by Theta Hub (<b>{comp_name}</b>).<br><br>"
+            f"Would you like to completely uninstall this component from your workspace, "
+            f"or only delete this folder?"
+        )
+        desc.setWordWrap(True)
+        desc.setStyleSheet("color: #a89984; font-size: 12px; line-height: 1.4;")
+        layout.addWidget(desc)
+
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(8)
+
+        btn_cancel = QPushButton("Cancel")
+        btn_cancel.clicked.connect(self._on_cancel)
+        btn_row.addWidget(btn_cancel)
+
+        btn_row.addStretch()
+
+        btn_delete_only = QPushButton("Delete Folder Only")
+        btn_delete_only.setToolTip("Deletes only this folder from disk without uninstalling the component source code")
+        btn_delete_only.clicked.connect(self._on_delete_only)
+        btn_row.addWidget(btn_delete_only)
+
+        btn_uninstall = QPushButton("Uninstall Completely")
+        btn_uninstall.setStyleSheet("background-color: #cc241d; color: #ebdbb2; font-weight: bold;")
+        btn_uninstall.setToolTip("Completely uninstalls the component and removes both its source code and configurations")
+        btn_uninstall.clicked.connect(self._on_uninstall)
+        btn_row.addWidget(btn_uninstall)
+
+        layout.addLayout(btn_row)
+
+    def _on_cancel(self):
+        self.choice = "cancel"
+        self.reject()
+
+    def _on_delete_only(self):
+        self.choice = "delete_only"
+        self.accept()
+
+    def _on_uninstall(self):
+        self.choice = "uninstall"
+        self.accept()
+
+
 def find_config_root():
     """Locate in/config directory from cwd or parent directories."""
     candidates = [
@@ -160,18 +234,6 @@ class ConfigTreeWidget(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
 
-        # Title on its own row. With five buttons beside it the title elided to
-        # "EXPERIM" at the panel's 220px minimum, and the two widest buttons
-        # collapsed to "...".
-        if self.mode in ("experiments", "experiment"):
-            title_text = "EXPERIMENTS"
-        elif self.mode == "components":
-            title_text = "COMPONENTS"
-        else:
-            title_text = "CONFIG REPOSITORY"
-        title = label(title_text, "eyebrow")
-        layout.addWidget(title)
-
         header = QHBoxLayout()
         header.setSpacing(4)
 
@@ -191,6 +253,13 @@ class ConfigTreeWidget(QWidget):
         self.btn_expand.clicked.connect(self.expand_all)
         self.btn_expand_all = self.btn_expand  # alias
         header.addWidget(self.btn_expand)
+
+        self.btn_search = self._tool_button("search")
+        self.btn_search.setToolTip("Filter configurations")
+        self.btn_search.setCheckable(True)
+        self.btn_search.setChecked(False)
+        self.btn_search.clicked.connect(self.toggle_search)
+        header.addWidget(self.btn_search)
 
         header.addStretch()
 
@@ -216,7 +285,7 @@ class ConfigTreeWidget(QWidget):
 
         layout.addLayout(header)
 
-        # Search filter
+        # Search filter (hidden by default, toggled via magnifying glass button)
         self.search = QLineEdit()
         if self.mode in ("experiments", "experiment"):
             placeholder = "Filter experiments…"
@@ -226,6 +295,8 @@ class ConfigTreeWidget(QWidget):
             placeholder = "Filter configs…"
         self.search.setPlaceholderText(placeholder)
         self.search.textChanged.connect(self.filter_tree)
+        self.search.hide()
+        self.search.installEventFilter(self)
         layout.addWidget(self.search)
 
         # Tree widget
@@ -273,6 +344,8 @@ class ConfigTreeWidget(QWidget):
             clean_exp = str(Path(ensure_expanded)).replace("\\", "/").strip("/")
             if clean_exp and clean_exp != ".":
                 expanded_paths.add(clean_exp)
+                if self.mode in ("experiments", "experiment") and not clean_exp.startswith("experiment/"):
+                    expanded_paths.add(f"experiment/{clean_exp}")
                 parts = clean_exp.split("/")
                 for i in range(1, len(parts)):
                     expanded_paths.add("/".join(parts[:i]))
@@ -289,10 +362,18 @@ class ConfigTreeWidget(QWidget):
         top_files = sorted([p for p in self.root_dir.iterdir() if p.is_file() and p.suffix in (".yaml", ".yml")])
 
         if self.mode in ("experiments", "experiment"):
-            # ONLY display in/config/experiment (or experiments)
-            exp_dir = existing_dirs.get("experiment") or existing_dirs.get("experiments") or (self.root_dir / "experiment")
+            # The tree directory is in/config/experiment/ - show groups and files directly
+            if self.root_dir.name in ("experiment", "experiments"):
+                exp_dir = self.root_dir
+            else:
+                exp_dir = existing_dirs.get("experiment") or existing_dirs.get("experiments") or (self.root_dir / "experiment")
             if exp_dir.exists():
-                self._add_dir_node(self.tree, exp_dir, expand=True, expanded_set=expanded_paths, has_previous_state=has_previous_state)
+                subdirs = sorted([p for p in exp_dir.iterdir() if p.is_dir() and not p.name.startswith(".")])
+                files = sorted([p for p in exp_dir.iterdir() if p.is_file() and p.suffix in (".yaml", ".yml")])
+                for sub in subdirs:
+                    self._add_dir_node(self.tree, sub, expand=True, expanded_set=expanded_paths, has_previous_state=has_previous_state)
+                for f in files:
+                    self._add_file_node(self.tree, f)
         elif self.mode == "components":
             # Display all modular configuration directories and files OUTSIDE experiment
             preferred_comp_order = ["agent", "env", "model", "paradigms", "site", "hydra"]
@@ -316,9 +397,9 @@ class ConfigTreeWidget(QWidget):
             for f in top_files:
                 self._add_file_node(self.tree, f)
 
-        # Re-apply current selection if possible
+        # Re-apply current selection if possible without triggering external selection signals
         if self.current_rel_path:
-            self.select_file(self.current_rel_path)
+            self.select_file(self.current_rel_path, emit_signal=False)
 
     def _tool_button(self, icon_name, text=None):
         """Square header button with a themed SVG icon; text, if any, becomes its accessible name."""
@@ -333,11 +414,22 @@ class ConfigTreeWidget(QWidget):
         return button
 
     def refresh_icons(self):
-        """Re-render the header icons in the current theme's colors."""
+        """Re-render the header and tree icons in the current theme's colors."""
         for button in self.findChildren(QToolButton):
             name = button.property("svg_icon")
             if name:
                 button.setIcon(svg_icon(name, TOOL_ICON_COLORS))
+
+        def _update_tree(parent):
+            count = parent.topLevelItemCount() if isinstance(parent, QTreeWidget) else parent.childCount()
+            for i in range(count):
+                child = parent.topLevelItem(i) if isinstance(parent, QTreeWidget) else parent.child(i)
+                data = child.data(0, Qt.ItemDataRole.UserRole)
+                if data and data.get("is_base"):
+                    child.setIcon(0, svg_icon("gear", TREE_GEAR_COLORS))
+                _update_tree(child)
+
+        _update_tree(self.tree)
 
     def _add_dir_node(self, parent_widget, dir_path: Path, expand=False, expanded_set=None, has_previous_state=False):
         name = dir_path.name
@@ -377,14 +469,28 @@ class ConfigTreeWidget(QWidget):
         name = file_path.name
         rel_path = file_path.relative_to(self.root_dir).as_posix()
         is_exp = rel_path.startswith("experiment/") and not name.startswith("_")
+        is_base = file_path.stem == "_base"
 
-        node = QTreeWidgetItem(parent_node, [name])
-        node.setIcon(0, self.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon))
+        display_name = name
+        if display_name.endswith(".yaml"):
+            display_name = display_name[:-5]
+        elif display_name.endswith(".yml"):
+            display_name = display_name[:-4]
+
+        if is_base:
+            display_name = "group defaults"
+
+        node = QTreeWidgetItem(parent_node, [display_name])
+        if is_base:
+            node.setIcon(0, svg_icon("gear", TREE_GEAR_COLORS))
+        elif file_path.suffix not in (".yaml", ".yml"):
+            node.setIcon(0, self.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon))
         node.setData(0, Qt.ItemDataRole.UserRole, {
             "type": "file",
             "path": str(file_path),
             "rel_path": rel_path,
             "is_experiment": is_exp,
+            "is_base": is_base,
         })
         node.setToolTip(0, rel_path)
         return node
@@ -420,7 +526,26 @@ class ConfigTreeWidget(QWidget):
         for i in range(self.tree.topLevelItemCount()):
             match_and_filter(self.tree.topLevelItem(i))
 
-    def select_file(self, target_rel_path: str):
+    def toggle_search(self, checked: bool | None = None):
+        """Toggle the visibility of the search/filter bar."""
+        if checked is None:
+            checked = self.search.isHidden()
+        self.btn_search.setChecked(checked)
+        self.search.setVisible(checked)
+        if checked:
+            self.search.setFocus()
+            self.search.selectAll()
+        else:
+            self.search.clear()
+
+    def eventFilter(self, obj, event):
+        if obj is self.search and event.type() == event.Type.KeyPress:
+            if event.key() == Qt.Key.Key_Escape:
+                self.toggle_search(False)
+                return True
+        return super().eventFilter(obj, event)
+
+    def select_file(self, target_rel_path: str, emit_signal: bool = True):
         """Find and select an item by its relative path."""
         target_norm = str(Path(target_rel_path)).replace("\\", "/")
 
@@ -431,7 +556,12 @@ class ConfigTreeWidget(QWidget):
                 data = item.data(0, Qt.ItemDataRole.UserRole)
                 if data and data.get("type") == "file":
                     item_rel = str(Path(data.get("rel_path", ""))).replace("\\", "/")
-                    if item_rel == target_norm or item_rel.endswith(target_norm):
+                    if (
+                        item_rel == target_norm
+                        or item_rel.endswith(target_norm)
+                        or item_rel.removesuffix(".yaml") == target_norm
+                        or item_rel.removesuffix(".yaml").endswith(target_norm)
+                    ):
                         return item
                 found = find_item(item)
                 if found:
@@ -448,7 +578,8 @@ class ConfigTreeWidget(QWidget):
                 curr = curr.parent()
             data = found.data(0, Qt.ItemDataRole.UserRole)
             self.current_rel_path = data["rel_path"]
-            self.file_selected.emit(Path(data["path"]), data["rel_path"])
+            if emit_signal:
+                self.file_selected.emit(Path(data["path"]), data["rel_path"])
             return True
         return False
 
@@ -507,7 +638,7 @@ class ConfigTreeWidget(QWidget):
 
     def get_available_groups(self):
         """Return sorted list of experiment groups in in/config/experiment/."""
-        exp_dir = self.root_dir / "experiment"
+        exp_dir = self.root_dir if self.root_dir.name in ("experiment", "experiments") else (self.root_dir / "experiment")
         if not exp_dir.exists():
             return []
         groups = [p.name for p in exp_dir.iterdir() if p.is_dir() and not p.name.startswith(".")]
@@ -638,6 +769,63 @@ class ConfigTreeWidget(QWidget):
         if not removed:
             QMessageBox.critical(self, "Delete failed", error or "Unknown error")
 
+    def _get_installer(self):
+        try:
+            from frontend.hub.installer import HubInstaller
+            workspace_dir = self.root_dir.parent.parent
+            data_dir = workspace_dir / ".thetaide"
+            return HubInstaller(workspace_dir=workspace_dir, data_dir=data_dir)
+        except Exception:
+            return None
+
+    def prompt_delete_dir(self, rel_path):
+        full_path = self.root_dir / rel_path
+        if not full_path.exists():
+            QMessageBox.warning(self, "Cannot delete", f"Folder '{rel_path}' does not exist.")
+            return
+
+        installer = self._get_installer()
+        comp_meta = installer.find_component_for_path(full_path) if installer else None
+
+        if comp_meta:
+            comp_name = comp_meta.get("name") or comp_meta.get("id")
+            dlg = ComponentDeleteDialog(rel_path, comp_name, parent=self)
+            if dlg.exec() != QDialog.DialogCode.Accepted or dlg.choice == "cancel":
+                return
+            if dlg.choice == "uninstall":
+                installer.uninstall_by_metadata(comp_meta, remove_configs=True)
+                self.populate()
+                return
+            elif dlg.choice == "delete_only":
+                try:
+                    shutil.rmtree(full_path)
+                except OSError as exc:
+                    QMessageBox.critical(self, "Delete failed", str(exc))
+                self.populate()
+                return
+
+        blocked = deletion_blocked_reason(full_path)
+        if blocked:
+            QMessageBox.warning(self, "Cannot delete", blocked)
+            return
+
+        files_count = len(list(full_path.rglob("*")))
+        answer = QMessageBox.question(
+            self,
+            "Delete folder",
+            f"Delete folder '{rel_path}' and all contents ({files_count} items)?\n\n"
+            f"This removes the folder from your working tree.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            shutil.rmtree(full_path)
+        except OSError as exc:
+            QMessageBox.critical(self, "Delete failed", str(exc))
+        self.populate()
+
     def prompt_rename(self, rel_path):
         current = Path(rel_path).stem
         name, ok = QInputDialog.getText(
@@ -678,6 +866,9 @@ class ConfigTreeWidget(QWidget):
                 action_new = menu.addAction("New Component in this category…")
                 cat_name = Path(data["rel_path"]).name
                 action_new.triggered.connect(lambda: self._create_in_specific_component_category(cat_name))
+
+            action_delete_dir = menu.addAction("Delete Folder…")
+            action_delete_dir.triggered.connect(lambda: self.prompt_delete_dir(rel))
 
         menu.addSeparator()
         action_collapse = menu.addAction("Collapse All")

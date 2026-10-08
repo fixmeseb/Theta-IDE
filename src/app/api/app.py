@@ -112,8 +112,90 @@ def list_experiments():
     return {"experiments": exps}
 
 
+def _latest_version_file(agent_dir: Path, name: str) -> Path | None:
+    """`name` inside the newest version_N folder of an agent's log directory (by N, so version_10 > version_9)."""
+    def number(path: Path) -> int:
+        suffix = path.parent.name.removeprefix("version_")
+        return int(suffix) if suffix.isdigit() else -1
+
+    files = sorted(agent_dir.glob(f"version_*/{name}"), key=number)
+    return files[-1] if files else None
+
+
+def _float(value) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _agent_summary(agent_dir: Path) -> dict[str, Any] | None:
+    """Timing and reward summary for one agent of a run, or None if it never logged anything."""
+    runtime_file = _latest_version_file(agent_dir, "runtime.json")
+    metrics_file = _latest_version_file(agent_dir, "metrics.csv")
+    if runtime_file is None and metrics_file is None:
+        return None
+    runtime: dict[str, Any] = {}
+    if runtime_file is not None:
+        try:
+            runtime = json.loads(runtime_file.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            runtime = {}
+    rewards, timesteps = [], None
+    if metrics_file is not None:
+        try:
+            with open(metrics_file, encoding="utf-8") as f:
+                for row in csv.DictReader(f):
+                    # Only rows with a step count, as the GUI's charts (metric_points) use: Lightning also
+                    # repeats each evaluation in an epoch row without one.
+                    transitions = _float(row.get("transitions"))
+                    if transitions is None:
+                        continue
+                    timesteps = max(timesteps or 0, round(transitions))
+                    reward = _float(row.get("eval/reward"))
+                    if reward is not None:
+                        rewards.append(reward)
+        except (OSError, csv.Error):
+            pass
+    return {
+        "name": agent_dir.name,
+        "started": runtime.get("start_time_iso"),
+        "finished": runtime.get("end_time_iso"),
+        "training_time_seconds": _float(runtime.get("training_time_seconds")),
+        "timesteps": timesteps,
+        "best_reward": max(rewards) if rewards else None,
+        "latest_reward": rewards[-1] if rewards else None,
+    }
+
+
+def _run_config_summary(run_dir: Path) -> dict[str, Any]:
+    """The fields of a run's saved Hydra config (config.yaml) that the Results browser shows."""
+    try:
+        cfg = yaml.safe_load((run_dir / "config.yaml").read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError):
+        return {}
+    if not isinstance(cfg, dict):
+        return {}
+    env = cfg.get("env") if isinstance(cfg.get("env"), dict) else {}
+    methods = cfg.get("methods") if isinstance(cfg.get("methods"), dict) else {}
+    return {
+        "env": env.get("name"),
+        "env_id": env.get("env_id"),
+        "seed": cfg.get("seed"),
+        "total_timesteps": cfg.get("total_timesteps"),
+        "paradigm": cfg.get("paradigm"),
+        "methods": {name: {key: settings.get(key) for key in ("agent", "model", "lr", "batch_size", "gamma")}
+                    for name, settings in methods.items() if isinstance(settings, dict)},
+    }
+
+
 @app.get("/api/runs")
 def list_runs():
+    """Every experiment folder under results/logs, however it was launched (GUI, CLI or SLURM).
+
+    `agents` lists each agent that logged something, with its timing and reward summary;
+    `finished` is true once every agent has recorded an end time.
+    """
     runs = []
     logs_dir = Path("results/logs")
     if logs_dir.exists():
@@ -127,11 +209,16 @@ def list_runs():
                             metadata = json.load(f)
                     except Exception:
                         pass
+                agents = [summary for agent_dir in sorted(p for p in run_dir.iterdir() if p.is_dir())
+                          if (summary := _agent_summary(agent_dir)) is not None]
                 runs.append(
                     {
                         "group": run_dir.parent.name,
                         "experiment_id": run_dir.name,
                         "metadata": metadata,
+                        "config": _run_config_summary(run_dir),
+                        "agents": agents,
+                        "finished": bool(agents) and all(agent["finished"] for agent in agents),
                     }
                 )
     return {"runs": runs}
@@ -139,13 +226,8 @@ def list_runs():
 
 @app.get("/api/runs/{group}/{experiment_id}/{agent}/metrics")
 def get_metrics(group: str, experiment_id: str, agent: str):
-    agent_dir = Path(f"results/logs/{group}/{experiment_id}/{agent}")
-    # Metrics live in version_N subdirectories
-    metrics_file = None
-    if agent_dir.exists():
-        versions = sorted(agent_dir.glob("version_*/metrics.csv"), reverse=True)
-        if versions:
-            metrics_file = versions[0]
+    # Metrics live in version_N subdirectories; use the newest.
+    metrics_file = _latest_version_file(Path(f"results/logs/{group}/{experiment_id}/{agent}"), "metrics.csv")
     if not metrics_file or not metrics_file.exists():
         raise HTTPException(status_code=404, detail="Metrics not found")
 

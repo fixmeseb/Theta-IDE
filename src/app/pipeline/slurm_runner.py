@@ -10,6 +10,7 @@ from pathlib import Path
 from src.app.pipeline.commands import build_method_overrides, get_sweep_direction
 from src.app.pipeline.config import normalize_agent_name
 from src.app.pipeline.datasets import fast_purge_dir, resolve_dataset_for_method
+from src.app.pipeline.engine import resolve_engine
 from src.app.pipeline.optuna_utils import create_optuna_study, delete_optuna_study, get_next_study_name
 from src.app.pipeline.runtime import get_shell_env_block, get_shell_python_cmd
 from src.app.pipeline.slurm import generate_sbatch_header, generate_sbatch_script, submit_sbatch
@@ -84,9 +85,10 @@ def run_slurm_training(cfg, context):
                 ) or get_sweep_direction(cfg, paradigm)
                 create_optuna_study(storage_url, study_name, direction=direction)
 
+            engine_script, _ = resolve_engine(method_cfg, cfg)
             train_cmd = " ".join(shlex.quote(arg) for arg in cmd_args)
             script_content += f'echo "=== [Phase: Training] {method_name} ==="\n'
-            script_content += f"{python_cmd} src/app/train.py {train_cmd}\n\n"
+            script_content += f"{python_cmd} {engine_script} {train_cmd}\n\n"
 
             if method_is_sweep:
                 storage_arg = storage_url if storage_url else ""
@@ -155,9 +157,10 @@ def run_slurm_training(cfg, context):
             ) or get_sweep_direction(cfg, paradigm)
             create_optuna_study(storage_url, study_name, direction=direction)
 
+        engine_script, _ = resolve_engine(method_cfg, cfg)
         train_cmd = " ".join(shlex.quote(arg) for arg in cmd_args)
         script_content += f'echo "=== [Phase: Training] {method_name} ==="\n'
-        script_content += f"{python_cmd} src/app/train.py {train_cmd}\n\n"
+        script_content += f"{python_cmd} {engine_script} {train_cmd}\n\n"
 
         if method_is_sweep:
             storage_arg = storage_url if storage_url else ""
