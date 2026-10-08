@@ -42,6 +42,16 @@ TOOL_ICON_COLORS = {
     (QIcon.Mode.Active, QIcon.State.On): "accent",
 }
 
+TREE_GEAR_COLORS = {
+    (QIcon.Mode.Normal, QIcon.State.Off): "secondary",
+    (QIcon.Mode.Active, QIcon.State.Off): "accent",
+    (QIcon.Mode.Selected, QIcon.State.Off): "text",
+    (QIcon.Mode.Disabled, QIcon.State.Off): "disabled",
+    (QIcon.Mode.Normal, QIcon.State.On): "accent",
+    (QIcon.Mode.Active, QIcon.State.On): "accent",
+    (QIcon.Mode.Selected, QIcon.State.On): "accent",
+}
+
 
 class NewExperimentDialog(QDialog):
     """Group, name, and - only for a group that does not exist yet - the paradigm
@@ -271,6 +281,8 @@ class ConfigTreeWidget(QWidget):
             clean_exp = str(Path(ensure_expanded)).replace("\\", "/").strip("/")
             if clean_exp and clean_exp != ".":
                 expanded_paths.add(clean_exp)
+                if self.mode in ("experiments", "experiment") and not clean_exp.startswith("experiment/"):
+                    expanded_paths.add(f"experiment/{clean_exp}")
                 parts = clean_exp.split("/")
                 for i in range(1, len(parts)):
                     expanded_paths.add("/".join(parts[:i]))
@@ -287,10 +299,18 @@ class ConfigTreeWidget(QWidget):
         top_files = sorted([p for p in self.root_dir.iterdir() if p.is_file() and p.suffix in (".yaml", ".yml")])
 
         if self.mode in ("experiments", "experiment"):
-            # ONLY display in/config/experiment (or experiments)
-            exp_dir = existing_dirs.get("experiment") or existing_dirs.get("experiments") or (self.root_dir / "experiment")
+            # The tree directory is in/config/experiment/ - show groups and files directly
+            if self.root_dir.name in ("experiment", "experiments"):
+                exp_dir = self.root_dir
+            else:
+                exp_dir = existing_dirs.get("experiment") or existing_dirs.get("experiments") or (self.root_dir / "experiment")
             if exp_dir.exists():
-                self._add_dir_node(self.tree, exp_dir, expand=True, expanded_set=expanded_paths, has_previous_state=has_previous_state)
+                subdirs = sorted([p for p in exp_dir.iterdir() if p.is_dir() and not p.name.startswith(".")])
+                files = sorted([p for p in exp_dir.iterdir() if p.is_file() and p.suffix in (".yaml", ".yml")])
+                for sub in subdirs:
+                    self._add_dir_node(self.tree, sub, expand=True, expanded_set=expanded_paths, has_previous_state=has_previous_state)
+                for f in files:
+                    self._add_file_node(self.tree, f)
         elif self.mode == "components":
             # Display all modular configuration directories and files OUTSIDE experiment
             preferred_comp_order = ["agent", "env", "model", "paradigms", "site", "hydra"]
@@ -331,11 +351,22 @@ class ConfigTreeWidget(QWidget):
         return button
 
     def refresh_icons(self):
-        """Re-render the header icons in the current theme's colors."""
+        """Re-render the header and tree icons in the current theme's colors."""
         for button in self.findChildren(QToolButton):
             name = button.property("svg_icon")
             if name:
                 button.setIcon(svg_icon(name, TOOL_ICON_COLORS))
+
+        def _update_tree(parent):
+            count = parent.topLevelItemCount() if isinstance(parent, QTreeWidget) else parent.childCount()
+            for i in range(count):
+                child = parent.topLevelItem(i) if isinstance(parent, QTreeWidget) else parent.child(i)
+                data = child.data(0, Qt.ItemDataRole.UserRole)
+                if data and data.get("is_base"):
+                    child.setIcon(0, svg_icon("gear", TREE_GEAR_COLORS))
+                _update_tree(child)
+
+        _update_tree(self.tree)
 
     def _add_dir_node(self, parent_widget, dir_path: Path, expand=False, expanded_set=None, has_previous_state=False):
         name = dir_path.name
@@ -375,6 +406,7 @@ class ConfigTreeWidget(QWidget):
         name = file_path.name
         rel_path = file_path.relative_to(self.root_dir).as_posix()
         is_exp = rel_path.startswith("experiment/") and not name.startswith("_")
+        is_base = file_path.stem == "_base"
 
         display_name = name
         if display_name.endswith(".yaml"):
@@ -382,14 +414,20 @@ class ConfigTreeWidget(QWidget):
         elif display_name.endswith(".yml"):
             display_name = display_name[:-4]
 
+        if is_base:
+            display_name = "group defaults"
+
         node = QTreeWidgetItem(parent_node, [display_name])
-        if file_path.suffix not in (".yaml", ".yml"):
+        if is_base:
+            node.setIcon(0, svg_icon("gear", TREE_GEAR_COLORS))
+        elif file_path.suffix not in (".yaml", ".yml"):
             node.setIcon(0, self.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon))
         node.setData(0, Qt.ItemDataRole.UserRole, {
             "type": "file",
             "path": str(file_path),
             "rel_path": rel_path,
             "is_experiment": is_exp,
+            "is_base": is_base,
         })
         node.setToolTip(0, rel_path)
         return node
@@ -545,7 +583,7 @@ class ConfigTreeWidget(QWidget):
 
     def get_available_groups(self):
         """Return sorted list of experiment groups in in/config/experiment/."""
-        exp_dir = self.root_dir / "experiment"
+        exp_dir = self.root_dir if self.root_dir.name in ("experiment", "experiments") else (self.root_dir / "experiment")
         if not exp_dir.exists():
             return []
         groups = [p.name for p in exp_dir.iterdir() if p.is_dir() and not p.name.startswith(".")]

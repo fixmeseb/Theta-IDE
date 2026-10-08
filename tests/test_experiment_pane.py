@@ -90,17 +90,37 @@ class TestConfigTree(unittest.TestCase):
             item = self.tree_widget.tree.topLevelItem(i)
             self.assertFalse(item.isHidden())
 
-    def test_experiments_mode_only_shows_experiment_directory(self):
+    def test_experiments_mode_shows_groups_directly_without_experiment_folder(self):
         exp_tree = ConfigTreeWidget(root_dir=self.root, mode="experiments")
         try:
             top_count = exp_tree.tree.topLevelItemCount()
             self.assertEqual(top_count, 1)
             item = exp_tree.tree.topLevelItem(0)
-            self.assertIn("experiment", item.text(0))
+            self.assertEqual(item.text(0), "cartpole")
             top_texts = [exp_tree.tree.topLevelItem(i).text(0) for i in range(top_count)]
+            self.assertFalse(any(t == "experiment" for t in top_texts))
             self.assertFalse(any("agent" in t for t in top_texts))
             self.assertFalse(any("env" in t for t in top_texts))
             self.assertFalse(any(t == "config" for t in top_texts))
+        finally:
+            exp_tree.close()
+
+    def test_base_yaml_displayed_as_group_defaults_with_gear_icon(self):
+        (self.root / "experiment" / "cartpole" / "_base.yaml").write_text("paradigm: online_rl\n", encoding="utf-8")
+        exp_tree = ConfigTreeWidget(root_dir=self.root, mode="experiments")
+        try:
+            cartpole_item = exp_tree.tree.topLevelItem(0)
+            self.assertEqual(cartpole_item.text(0), "cartpole")
+            child_texts = [cartpole_item.child(i).text(0) for i in range(cartpole_item.childCount())]
+            self.assertIn("group defaults", child_texts)
+            self.assertFalse(any("_base" in t for t in child_texts))
+
+            defaults_item = next(
+                cartpole_item.child(i)
+                for i in range(cartpole_item.childCount())
+                if cartpole_item.child(i).text(0) == "group defaults"
+            )
+            self.assertFalse(defaults_item.icon(0).isNull(), "group defaults must have a gear icon")
         finally:
             exp_tree.close()
 
@@ -271,6 +291,13 @@ class TestConfigViewer(unittest.TestCase):
         self.assertIn("seed=123", overrides)
         self.assertIn("total_timesteps=25000", overrides)
 
+    def test_boxes_do_not_have_titles_or_subtitles(self):
+        cards = self.viewer.findChildren(ConfigBox)
+        self.assertGreaterEqual(len(cards), 3)
+        for card in cards:
+            self.assertIsNone(card.title_label)
+            self.assertIsNone(card.subtitle_label)
+
 
 @unittest.skipIf(not HAS_PYQT6, "PyQt6 not installed in current environment")
 class TestComponentsPanel(unittest.TestCase):
@@ -304,6 +331,11 @@ class TestComponentsPanel(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual(self.panel.viewer.file_title.text(), "ppo.yaml")
         self.assertIn("lr", self.panel.viewer.raw_data)
+        cards = self.panel.viewer.findChildren(ConfigBox)
+        self.assertGreaterEqual(len(cards), 1)
+        for card in cards:
+            self.assertIsNone(card.title_label)
+            self.assertIsNone(card.subtitle_label)
 
     def test_toggle_raw_yaml_view(self):
         self.assertTrue(self.panel.raw_panel.isHidden())
@@ -349,9 +381,10 @@ class TestExperimentPaneWindowIntegration(unittest.TestCase):
 
     def test_experiment_pane_only_has_experiments(self):
         self.assertEqual(self.window.config_tree.mode, "experiments")
-        for i in range(self.window.config_tree.tree.topLevelItemCount()):
-            item = self.window.config_tree.tree.topLevelItem(i)
-            self.assertIn("experiment", item.text(0))
+        top_texts = [self.window.config_tree.tree.topLevelItem(i).text(0) for i in range(self.window.config_tree.tree.topLevelItemCount())]
+        self.assertFalse(any(t == "experiment" for t in top_texts))
+        self.assertFalse(any(t in ("agent", "env", "model", "paradigms", "site") for t in top_texts))
+        self.assertTrue(any(t in ("cartpole", "mimic") for t in top_texts))
 
     def test_components_pane_integrated_in_window(self):
         self.assertIsNotNone(self.window.components_panel)
