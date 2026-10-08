@@ -52,6 +52,14 @@ from PyQt6.QtWidgets import (
 )
 
 from . import wheel_guard
+from .api import DEFAULT_URL, Backend
+from .model import (BASE_EXPERIMENT, FINAL_STATUSES, LIVE_STATUSES, RESULT_COLUMNS, SOURCE_FILTERS, STATUS_FILTERS,
+                    Config, Store, available_metrics, disk_run, example_runs, latest, matches_filters, metric_points,
+                    metric_points_from_api, new_run, result_row, run_source, sample)
+from .settings import SettingsManager
+from .theme import STYLE, ThemeManager, theme_color
+from .theme_builder import ThemeBuilder
+from .widgets import Chart, MetricCard, SortableItem, ToggleSlider, YamlHighlighter, label
 from .about import AboutDialog, AsciiTheta
 from .api import DEFAULT_URL, Backend
 from .app_icon import DESKTOP_FILE_NAME, ICON_PATH, app_icon, install_desktop_entry, set_windows_app_id
@@ -142,6 +150,9 @@ class Window(QMainWindow):
         )
         saved, errors = self.store.load()
         self.runs = saved or example_runs()
+        # GET /api/runs entries by (group, experiment_id): every results/logs folder, however it was launched.
+        self.disk_entries = {}
+        self.backend_connected = False
         self.active = None
         self.selected = None
         self.pinned_baseline_run = None
@@ -427,15 +438,36 @@ class Window(QMainWindow):
         results_layout = QVBoxLayout(results)
         results_layout.setContentsMargins(18, 18, 18, 18)
         results_layout.addWidget(label("Experiment history", "heading"))
-        results_layout.addWidget(label("Select one run to inspect, or two to compare (Ctrl + click).", "muted"))
+        results_layout.addWidget(label("Select one run to inspect, or two to compare (Ctrl + click). "
+                                       "Click a column header to sort.", "muted"))
+        filters = QHBoxLayout()
         self.search = QLineEdit()
-        self.search.setPlaceholderText("Filter by experiment name, seed, or status…")
+        self.search.setPlaceholderText("Filter by name, method, environment, seed, status, or source…")
         self.search.textChanged.connect(self.refresh_runs)
-        results_layout.addWidget(self.search)
-        self.table = QTableWidget(0, 5)
-        self.table.setHorizontalHeaderLabels(["Experiment", "Seed", "Status", "Reward", "Source"])
+        filters.addWidget(self.search, 1)
+        self.source_filter = QComboBox()
+        self.status_filter = QComboBox()
+        for combo, choices in ((self.source_filter, SOURCE_FILTERS), (self.status_filter, STATUS_FILTERS)):
+            for key, text in choices.items():
+                combo.addItem(text, key)
+            combo.currentIndexChanged.connect(self.refresh_runs)
+            filters.addWidget(combo)
+        self.show_examples = QCheckBox("Show example runs")
+        self.show_examples.setToolTip("Example runs carry synthetic metrics. They are hidden once real runs exist.")
+        self.show_examples.toggled.connect(self.refresh_runs)
+        filters.addWidget(self.show_examples)
+        refresh = self.button("↻  Refresh", self.request_disk_runs)
+        refresh.setToolTip("Re-read results/logs through the backend, including runs started from the command line")
+        filters.addWidget(refresh)
+        results_layout.addLayout(filters)
+        self.disk_status = label("", "muted")
+        results_layout.addWidget(self.disk_status)
+        self.table = QTableWidget(0, len(RESULT_COLUMNS))
+        self.table.setHorizontalHeaderLabels(list(RESULT_COLUMNS))
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.ResizeToContents)
+        self.table.setSortingEnabled(True)
+        self.table.sortByColumn(RESULT_COLUMNS.index("Started"), Qt.SortOrder.DescendingOrder)
         self.table.verticalHeader().hide()
         self.table.verticalHeader().setDefaultSectionSize(40)
         self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
@@ -1282,6 +1314,11 @@ class Window(QMainWindow):
         self.builder_status.setStyle(self.builder_status.style())
 
     def set_backend_state(self, connected, error=None):
+        was_connected, self.backend_connected = self.backend_connected, connected
+        if connected and not was_connected:
+            self.request_disk_runs()  # list runs on disk, including ones started outside the app
+        elif was_connected != connected:
+            self.update_disk_status()
         if connected:
             self.backend_label.setText(f"BACKEND   ●   {self.backend.base_url}  ")
             self.backend_label.setToolTip("Configs are composed and validated by the Theta-IDE backend API.")
@@ -1360,10 +1397,15 @@ class Window(QMainWindow):
             self.tabs.setCurrentWidget(self.config_panel)
 
     def persist(self, run):
+        # A run found in results/logs is only listed until something of the user's (such as notes)
+        # is attached; saving it adopts it into the run store like a run launched from the app.
+        transient = run.pop("transient", False)
         try:
             self.store.save(run)
             return True
         except OSError as exc:
+            if transient:
+                run["transient"] = True
             self.log(f"SAVE FAILED: {exc}")
             self.statusBar().showMessage(f"Could not save run: {exc}", 12000)
             return False
@@ -1651,7 +1693,7 @@ class Window(QMainWindow):
                           lambda data, error: self.log(f"Remove failed: {error}") if error else self.poll_queue())
 
     def open_job(self, job_id):
-        run = next((r for r in self.runs if not r["simulated"] and r["backend"]["job_id"] == job_id), None)
+        run = next((r for r in self.runs if not r["simulated"] and r["backend"].get("job_id") == job_id), None)
         if run is None:
             self.statusBar().showMessage("That job was queued from another client; it has no record here.", 5000)
             return
@@ -1714,6 +1756,8 @@ class Window(QMainWindow):
         self.active = None
         self.update_launch_state()
         self.refresh_runs()
+        if not run["simulated"] and self.backend_connected:
+            self.request_disk_runs()
         self.render_run()
         if any(r["status"] == "queued" for r in self.runs):
             self.poll_queue()  # follow the next queued job as soon as it starts
@@ -1733,6 +1777,7 @@ class Window(QMainWindow):
             self.btn_next_run.setEnabled(idx >= 0 and idx < self.run_combo.count() - 1)
         self.render_run()
         self.backfill_metrics(run)
+        self.load_disk_metrics(run)
 
     def on_smoothing_changed(self, value):
         self.smoothing_label.setText(f"Smoothing: {value}%")
@@ -1811,16 +1856,7 @@ class Window(QMainWindow):
         run["metrics_backfilled"] = True  # try once; the results folder may have been deleted
         if error:
             return
-        rows = []
-        for row in data["metrics"]:
-            numeric = {}
-            for key, value in row.items():
-                try:
-                    numeric[key] = float(value)
-                except (TypeError, ValueError):
-                    pass
-            rows.append(numeric)
-        points = metric_points(rows)
+        points = metric_points_from_api(data["metrics"])
         if points:
             run["metrics"] = points
             self.persist(run)
@@ -1835,9 +1871,14 @@ class Window(QMainWindow):
         metrics = run["metrics"]
         live = not run["simulated"]
         title = run["backend"]["experiment_id"] if live else config["name"]
-        source = f"LIVE · job {run['backend']['job_id'][:8]}" if live else "SIMULATED"
+        if run.get("origin") == "cli":  # found in results/logs: no app job, and any environment or method
+            source = "COMMAND LINE"
+            setup = f"{config['env']}  /  {' + '.join(run['backend'].get('agents') or ['?']).upper()}"
+        else:
+            source = f"LIVE · job {run['backend']['job_id'][:8]}" if live else "SIMULATED"
+            setup = "CartPole-v1  /  PPO"
         self.run_title.setText(title)
-        self.run_caption.setText(f"CartPole-v1  /  PPO  /  seed {config['seed']}   •   {run['status'].upper()}   •   {source}")
+        self.run_caption.setText(f"{setup}  /  seed {config['seed']}   •   {run['status'].upper()}   •   {source}")
         if hasattr(self, "storage_label"):
             if live:
                 where = f"results/logs/{run['backend']['group']}/{run['backend']['experiment_id']}/"
@@ -1909,6 +1950,9 @@ class Window(QMainWindow):
                 note = "Starting the pipeline — the first evaluation usually appears after about 15 seconds."
             elif run["status"] == "running" and run.get("phase") == "plotting":
                 note = f"Training finished — the pipeline is generating plots in results/plots/{run['backend']['group']}/…"
+            elif run["status"] == "incomplete":
+                note = (f"Metrics from {where} · this run was started outside the app and has no recorded end "
+                        "time: it may still be training, or it stopped early.")
             elif run["status"] in FINAL_STATUSES:
                 note = f"Final metrics from {where}"
                 if run["status"] == "completed":
@@ -1944,26 +1988,41 @@ class Window(QMainWindow):
         if hasattr(self, "settings_runs_count_label"):
             self.settings_runs_count_label.setText(f"Total run records:  {len(self.runs)} runs")
         query = self.search.text().lower()
+        # Example runs are synthetic; once real runs exist they only show on request.
+        has_real = any(run_source(run) != "example" for run in self.runs)
+        self.show_examples.setVisible(has_real)
+        show_examples = (self.show_examples.isChecked() or not has_real
+                         or self.source_filter.currentData() == "simulated")
+        selected_ids = {self.table.item(index.row(), 0).data(Qt.ItemDataRole.UserRole)
+                        for index in self.table.selectionModel().selectedRows()}
         self.table.blockSignals(True)
+        self.table.setSortingEnabled(False)  # rows would re-sort mid-fill otherwise
         self.table.setRowCount(0)
         for run in self.runs:
-            config = run["config"]
-            name = config["name"] if run["simulated"] else run["backend"]["experiment_id"]
-            if query not in f"{name} {config['seed']} {run['status']}".lower():
+            if not matches_filters(run, self.source_filter.currentData(), self.status_filter.currentData(),
+                                   show_examples):
+                continue
+            backend = run.get("backend") or {}
+            cells = result_row(run, self.disk_entries.get((backend.get("group"), backend.get("experiment_id"))))
+            if query not in " ".join(text for text, _ in cells).lower():
                 continue
             row = self.table.rowCount()
             self.table.insertRow(row)
-            last_reward = latest(run, "reward")
-            reward = "—" if last_reward is None else f"{last_reward:.1f}"
-            source = "Simulated" if run["simulated"] else "Trained"
-            for col, value in enumerate((name, str(config["seed"]), run["status"], reward, source)):
-                cell = QTableWidgetItem(value)
+            for col, (text, key) in enumerate(cells):
+                cell = SortableItem(text, key)
                 cell.setData(Qt.ItemDataRole.UserRole, run["id"])
                 # Experiment names read best left-aligned; every other value sits centered under its label.
                 cell.setTextAlignment((Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter) if col == 0
                                       else Qt.AlignmentFlag.AlignCenter)
                 self.table.setItem(row, col, cell)
+        self.table.setSortingEnabled(True)
+        selection = self.table.selectionModel()
+        for row in range(self.table.rowCount()):  # keep the selection across refreshes
+            if self.table.item(row, 0).data(Qt.ItemDataRole.UserRole) in selected_ids:
+                selection.select(self.table.model().index(row, 0),
+                                 selection.SelectionFlag.Select | selection.SelectionFlag.Rows)
         self.table.blockSignals(False)
+        self.update_disk_status()
 
         # Sync run_combo dropdown in Monitor
         if hasattr(self, "run_combo"):
@@ -1998,6 +2057,71 @@ class Window(QMainWindow):
             self.btn_prev_run.setEnabled(idx > 0)
             self.btn_next_run.setEnabled(idx >= 0 and idx < self.run_combo.count() - 1)
 
+    def request_disk_runs(self):
+        """Ask the backend for every results/logs folder (GET /api/runs)."""
+        self.backend.get("/api/runs", self.disk_runs_received)
+
+    def disk_runs_received(self, data, error):
+        if error:
+            self.log(f"Could not list runs in results/logs: {error}")
+            return
+        self.disk_entries = {(entry["group"], entry["experiment_id"]): entry for entry in data.get("runs", [])}
+        linked = {(run["backend"]["group"], run["backend"]["experiment_id"])
+                  for run in self.runs if not run["simulated"] and not run.get("transient")}
+        previous = {run["id"]: run for run in self.runs if run.get("transient")}
+        self.runs = [run for run in self.runs if not run.get("transient")]
+        for key, entry in self.disk_entries.items():
+            if key in linked:
+                continue  # the app already has a record for this run
+            fresh = disk_run(entry)
+            run = previous.get(fresh["id"])
+            if run is None:
+                run = fresh
+            else:  # keep the same record (and any metrics already loaded) so selections stay valid
+                run.update({k: v for k, v in fresh.items() if k not in ("metrics", "notes")})
+            self.runs.append(run)
+        self.runs.sort(key=lambda r: r.get("created") or "", reverse=True)
+        if self.selected is not None and not any(run is self.selected for run in self.runs):
+            self.selected = None  # its folder was deleted
+        self.refresh_runs()
+
+    def update_disk_status(self):
+        if not hasattr(self, "disk_status"):
+            return
+        found = sum(1 for run in self.runs if run_source(run) == "cli")
+        if self.backend_connected:
+            self.disk_status.setText(f"●  {len(self.disk_entries)} run folders in results/logs · "
+                                     f"{found} started outside the app")
+        else:
+            self.disk_status.setText("○  Backend offline: runs started from the command line appear once it connects.")
+
+    def load_disk_metrics(self, run):
+        """Fetch the metrics of a run found in results/logs (the app has none recorded for it)."""
+        if run.get("origin") != "cli" or run["metrics"] or run.get("metrics_requested"):
+            return
+        agents = run["backend"].get("agents") or []
+        if not agents:
+            return
+        run["metrics_requested"] = True
+        path = f"/api/runs/{run['backend']['group']}/{run['backend']['experiment_id']}/{agents[0]}/metrics"
+        self.backend.get(path, lambda data, error: self.disk_metrics_received(run, data, error))
+
+    def disk_metrics_received(self, run, data, error):
+        if error:
+            run["metrics_requested"] = False  # allow a retry on the next selection
+            self.log(f"Could not load metrics for {run['backend']['experiment_id']}: {error}")
+            return
+        run["metrics"] = metric_points_from_api(data["metrics"])
+        if not run.get("transient"):
+            self.persist(run)
+        if self.selected is run:
+            self.render_run()
+        self.refresh_runs()
+        selected_ids = {self.table.item(index.row(), 0).data(Qt.ItemDataRole.UserRole)
+                        for index in self.table.selectionModel().selectedRows()}
+        if len(selected_ids) > 1 and run["id"] in selected_ids:
+            self.table_selected()  # redraw the comparison overlay with the newly loaded curve
+
     def by_id(self, run_id):
         return next((run for run in self.runs if run["id"] == run_id), None)
 
@@ -2017,6 +2141,8 @@ class Window(QMainWindow):
         elif len(rows) >= 2:
             runs = [self.by_id(self.table.item(r.row(), 0).data(Qt.ItemDataRole.UserRole)) for r in rows]
             runs = [r for r in runs if r is not None]
+            for r in runs:
+                self.load_disk_metrics(r)  # command-line runs load their curves on first use
             if runs:
                 palette = ("#b8bb26", "#83a598", "#fabd2f", "#d3869b", "#8ec07c")
                 series = []
@@ -2032,6 +2158,10 @@ class Window(QMainWindow):
             self.statusBar().showMessage("Select exactly one run to load its saved config.", 5000)
             return
         run = self.by_id(self.table.item(rows[0].row(), 0).data(Qt.ItemDataRole.UserRole))
+        if run.get("origin") == "cli" and not run.get("builder_compatible"):
+            self.statusBar().showMessage("The experiment builder only edits single-method CartPole/PPO runs; "
+                                         "this run's config is in its results/logs folder.", 8000)
+            return
         self.set_config(Config(**run["config"]))
         self.tabs.setCurrentWidget(self.config_panel)
         self.log(f"Loaded exact configuration from {run['id']}. Launch to create a new run.")

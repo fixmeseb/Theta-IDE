@@ -86,6 +86,7 @@ visible = [
     "config",
     "workflows",
     "monitor",
+    "results",
     "terminal",
     "console",
 ]
