@@ -1,0 +1,15 @@
+name: digits
+env_id: digits
+monitor_metric: "val/loss"
+offline_only: true
+dataset_name: digits.npz
+data_module: TabularNpzDataModule
+
+# 1797 real handwritten digits, 64 features, 10 classes. Stored flat and as
+# 8 steps x 8 features, so it exercises the sequence autoencoder too:
+# set use_sequences: true to train on the sequence form.
+use_sequences: false
+val_fraction: 0.3
+batch_size: 64
+
+default_plots: [losses]

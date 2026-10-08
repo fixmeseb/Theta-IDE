@@ -147,7 +147,8 @@ def main(cfg: DictConfig):
                 kwargs[k] = cfg.get(k)
 
         print(
-            f"Supervised Paradigm: constructing {SupervisedModelCls.__name__} ({arch_name.upper()}, input_dim={input_dim}, lr={lr})"
+            f"{paradigm_name} paradigm: constructing {SupervisedModelCls.__name__} "
+            f"({arch_name.upper()}, input_dim={input_dim}, lr={lr})"
         )
         model = SupervisedModelCls(architecture_name=arch_name, input_dim=input_dim, lr=lr, **kwargs)
     else:

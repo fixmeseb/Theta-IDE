@@ -87,6 +87,24 @@ def print_hardware_diagnostics():
         print("=" * 50 + "\n")
 
 
+def _agent_or_global(cfg, key, default):
+    """A schedule setting from the agent config, else the experiment's own value.
+
+    Reading only the agent silently discarded a value the experiment did set: an
+    agent-less paradigm (supervised, unsupervised) still composes the default
+    agent group, and that group does not declare these keys, so every run came
+    out with max_epochs=1 no matter what the config asked for.
+    """
+    agent = getattr(cfg, "agent", None)
+    if agent is None and hasattr(cfg, "get"):
+        agent = cfg.get("agent", None)  # plain dicts hold it as a key, not an attribute
+    if agent is not None and hasattr(agent, "get"):
+        value = agent.get(key, None)
+        if value is not None:
+            return value
+    return cfg.get(key, default) if hasattr(cfg, "get") else default
+
+
 def infer_dynamic_timesteps(cfg):
     """Dynamically infer total timesteps based on offline dataset size."""
     if cfg.get("paradigm") == "offline_rl":
@@ -197,11 +215,7 @@ def build_trainer(cfg, model=None):
                 enable_version_counter=False,
             )
         )
-        eval_interval_epochs = (
-            cfg.agent.get("eval_interval_epochs", 1)
-            if hasattr(cfg, "agent") and cfg.agent is not None and hasattr(cfg.agent, "get")
-            else cfg.get("eval_interval_epochs", 1)
-        )
+        eval_interval_epochs = _agent_or_global(cfg, "eval_interval_epochs", 1)
         if eval_interval_epochs:
             interval_dir = os.path.join(ckpt_dir, "intervals")
             callbacks.append(
@@ -244,20 +258,12 @@ def build_trainer(cfg, model=None):
         limit_val_batches = 0
         check_val_every_n_epoch = 1000000
     else:
-        epochs_per_interval = (
-            cfg.agent.get("epochs_per_interval", 1)
-            if hasattr(cfg, "agent") and cfg.agent is not None and hasattr(cfg.agent, "get")
-            else cfg.get("epochs_per_interval", 1)
-        )
+        epochs_per_interval = _agent_or_global(cfg, "epochs_per_interval", 1)
         intervals_count = (
             1 if (is_offline_only or cfg.get("paradigm") == "offline_rl") else cfg.get("intervals_count", 1)
         )
         max_epochs = intervals_count * epochs_per_interval
-        eval_interval_epochs = (
-            cfg.agent.get("eval_interval_epochs", 1)
-            if hasattr(cfg, "agent") and cfg.agent is not None and hasattr(cfg.agent, "get")
-            else cfg.get("eval_interval_epochs", 1)
-        )
+        eval_interval_epochs = _agent_or_global(cfg, "eval_interval_epochs", 1)
         limit_val_batches = 1.0
         check_val_every_n_epoch = eval_interval_epochs if eval_interval_epochs else 1
 

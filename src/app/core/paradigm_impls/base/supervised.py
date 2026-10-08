@@ -65,7 +65,9 @@ class SupervisedDataModule(L.LightningDataModule, BaseDataModule):
             dm_name = (
                 self._cfg.get("data_module") if hasattr(self._cfg, "get") else getattr(self._cfg, "data_module", None)
             )
-            if dm_name and dm_name != "SupervisedDataModule":
+            # Excluding this class's own name too: a config naming the
+            # subclass in use would otherwise delegate to itself forever.
+            if dm_name and dm_name not in (type(self).__name__, "SupervisedDataModule"):
                 from src.app.core.paradigm_loader import get_component
 
                 try:

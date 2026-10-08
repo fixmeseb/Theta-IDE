@@ -10,9 +10,5 @@ no_plot: true
 tensorboard: true
 
 methods:
-  ae_sequence:
-    model: autoencoder
-    hidden_dim: 32
-    latent_dim: 8
-    epochs: 1
-    batch_size: 128
+  ae_dense:
+    epochs_per_interval: 3

@@ -1,0 +1,15 @@
+name: breast_cancer
+env_id: breast_cancer
+monitor_metric: "val/loss"
+# Required by every paradigm that trains from a file rather than a simulator.
+# There is no gym env here: actions cannot alter a fixed table of biopsies.
+offline_only: true
+dataset_name: breast_cancer.npz
+data_module: TabularNpzDataModule
+
+# 569 real biopsies, 30 features, benign/malignant. Bundled with scikit-learn,
+# so `python in/datasets/prepare_tabular.py breast_cancer` needs no network.
+val_fraction: 0.3
+batch_size: 32
+
+default_plots: [losses]

@@ -403,13 +403,21 @@ class TestUnsupervisedParadigmInThePanel(unittest.TestCase):
             self.assertIn("unsupervised", paradigm.disabled_reason(field_name))
 
     def test_the_shipped_group_is_bound_to_it(self):
+        """breast_cancer rather than mimic: the paradigm needs an offline dataset
+        and this project has no MIMIC access, so the shipped example uses one
+        that in/datasets/prepare_tabular.py can actually produce."""
         group = self.tree.group("representation")
         self.assertEqual(group.paradigm, "unsupervised")
-        self.assertEqual(group.env, "mimic")
+        self.assertEqual(group.env, "breast_cancer")
+
+    def test_the_group_env_is_offline_only(self):
+        """Required by the paradigm, and the reason it may bind this env at all."""
+        env = self.tree.environments[self.tree.group("representation").env]
+        self.assertTrue(env.offline_only)
 
     def test_a_new_method_defaults_to_the_architecture_the_group_uses(self):
         group = self.tree.group("representation")
-        self.assertEqual(default_method_model(group, self.tree.models), "autoencoder")
+        self.assertEqual(default_method_model(group, self.tree.models), "dense_autoencoder")
 
     def test_the_autoencoder_models_are_visible_to_the_panel(self):
         self.assertIn("autoencoder", self.tree.models)
