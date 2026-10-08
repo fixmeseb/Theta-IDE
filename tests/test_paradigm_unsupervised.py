@@ -427,3 +427,95 @@ def test_train_py_resolves_the_autoencoder_from_a_composed_config():
     )
     assert type(module.model).__name__ == "SequenceAutoencoder"
     assert module.model.latent_dim == model_cfg.get("latent_dim")
+
+
+# ---------------------------------------------------------------------------
+# Real data
+# ---------------------------------------------------------------------------
+
+
+def _breast_cancer_split(seed=0):
+    """Real clinical tabular data: 569 biopsies, 30 features, benign/malignant.
+
+    The MIMIC dataset this paradigm targets needs PhysioNet credentials and is
+    not in the repo, so this stands in as real data that ships with sklearn.
+    """
+    from sklearn.datasets import load_breast_cancer
+    from sklearn.model_selection import train_test_split
+    from sklearn.preprocessing import StandardScaler
+
+    data = load_breast_cancer()
+    x_train, x_test, _, y_test = train_test_split(
+        data.data, data.target, test_size=0.3, random_state=seed, stratify=data.target
+    )
+    scaler = StandardScaler().fit(x_train)
+    return (
+        scaler.transform(x_train).astype("float32"),
+        scaler.transform(x_test).astype("float32"),
+        y_test,
+    )
+
+
+def test_autoencoder_learns_real_clinical_data():
+    """Trains on real features with the labels withheld, then uses them only to
+    score whether the latent space recovered the real benign/malignant split.
+
+    Asserts the two properties that held across every seed tried. Notably it
+    does not assert the latent beats k-means on the raw features: that was true
+    for only two seeds in five, so it is not a property of the model.
+    """
+    from sklearn.cluster import KMeans
+    from sklearn.metrics import adjusted_rand_score
+
+    torch.manual_seed(0)
+    x_train, x_test, y_test = _breast_cancer_split()
+    definition = load_paradigm_definition(PARADIGM)
+    module = _module(architecture="dense_autoencoder", input_dim=x_train.shape[1], hidden_dim=64, latent_dim=8)
+
+    train_loader = DataLoader(TensorDataset(torch.tensor(x_train)), batch_size=32, shuffle=True)
+    test_loader = DataLoader(TensorDataset(torch.tensor(x_test)), batch_size=32)
+
+    protocol = definition.eval_protocol_cls()
+    before = protocol.evaluate(module, test_loader, n_clusters=2)["recon_mse"]
+    definition.runner_cls().train_model(module, train_loader, val_loader=test_loader, epochs=30, device_str="cpu")
+    after = protocol.evaluate(module, test_loader, n_clusters=2)["recon_mse"]
+
+    assert after < before / 2, f"reconstruction barely improved: {before:.3f} -> {after:.3f}"
+
+    with torch.no_grad():
+        latent = module.encode(torch.tensor(x_test)).numpy()
+    clusters = KMeans(n_clusters=2, n_init=10, random_state=0).fit_predict(latent)
+    score = adjusted_rand_score(y_test, clusters)
+    # Chance is ~0. The five seeds tried landed between 0.56 and 0.86.
+    assert score > 0.3, f"latent space carries no real class structure (ARI={score:.3f})"
+
+
+def test_reconstruction_quality_and_cluster_quality_are_not_the_same_thing():
+    """A wider latent reconstructs better while clustering worse, which is why
+    monitor_metric: val/loss selects for reconstruction rather than for a
+    representation a downstream task can use. Worth knowing before tuning on it.
+    """
+    from sklearn.cluster import KMeans
+    from sklearn.metrics import adjusted_rand_score
+
+    x_train, x_test, y_test = _breast_cancer_split()
+    definition = load_paradigm_definition(PARADIGM)
+    results = {}
+    for latent_dim in (8, 48):
+        torch.manual_seed(0)
+        module = _module(
+            architecture="dense_autoencoder", input_dim=x_train.shape[1], hidden_dim=64, latent_dim=latent_dim
+        )
+        train_loader = DataLoader(TensorDataset(torch.tensor(x_train)), batch_size=32, shuffle=True)
+        test_loader = DataLoader(TensorDataset(torch.tensor(x_test)), batch_size=32)
+        definition.runner_cls().train_model(module, train_loader, val_loader=test_loader, epochs=30, device_str="cpu")
+        mse = definition.eval_protocol_cls().evaluate(module, test_loader, n_clusters=2)["recon_mse"]
+        with torch.no_grad():
+            latent = module.encode(torch.tensor(x_test)).numpy()
+        clusters = KMeans(n_clusters=2, n_init=10, random_state=0).fit_predict(latent)
+        results[latent_dim] = (mse, adjusted_rand_score(y_test, clusters))
+
+    wide_mse, wide_ari = results[48]
+    narrow_mse, narrow_ari = results[8]
+    assert wide_mse < narrow_mse, "expected the wider latent to reconstruct better"
+    assert wide_ari <= narrow_ari, "expected the wider latent not to cluster better"
