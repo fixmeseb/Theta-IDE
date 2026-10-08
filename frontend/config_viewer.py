@@ -25,7 +25,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from .config_model import ConfigTree
+from .config_model import ConfigTree, default_method_model
 from .config_model import add_method as add_method_to
 from .config_model import remove_method as remove_method_from
 from .widgets import ComboBox, DoubleSpinBox, SpinBox, label
@@ -532,9 +532,16 @@ class ConfigViewer(QWidget):
                 title_row.addWidget(btn_remove)
                 sc_layout.addRow(title_row)
 
-                # Agent — restricted to what this paradigm permits
+                # Agent — restricted to what this paradigm permits, and omitted
+                # entirely where it permits none: a supervised method names an
+                # architecture and has no policy to choose actions with, so an
+                # empty agent picker would only invite an invalid edit.
                 agent_val = str(m_spec.get("agent", ""))
-                if tree and tree.paradigms.get(paradigm):
+                paradigm_has_agents = bool(tree and paradigm in tree.paradigms and tree.agents_for(paradigm))
+                txt_agent = None
+                if not paradigm_has_agents and not agent_val:
+                    pass
+                elif tree and tree.paradigms.get(paradigm):
                     permitted = [a.name for a in tree.agents_for(paradigm)]
                     txt_agent = ComboBox()
                     txt_agent.addItems(permitted)
@@ -556,7 +563,8 @@ class ConfigViewer(QWidget):
                     txt_agent.textChanged.connect(
                         lambda v, mn=m_name: self._on_method_param_edited(mn, "agent", v)
                     )
-                sc_layout.addRow("Agent Algorithm", txt_agent)
+                if txt_agent is not None:
+                    sc_layout.addRow("Agent Algorithm", txt_agent)
 
                 # Model — a dict value is a nested override, so keep it as text
                 model_val = m_spec.get("model", "")
@@ -625,17 +633,30 @@ class ConfigViewer(QWidget):
         # Adding a method is how an experiment becomes a comparison, and 17 of
         # the 46 experiments configure more than one.
         add_row = QHBoxLayout()
-        add_row.addWidget(label("Add method:", "muted"))
-        self.combo_new_method = ComboBox()
+        # A paradigm that declares no agents picks a method by architecture
+        # instead: supervised learning has no policy, so its methods are
+        # model-only (ep_lstm, ep_transformer).
         permitted_agents = [a.name for a in tree.agents_for(paradigm)] if tree and paradigm in tree.paradigms else []
-        self.combo_new_method.addItems(permitted_agents)
-        self.combo_new_method.setToolTip(f"Agents permitted by {paradigm}")
+        self.new_method_is_agent = bool(permitted_agents)
+        choices = permitted_agents or (sorted(tree.models) if tree else [])
+        add_row.addWidget(label("Add method:" if permitted_agents else "Add model:", "muted"))
+        self.combo_new_method = ComboBox()
+        self.combo_new_method.addItems(choices)
+        self.combo_new_method.setToolTip(
+            f"Agents permitted by {paradigm}" if permitted_agents
+            else f"{paradigm} has no agents; methods name an architecture"
+        )
+        if not permitted_agents and choices:
+            # Alphabetically first across every model is blendrl, a neuro-symbolic
+            # RL architecture; follow what the group already uses instead.
+            self.combo_new_method.setCurrentText(
+                default_method_model(tree.group(self._group_name() or "") if tree else None, choices)
+            )
         add_row.addWidget(self.combo_new_method)
         self.btn_add_method = QPushButton("Add")
-        self.btn_add_method.setEnabled(bool(permitted_agents))
-        if not permitted_agents:
-            self.btn_add_method.setToolTip(f"{paradigm} declares no allowed agents")
-        self.btn_add_method.clicked.connect(self.add_method)
+        self.btn_add_method.setEnabled(bool(choices))
+        # Swallow clicked(bool): a stray False would read as the agent name.
+        self.btn_add_method.clicked.connect(lambda: self.add_method())
         add_row.addWidget(self.btn_add_method)
         add_row.addStretch()
         m_layout.addLayout(add_row)
@@ -770,12 +791,21 @@ class ConfigViewer(QWidget):
         self.raw_data[key] = value
         self._mark_dirty()
 
-    def add_method(self, agent=None, model="dnn"):
-        """Add a method to the open experiment. Returns its name, or None."""
-        agent = agent or (self.combo_new_method.currentText() if hasattr(self, "combo_new_method") else "")
-        if not agent:
-            return None
-        name = add_method_to(self.raw_data, agent, model)
+    def add_method(self, agent=None, model=None):
+        """Add a method to the open experiment. Returns its name, or None.
+
+        The picker holds an agent where the paradigm has them and a model where
+        it does not, so which one the selection means depends on the paradigm.
+        """
+        if agent is None and model is None:
+            chosen = self.combo_new_method.currentText() if hasattr(self, "combo_new_method") else ""
+            if not chosen:
+                return None
+            if getattr(self, "new_method_is_agent", True):
+                agent, model = chosen, "dnn"
+            else:
+                agent, model = None, chosen
+        name = add_method_to(self.raw_data, agent, model or "dnn")
         self._mark_dirty()
         self._render_boxes()
         return name

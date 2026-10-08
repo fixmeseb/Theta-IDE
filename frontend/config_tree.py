@@ -26,6 +26,7 @@ from PyQt6.QtWidgets import (
 
 from .config_model import (
     ConfigTree,
+    default_method_model,
     deletion_blocked_reason,
     experiment_yaml,
     group_base_yaml,
@@ -477,28 +478,17 @@ class ConfigTreeWidget(QWidget):
     def _write_experiment(self, group_name, filename, exp_id, paradigm=None, env=None):
         """Create an experiment valid for its group's paradigm. Returns rel path or None."""
         tree = self._model()
-        paradigm_obj, agent = None, None
+        paradigm_obj, agent, model = None, None, None
         if tree is not None:
             paradigm_name = self._ensure_group_base(tree, group_name, paradigm, env)
             paradigm_obj = tree.paradigms.get(paradigm_name) if paradigm_name else None
             permitted = [a.name for a in tree.agents_for(paradigm_name)] if paradigm_name else []
             agent = permitted[0] if permitted else None
             if paradigm_name and not permitted:
-                # supervised currently declares allowed_agents: [], yet the same
-                # paradigm requires methods to be non-empty, so no valid
-                # experiment can be generated for it.
-                proceed = QMessageBox.question(
-                    self, "No agents for this paradigm",
-                    f"'{paradigm_name}' declares no allowed agents, so the experiment "
-                    f"will have no methods block and the pipeline will reject it:\n\n"
-                    f"    requires 'methods' to satisfy rule 'non_empty'\n\n"
-                    f"Add agents to in/config/paradigms/{paradigm_name}.yaml to fix this.\n\n"
-                    f"Create the file anyway?",
-                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-                    QMessageBox.StandardButton.No,
-                )
-                if proceed != QMessageBox.StandardButton.Yes:
-                    return None
+                # A paradigm with no agents still requires methods to be
+                # non-empty, and supervised satisfies that with model-only
+                # methods, so seed one instead of writing an invalid file.
+                model = default_method_model(tree.group(group_name), tree.models)
 
         target_dir = self.root_dir / "experiment" / group_name
         target_dir.mkdir(parents=True, exist_ok=True)
@@ -507,7 +497,9 @@ class ConfigTreeWidget(QWidget):
             QMessageBox.warning(self, "File Exists", f"Experiment file already exists:\n{target_file}")
             return None
         try:
-            target_file.write_text(experiment_yaml(group_name, exp_id, paradigm_obj, agent), encoding="utf-8")
+            target_file.write_text(
+                experiment_yaml(group_name, exp_id, paradigm_obj, agent, model), encoding="utf-8"
+            )
         except OSError as exc:
             QMessageBox.critical(self, "Error Creating Experiment", f"Could not create file:\n{exc}")
             return None

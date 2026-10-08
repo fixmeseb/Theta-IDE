@@ -15,6 +15,7 @@ from frontend.config_model import (
     ConfigTree,
     ExperimentGroup,
     add_method,
+    default_method_model,
     experiment_yaml,
     group_base_yaml,
     remove_method,
@@ -239,6 +240,75 @@ class TestMethodEditing(unittest.TestCase):
         data = {"methods": {"params": {"lr": 1}, "a": {"agent": "ppo"}}}
         remove_method(data, "a")
         self.assertNotIn("methods", data)
+
+
+class TestAgentlessParadigms(unittest.TestCase):
+    """supervised declares `allowed_agents: []` and still requires methods to be
+    non-empty, which it satisfies with model-only methods (ep_lstm, ep_transformer).
+    Nothing in the panel may assume a method has an agent."""
+
+    def setUp(self):
+        self.tree = ConfigTree.discover()
+        self.supervised = self.tree.paradigms["supervised"]
+
+    def test_supervised_declares_no_agents(self):
+        self.assertEqual(self.tree.agents_for("supervised"), [])
+
+    def test_the_shipped_supervised_methods_have_no_agent(self):
+        base = self.tree.group("early_prediction")
+        self.assertTrue(base.base_methods, "early_prediction/_base.yaml should declare methods")
+        for name, spec in base.base_methods.items():
+            self.assertNotIn("agent", spec, f"{name} unexpectedly names an agent")
+
+    def test_a_model_alone_writes_a_methods_block(self):
+        data = parse(experiment_yaml("early_prediction", "demo", self.supervised, model="lstm"))
+        self.assertEqual(data["methods"], {"lstm": {"model": "lstm"}})
+
+    def test_a_model_only_method_omits_the_agent_key(self):
+        """A null agent would fail the registry lookup rather than be ignored."""
+        data = parse(experiment_yaml("early_prediction", "demo", self.supervised, model="lstm"))
+        self.assertNotIn("agent", data["methods"]["lstm"])
+
+    def test_add_method_without_an_agent_is_named_for_the_model(self):
+        data = {}
+        self.assertEqual(add_method(data, None, "transformer"), "transformer")
+
+    def test_add_method_without_an_agent_writes_the_model_only(self):
+        data = {}
+        name = add_method(data, None, "lstm")
+        self.assertEqual(data["methods"][name], {"model": "lstm"})
+
+    def test_repeated_model_only_methods_still_get_suffixes(self):
+        data = {}
+        add_method(data, None, "lstm")
+        self.assertEqual(add_method(data, None, "lstm"), "lstm_2")
+
+    def test_unique_name_handles_a_missing_agent(self):
+        self.assertEqual(unique_method_name({"lstm"}, None, "lstm"), "lstm_2")
+
+    def test_removing_a_model_only_method_works(self):
+        data = {}
+        name = add_method(data, None, "lstm")
+        self.assertTrue(remove_method(data, name))
+
+    def test_default_model_follows_the_group_base(self):
+        group = self.tree.group("early_prediction")
+        self.assertIn(default_method_model(group, self.tree.models), {"lstm", "transformer"})
+
+    def test_default_model_falls_back_for_a_group_with_no_methods(self):
+        self.assertEqual(default_method_model(self.tree.group("cartpole"), self.tree.models), "dnn")
+
+    def test_default_model_tolerates_an_unknown_group(self):
+        self.assertEqual(default_method_model(None, self.tree.models), "dnn")
+
+    def test_default_model_picks_a_known_model_when_the_fallback_is_absent(self):
+        self.assertEqual(default_method_model(None, {"transformer"}), "transformer")
+
+    def test_a_generated_supervised_experiment_satisfies_non_empty_methods(self):
+        """The constraint the paradigm declares is the one this must not break."""
+        self.assertEqual(self.supervised.requires.get("methods"), "non_empty")
+        data = parse(experiment_yaml("early_prediction", "demo", self.supervised, model="lstm"))
+        self.assertTrue(data["methods"])
 
 
 class TestParadigmInheritance(unittest.TestCase):
