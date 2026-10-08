@@ -1,3 +1,4 @@
 PyQt6>=6.7,<7
 PyQt6-WebEngine>=6.7,<7
 pyyaml>=6.0
+pywinpty>=2.0; sys_platform == "win32"
