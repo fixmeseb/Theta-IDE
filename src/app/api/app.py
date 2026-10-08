@@ -114,6 +114,7 @@ def list_experiments():
 
 def _latest_version_file(agent_dir: Path, name: str) -> Path | None:
     """`name` inside the newest version_N folder of an agent's log directory (by N, so version_10 > version_9)."""
+
     def number(path: Path) -> int:
         suffix = path.parent.name.removeprefix("version_")
         return int(suffix) if suffix.isdigit() else -1
@@ -184,8 +185,11 @@ def _run_config_summary(run_dir: Path) -> dict[str, Any]:
         "seed": cfg.get("seed"),
         "total_timesteps": cfg.get("total_timesteps"),
         "paradigm": cfg.get("paradigm"),
-        "methods": {name: {key: settings.get(key) for key in ("agent", "model", "lr", "batch_size", "gamma")}
-                    for name, settings in methods.items() if isinstance(settings, dict)},
+        "methods": {
+            name: {key: settings.get(key) for key in ("agent", "model", "lr", "batch_size", "gamma")}
+            for name, settings in methods.items()
+            if isinstance(settings, dict)
+        },
     }
 
 
@@ -209,8 +213,11 @@ def list_runs():
                             metadata = json.load(f)
                     except Exception:
                         pass
-                agents = [summary for agent_dir in sorted(p for p in run_dir.iterdir() if p.is_dir())
-                          if (summary := _agent_summary(agent_dir)) is not None]
+                agents = [
+                    summary
+                    for agent_dir in sorted(p for p in run_dir.iterdir() if p.is_dir())
+                    if (summary := _agent_summary(agent_dir)) is not None
+                ]
                 runs.append(
                     {
                         "group": run_dir.parent.name,
