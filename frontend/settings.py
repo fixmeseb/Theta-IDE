@@ -134,6 +134,19 @@ panes = [
     "terminal",
     "console",
 ]
+
+[terminal]
+# Shell for the Terminal pane, as a command line. Empty = detect automatically
+# (Windows: PowerShell 7, then Windows PowerShell, then cmd; Linux/macOS: your login shell).
+# Examples: "pwsh -NoLogo", "cmd.exe", "C:/Program Files/Git/bin/bash.exe --login", "/bin/zsh -l"
+shell = ""
+
+# Folder new shells start in. Empty = the folder ThetaIDE was launched from.
+cwd = ""
+
+# Put the backend venv (venv/) first on PATH, so python, pytest and run_pipeline.py
+# use the project's environment without activating it by hand.
+activate_venv = true
 """
 
 
@@ -398,6 +411,18 @@ class SettingsManager(QObject):
     @property
     def hotkeys_terminal_precedence(self) -> bool:
         return bool(self.get("hotkeys", "terminal_precedence", default=True))
+
+    @property
+    def terminal_shell(self) -> str:
+        return str(self.get("terminal", "shell", default="") or "").strip()
+
+    @property
+    def terminal_cwd(self) -> str:
+        return str(self.get("terminal", "cwd", default="") or "").strip()
+
+    @property
+    def terminal_activate_venv(self) -> bool:
+        return bool(self.get("terminal", "activate_venv", default=True))
 
     @property
     def hotkey_bindings(self) -> dict[str, str]:

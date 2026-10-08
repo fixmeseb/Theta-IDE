@@ -85,6 +85,8 @@ from .titlebar import apply_title_bar
 from .widgets import Chart, MetricCard, ToggleSlider, YamlHighlighter, label
 from .workflows import WorkflowsPanel
 
+REPO_ROOT = Path(__file__).resolve().parent.parent  # holds venv/, in/, results/
+
 # Metrics the monitor's second chart can show: key -> (card title, chart title, subtitle, value format)
 SECOND_METRICS = {
     "loss": ("TRAINING LOSS", "Total loss", "policy + 0.5 × value − 0.01 × entropy", ".4f"),
@@ -454,7 +456,8 @@ class Window(QMainWindow):
         self.tabs.addTab(self.queue_panel, "Job queue", "queue", "Queue", tab_id="queue")
 
         # 8. Terminal Panel
-        self.terminal_panel = TerminalPanel(cwd=str(Path.cwd()), parent=self)
+        command, cwd, env = self.terminal_config()
+        self.terminal_panel = TerminalPanel(cwd=cwd, parent=self, command=command, env=env)
         self.tabs.addTab(self.terminal_panel, "Terminal", "terminal", "Terminal", tab_id="terminal")
 
         # 9. Console Panel
@@ -575,6 +578,22 @@ class Window(QMainWindow):
             if theme:
                 self.select_theme(theme)
 
+    def terminal_config(self):
+        """(argv or None for auto-detect, start folder, extra env) from the [terminal] settings."""
+        from .terminal.pty_session import parse_shell_command, venv_environment
+
+        sm = getattr(self, "settings_manager", None)
+        if sm is None:
+            return None, str(Path.cwd()), {}
+        command = parse_shell_command(sm.terminal_shell)
+        if sm.terminal_shell and command is None:
+            self.log(f"[terminal] Shell '{sm.terminal_shell}' not found; using the default shell.")
+        cwd = sm.terminal_cwd
+        if not cwd or not Path(cwd).expanduser().is_dir():
+            cwd = str(Path.cwd())
+        env = venv_environment(REPO_ROOT / "venv") if sm.terminal_activate_venv else {}
+        return command, str(Path(cwd).expanduser()), env
+
     def _on_settings_changed(self):
         """Called when settings.toml changes on disk (or when the app mutates it).
 
@@ -583,6 +602,11 @@ class Window(QMainWindow):
         """
         if not hasattr(self, "settings_manager"):
             return
+
+        # --- Terminal: shell, folder and venv apply from the next new shell ---
+        if hasattr(self, "terminal_panel"):
+            command, cwd, env = self.terminal_config()
+            self.terminal_panel.terminal.configure(command=command, cwd=cwd, env=env)
 
         # --- Theme hot-reload ---
         new_theme = self.settings_manager.theme

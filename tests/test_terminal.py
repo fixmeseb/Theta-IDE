@@ -50,7 +50,7 @@ class TestPtySession(unittest.TestCase):
         pty.close()
         self.assertFalse(pty.is_alive())
 
-    @unittest.skipIf(not HAS_PTY, "PTY not supported on current platform")
+    @unittest.skipIf(not HAS_PTY or sys.platform == "win32", "/dev/tty is POSIX-only")
     def test_controlling_terminal_dev_tty(self):
         """Verify that TIOCSCTTY was set and child can access /dev/tty."""
         code = "import sys; f = open('/dev/tty', 'r'); print('TTY_SUCCESS'); sys.stdout.flush()"
