@@ -1,9 +1,15 @@
-"""Pseudo-terminal (PTY) session management for interactive shells."""
+"""Pseudo-terminal (PTY) session management for interactive shells.
+
+PtySession is the backend for this platform: PosixPtySession (pty/termios) on Linux and macOS,
+WinPtySession (ConPTY via pywinpty, see win_pty_session.py) on Windows.
+"""
 import codecs
 import errno
 import os
 from pathlib import Path
 import select
+import shlex
+import shutil
 import signal
 import struct
 import subprocess
@@ -14,18 +20,22 @@ try:
     import fcntl
     import pty
     import termios
-    HAS_PTY = True
+    HAS_POSIX_PTY = True
 except ImportError:
     fcntl = None
     pty = None
     termios = None
-    HAS_PTY = False
+    HAS_POSIX_PTY = False
 
 from PyQt6.QtCore import QObject, QSocketNotifier, pyqtSignal
+
+from .win_pty_session import HAS_WINPTY, WinPtySession, get_default_windows_shell
 
 
 def get_default_shell() -> list[str]:
     """Resolve the preferred interactive user shell."""
+    if sys.platform == "win32":
+        return get_default_windows_shell()
     shell_env = os.environ.get("SHELL")
     if shell_env and Path(shell_env).is_file() and os.access(shell_env, os.X_OK):
         return [shell_env, "-l"]
@@ -45,8 +55,60 @@ def get_default_shell() -> list[str]:
     return ["/bin/sh"]
 
 
-class PtySession(QObject):
-    """Manages an interactive shell process bound to a pseudo-terminal."""
+def available_shells() -> list[tuple[str, str]]:
+    """Shells installed on this machine, as (label, command line) for the Settings picker."""
+    found = []
+    if sys.platform == "win32":
+        git_bash = Path(os.environ.get("ProgramFiles", r"C:\Program Files")) / "Git" / "bin" / "bash.exe"
+        candidates = [
+            ("PowerShell 7", shutil.which("pwsh.exe"), ["-NoLogo"]),
+            ("Windows PowerShell", shutil.which("powershell.exe"), ["-NoLogo"]),
+            ("Command Prompt", shutil.which("cmd.exe"), []),
+            ("Git Bash", str(git_bash) if git_bash.is_file() else None, ["--login", "-i"]),
+            ("WSL", shutil.which("wsl.exe"), []),
+        ]
+        for name, path, args in candidates:
+            if path:
+                found.append((name, subprocess.list2cmdline([path, *args])))
+    else:
+        for name in ("zsh", "bash", "fish", "sh"):
+            path = shutil.which(name)
+            if path:
+                found.append((name, shlex.join([path, "-l"])))
+    return found
+
+
+def parse_shell_command(text: str) -> Optional[list[str]]:
+    """Split a shell setting into argv; None when empty (auto-detect) or the program isn't found."""
+    text = (text or "").strip()
+    if not text:
+        return None
+    if sys.platform == "win32":
+        argv = [part.strip('"') for part in shlex.split(text, posix=False)]
+    else:
+        argv = shlex.split(text)
+    if not argv:
+        return None
+    program = argv[0] if Path(argv[0]).is_file() else shutil.which(argv[0])
+    if not program:
+        return None
+    return [program, *argv[1:]]
+
+
+def venv_environment(venv_dir: Path) -> dict[str, str]:
+    """Environment changes that make `venv_dir` the active Python, in any shell."""
+    bin_dir = venv_dir / ("Scripts" if sys.platform == "win32" else "bin")
+    if not bin_dir.is_dir():
+        return {}
+    return {
+        "VIRTUAL_ENV": str(venv_dir),
+        "VIRTUAL_ENV_PROMPT": venv_dir.name,
+        "PATH": str(bin_dir) + os.pathsep + os.environ.get("PATH", ""),
+    }
+
+
+class PosixPtySession(QObject):
+    """Manages an interactive shell process bound to a POSIX pseudo-terminal."""
 
     data_ready = pyqtSignal(str)
     process_exited = pyqtSignal(int)
@@ -61,10 +123,11 @@ class PtySession(QObject):
         self.decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
         self.initial_cols = 80
         self.initial_rows = 24
+        self.extra_env: dict[str, str] = {}  # merged over os.environ at start (e.g. venv activation)
 
     def start(self, cols: int = 80, rows: int = 24) -> bool:
         """Start the child shell process inside a new PTY."""
-        if not HAS_PTY:
+        if not HAS_POSIX_PTY:
             return False
 
         # Cleanly shut down any existing session and descriptors first
@@ -93,6 +156,7 @@ class PtySession(QObject):
         env["TERM_PROGRAM"] = "ghostty"
         env["LANG"] = "en_US.UTF-8"
         env["LC_ALL"] = "en_US.UTF-8"
+        env.update(self.extra_env)
 
         def _preexec():
             # Create a new session leader and set controlling terminal so /dev/tty,
@@ -206,7 +270,7 @@ class PtySession(QObject):
 
     def resize(self, cols: int, rows: int):
         """Resize terminal window via ioctl TIOCSWINSZ."""
-        if self.master_fd is None or not HAS_PTY:
+        if self.master_fd is None or not HAS_POSIX_PTY:
             return
         cols = max(10, cols)
         rows = max(4, rows)
@@ -262,3 +326,11 @@ class PtySession(QObject):
         except Exception:
             pass
         return False
+
+
+if sys.platform == "win32":
+    PtySession = WinPtySession
+    HAS_PTY = HAS_WINPTY
+else:
+    PtySession = PosixPtySession
+    HAS_PTY = HAS_POSIX_PTY
