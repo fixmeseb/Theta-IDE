@@ -1,0 +1,15 @@
+# @package _global_
+defaults:
+- override /env: mimic
+
+intervals_count: 1
+eval_episodes: 0
+paradigm: unsupervised
+consolidate: false
+partition: common
+
+methods:
+  ae_sequence:
+    model: autoencoder
+  ae_dense:
+    model: dense_autoencoder

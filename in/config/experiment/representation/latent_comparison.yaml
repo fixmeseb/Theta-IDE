@@ -1,0 +1,20 @@
+# @package _global_
+defaults:
+  - representation/_base
+
+experiment_id: latent_comparison
+seed: 42
+total_timesteps: 10000
+
+no_plot: true
+tensorboard: true
+
+# Two latent widths on the same encoder: the comparison an unsupervised run is
+# usually for, since there is no accuracy to rank architectures by.
+methods:
+  ae_latent8:
+    model: autoencoder
+    latent_dim: 8
+  ae_latent32:
+    model: autoencoder
+    latent_dim: 32

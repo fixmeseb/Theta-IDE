@@ -1,0 +1,9 @@
+architecture: autoencoder
+# Resolved through paradigm_loader's component registry. Without this, train.py
+# falls back to the supervised classifier module, which needs labels.
+lightning_module: AutoencoderLightningModule
+hidden_dim: 64
+latent_dim: 32
+num_layers: 1
+dropout: 0.0
+bidirectional: false

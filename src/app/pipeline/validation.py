@@ -62,6 +62,49 @@ def load_paradigm(paradigm_name: str) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Paradigm capability queries
+# ---------------------------------------------------------------------------
+#
+# The pipeline used to branch on paradigm names - `paradigm == "supervised"`,
+# `paradigm in ("offline_rl", "supervised")` - which meant every new paradigm
+# had to be threaded through a dozen tuples before it could run. These two
+# questions are what those branches were really asking, and both are already
+# answered by the paradigm YAML, so a new file is enough to answer them.
+
+
+def paradigm_uses_agents(paradigm_name: str | None) -> bool:
+    """Whether methods in this paradigm name an RL agent harness.
+
+    An `allowed_agents: []` declaration means no agent is permitted at all, so
+    methods name a model only - supervised and unsupervised both work that way,
+    having no policy that chooses actions. A paradigm that omits the key places
+    no restriction, which is treated as the RL default.
+    """
+    try:
+        defn = load_paradigm(paradigm_name or "")
+    except ConfigurationError:
+        return True  # Unknown paradigm: leave the RL assumption in place.
+    allowed = defn.get("allowed_agents", None)
+    if allowed is None:
+        return True
+    return bool(allowed)
+
+
+def paradigm_uses_static_dataset(paradigm_name: str | None) -> bool:
+    """Whether this paradigm trains from a dataset file rather than a live simulator.
+
+    Declared as `requires: {env.offline_only: true}`, which is the same fact the
+    validator already enforces, so the two cannot drift apart.
+    """
+    try:
+        defn = load_paradigm(paradigm_name or "")
+    except ConfigurationError:
+        return False
+    requires = (defn.get("constraints") or {}).get("requires") or {}
+    return requires.get("env.offline_only") is True
+
+
+# ---------------------------------------------------------------------------
 # Constraint checking helpers
 # ---------------------------------------------------------------------------
 
