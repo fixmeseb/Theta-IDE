@@ -66,6 +66,9 @@ PANE_ALIASES: dict[str, str] = {
     "terminal": "terminal",
     "term": "terminal",
     "console": "console",
+    "documentation": "documentation",
+    "docs": "documentation",
+    "doc": "documentation",
 }
 
 # ---------------------------------------------------------------------------
@@ -270,9 +273,12 @@ class HotkeyManager(QObject):
 
         tabs = getattr(self.window, "tabs", None)
         if tabs and hasattr(tabs, "currentWidget"):
-            if tabs.currentWidget() is not terminal_panel:
+            try:
+                if tabs.currentWidget() is not terminal_panel:
+                    return False
+                return True
+            except RuntimeError:
                 return False
-            return True
 
         if watched is not None and isinstance(watched, QWidget):
             if watched is terminal_panel or terminal_panel.isAncestorOf(watched):
@@ -375,15 +381,35 @@ class HotkeyManager(QObject):
             self._cancel_leader()
             return True
 
-        # ── Step 5: digit → switch pane ───────────────────────────────────
-        num: Optional[int] = None
-        if Qt.Key.Key_0 <= key <= Qt.Key.Key_9:
-            num = key - Qt.Key.Key_0
-        elif event.text() in "0123456789" and len(event.text()) == 1:
-            num = int(event.text())
+        # ── Step 5: target key (digit or letter) → switch pane ────────────
+        pane_id: Optional[str] = None
+        target_char = event.text().strip().upper()
 
-        if num is not None:
-            self.switch_to_pane_by_index(num)
+        # 5a. Match against explicit hotkeys.bindings (e.g. "Action + 1", "Action + T")
+        if target_char:
+            combo_to_check = f"Action + {target_char}".upper()
+            bindings = self.settings_manager.get("hotkeys", "bindings", default=None)
+            if isinstance(bindings, dict):
+                for pid, c in bindings.items():
+                    c_clean = str(c).strip().upper()
+                    if not c_clean.startswith("ACTION"):
+                        c_clean = f"Action + {c_clean}".upper()
+                    if c_clean == combo_to_check:
+                        pane_id = PANE_ALIASES.get(pid.lower(), pid)
+                        break
+
+        # 5b. Match digit fallback via hotkeys.panes
+        if not pane_id:
+            num: Optional[int] = None
+            if Qt.Key.Key_0 <= key <= Qt.Key.Key_9:
+                num = key - Qt.Key.Key_0
+            elif target_char.isdigit() and len(target_char) == 1:
+                num = int(target_char)
+            if num is not None:
+                pane_id = self.get_pane_id_by_index(num)
+
+        if pane_id:
+            self.switch_to_pane(pane_id)
             self._action_key_held = False
             self._cancel_leader()
             return True
@@ -424,7 +450,7 @@ class HotkeyManager(QObject):
             key_label = self.action_key_name.replace("_", "+").title()
             timeout_ms = int(self.leader_timeout * 1000) if self.leader_timeout > 0 else 0
             sb.showMessage(
-                f"⚡ Action [{key_label}]: Press [0-9] to switch pane  (Esc or {key_label} to cancel)…",
+                f"Action [{key_label}]: Press [0-9] to switch pane  (Esc or {key_label} to cancel)…",
                 timeout_ms,
             )
 
@@ -432,7 +458,7 @@ class HotkeyManager(QObject):
         self._leader_active = False
         self._leader_timer.stop()
         sb = self.window.statusBar() if hasattr(self.window, "statusBar") else None
-        if sb and sb.currentMessage().startswith("⚡ Action"):
+        if sb and sb.currentMessage().startswith("Action ["):
             sb.clearMessage()
 
     def _on_leader_timeout(self) -> None:
@@ -450,6 +476,8 @@ class HotkeyManager(QObject):
         configured = self.settings_manager.hotkey_panes
         if 0 <= index < len(configured):
             raw = configured[index]
+            if not raw or str(raw).lower() in ("none", "unassigned", "disabled", ""):
+                return None
             return PANE_ALIASES.get(raw.lower(), raw)
 
         # Fallback: 0 → settings, rest follow tab_order

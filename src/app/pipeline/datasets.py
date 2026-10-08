@@ -11,6 +11,7 @@ import subprocess
 import threading
 import uuid
 from pathlib import Path
+from typing import Any
 
 from src.app.pipeline.runtime import get_python_executable
 
@@ -115,6 +116,40 @@ def resolve_dataset_path(
     return Path("in/datasets") / dataset_name_internal
 
 
+def resolve_dataset_for_method(method_name: str, method_cfg: dict, cfg: Any) -> Path:
+    """Resolve the dataset path for an offline method from method_cfg or env config."""
+    explicit_ds = method_cfg.get("dataset_path") or (cfg.get("dataset_path") if hasattr(cfg, "get") else None)
+    if explicit_ds and Path(explicit_ds).exists():
+        return Path(explicit_ds)
+
+    # For offline paradigms, dataset comes from the environment config
+    if hasattr(cfg, "env"):
+        env_dataset = cfg.env.get("dataset_name", None)
+        env_name = cfg.env.get("name", None)
+        if env_dataset:
+            try:
+                return resolve_dataset_path(
+                    dataset_id=str(env_dataset).replace(".npz", ""),
+                    group=env_name or cfg.get("group", ""),
+                    experiment_id=cfg.get("experiment_id", ""),
+                    yaml_ds_path=str(explicit_ds) if explicit_ds else None,
+                )
+            except FileNotFoundError:
+                pass
+
+    # Fallback: look in standard dataset directories
+    group = cfg.get("group", "") if hasattr(cfg, "get") else getattr(cfg, "group", "")
+    exp_id = cfg.get("experiment_id", "") if hasattr(cfg, "get") else getattr(cfg, "experiment_id", "")
+    ds_root = Path("in/datasets") / group / exp_id
+    if ds_root.exists():
+        return ds_root
+
+    raise FileNotFoundError(
+        f"Cannot resolve dataset for method '{method_name}'. "
+        f"No dataset_name in env config and no datasets found at {ds_root}."
+    )
+
+
 def resolve_mimic_npz_path(filename_or_path: str | None = None, site_cfg=None) -> Path:
     """Robustly resolve the filesystem path for a MIMIC NPZ dataset file.
 
@@ -160,14 +195,15 @@ def resolve_mimic_npz_path(filename_or_path: str | None = None, site_cfg=None) -
     raise FileNotFoundError(f"MIMIC dataset '{filename}' not found. Searched existing directories: {searched}")
 
 
-def run_experiment(overrides, site_cfg=None):
-    """Run src/train.py as a subprocess with the given Hydra overrides."""
+def run_experiment(overrides, site_cfg=None, script_entrypoint: str | None = None, python_executable: str | None = None):
+    """Run target training script as a subprocess with the given Hydra overrides."""
     from src.app.pipeline.runtime import get_subprocess_env
 
     env = get_subprocess_env(site_cfg)
 
-    venv_python = get_python_executable()
-    cmd = [venv_python, "src/app/train.py"] + list(overrides)
+    venv_python = python_executable or get_python_executable(site_cfg)
+    target_script = script_entrypoint or "src/app/train.py"
+    cmd = [venv_python, str(target_script)] + list(overrides)
     print(f"Running: {' '.join(cmd)}")
     subprocess.run(cmd, check=True, env=env)
 

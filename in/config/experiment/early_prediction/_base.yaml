@@ -8,6 +8,12 @@ paradigm: supervised
 consolidate: false
 partition: common
 
+methods:
+  ep_lstm:
+    model: lstm
+  ep_transformer:
+    model: transformer
+
 early_prediction:
   checkpoint: "results/checkpoints/mimic/cql_literature"
   dataset_path: "in/datasets/mimic/mimic_lazy_12_clean_with_interventions.npz"

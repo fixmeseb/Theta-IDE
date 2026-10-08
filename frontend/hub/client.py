@@ -29,11 +29,13 @@ class HubClient(QObject):
         data_dir: Path,
         registry_url: str = DEFAULT_REGISTRY_URL,
         on_change_callback=None,
+        settings_manager=None,
     ):
         super().__init__()
         self.workspace_dir = Path(workspace_dir)
         self.data_dir = Path(data_dir)
         self.registry_url = registry_url
+        self.settings_manager = settings_manager
 
         self.cache_dir = self.data_dir / "cache" / "hub"
         self.cache_dir.mkdir(parents=True, exist_ok=True)
@@ -44,6 +46,7 @@ class HubClient(QObject):
             workspace_dir=self.workspace_dir,
             data_dir=self.data_dir,
             on_change_callback=self._handle_installer_change,
+            settings_manager=self.settings_manager,
         )
         if on_change_callback:
             self.componentChanged.connect(on_change_callback)
@@ -90,10 +93,13 @@ class HubClient(QObject):
                 data = json.loads(local_file.read_text(encoding="utf-8"))
         else:
             candidates = [self.registry_url]
-            # Check local theta-hub directory if available
-            local_hub = (self.workspace_dir.parent / "theta-hub" / "dist" / "index.json").resolve()
-            if local_hub.exists():
-                candidates.insert(0, f"file://{local_hub}")
+            local_hub_candidates = [
+                self.workspace_dir.resolve().parent / "theta-hub" / "dist" / "index.json",
+                Path(__file__).resolve().parents[3] / "theta-hub" / "dist" / "index.json",
+            ]
+            matching_hub = next((p for p in local_hub_candidates if p.is_file()), None)
+            if matching_hub is not None:
+                candidates.insert(0, f"file://{matching_hub}")
 
             for alt in [
                 "https://raw.githubusercontent.com/CameronEgb/theta-hub/main/dist/index.json",
@@ -244,11 +250,39 @@ class HubClient(QObject):
         thread = threading.Thread(target=worker, daemon=True)
         thread.start()
 
-    def uninstall_async(self, component: HubComponent) -> None:
+    def get_uninstall_configs_pref(self) -> str:
+        """Get the user preference for handling configuration files during component uninstall."""
+        if self.settings_manager:
+            return str(self.settings_manager.get("hub", "uninstall_configs", default="ask"))
+        settings_file = self.workspace_dir / ".thetaide" / "settings.toml"
+        if settings_file.is_file():
+            try:
+                import tomllib
+                data = tomllib.loads(settings_file.read_text(encoding="utf-8"))
+                return data.get("hub", {}).get("uninstall_configs", "ask")
+            except Exception:
+                pass
+        return "ask"
+
+    def set_uninstall_configs_pref(self, value: str) -> None:
+        """Persist user preference for handling configuration files during component uninstall."""
+        if self.settings_manager:
+            self.settings_manager.set("hub", "uninstall_configs", value)
+            return
+        settings_file = self.workspace_dir / ".thetaide" / "settings.toml"
+        try:
+            from frontend.settings import _parse_toml_file, _write_toml_file
+            data = _parse_toml_file(settings_file)
+            data.setdefault("hub", {})["uninstall_configs"] = value
+            _write_toml_file(settings_file, data)
+        except Exception:
+            pass
+
+    def uninstall_async(self, component: HubComponent, remove_configs: bool = True) -> None:
         """Uninstall component in a background thread."""
         def worker():
             try:
-                self.installer.uninstall(component)
+                self.installer.uninstall(component, remove_configs=remove_configs)
                 self.refresh_installed_status()
                 self.uninstallFinished.emit(component.id, True, "Uninstalled.")
             except Exception as exc:

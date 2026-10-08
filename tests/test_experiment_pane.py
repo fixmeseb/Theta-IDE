@@ -9,6 +9,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+
 import yaml
 
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
@@ -16,12 +17,12 @@ os.environ["QT_QPA_PLATFORM"] = "offscreen"
 try:
     from PyQt6 import QtWebEngineWidgets
     from PyQt6.QtCore import Qt
-    from PyQt6.QtWidgets import QApplication
+    from PyQt6.QtWidgets import QApplication, QTreeWidget
     app = QApplication.instance() or QApplication(sys.argv[:1])
-    from frontend.config_tree import ConfigTreeWidget
-    from frontend.config_viewer import ConfigViewer, ConfigBox
-    from frontend.components_panel import ComponentsPanel
     from frontend.app import Window
+    from frontend.components_panel import ComponentsPanel
+    from frontend.config_tree import ConfigTreeWidget
+    from frontend.config_viewer import ConfigBox, ConfigViewer
     HAS_PYQT6 = True
 except ImportError:
     HAS_PYQT6 = False
@@ -59,7 +60,7 @@ class TestConfigTree(unittest.TestCase):
         top_texts = [self.tree_widget.tree.topLevelItem(i).text(0) for i in range(top_count)]
         self.assertTrue(any("experiment" in t for t in top_texts))
         self.assertTrue(any("agent" in t for t in top_texts))
-        self.assertTrue(any("config.yaml" in t for t in top_texts))
+        self.assertTrue(any("config" in t for t in top_texts))
 
     def test_experiment_expanded_by_default(self):
         for i in range(self.tree_widget.tree.topLevelItemCount()):
@@ -89,17 +90,37 @@ class TestConfigTree(unittest.TestCase):
             item = self.tree_widget.tree.topLevelItem(i)
             self.assertFalse(item.isHidden())
 
-    def test_experiments_mode_only_shows_experiment_directory(self):
+    def test_experiments_mode_shows_groups_directly_without_experiment_folder(self):
         exp_tree = ConfigTreeWidget(root_dir=self.root, mode="experiments")
         try:
             top_count = exp_tree.tree.topLevelItemCount()
             self.assertEqual(top_count, 1)
             item = exp_tree.tree.topLevelItem(0)
-            self.assertIn("experiment", item.text(0))
+            self.assertEqual(item.text(0), "cartpole")
             top_texts = [exp_tree.tree.topLevelItem(i).text(0) for i in range(top_count)]
+            self.assertFalse(any(t == "experiment" for t in top_texts))
             self.assertFalse(any("agent" in t for t in top_texts))
             self.assertFalse(any("env" in t for t in top_texts))
-            self.assertFalse(any("config.yaml" in t for t in top_texts))
+            self.assertFalse(any(t == "config" for t in top_texts))
+        finally:
+            exp_tree.close()
+
+    def test_base_yaml_displayed_as_group_defaults_with_gear_icon(self):
+        (self.root / "experiment" / "cartpole" / "_base.yaml").write_text("paradigm: online_rl\n", encoding="utf-8")
+        exp_tree = ConfigTreeWidget(root_dir=self.root, mode="experiments")
+        try:
+            cartpole_item = exp_tree.tree.topLevelItem(0)
+            self.assertEqual(cartpole_item.text(0), "cartpole")
+            child_texts = [cartpole_item.child(i).text(0) for i in range(cartpole_item.childCount())]
+            self.assertIn("group defaults", child_texts)
+            self.assertFalse(any("_base" in t for t in child_texts))
+
+            defaults_item = next(
+                cartpole_item.child(i)
+                for i in range(cartpole_item.childCount())
+                if cartpole_item.child(i).text(0) == "group defaults"
+            )
+            self.assertFalse(defaults_item.icon(0).isNull(), "group defaults must have a gear icon")
         finally:
             exp_tree.close()
 
@@ -110,10 +131,40 @@ class TestConfigTree(unittest.TestCase):
             top_texts = [comp_tree.tree.topLevelItem(i).text(0) for i in range(top_count)]
             self.assertTrue(any("agent" in t for t in top_texts))
             self.assertTrue(any("env" in t for t in top_texts))
-            self.assertTrue(any("config.yaml" in t for t in top_texts))
+            self.assertTrue(any(t == "config" for t in top_texts))
             self.assertFalse(any("experiment" in t for t in top_texts))
         finally:
             comp_tree.close()
+
+    def test_yaml_files_have_no_icon_and_no_yaml_extension_in_tree(self):
+        """YAML files must not display the .yaml extension and must not have a file icon."""
+        def find_file_items(parent):
+            items = []
+            count = parent.topLevelItemCount() if isinstance(parent, QTreeWidget) else parent.childCount()
+            for i in range(count):
+                child = parent.topLevelItem(i) if isinstance(parent, QTreeWidget) else parent.child(i)
+                data = child.data(0, Qt.ItemDataRole.UserRole)
+                if data and data.get("type") == "file":
+                    items.append(child)
+                items.extend(find_file_items(child))
+            return items
+
+        file_items = find_file_items(self.tree_widget.tree)
+        self.assertGreater(len(file_items), 0)
+        for item in file_items:
+            # No .yaml or .yml extension in displayed text
+            self.assertFalse(item.text(0).endswith(".yaml"))
+            self.assertFalse(item.text(0).endswith(".yml"))
+            # No icon / emoji next to yaml files
+            self.assertTrue(item.icon(0).isNull())
+
+    def test_directory_nodes_retain_folder_icons(self):
+        """Directory nodes in the tree should still display folder icons."""
+        for i in range(self.tree_widget.tree.topLevelItemCount()):
+            item = self.tree_widget.tree.topLevelItem(i)
+            data = item.data(0, Qt.ItemDataRole.UserRole)
+            if data and data.get("type") == "dir":
+                self.assertFalse(item.icon(0).isNull())
 
     def test_collapse_and_expand_all(self):
         exp_tree = ConfigTreeWidget(root_dir=self.root, mode="experiments")
@@ -130,6 +181,51 @@ class TestConfigTree(unittest.TestCase):
             self.assertTrue(exp_tree.tree.topLevelItem(0).isExpanded())
         finally:
             exp_tree.close()
+
+    def test_populate_preserves_expanded_folders_on_install_and_uninstall(self):
+        """Folders in the tree do not collapse when new components/configs are installed or uninstalled."""
+        comp_tree = ConfigTreeWidget(root_dir=self.root, mode="components")
+        try:
+            # Locate agent folder item and expand it
+            agent_item = None
+            for i in range(comp_tree.tree.topLevelItemCount()):
+                item = comp_tree.tree.topLevelItem(i)
+                if "agent" in item.text(0):
+                    agent_item = item
+                    item.setExpanded(True)
+                    break
+            self.assertIsNotNone(agent_item)
+            self.assertTrue(agent_item.isExpanded())
+
+            # Simulate install into agent folder
+            (self.root / "agent" / "new_algo.yaml").write_text("algo: new\n", encoding="utf-8")
+            comp_tree.populate(ensure_expanded="agent")
+
+            # Check that agent folder did NOT collapse
+            found_agent = None
+            for i in range(comp_tree.tree.topLevelItemCount()):
+                item = comp_tree.tree.topLevelItem(i)
+                if "agent" in item.text(0):
+                    found_agent = item
+                    break
+            self.assertIsNotNone(found_agent)
+            self.assertTrue(found_agent.isExpanded(), "Folder must not collapse when something is installed into it")
+
+            # Simulate uninstall from agent folder
+            (self.root / "agent" / "new_algo.yaml").unlink()
+            comp_tree.populate(ensure_expanded="agent")
+
+            # Check that agent folder did NOT collapse
+            found_agent_after = None
+            for i in range(comp_tree.tree.topLevelItemCount()):
+                item = comp_tree.tree.topLevelItem(i)
+                if "agent" in item.text(0):
+                    found_agent_after = item
+                    break
+            self.assertIsNotNone(found_agent_after)
+            self.assertTrue(found_agent_after.isExpanded(), "Folder must not collapse when something is uninstalled from it")
+        finally:
+            comp_tree.close()
 
 
 @unittest.skipIf(not HAS_PYQT6, "PyQt6 not installed in current environment")
@@ -195,6 +291,13 @@ class TestConfigViewer(unittest.TestCase):
         self.assertIn("seed=123", overrides)
         self.assertIn("total_timesteps=25000", overrides)
 
+    def test_boxes_do_not_have_titles_or_subtitles(self):
+        cards = self.viewer.findChildren(ConfigBox)
+        self.assertGreaterEqual(len(cards), 3)
+        for card in cards:
+            self.assertIsNone(card.title_label)
+            self.assertIsNone(card.subtitle_label)
+
 
 @unittest.skipIf(not HAS_PYQT6, "PyQt6 not installed in current environment")
 class TestComponentsPanel(unittest.TestCase):
@@ -228,6 +331,11 @@ class TestComponentsPanel(unittest.TestCase):
         self.assertTrue(ok)
         self.assertEqual(self.panel.viewer.file_title.text(), "ppo.yaml")
         self.assertIn("lr", self.panel.viewer.raw_data)
+        cards = self.panel.viewer.findChildren(ConfigBox)
+        self.assertGreaterEqual(len(cards), 1)
+        for card in cards:
+            self.assertIsNone(card.title_label)
+            self.assertIsNone(card.subtitle_label)
 
     def test_toggle_raw_yaml_view(self):
         self.assertTrue(self.panel.raw_panel.isHidden())
@@ -235,6 +343,73 @@ class TestComponentsPanel(unittest.TestCase):
         self.assertFalse(self.panel.raw_panel.isHidden())
         self.panel.toggle_raw_preview(False)
         self.assertTrue(self.panel.raw_panel.isHidden())
+
+    def test_component_hub_replaces_parameters_panels_and_restores_on_selection(self):
+        # Initially on parameters view
+        self.assertFalse(self.panel.is_hub_active)
+        self.assertFalse(self.panel.btn_hub.isChecked())
+        self.assertFalse(self.panel.btn_toggle_raw.isHidden())
+        self.assertEqual(self.panel.content_stack.currentWidget(), self.panel.content_splitter)
+
+        # Click Component Hub button in top right
+        self.panel.btn_hub.click()
+        self.assertTrue(self.panel.is_hub_active)
+        self.assertTrue(self.panel.btn_hub.isChecked())
+        self.assertTrue(self.panel.btn_toggle_raw.isHidden())
+        self.assertEqual(self.panel.content_stack.currentWidget(), self.panel.hub_view)
+
+        # Click on a component again in the tree
+        self.panel.components_tree.select_file("env/cartpole.yaml")
+        # Brought back to parameters view
+        self.assertFalse(self.panel.is_hub_active)
+        self.assertFalse(self.panel.btn_hub.isChecked())
+        self.assertFalse(self.panel.btn_toggle_raw.isHidden())
+        self.assertEqual(self.panel.content_stack.currentWidget(), self.panel.content_splitter)
+        self.assertEqual(self.panel.viewer.file_title.text(), "cartpole.yaml")
+
+    def test_component_hub_toggle_and_close_button(self):
+        # Open hub
+        self.panel.btn_hub.click()
+        self.assertTrue(self.panel.is_hub_active)
+
+        # Click btn_hub again to toggle back
+        self.panel.btn_hub.click()
+        self.assertFalse(self.panel.is_hub_active)
+        self.assertEqual(self.panel.content_stack.currentWidget(), self.panel.content_splitter)
+
+        # Open hub again
+        self.panel.btn_hub.click()
+        self.assertTrue(self.panel.is_hub_active)
+
+        # Click Back to Parameters button in Hub footer
+        self.panel.hub_view.btn_close.click()
+        self.assertFalse(self.panel.is_hub_active)
+        self.assertEqual(self.panel.content_stack.currentWidget(), self.panel.content_splitter)
+
+    def test_reload_components_preserves_hub_view_on_install_and_uninstall(self):
+        # Open hub
+        self.panel.btn_hub.click()
+        self.assertTrue(self.panel.is_hub_active)
+        self.assertEqual(self.panel.content_stack.currentWidget(), self.panel.hub_view)
+
+        # Simulate install: new component created and reload_components called
+        (self.root / "agent" / "new_dqn.yaml").write_text("gamma: 0.99\n", encoding="utf-8")
+        self.panel.reload_components(target_rel_path="agent/new_dqn.yaml", ensure_expanded="agent")
+        # Must still be in the Hub!
+        self.assertTrue(self.panel.is_hub_active)
+        self.assertEqual(self.panel.content_stack.currentWidget(), self.panel.hub_view)
+
+        # Simulate uninstall: component deleted and reload_components called
+        (self.root / "agent" / "new_dqn.yaml").unlink()
+        self.panel.reload_components(target_rel_path=None, ensure_expanded="agent")
+        # Must still be in the Hub!
+        self.assertTrue(self.panel.is_hub_active)
+        self.assertEqual(self.panel.content_stack.currentWidget(), self.panel.hub_view)
+
+        # Only clicking a component in the tree brings you back to params
+        self.panel.components_tree.select_file("agent/ppo.yaml")
+        self.assertFalse(self.panel.is_hub_active)
+        self.assertEqual(self.panel.content_stack.currentWidget(), self.panel.content_splitter)
 
 
 @unittest.skipIf(not HAS_PYQT6, "PyQt6 not installed in current environment")
@@ -273,9 +448,10 @@ class TestExperimentPaneWindowIntegration(unittest.TestCase):
 
     def test_experiment_pane_only_has_experiments(self):
         self.assertEqual(self.window.config_tree.mode, "experiments")
-        for i in range(self.window.config_tree.tree.topLevelItemCount()):
-            item = self.window.config_tree.tree.topLevelItem(i)
-            self.assertIn("experiment", item.text(0))
+        top_texts = [self.window.config_tree.tree.topLevelItem(i).text(0) for i in range(self.window.config_tree.tree.topLevelItemCount())]
+        self.assertFalse(any(t == "experiment" for t in top_texts))
+        self.assertFalse(any(t in ("agent", "env", "model", "paradigms", "site") for t in top_texts))
+        self.assertTrue(any(t in ("cartpole", "mimic") for t in top_texts))
 
     def test_components_pane_integrated_in_window(self):
         self.assertIsNotNone(self.window.components_panel)

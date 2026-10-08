@@ -10,7 +10,12 @@
 
 defaults:
 - mimic/_base
-task: reciprocal_refinement
+workflow: sepsis_reciprocal
+
+methods:
+  cql_dnn:
+    agent: cql
+    model: dnn
 
 resources:
   time: "48:00:00"

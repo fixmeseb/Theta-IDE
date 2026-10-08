@@ -62,8 +62,8 @@ Supervised representation learning and early prediction tasks.
 - **Configuration:** All experiment parameters are in YAML files in `in/config/`.
 - **Precedence:** CLI arguments > experiment YAML > group `_base.yaml` > env/mode/site defaults > `config.yaml` root defaults.
 - **Entry Point:** `python run_pipeline.py <experiment_name> [optional Hydra overrides]` is the sole entry point.
-- **Task Registry:** Dispatches via `src/app/pipeline/task_registry.py`. `@register_task("name")` auto-registers. Default task: `"rl"`. Others: `early_prediction`, `reciprocal_refinement`.
-- **Dynamic Orchestration:** Reads `online_methods` and `offline_methods` from the config. Executes online then offline sequentially.
+- **Dispatch Model:** `task:` has been completely removed. Routing is governed solely by `paradigm:` (e.g., `online_rl`, `offline_rl`, `supervised`) for single experiments, or `workflow:` (e.g., `sepsis_reciprocal`) for multi-paradigm DAG workflows. Stale `task:` declarations trigger a deprecation warning at startup.
+- **Method Execution:** Driven by the structured `methods:` dictionary. Methods are dispatched sequentially (or swept via Hydra/Optuna) for the declared paradigm.
 
 ### 3-Tier Hierarchical Configuration & Composite Models
 Configurations follow a 3-tier hierarchy that eliminates parameter repetition and cleanly separates algorithm, model, and training hyperparameters:
@@ -165,16 +165,16 @@ Priority: CLI flags > experiment `resources:` > site config > hardcoded fallback
 ## 8. Environment Customization & Wrappers
 - **Interface:** All environments wrapped via `VectorizedNudgeBaseEnv` (`src/app/core/env_vectorized.py`).
 - **Evaluation:** `EnvironmentEvaluatorCallback` (`src/app/core/callbacks.py`) executes fixed episode counts (default 100) at transition intervals.
-- **Environment Rules:** `in/envs/[ENV]/` — custom reward shaping (`blenderl_reward.py`) and architecture definitions (`mlp.py`).
+- **Environment Logic:** `in/envs/[ENV]/` — custom reward shaping (`blenderl_reward.py`) and logic valuation (`valuation.py`). Environments do not define models.
 
 ---
 
-## 9. Agent Implementation Guide
-Agents are PyTorch Lightning Modules in `src/usr/methods/`:
+## 9. Agent & Model Implementation Guide
+Agents are PyTorch Lightning Modules in `src/usr/methods/` (registered in `agent_registry.py`):
 - `PPOAgent`: Standard online actor-critic RL.
 - `IQLAgent`: Offline RL using Implicit Q-Learning.
 - `BlendRLAgent` / `BlendRLIQLAgent`: Hybrid logic-neural agents.
-- **Architecture Selection:** `get_neural_agent` (`src/app/core/factories.py`) selects CNN or MLP based on env config.
+- **Model Architecture Selection:** All models live in `src/usr/models/` and are registered via `@register_model`. Instantiated through `build_model()` (`src/app/core/model_registry.py`).
 
 See `pipeline-crud` skill for step-by-step instructions on adding new agents.
 
@@ -188,7 +188,7 @@ See `pipeline-crud` skill for step-by-step instructions on adding new agents.
 ---
 
 ## 11. Method Style Registry
-- **Source of Truth:** `src/usr/methods/method_registry.py` — display names, colors, linestyles, markers.
+- **Source of Truth:** `src/usr/methods/method_style_registry.py` — display names, colors, linestyles, markers.
 - **One entry per architecture.** Both `plot/base.py` and `src/usr/eval/early_prediction/eval_logic.py` import from here.
 - **Prefix Matching:** `get_style("ppo_cp_tuned")` resolves to `"ppo"`. Longest prefix wins.
 
@@ -205,14 +205,22 @@ See `pipeline-crud` skill for adding new plotters.
 ---
 
 ## 13. Pipeline Architecture (`run_pipeline.py` & `src/app/pipeline/`)
-- **`src/app/pipeline/task_registry.py`**: `@register_task("name")` with longest-prefix dispatch.
+
+**Dispatch model (no `task:` key):** `run_pipeline.py` routes directly based on config keys:
+1. `workflow: <id>` → `src/app/pipeline/workflow/executor.py` runs the named DAG from `in/config/workflow/<id>.yaml`.
+2. Otherwise → `local_runner.run_local_training()` (site=local) or `slurm_runner.run_slurm_training()` (any cluster site).
+
+> [!IMPORTANT]
+> `task:` has been completely removed. If a stale `task:` key is found at startup, the pipeline emits a deprecation warning and ignores it. Routing is governed by `paradigm:` (single experiment) and `workflow:` (multi-experiment DAG).
+
+- **`src/app/pipeline/workflow/executor.py`**: Workflow DAG executor. Loads `WorkflowGraph` from `in/config/workflow/*.yaml`, walks topological levels, dispatches paradigm nodes as `run_pipeline.py` subprocesses.
+- **`src/app/pipeline/workflow/model.py`**: `WorkflowGraph`, `WorkflowNode`, `WorkflowString`, `PortType` — string diagram data model.
 - **`src/app/pipeline/config.py`**: Name normalization, method list parsing, CLI arg sanitization.
 - **`src/app/pipeline/datasets.py`**: Dataset path resolution, online symlinking, plotting dispatch.
 - **`src/app/pipeline/slurm.py`**: Slurm header builder (`generate_sbatch_header`), job submission (`submit_sbatch`). Mail: `--mail-type=END,FAIL`, `--mail-user=egbertcm23@gmail.com`.
-- **`src/app/pipeline/local_runner.py`**: Local sequential online & offline phase execution.
+- **`src/app/pipeline/local_runner.py`**: Local sequential phase execution (`_setup_output_dirs` → `run_methods` → `run_plotting_phase`).
 - **`src/app/pipeline/slurm_runner.py`**: Cluster batch script generation and job dependency orchestration.
-- **`src/app/pipeline/early_prediction_task.py`**: EP sweeps, checkpoint evals, Optuna tuning. `@register_task("early_prediction")`.
-- **`src/app/pipeline/reciprocal_task.py`**: EP ↔ CQL co-training. `@register_task("reciprocal_refinement")`.
+- **`src/app/pipeline/shape_rewards.py`**: Offline ETL utility — `run_shape_rewards(cfg, context=None)`. Not a registered task; called as a library function from workflow transform nodes.
 - **`src/app/pipeline/optuna_utils.py`**: SQLite URL constants, study management, dashboard launching.
 - **`src/app/pipeline/validation.py`**: Pre-flight paradigm compatibility and config validation.
 
@@ -220,11 +228,11 @@ See `pipeline-crud` skill for adding new plotters.
 
 ## 14. Reciprocal Refinement (EP ↔ CQL Co-Training)
 - **Concept:** EP septic shock predictor and CQL policy iteratively improve each other.
+- **Workflow Orchestration:** Reciprocal refinement is orchestrated as a declarative Workflow DAG (`in/config/workflow/sepsis_reciprocal.yaml`) executed via `workflow: sepsis_reciprocal` in `in/config/experiment/mimic/reciprocal_refinement.yaml`.
 - **Reward Shaping (`src/usr/eval/reward_shaping.py`):** Potential-based (Ng et al. 1999):
     - Φ(s) = −P_EP(shock | observation window ending at s)
     - r_shaped = r_TQN + λ * (γ * Φ(s') − Φ(s))
 - **Config:** `in/config/env/mimic.yaml` under `reward_shaping:`. `reward_type: ep_shaped` activates it via `in/envs/mimic/hooks.py`.
-- **Experiment Config:** `in/config/experiment/mimic/reciprocal_refinement.yaml`
 - **Results:** `results/checkpoints/[GROUP]/[EXP_ID]/roundN/`, `results/plots/[GROUP]/[EXP_ID]/convergence_log.json`.
 
 ---

@@ -20,7 +20,7 @@ class TensorBoardPanel(QWidget):
         self.timer.timeout.connect(self.refresh)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(28, 28, 28, 28)
+        layout.setContentsMargins(18, 18, 18, 18)
         layout.setSpacing(16)
 
         header = QVBoxLayout()
@@ -59,11 +59,11 @@ class TensorBoardPanel(QWidget):
         card_layout.addWidget(self.info_text)
 
         button_row = QHBoxLayout()
-        self.start_btn = QPushButton("▶  Start Server")
+        self.start_btn = QPushButton("Start server")
         self.start_btn.clicked.connect(lambda: self.refresh(start=True))
-        self.stop_btn = QPushButton("■  Stop Server")
+        self.stop_btn = QPushButton("Stop server")
         self.stop_btn.clicked.connect(self.stop)
-        self.browser_btn = QPushButton("↗  Open in Browser")
+        self.browser_btn = QPushButton("Open in browser")
         self.browser_btn.clicked.connect(self.open_in_browser)
         self.browser_btn.setEnabled(False)
 

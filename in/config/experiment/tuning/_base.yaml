@@ -1,14 +1,8 @@
 # @package _global_
+defaults:
+  - override /hydra/sweeper: optuna_online
+
 seed: 1
 save_dataset: false
-
-hydra:
-  sweeper:
-    sampler:
-      _target_: optuna.samplers.TPESampler
-      seed: 123
-    _target_: hydra_plugins.hydra_optuna_sweeper.optuna_sweeper.OptunaSweeper
-    direction: maximize
-    storage: "sqlite:///results/optuna/optuna.db"
-    n_jobs: 1
 paradigm: online_rl
+

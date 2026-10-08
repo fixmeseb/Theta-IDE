@@ -1,0 +1,9 @@
+{
+  "id": "blendrl",
+  "name": "BlendRL Neural-Symbolic Policy",
+  "kind": "model",
+  "version": "1.0.0",
+  "installed_from": "https://raw.githubusercontent.com/CameronEgb/theta-hub/main/packages/blendrl-1.0.0.zip",
+  "sha256": "9663d583392ba7d64f6721a610a3fbeb467e5604fc209c683a73c41888163164",
+  "config_path": "in/config/model/blendrl.yaml"
+}

@@ -490,3 +490,84 @@ class DatasetReader:
     def __len__(self):
         """Return the total number of transitions in the dataset."""
         return len(self.obs)
+
+
+def convert_mimic_npz_to_transitions(
+    npz_path: str | Path,
+    out_dir: str | Path | None = None,
+    chunk_size: int = 200000,
+) -> int:
+    """Convert a MIMIC trajectory NPZ file into chunked transition PKL files.
+
+    Args:
+        npz_path: Path to the input MIMIC .npz trajectory file.
+        out_dir: Directory where chunks should be written. If None, defaults to a directory
+                 named after the NPZ stem alongside the file.
+        chunk_size: Maximum transitions per chunk file.
+
+    Returns:
+        Total number of transitions written.
+    """
+    npz_path = Path(npz_path)
+    if not npz_path.exists():
+        raise FileNotFoundError(f"NPZ dataset not found at {npz_path}")
+
+    npz_stem = npz_path.stem
+    if out_dir is None:
+        out_dir = npz_path.parent / npz_stem
+    else:
+        out_dir = Path(out_dir)
+
+    print(f"Loading NPZ dataset from {npz_path}...")
+    data = np.load(npz_path, allow_pickle=True)
+    X = data["X"]  # (N, 240, 49)
+    y = data["y"]  # (N, 1)
+    mask = data["mask"]  # (N, 240, 1)
+
+    writer = DatasetWriter(save_dir=out_dir, chunk_size=chunk_size, env_name=npz_stem)
+
+    print("Converting trajectories to transitions...")
+    total_transitions = 0
+
+    for i in range(len(X)):
+        mask_patient = mask[i].squeeze()
+        active_steps = np.where(mask_patient != -1)[0]
+        if len(active_steps) == 0:
+            continue
+
+        T = len(active_steps)
+        outcome = y[i, 0]
+
+        for t_idx, t in enumerate(active_steps):
+            obs = X[i, t, :46]
+            logic_obs = np.stack([obs, obs], axis=0)
+
+            action = int(X[i, t, 47])
+            reward = (1.0 / T) if action == int(X[i, t, 47]) else 0.0
+            if outcome != 0:
+                reward = -reward
+
+            if t_idx == len(active_steps) - 1:
+                next_obs = obs.copy()
+                next_logic_obs = logic_obs.copy()
+                done = True
+            else:
+                t_next = active_steps[t_idx + 1]
+                next_obs = X[i, t_next, :46]
+                next_logic_obs = np.stack([next_obs, next_obs], axis=0)
+                done = False
+
+            writer.add(
+                obs=obs,
+                logic_obs=logic_obs,
+                action=action,
+                reward=reward,
+                next_obs=next_obs,
+                next_logic_obs=next_logic_obs,
+                done=done,
+            )
+            total_transitions += 1
+
+    writer.close()
+    print(f"Successfully converted {len(X)} patients and saved {total_transitions} transitions to {out_dir}")
+    return total_transitions

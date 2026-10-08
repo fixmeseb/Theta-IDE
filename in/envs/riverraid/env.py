@@ -12,7 +12,7 @@ from stable_baselines3.common.env_util import make_atari_env
 from stable_baselines3.common.vec_env import VecFrameStack
 
 
-from src.utils import load_cleanrl_envs
+from src.app.core.factories import load_cleanrl_envs
 
 from stable_baselines3.common.atari_wrappers import (
     ClipRewardEnv,

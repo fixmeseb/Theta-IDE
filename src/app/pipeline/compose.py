@@ -9,7 +9,7 @@ from __future__ import annotations
 import threading
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from hydra import compose, initialize_config_dir
 from hydra.core.global_hydra import GlobalHydra
@@ -122,13 +122,21 @@ def ppo_rollout(cfg: DictConfig, settings: dict[str, Any]) -> dict[str, int] | N
     """
     if settings.get("agent") != "ppo" or cfg.get("paradigm") != "online_rl":
         return None
-    defaults = cfg.agent if cfg.agent.get("algorithm") == "ppo" else {}
+    agent_cfg = getattr(cfg, "agent", None) if hasattr(cfg, "agent") else cfg.get("agent", None)
+    defaults: Any = (
+        agent_cfg if isinstance(agent_cfg, (dict, DictConfig)) and agent_cfg.get("algorithm") == "ppo" else {}
+    )
     num_envs = int(settings.get("num_envs", defaults.get("num_envs", 4)))
     num_steps = int(settings.get("num_steps", defaults.get("num_steps", 128)))
     size = num_envs * num_steps
     rollouts = max(1, -(-int(cfg.total_timesteps) // size))
-    return {"num_envs": num_envs, "num_steps": num_steps, "size": size, "rollouts": rollouts,
-            "timesteps": rollouts * size}
+    return {
+        "num_envs": num_envs,
+        "num_steps": num_steps,
+        "size": size,
+        "rollouts": rollouts,
+        "timesteps": rollouts * size,
+    }
 
 
 def effective_config(cfg: DictConfig) -> dict[str, Any]:
@@ -137,8 +145,10 @@ def effective_config(cfg: DictConfig) -> dict[str, Any]:
         data = OmegaConf.to_container(cfg, resolve=True)
     except Exception:
         data = OmegaConf.to_container(cfg, resolve=False)
+    if not isinstance(data, dict):
+        return {}
     data.pop("hydra", None)
-    return data
+    return cast(dict[str, Any], data)
 
 
 def comparable_config(cfg: DictConfig) -> dict[str, Any]:

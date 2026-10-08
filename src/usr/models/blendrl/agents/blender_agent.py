@@ -1,13 +1,15 @@
 import os
 import pickle
 import random
+
+# from nudge.env import NudgeBaseEnv
+import sys
 from pathlib import Path
 
 import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.distributions.categorical import Categorical
 from captum.attr import (
     DeepLift,
     DeepLiftShap,
@@ -17,9 +19,7 @@ from captum.attr import (
     NeuronConductance,
     NoiseTunnel,
 )
-
-# from nudge.env import NudgeBaseEnv
-import sys
+from torch.distributions.categorical import Categorical
 
 PROJECT_ROOT = str(Path(__file__).resolve().parents[5])
 for _p in [
@@ -35,8 +35,8 @@ from nudge.agents.logic_agent import NsfrActorCritic
 from nudge.agents.neural_agent import ActorCritic, NeuralPPO
 from nudge.torch_utils import softor
 from src.app.core.factories import get_blender, get_neural_agent
+from src.app.core.model_registry import register_model
 from src.app.core.types import ActionResult
-from src.usr.methods.cew_utils import MultiFLC, rule_creation, run_CLIP, run_ECM, run_FYD
 
 
 class BlenderActor(nn.Module):
@@ -157,8 +157,11 @@ class BlenderActor(nn.Module):
             m_type = self.module_types[i]
             if m_type == "neural":
                 probs = module.get_action_probs(neural_state)
-            elif m_type == "cew":
-                cew_inp = (
+            elif m_type == "logic":
+                probs = self._map_logic_output(module.get_action_probs(logic_state), module)
+            else:
+                # Custom / plugin submodule (e.g. CEW or other continuous/relational modules)
+                sub_inp = (
                     neural_state
                     if (
                         neural_state.ndim == 2
@@ -167,10 +170,10 @@ class BlenderActor(nn.Module):
                     )
                     else (logic_state if logic_state is not None else neural_state)
                 )
-                probs = self._map_logic_output(module.get_action_probs(cew_inp), module)
-            else:
-                # logic
-                probs = self._map_logic_output(module.get_action_probs(logic_state), module)
+                if hasattr(module, "get_action_probs"):
+                    probs = self._map_logic_output(module.get_action_probs(sub_inp), module)
+                else:
+                    probs = module(sub_inp)
             module_probs.append(probs)
 
         # weights size: B * N_modules
@@ -209,8 +212,13 @@ class BlenderActor(nn.Module):
         action_probs = torch.zeros(logic_state.size(0), self.env.n_actions, device=logic_state.device)
         for i, module in enumerate(self.policy_modules):
             m_type = self.module_types[i]
-            if m_type == "cew":
-                cew_inp = (
+            if m_type == "neural":
+                continue
+            elif m_type == "logic":
+                probs = self._map_logic_output(module.get_action_probs(logic_state), module)
+                action_probs += weights[:, i].unsqueeze(1) * probs
+            else:
+                sub_inp = (
                     dummy_neural
                     if (
                         dummy_neural.ndim == 2
@@ -219,10 +227,10 @@ class BlenderActor(nn.Module):
                     )
                     else (logic_state if logic_state is not None else dummy_neural)
                 )
-                probs = self._map_logic_output(module.get_action_probs(cew_inp), module)
-                action_probs += weights[:, i].unsqueeze(1) * probs
-            elif m_type != "neural":
-                probs = self._map_logic_output(module.get_action_probs(logic_state), module)
+                if hasattr(module, "get_action_probs"):
+                    probs = self._map_logic_output(module.get_action_probs(sub_inp), module)
+                else:
+                    probs = module(sub_inp)
                 action_probs += weights[:, i].unsqueeze(1) * probs
 
         return action_probs, weights
@@ -322,8 +330,16 @@ class BlenderActor(nn.Module):
                         q = module(neural_state)  # Assuming forward returns Q-values for Q-networks
                 else:
                     q = torch.zeros(batch_size, self.env.n_actions, device=neural_state.device)
-            elif m_type == "cew":
-                cew_inp = (
+            elif m_type == "logic":
+                # logic (NSFR / Neumann)
+                if hasattr(module, "get_q_values"):
+                    q = module.get_q_values(logic_state)
+                else:
+                    # Logic modules usually return probs, treat as Q-values [0, 1]
+                    q = self._map_logic_output(module.get_action_probs(logic_state), module)
+            else:
+                # Custom / plugin submodule (e.g. CEW or other continuous/relational modules)
+                sub_inp = (
                     neural_state
                     if (
                         neural_state.ndim == 2
@@ -333,16 +349,9 @@ class BlenderActor(nn.Module):
                     else (logic_state if logic_state is not None else neural_state)
                 )
                 if hasattr(module, "get_q_values"):
-                    q = module.get_q_values(cew_inp)
+                    q = module.get_q_values(sub_inp)
                 else:
-                    q = module(cew_inp)  # MultiFLC forward returns Q-values
-            else:
-                # logic (NSFR / Neumann)
-                if hasattr(module, "get_q_values"):
-                    q = module.get_q_values(logic_state)
-                else:
-                    # Logic modules usually return probs, treat as Q-values [0, 1]
-                    q = self._map_logic_output(module.get_action_probs(logic_state), module)
+                    q = module(sub_inp)
             module_q_values.append(q)
 
         weights = self.to_blender_policy_distribution(neural_state, logic_state)
@@ -354,6 +363,7 @@ class BlenderActor(nn.Module):
         return q_values
 
 
+@register_model("blendrl", "blender")
 class BlenderActorCritic(nn.Module):
     """
     BlendeRL actor-critic that supports heterogeneous policy modules.
@@ -423,7 +433,9 @@ class BlenderActorCritic(nn.Module):
                     s_dict = {"type": self.reasoner or "nsfr", "rules": symbolic_cfg}
                 else:
                     s_dict = dict(symbolic_cfg) if hasattr(symbolic_cfg, "items") else {}
-                    s_type = _get_val(s_dict, "type", _get_val(s_dict, "name", _get_val(s_dict, "reasoner", self.reasoner or "nsfr")))
+                    s_type = _get_val(
+                        s_dict, "type", _get_val(s_dict, "name", _get_val(s_dict, "reasoner", self.reasoner or "nsfr"))
+                    )
                     s_dict["type"] = s_type
                     if "rules" not in s_dict and s_type in ("nsfr", "neumann"):
                         s_dict["rules"] = self.get_cfg("rules", "default")
@@ -434,7 +446,11 @@ class BlenderActorCritic(nn.Module):
                     n_dict = {"module_type": "neural", "architecture": neural_cfg}
                 else:
                     n_dict = dict(neural_cfg) if hasattr(neural_cfg, "items") else {}
-                    arch = _get_val(n_dict, "architecture", _get_val(n_dict, "type", _get_val(n_dict, "name", self.architecture or "dnn")))
+                    arch = _get_val(
+                        n_dict,
+                        "architecture",
+                        _get_val(n_dict, "type", _get_val(n_dict, "name", self.architecture or "dnn")),
+                    )
                     n_dict["architecture"] = arch
                     n_dict["module_type"] = "neural"
                 modules_list.append(n_dict)
@@ -457,13 +473,19 @@ class BlenderActorCritic(nn.Module):
                     self.module_types.append("logic")
                     if blender_rules is None:
                         blender_rules = m_rules
-                elif m_type == "cew":
-                    # Placeholder CEW module, will be self-organized later
-                    # Determine input size from env
-                    n_inputs = np.prod(obs.shape[1:])
-                    m = MultiFLC(n_inputs=n_inputs, n_outputs=env.n_actions, antecedents=[], rules=[]).to(device)
+                elif m_type not in ("nsfr", "neumann", "neural"):
+                    # Dynamically instantiate from MODEL_REGISTRY without hardcoded classes
+                    from src.app.core.model_registry import build_model
+
+                    m = build_model(
+                        m_cfg,
+                        env=env,
+                        device=device,
+                        obs_dim=int(np.prod(obs.shape[1:])),
+                        n_actions=env.n_actions,
+                    ).to(device)
                     self.policy_modules.append(m)
-                    self.module_types.append("cew")
+                    self.module_types.append(m_type)
                 elif m_type == "neural":
                     arch = _get_val(m_cfg, "architecture", _get_val(m_cfg, "type", self.architecture))
                     if arch == "neural" or not arch:
@@ -606,86 +628,6 @@ class BlenderActorCritic(nn.Module):
         if found:
             return val
         return default
-
-    def self_organize_cew_modules(self, dataset_sample_obs):
-        """Triggers self-organization for any CEW modules in the architecture.
-        Returns True if any module was physically replaced (architecture changed).
-        """
-        any_changed = False
-        for i, m in enumerate(self.policy_modules):
-            if self.module_types[i] == "cew":
-                print(f"Self-organizing CEW module {i}...")
-                m_cfg = self.module_cfgs[i] if hasattr(self, "module_cfgs") and i < len(self.module_cfgs) else {}
-
-                def _get_val(cfg_obj, key, fallback=None):
-                    if cfg_obj is None:
-                        return fallback
-                    try:
-                        if hasattr(cfg_obj, key):
-                            val = getattr(cfg_obj, key)
-                            if val is not None:
-                                return val
-                    except Exception:
-                        pass
-                    try:
-                        if isinstance(cfg_obj, dict) or (hasattr(cfg_obj, "__contains__") and key in cfg_obj):
-                            val = cfg_obj[key]
-                            if val is not None:
-                                return val
-                    except Exception:
-                        pass
-                    return fallback
-
-                obs = dataset_sample_obs.cpu().numpy()
-                # Flatten obs if it has more than 2 dimensions (B, entities, features) -> (B, entities*features)
-                if len(obs.shape) > 2:
-                    obs = obs.reshape(obs.shape[0], -1)
-
-                mins = obs.min(axis=0)
-                maxes = obs.max(axis=0)
-
-                # CLIP
-                antecedents = run_CLIP(obs, mins, maxes)
-                # ECM
-                dthr = _get_val(m_cfg, "ecm_dthr", self.get_cfg("ecm_dthr", 0.05))
-                clusters = run_ECM(obs, [], dthr)
-                reduced_X = np.array([c.center for c in clusters])
-                # WM
-                antecedents, rules = rule_creation(reduced_X, antecedents)
-
-                # FYD (optional)
-                use_fyd = _get_val(m_cfg, "fyd", self.get_cfg("fyd", False))
-                if use_fyd:
-                    top_k = _get_val(m_cfg, "fyd_top_k", self.get_cfg("fyd_top_k", None))
-                    n_rules_before = len(rules)
-                    rules, antecedents = run_FYD(rules, obs, antecedents, top_k=top_k)
-                    print(f"FYD pruning for CEW module {i}: {n_rules_before} -> {len(rules)} rules (top_k={top_k})")
-
-                # Check if architecture changed
-                current_rules = getattr(m.flcs[0], "links", None)
-                if current_rules is not None and current_rules.shape[1] == len(rules):
-                    # Simple heuristic: if rule count is same, check if antecedents count is same
-                    if m.flcs[0].transformed_len == sum(len(p_ants) for p_ants in antecedents):
-                        print(f"CEW module {i} architecture stable ({len(rules)} rules). Skipping reset.")
-                        continue
-
-                # Re-initialize MultiFLC in place
-                from src.usr.methods.cew_utils import MultiFLC
-
-                n_in = np.prod(obs.shape[1:])
-                # Determine current device from existing parameters
-                current_device = next(self.parameters()).device
-                new_m = MultiFLC(n_inputs=n_in, n_outputs=self.env.n_actions, antecedents=antecedents, rules=rules).to(
-                    current_device
-                )
-
-                # Replace the module in ModuleList
-                self.policy_modules[i] = new_m
-                # Also update the actor's reference
-                self.actor.policy_modules[i] = new_m
-                print(f"CEW module {i} self-organized with {len(rules)} rules. Weights reset.")
-                any_changed = True
-        return any_changed
 
     def forward(self, neural_state, logic_state=None, action=None):
         return self.get_action_and_value(neural_state, logic_state, action=action)

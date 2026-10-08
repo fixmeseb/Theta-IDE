@@ -78,11 +78,18 @@ def discover_blendrl_checkpoints(exp_id: str, group: str, clean_exp: str) -> dic
 
 
 def load_modular_agent(path: Path):
-    from src.usr.methods.cew_agent import CEWAgent
     from src.usr.methods.cql_agent import CQLAgent
     from src.usr.methods.iql_agent import IQLAgent
 
-    for cls in [CQLAgent, CEWAgent, IQLAgent]:
+    classes = [CQLAgent, IQLAgent]
+    try:
+        from src.usr.methods.cew_agent import CEWAgent
+
+        classes.insert(1, CEWAgent)
+    except ImportError:
+        pass
+
+    for cls in classes:
         try:
             ag = cls.load_from_checkpoint(str(path), map_location="cpu", weights_only=False)
             ag.eval()

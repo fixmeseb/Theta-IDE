@@ -1,4 +1,4 @@
-"""Non-blocking JSON client for the NeSyRL backend API (src/app/api/app.py)."""
+"""Non-blocking JSON client for the Theta-IDE backend API (src/app/api/app.py)."""
 import json
 
 from PyQt6.QtCore import QByteArray, QObject, QUrl

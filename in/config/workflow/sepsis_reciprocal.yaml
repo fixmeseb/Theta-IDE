@@ -1,0 +1,192 @@
+id: sepsis_reciprocal_refinement
+name: "Sepsis Clinician Behavior \u2194 Early Prediction"
+description: CQL clinician policy outputs V(s) to augment MIMIC patient records for
+  Early Prediction, whose shock risk Phi(s) shapes CQL rewards.
+nodes:
+  cql_clinician:
+    id: cql_clinician
+    label: MIMIC CQL Clinician Model
+    category: paradigm
+    paradigm: offline_rl
+    experiment_ref: mimic/cql_literature
+    overrides: []
+    pos:
+    - 60
+    - 80
+    inputs:
+    - name: dataset
+      direction: input
+      port_type: dataset
+      description: Replay buffer dataset for offline training
+      param_binding: ++mode.dataset_path=${source.dataset_path}
+      required: true
+    - name: initial_weights
+      direction: input
+      port_type: checkpoint
+      description: Warm-start or initialization weights
+      param_binding: ++model.checkpoint_path=${source.checkpoint_path}
+      required: false
+    outputs:
+    - name: checkpoint
+      direction: output
+      port_type: checkpoint
+      description: Offline-trained policy checkpoint
+      param_binding: ''
+      required: false
+    - name: metrics
+      direction: output
+      port_type: metrics
+      description: Offline training loss & Bellman error metrics
+      param_binding: ''
+      required: false
+    - name: value_estimator
+      direction: output
+      port_type: value_estimator
+      description: State-value estimates V(s) and action Q-values
+      param_binding: ''
+      required: false
+  mimic_dataset:
+    id: mimic_dataset
+    label: MIMIC Patient Transitions
+    category: data
+    paradigm: dataset
+    experiment_ref: in/datasets/mimic
+    overrides: []
+    pos:
+    - 60
+    - 300
+    inputs: []
+    outputs:
+    - name: dataset
+      direction: output
+      port_type: dataset
+      description: 'Static offline dataset: in/datasets/mimic'
+      param_binding: ''
+      required: false
+  feature_augmenter:
+    id: feature_augmenter
+    label: V(s) Feature Augmenter
+    category: transform
+    paradigm: transform
+    experiment_ref: ''
+    overrides: []
+    pos:
+    - 440
+    - 80
+    inputs:
+    - name: value_estimator
+      direction: input
+      port_type: value_estimator
+      description: Estimated values V(s) or Q(s, a)
+      param_binding: ++augment.value_model=${source.checkpoint_path}
+      required: true
+    - name: dataset
+      direction: input
+      port_type: dataset
+      description: Raw dataset to augment with value features
+      param_binding: ++augment.input_dataset=${source.dataset_path}
+      required: true
+    outputs:
+    - name: augmented_dataset
+      direction: output
+      port_type: dataset
+      description: Dataset augmented with clinician value state features
+      param_binding: ''
+      required: false
+  ep_transformer:
+    id: ep_transformer
+    label: Early Prediction (Transformer)
+    category: paradigm
+    paradigm: supervised
+    experiment_ref: early_prediction/quick_test
+    overrides: []
+    pos:
+    - 800
+    - 80
+    inputs:
+    - name: dataset
+      direction: input
+      port_type: dataset
+      description: Tabular or sequential supervised training dataset
+      param_binding: ++mode.dataset_path=${source.dataset_path}
+      required: true
+    outputs:
+    - name: checkpoint
+      direction: output
+      port_type: checkpoint
+      description: Supervised model weights (.ckpt)
+      param_binding: ''
+      required: false
+    - name: value_estimator
+      direction: output
+      port_type: value_estimator
+      description: Prediction function / shock risk estimator Phi(s)
+      param_binding: ''
+      required: false
+    - name: metrics
+      direction: output
+      port_type: metrics
+      description: AUPRC, AUROC, and cross-entropy metrics
+      param_binding: ''
+      required: false
+  reward_shaper:
+    id: reward_shaper
+    label: Potential Reward Shaper
+    category: transform
+    paradigm: transform
+    experiment_ref: ''
+    overrides: []
+    pos:
+    - 440
+    - 300
+    inputs:
+    - name: potential_function
+      direction: input
+      port_type: value_estimator
+      description: Potential function Phi(s) for Ng et al. shaping
+      param_binding: ++reward_shaping.ep_model=${source.checkpoint_path}
+      required: true
+    - name: dataset
+      direction: input
+      port_type: dataset
+      description: Base dataset to reshape rewards for
+      param_binding: ++reward_shaping.dataset_path=${source.dataset_path}
+      required: true
+    outputs:
+    - name: shaped_dataset
+      direction: output
+      port_type: dataset
+      description: Dataset with r_shaped = r + lambda*(gamma*Phi' - Phi)
+      param_binding: ''
+      required: false
+strings:
+- id: wire_mimic_dataset_dataset_to_feature_augmenter_dataset
+  from: mimic_dataset.dataset
+  to: feature_augmenter.dataset
+  port_type: dataset
+  binding: ++augment.input_dataset=${source.dataset_path}
+- id: wire_mimic_dataset_dataset_to_reward_shaper_dataset
+  from: mimic_dataset.dataset
+  to: reward_shaper.dataset
+  port_type: dataset
+  binding: ++reward_shaping.dataset_path=${source.dataset_path}
+- id: wire_cql_clinician_value_estimator_to_feature_augmenter_value_estimator
+  from: cql_clinician.value_estimator
+  to: feature_augmenter.value_estimator
+  port_type: value_estimator
+  binding: ++augment.value_model=${source.checkpoint_path}
+- id: wire_feature_augmenter_augmented_dataset_to_ep_transformer_dataset
+  from: feature_augmenter.augmented_dataset
+  to: ep_transformer.dataset
+  port_type: dataset
+  binding: ++mode.dataset_path=${source.dataset_path}
+- id: wire_ep_transformer_value_estimator_to_reward_shaper_potential_function
+  from: ep_transformer.value_estimator
+  to: reward_shaper.potential_function
+  port_type: value_estimator
+  binding: ++reward_shaping.ep_model=${source.checkpoint_path}
+- id: wire_reward_shaper_shaped_dataset_to_cql_clinician_dataset
+  from: reward_shaper.shaped_dataset
+  to: cql_clinician.dataset
+  port_type: dataset
+  binding: ++mode.dataset_path=${source.dataset_path}

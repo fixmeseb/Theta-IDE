@@ -2,7 +2,6 @@
 defaults:
   - early_prediction/_base
 
-task: early_prediction_eval
 
 early_prediction:
   checkpoint: "results/checkpoints/mimic/cql_literature"

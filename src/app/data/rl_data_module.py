@@ -4,6 +4,7 @@ import lightning as L
 import torch
 from torch.utils.data import DataLoader, Dataset
 
+from src.app.core.interfaces import BaseDataModule
 from src.app.dataset_utils import DatasetReader
 
 
@@ -18,17 +19,30 @@ class OfflineDataset(Dataset):
         return idx
 
 
-class RLDataModule(L.LightningDataModule):
-    def __init__(self, cfg: dict[str, Any]):
+class RLDataModule(L.LightningDataModule, BaseDataModule):
+    def __init__(self, cfg: Any = None):
         super().__init__()
         self.cfg = cfg
-        self.reader = None
-        self.val_reader = None
-        self.train_dataset = None
-        self.val_dataset = None
+        self.reader: DatasetReader | None = None
+        self.val_reader: DatasetReader | None = None
+        self.train_dataset: Dataset | None = None
+        self.val_dataset: Dataset | None = None
 
-    def setup(self, stage: str | None = None):
-        if self.cfg.paradigm == "offline_rl":
+    def setup(self, stage: str | None = None, cfg: Any = None) -> None:
+        if cfg is not None and not isinstance(cfg, str):
+            self.cfg = cfg
+        elif stage is not None and not isinstance(stage, str) and cfg is None:
+            self.cfg = stage
+        if self.cfg is None:
+            return
+
+        paradigm = (
+            self.cfg.get("paradigm", "online_rl")
+            if hasattr(self.cfg, "get")
+            else getattr(self.cfg, "paradigm", "online_rl")
+        )
+
+        if paradigm == "offline_rl":
             import os
             from pathlib import Path
 
@@ -42,7 +56,7 @@ class RLDataModule(L.LightningDataModule):
                 import subprocess
                 import sys
 
-                script = Path("scripts/preprocess_pyrenees_per_problem.py")
+                script = Path("in/envs/pyrenees/tools/preprocess_pyrenees_per_problem.py")
                 if script.exists():
                     subprocess.run([sys.executable, str(script)], check=True)
 
@@ -69,14 +83,27 @@ class RLDataModule(L.LightningDataModule):
             self.val_dataset = None
 
     def train_dataloader(self):
-        batch_size = (
-            self.cfg.agent.get("batch_size", 1024)
-            if self.cfg.paradigm == "offline_rl"
-            else self.cfg.agent.get("batch_size", 1)
+        paradigm = (
+            self.cfg.get("paradigm", "online_rl")
+            if hasattr(self.cfg, "get")
+            else getattr(self.cfg, "paradigm", "online_rl")
         )
-        default_workers = 0 if self.cfg.paradigm == "offline_rl" else (2 if torch.cuda.is_available() else 0)
-        num_workers = self.cfg.get("num_workers", self.cfg.agent.get("num_workers", default_workers))
-        pin_memory = self.cfg.get("pin_memory", torch.cuda.is_available() and num_workers > 0)
+        is_offline = paradigm == "offline_rl"
+        agent_cfg = getattr(self.cfg, "agent", {}) if hasattr(self.cfg, "agent") else {}
+        if agent_cfg is None:
+            agent_cfg = {}
+        batch_size = agent_cfg.get("batch_size", 1024) if is_offline else agent_cfg.get("batch_size", 1)
+        default_workers = 0 if is_offline else (2 if torch.cuda.is_available() else 0)
+        num_workers = (
+            self.cfg.get("num_workers", agent_cfg.get("num_workers", default_workers))
+            if hasattr(self.cfg, "get")
+            else default_workers
+        )
+        pin_memory = (
+            self.cfg.get("pin_memory", torch.cuda.is_available() and num_workers > 0)
+            if hasattr(self.cfg, "get")
+            else False
+        )
         persistent_workers = num_workers > 0
         if self.reader is not None:
             return DataLoader(
@@ -91,10 +118,23 @@ class RLDataModule(L.LightningDataModule):
         return DataLoader(self.train_dataset, batch_size=batch_size, shuffle=True)
 
     def val_dataloader(self):
+        paradigm = (
+            self.cfg.get("paradigm", "online_rl")
+            if hasattr(self.cfg, "get")
+            else getattr(self.cfg, "paradigm", "online_rl")
+        )
+        is_offline = paradigm == "offline_rl"
+        agent_cfg = getattr(self.cfg, "agent", {}) if hasattr(self.cfg, "agent") else {}
+        if agent_cfg is None:
+            agent_cfg = {}
         if self.val_dataset is not None and self.val_reader is not None:
-            batch_size = self.cfg.agent.get("batch_size", 1024)
-            default_workers = 0 if self.cfg.paradigm == "offline_rl" else (2 if torch.cuda.is_available() else 0)
-            num_workers = self.cfg.get("num_workers", self.cfg.agent.get("num_workers", default_workers))
+            batch_size = agent_cfg.get("batch_size", 1024)
+            default_workers = 0 if is_offline else (2 if torch.cuda.is_available() else 0)
+            num_workers = (
+                self.cfg.get("num_workers", agent_cfg.get("num_workers", default_workers))
+                if hasattr(self.cfg, "get")
+                else default_workers
+            )
             pin_memory = self.cfg.get("pin_memory", torch.cuda.is_available() and num_workers > 0)
             persistent_workers = num_workers > 0
             return DataLoader(
@@ -106,4 +146,4 @@ class RLDataModule(L.LightningDataModule):
                 persistent_workers=persistent_workers,
                 collate_fn=lambda idxs: self.val_reader.get_batch(idxs, device="cpu"),
             )
-        return DataLoader(self.train_dataset, batch_size=1)
+        return None

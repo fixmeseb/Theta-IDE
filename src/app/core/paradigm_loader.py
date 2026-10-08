@@ -8,13 +8,13 @@ The loader resolves those strings to actual classes at runtime.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Type
 
 # ---------------------------------------------------------------------------
 # Component registry
 # ---------------------------------------------------------------------------
 
-_COMPONENT_REGISTRY: dict[str, type] = {}
+_COMPONENT_REGISTRY: dict[str, Type[Any]] = {}
 _discovered: bool = False
 
 
@@ -27,14 +27,16 @@ def register_component(*names: str):
         class OfflineRLRunner(BaseParadigmRunner):
             ...
     """
+
     def decorator(cls):
         for name in names:
             _COMPONENT_REGISTRY[name] = cls
         return cls
+
     return decorator
 
 
-def get_component(name: str | None) -> type | None:
+def get_component(name: str | None) -> Type[Any] | None:
     """Return a registered component class by name, or None if name is None/empty.
 
     Triggers auto-discovery of all paradigm_impls modules exactly once,
@@ -49,8 +51,7 @@ def get_component(name: str | None) -> type | None:
         _discovered = True
     if name not in _COMPONENT_REGISTRY:
         raise KeyError(
-            f"Component '{name}' is not registered. "
-            f"Registered components: {sorted(_COMPONENT_REGISTRY.keys())}"
+            f"Component '{name}' is not registered. Registered components: {sorted(_COMPONENT_REGISTRY.keys())}"
         )
     return _COMPONENT_REGISTRY[name]
 
@@ -76,20 +77,27 @@ def _auto_discover_components():
             except Exception:
                 pass
 
+    try:
+        importlib.import_module("src.usr.eval.early_prediction.data_module")
+    except Exception:
+        pass
+
 
 # ---------------------------------------------------------------------------
 # ParadigmDefinition dataclass
 # ---------------------------------------------------------------------------
 
+
 @dataclass
 class ParadigmDefinition:
     """Fully resolved paradigm definition with concrete class references."""
+
     name: str
-    type: str                         # 'base' or 'meta'
+    type: str  # 'base' or 'meta'
     description: str = ""
-    runner_cls: type | None = None
-    data_module_cls: type | None = None
-    eval_protocol_cls: type | None = None
+    runner_cls: Type[Any] | None = None
+    data_module_cls: Type[Any] | None = None
+    eval_protocol_cls: Type[Any] | None = None
     default_callback_names: list[str] = field(default_factory=list)
     raw: dict = field(default_factory=dict)  # full raw YAML for access to extra keys
 

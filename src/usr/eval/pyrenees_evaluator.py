@@ -16,12 +16,23 @@ class PyreneesEvaluator:
         self.tier_names = [("Low Tier", 0), ("Med Tier", 1), ("High Tier", 2)]
 
     def _load_agent(self, path):
-        from src.usr.methods.cew_agent import CEWAgent
-        from src.usr.methods.cql_agent import CQLAgent
-        from src.usr.methods.iql_agent import IQLAgent
+        from src.usr.methods.agent_registry import AGENT_REGISTRY, auto_discover, get_agent_class
+
+        auto_discover()
+        candidates = []
+        for name in ("cql", "iql", "blendrl_cql", "blendrl_iql"):
+            try:
+                candidate_cls = get_agent_class(name)
+                if candidate_cls not in candidates:
+                    candidates.append(candidate_cls)
+            except Exception:
+                pass
+        for cls in AGENT_REGISTRY.values():
+            if cls not in candidates and hasattr(cls, "load_from_checkpoint"):
+                candidates.append(cls)
 
         last_error = None
-        for cls in [CQLAgent, CEWAgent, IQLAgent]:
+        for cls in candidates:
             try:
                 ag = cls.load_from_checkpoint(str(path), map_location=self.device, weights_only=False)
                 ag.to(self.device)

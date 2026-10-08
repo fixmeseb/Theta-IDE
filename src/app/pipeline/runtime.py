@@ -38,7 +38,6 @@ def get_pythonpath_entries(site_cfg=None) -> list:
 
     Always includes PROJECT_ROOT and src directories (app, usr, models, environments, eval).
     Adds site_cfg.extra_pythonpath entries (relative to PROJECT_ROOT).
-    Falls back to including fyd_repo if it exists on disk when no site_cfg.
     """
     entries = [
         str(PROJECT_ROOT),
@@ -52,11 +51,6 @@ def get_pythonpath_entries(site_cfg=None) -> list:
     if site_cfg:
         for extra in getattr(site_cfg, "extra_pythonpath", []) or []:
             entries.append(str(PROJECT_ROOT / extra))
-    else:
-        # Fallback: include fyd_repo if it exists
-        fyd = PROJECT_ROOT / "src" / "usr" / "models" / "fyd_repo" / "src"
-        if fyd.exists():
-            entries.append(str(fyd))
     return entries
 
 

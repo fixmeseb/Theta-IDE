@@ -1,0 +1,9 @@
+# Stable-Baselines3 A2C (Advantage Actor Critic)
+algorithm: A2C
+engine: sb3
+policy: MlpPolicy
+learning_rate: 7e-4
+n_steps: 5
+gamma: 0.99
+ent_coef: 0.01
+vf_coef: 0.5

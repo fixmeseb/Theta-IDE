@@ -14,15 +14,15 @@ import os
 from pathlib import Path
 from typing import Any
 
+import lightning as L
 import numpy as np
 import torch
 from sklearn.model_selection import train_test_split
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Dataset
 
-import lightning as L
 from src.app.core.interfaces import BaseDataModule
+from src.app.core.paradigm_loader import register_component
 from src.usr.eval.early_prediction.model import compute_volatility_features, normalize_features
-from torch.utils.data import Dataset
 
 log = logging.getLogger(__name__)
 
@@ -58,6 +58,7 @@ def collate_ep_batch(batch):
     return padded_seqs, torch.stack(labels), lengths, padding_mask
 
 
+@register_component("EPSepsisDataModule", "SepsisDataModule")
 class EPSepsisDataModule(L.LightningDataModule, BaseDataModule):
     """DataModule managing MIMIC clinical trajectory loading and CV splits."""
 
@@ -108,8 +109,7 @@ class EPSepsisDataModule(L.LightningDataModule, BaseDataModule):
                 dataset_path = f"in/datasets/mimic/{ds_name}"
         if not dataset_path:
             raise ValueError(
-                "Dataset path is required for supervised sepsis learning. "
-                "Specify dataset_path in the config."
+                "Dataset path is required for supervised sepsis learning. Specify dataset_path in the config."
             )
         if not os.path.exists(dataset_path) and os.path.exists(f"{dataset_path}.npz"):
             dataset_path = f"{dataset_path}.npz"
@@ -124,15 +124,23 @@ class EPSepsisDataModule(L.LightningDataModule, BaseDataModule):
         self.mask = data["mask"]
         self.patient_lengths = np.array([(self.mask[i].squeeze() != -1).sum() for i in range(len(self.X))])
 
-        self.window_hours = ep_cfg.get("window_hours", 12)
+        data_cfg = cfg.get("data", {}) if hasattr(cfg, "get") else {}
+        if hasattr(data_cfg, "__iter__") and not isinstance(data_cfg, dict):
+            from omegaconf import OmegaConf
+
+            data_cfg = OmegaConf.to_container(data_cfg, resolve=True)
+        if not isinstance(data_cfg, dict):
+            data_cfg = {}
+
+        self.window_hours = ep_cfg.get("window_hours", data_cfg.get("window_hours", 12))
         self.w_steps = 2 * self.window_hours
-        self.tau_train = ep_cfg.get("tau_train", 12)
-        self.tau_max = ep_cfg.get("tau_max", 33)
-        self.use_volatility = ep_cfg.get("use_volatility", True)
-        self.use_norm = ep_cfg.get("use_norm", True)
-        self.use_all_history = ep_cfg.get("use_all_history", False)
-        self.use_all_trajectories = ep_cfg.get("use_all_trajectories", False)
-        self.n_splits = ep_cfg.get("n_splits", 20)
+        self.tau_train = ep_cfg.get("tau_train", data_cfg.get("tau_train", 12))
+        self.tau_max = ep_cfg.get("tau_max", data_cfg.get("tau_max", 33))
+        self.use_volatility = ep_cfg.get("use_volatility", data_cfg.get("use_volatility", True))
+        self.use_norm = ep_cfg.get("use_norm", data_cfg.get("use_norm", True))
+        self.use_all_history = ep_cfg.get("use_all_history", data_cfg.get("use_all_history", False))
+        self.use_all_trajectories = ep_cfg.get("use_all_trajectories", data_cfg.get("use_all_trajectories", False))
+        self.n_splits = ep_cfg.get("n_splits", data_cfg.get("n_splits", 20))
 
         # Precompute CQL policy values V(s) if checkpoint is supplied
         checkpoint = ep_cfg.get("checkpoint")
@@ -269,7 +277,8 @@ class EPSepsisDataModule(L.LightningDataModule, BaseDataModule):
 
         steps_early_tau = 2 * tau
         valid_mask = [
-            i for i, g_idx in enumerate(test_global_patient_indices)
+            i
+            for i, g_idx in enumerate(test_global_patient_indices)
             if self.patient_lengths[g_idx] - steps_early_tau >= 1
         ]
         if not valid_mask:
@@ -300,16 +309,28 @@ class EPSepsisDataModule(L.LightningDataModule, BaseDataModule):
 
     def train_dataloader(self) -> DataLoader:
         batch_size = 64
-        if self.cfg and hasattr(self.cfg, "agent") and hasattr(self.cfg.agent, "get") and self.cfg.agent.get("batch_size"):
+        if (
+            self.cfg
+            and hasattr(self.cfg, "agent")
+            and hasattr(self.cfg.agent, "get")
+            and self.cfg.agent.get("batch_size")
+        ):
             batch_size = int(self.cfg.agent.get("batch_size"))
         loader, _, _, _ = self.get_train_dataloader(split_idx=0, batch_size=batch_size)
         return loader
 
     def val_dataloader(self) -> DataLoader | None:
         batch_size = 64
-        if self.cfg and hasattr(self.cfg, "agent") and hasattr(self.cfg.agent, "get") and self.cfg.agent.get("batch_size"):
+        if (
+            self.cfg
+            and hasattr(self.cfg, "agent")
+            and hasattr(self.cfg.agent, "get")
+            and self.cfg.agent.get("batch_size")
+        ):
             batch_size = int(self.cfg.agent.get("batch_size"))
         tr_idxs, _ = self.get_split_indices(0)
         seqs, input_dim = self.get_training_sequences()
         x_train = [seqs[i] for i in tr_idxs]
-        return self.get_eval_dataloader(split_idx=0, tau=self.tau_train, x_train=x_train, input_dim=input_dim, batch_size=batch_size)
+        return self.get_eval_dataloader(
+            split_idx=0, tau=self.tau_train, x_train=x_train, input_dim=input_dim, batch_size=batch_size
+        )

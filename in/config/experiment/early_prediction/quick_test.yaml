@@ -2,8 +2,10 @@
 defaults:
   - early_prediction/_base
 
-task: early_prediction_sweep
 no_plot: true
+
+eval_protocol:
+  horizons: [1]
 
 early_prediction:
   output_dir: results/plots/early_prediction/quick_test

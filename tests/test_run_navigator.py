@@ -1,10 +1,12 @@
-"""Unit tests for the Run History Navigator, Baseline Pinning, and Curve Smoothing in ThetaIDE."""
 import json
 import os
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+import pytest
+
+pytest.importorskip("PyQt6")
 
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
@@ -129,7 +131,7 @@ class TestRunNavigator(unittest.TestCase):
         # Select the historical run: chip should appear
         self.window.select_run(run1)
         self.assertFalse(self.window.btn_live_jump.isHidden())
-        self.assertIn("Jump to Live", self.window.btn_live_jump.text())
+        self.assertIn("Jump to live", self.window.btn_live_jump.text())
 
         # Clicking Jump to Live snaps back to active run
         self.window.jump_to_live_run()

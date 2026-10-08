@@ -9,6 +9,7 @@ on:
 jobs:
   lint:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -22,18 +23,30 @@ jobs:
         run: ruff format --check src/ plot/ run_pipeline.py
 
   test:
-    runs-on: ubuntu-latest
+    # Pinned: the apt package names below are specific to Ubuntu 24.04 (e.g. libasound2t64)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+      - name: Install Qt system libraries
+        # PyQt6 wheels need these at import time; without them every GUI test file skips or errors
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libegl1 libgl1 libxkbcommon0 libfontconfig1 libdbus-1-3 \
+            libnss3 libxcomposite1 libxdamage1 libxrandr2 libxtst6 libxkbfile1 libgbm1 libasound2t64
       - name: Install dependencies
         run: |
           pip install --upgrade pip
           pip install -e ".[dev,api]"
+          pip install -r frontend/requirements.txt
       - name: Run tests
-        run: pytest tests/ -v --tb=short --cov=src --cov-report=xml
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: pytest tests/ -v --tb=short --timeout=120 --timeout-method=thread --cov=src --cov=frontend --cov-report=xml
       - name: Upload coverage
         uses: codecov/codecov-action@v4
         with:
@@ -43,6 +56,7 @@ jobs:
 
   typecheck:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -53,4 +67,4 @@ jobs:
           pip install --upgrade pip
           pip install -e ".[dev,api]"
       - name: Type check
-        run: mypy src/pipeline/ src/methods/registry.py src/method_registry.py --ignore-missing-imports --follow-imports=silent
+        run: mypy src/app/pipeline/ src/usr/methods/agent_registry.py src/usr/methods/method_style_registry.py --ignore-missing-imports --follow-imports=silent

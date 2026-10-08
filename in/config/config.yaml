@@ -3,6 +3,7 @@ defaults:
   - model: dnn
   - env: cartpole
   - site: local
+  - optional workflow: null
   - _self_
 
 experiment_id: "default_exp"

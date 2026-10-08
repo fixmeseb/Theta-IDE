@@ -18,4 +18,3 @@ forbidden_agents:
   - cql
   - iql
   - ppo
-  - cew

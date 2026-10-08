@@ -9,42 +9,11 @@ from pathlib import Path
 
 from src.app.pipeline.commands import build_method_overrides, get_sweep_direction
 from src.app.pipeline.config import normalize_agent_name
-from src.app.pipeline.datasets import fast_purge_dir, resolve_dataset_path
+from src.app.pipeline.datasets import fast_purge_dir, resolve_dataset_for_method
+from src.app.pipeline.engine import resolve_engine
 from src.app.pipeline.optuna_utils import create_optuna_study, delete_optuna_study, get_next_study_name
 from src.app.pipeline.runtime import get_shell_env_block, get_shell_python_cmd
 from src.app.pipeline.slurm import generate_sbatch_header, generate_sbatch_script, submit_sbatch
-
-
-def _resolve_dataset_for_method(method_name, method_cfg, cfg):
-    """Resolve the dataset path for an offline method."""
-    explicit_ds = method_cfg.get("dataset_path") or cfg.get("dataset_path")
-    if explicit_ds and Path(explicit_ds).exists():
-        return Path(explicit_ds)
-
-    env_dataset = None
-    env_name = None
-    if hasattr(cfg, "env"):
-        env_dataset = cfg.env.get("dataset_name", None)
-        env_name = cfg.env.get("name", None)
-        if env_dataset:
-            try:
-                return resolve_dataset_path(
-                    dataset_id=str(env_dataset).replace(".npz", ""),
-                    group=env_name or cfg.get("group", ""),
-                    experiment_id=cfg.get("experiment_id", ""),
-                    yaml_ds_path=str(explicit_ds) if explicit_ds else None,
-                )
-            except FileNotFoundError:
-                pass
-
-    ds_root = Path("in/datasets") / cfg.group / cfg.experiment_id
-    if ds_root.exists():
-        return ds_root
-
-    raise FileNotFoundError(
-        f"Cannot resolve dataset for method '{method_name}'. "
-        f"No dataset_name in env config and no datasets found at {ds_root}."
-    )
 
 
 def run_slurm_training(cfg, context):
@@ -87,10 +56,10 @@ def run_slurm_training(cfg, context):
         for method_name, method_cfg in methods.items():
             agent_name = normalize_agent_name(method_name)
             dataset_path = None
-            
+
             if paradigm in ("offline_rl", "supervised"):
                 try:
-                    dataset_path = _resolve_dataset_for_method(method_name, method_cfg, cfg)
+                    dataset_path = resolve_dataset_for_method(method_name, method_cfg, cfg)
                 except FileNotFoundError as e:
                     print(f"Error: {e}")
                     sys.exit(1)
@@ -98,7 +67,7 @@ def run_slurm_training(cfg, context):
             method_tune = method_cfg.get("tune") or method_cfg.get("search_space") or {}
             method_is_sweep = bool(is_sweep) or bool(method_tune)
             study_name = get_next_study_name(cfg.group, cfg.experiment_id, agent_name) if method_is_sweep else None
-            
+
             cmd_args = build_method_overrides(
                 method_name=method_name,
                 method_cfg=method_cfg,
@@ -108,18 +77,17 @@ def run_slurm_training(cfg, context):
                 study_name=study_name,
                 is_sweep=method_is_sweep,
             )
-            
+
             if method_is_sweep:
                 direction = (
-                    cfg.get("tuning", {}).get("direction")
-                    if hasattr(cfg, "get") and cfg.get("tuning")
-                    else None
+                    cfg.get("tuning", {}).get("direction") if hasattr(cfg, "get") and cfg.get("tuning") else None
                 ) or get_sweep_direction(cfg, paradigm)
                 create_optuna_study(storage_url, study_name, direction=direction)
 
+            engine_script, _ = resolve_engine(method_cfg, cfg)
             train_cmd = " ".join(shlex.quote(arg) for arg in cmd_args)
             script_content += f'echo "=== [Phase: Training] {method_name} ==="\n'
-            script_content += f"{python_cmd} src/app/train.py {train_cmd}\n\n"
+            script_content += f"{python_cmd} {engine_script} {train_cmd}\n\n"
 
             if method_is_sweep:
                 storage_arg = storage_url if storage_url else ""
@@ -150,10 +118,10 @@ def run_slurm_training(cfg, context):
     for method_name, method_cfg in methods.items():
         agent_name = normalize_agent_name(method_name)
         dataset_path = None
-        
+
         if paradigm in ("offline_rl", "supervised"):
             try:
-                dataset_path = _resolve_dataset_for_method(method_name, method_cfg, cfg)
+                dataset_path = resolve_dataset_for_method(method_name, method_cfg, cfg)
             except FileNotFoundError as e:
                 print(f"Error: {e}")
                 sys.exit(1)
@@ -162,7 +130,7 @@ def run_slurm_training(cfg, context):
         method_is_sweep = bool(is_sweep) or bool(method_tune)
         job_name = f"{agent_name}_{cfg.experiment_id}"
         study_name = get_next_study_name(cfg.group, cfg.experiment_id, agent_name) if method_is_sweep else None
-        
+
         cmd_args = build_method_overrides(
             method_name=method_name,
             method_cfg=method_cfg,
@@ -184,15 +152,14 @@ def run_slurm_training(cfg, context):
 
         if method_is_sweep:
             direction = (
-                cfg.get("tuning", {}).get("direction")
-                if hasattr(cfg, "get") and cfg.get("tuning")
-                else None
+                cfg.get("tuning", {}).get("direction") if hasattr(cfg, "get") and cfg.get("tuning") else None
             ) or get_sweep_direction(cfg, paradigm)
             create_optuna_study(storage_url, study_name, direction=direction)
 
+        engine_script, _ = resolve_engine(method_cfg, cfg)
         train_cmd = " ".join(shlex.quote(arg) for arg in cmd_args)
         script_content += f'echo "=== [Phase: Training] {method_name} ==="\n'
-        script_content += f"{python_cmd} src/app/train.py {train_cmd}\n\n"
+        script_content += f"{python_cmd} {engine_script} {train_cmd}\n\n"
 
         if method_is_sweep:
             storage_arg = storage_url if storage_url else ""

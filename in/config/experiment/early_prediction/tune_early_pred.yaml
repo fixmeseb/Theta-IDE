@@ -2,7 +2,8 @@
 defaults:
   - early_prediction/_base
 
-task: early_prediction_tune
+sweep: true
+
 
 early_prediction:
   checkpoint: "results/checkpoints/mimic/cql_literature"

@@ -8,23 +8,11 @@ import torch.nn as nn
 import torch.optim as optim
 from omegaconf import DictConfig
 
+from src.usr.methods.agent_registry import register_agent
 from src.usr.methods.base_agent import BaseAgent
-from src.usr.methods.registry import register_agent
 
 
-@register_agent(
-    "ppo",
-    "ppo_dnn",
-    "blendrl",
-    "ppo_blendrl_human_neural",
-    "blendrl_human_neural",
-    "ppo_blendrl_cp_tuned",
-    "blendrl_cp_tuned",
-    "ppo_blendrl_final_cp",
-    "blendrl_final_cp",
-    "ppo_blendrl_multi_logic",
-    "blendrl_multi_logic",
-)
+@register_agent("ppo", "blendrl")
 class PPOAgent(BaseAgent):
     """Unified Proximal Policy Optimization (PPO) Online RL Agent.
 
@@ -47,8 +35,8 @@ class PPOAgent(BaseAgent):
         if self.num_minibatches is not None:
             self.batch_size = (self.num_envs * self.num_steps) // self.num_minibatches
 
-        self.gamma = float(self.get_cfg("gamma", getattr(self.cfg.env, "gamma", 0.99)))
-        self.gae_lambda = float(self.get_cfg("gae_lambda", getattr(self.cfg.env, "gae_lambda", 0.95)))
+        self.gamma = float(self.get_cfg("gamma", 0.99))
+        self.gae_lambda = float(self.get_cfg("gae_lambda", 0.95))
         self.clip_coef = self.get_cfg("clip_coef", 0.2)
         self.ent_coef = self.get_cfg("ent_coef", 0.01)
         self.blend_ent_coef = self.get_cfg("blend_ent_coef", 0.01)
@@ -59,31 +47,34 @@ class PPOAgent(BaseAgent):
         self.clip_vloss = self.get_cfg("clip_vloss", True)
 
         self._init_env(n_envs=self.num_envs)
-        algorithm = self.get_cfg("algorithm", self.get_cfg("name", "ppo"))
 
         self.dataset_writer = None
-        if getattr(cfg, "save_dataset", False) and getattr(cfg, "dataset_path", None):
+        if self.get_cfg("save_dataset", False) and self.get_cfg("dataset_path", None):
             from src.app.dataset_utils import DatasetWriter
 
-            self.dataset_writer = DatasetWriter(save_dir=cfg.dataset_path, env_name=cfg.env.name, cfg=cfg)
+            env_name = self.get_cfg("env.name", getattr(getattr(self.cfg, "env", None), "name", "env"))
+            self.dataset_writer = DatasetWriter(save_dir=self.get_cfg("dataset_path"), env_name=env_name, cfg=self.cfg)
 
         # Check if modular/hybrid policy is configured
-        has_modules = bool(self.get_cfg("modules", []))
-        is_hybrid = self.get_cfg("actor_mode", "neural") in ["hybrid", "logic"] or "blendrl" in str(algorithm)
-        self.is_modular = has_modules or is_hybrid
+        self.is_modular = self.is_hybrid_configured()
+
+        default_rules = self.get_cfg("rules", "default")
+        default_reasoner = self.get_cfg("reasoner", "nsfr")
+        default_arch = self.get_cfg("architecture", "mlp")
 
         if self.is_modular:
-            from src.usr.models.blendrl.agents.blender_agent import BlenderActorCritic
+            from src.app.core.model_registry import build_model
 
-            self.model = BlenderActorCritic(
-                self.env,
-                self.get_cfg("rules", cfg.env.rules),
-                self.get_cfg("actor_mode", "hybrid"),
-                self.get_cfg("blender_mode", "neural"),
-                self.get_cfg("blend_function", "softmax"),
-                self.get_cfg("reasoner", cfg.env.reasoner),
-                self.device,
-                architecture=self.get_cfg("architecture", cfg.env.architecture),
+            self.model = build_model(
+                "blendrl",
+                env=self.env,
+                device=self.device,
+                rules=self.get_cfg("rules", default_rules),
+                actor_mode=self.get_cfg("actor_mode", "hybrid"),
+                blender_mode=self.get_cfg("blender_mode", "neural"),
+                blend_function=self.get_cfg("blend_function", "softmax"),
+                reasoner=self.get_cfg("reasoner", default_reasoner),
+                architecture=self.get_cfg("architecture", default_arch),
                 cfg=self.cfg,
             )
             self.logic_shape = (
@@ -91,14 +82,19 @@ class PPOAgent(BaseAgent):
             )
             self.register_buffer("logic_obs", torch.zeros((self.num_steps, self.num_envs) + self.logic_shape))
         else:
-            from src.app.core.factories import get_neural_agent
+            from src.app.core.model_registry import build_model
 
-            self.model = get_neural_agent(
-                cfg.env.name,
-                self.n_actions,
-                self.device,
-                arch_name=cfg.env.architecture,
+            model_arch = self.resolve_model_name(default=default_arch)
+            obs_dim = (
+                self.observation_space[-1] if hasattr(self, "observation_space") and self.observation_space else None
+            )
+            self.model = build_model(
+                model_arch,
+                env=self.env,
+                n_actions=self.n_actions,
+                device=self.device,
                 hidden_sizes=self.get_cfg("hidden_sizes", [64, 64]),
+                obs_dim=obs_dim,
             )
 
         # Storage for rollouts

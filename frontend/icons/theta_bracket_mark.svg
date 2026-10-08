@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- Corner mark: one shape in currentColor, with the bracket theta cut out of the tile
+       so the sidebar shows through. The app recolors currentColor to the theme accent. -->
+  <path fill="currentColor" fill-rule="evenodd" d="M190 0H834A190 190 0 0 1 1024 190V834A190 190 0 0 1 834 1024H190A190 190 0 0 1 0 834V190A190 190 0 0 1 190 0Z M216 212H432V284H384A40 40 0 0 0 344 324V700A40 40 0 0 0 384 740H432V812H216Z M808 212H592V284H640A40 40 0 0 1 680 324V700A40 40 0 0 1 640 740H592V812H808Z M416 440C430 470 452 480 490 480H534C572 480 594 470 608 440V584C594 554 572 544 534 544H490C452 544 430 554 416 584Z"/>
+</svg>

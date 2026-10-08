@@ -7,6 +7,10 @@ paradigm: offline_rl
 intervals_count: 1
 eval_episodes: 0
 
+methods:
+  params:
+    rules: step
+
 resources:
   time: "02:00:00"
   gpus: 1

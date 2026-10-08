@@ -11,8 +11,13 @@ FINISHED_MARKS = {"completed": "✓", "failed": "✗", "error": "✗", "cancelle
 
 
 def clock(seconds):
-    seconds = int(max(0, seconds))
-    return f"{seconds // 60}:{seconds % 60:02d}"
+    if seconds is None:
+        return "0:00"
+    try:
+        seconds = int(max(0, seconds))
+        return f"{seconds // 60}:{seconds % 60:02d}"
+    except (TypeError, ValueError):
+        return "0:00"
 
 
 class QueuePanel(QWidget):
@@ -34,7 +39,7 @@ class QueuePanel(QWidget):
         about.setWordWrap(True)
         layout.addWidget(about)
         state_row = QHBoxLayout()
-        self.run_button = self.button("▶  Start queue", lambda: self.on_toggle(not self.running))
+        self.run_button = self.button("Start queue", lambda: self.on_toggle(not self.running))
         state_row.addWidget(self.run_button)
         self.state = label("", "muted")
         self.state.setWordWrap(True)
@@ -57,9 +62,9 @@ class QueuePanel(QWidget):
         layout.addWidget(self.table, 1)
 
         actions = QHBoxLayout()
-        self.up_button = self.button("▲  Move up", lambda: self.move_selected(-1))
-        self.down_button = self.button("▼  Move down", lambda: self.move_selected(1))
-        self.remove_button = self.button("✕  Remove from queue", self.remove_selected)
+        self.up_button = self.button("Move up", lambda: self.move_selected(-1))
+        self.down_button = self.button("Move down", lambda: self.move_selected(1))
+        self.remove_button = self.button("Remove from queue", self.remove_selected)
         self.open_button = self.button("Open in monitor", self.open_selected)
         for button in (self.up_button, self.down_button, self.remove_button, self.open_button):
             actions.addWidget(button)
@@ -75,49 +80,69 @@ class QueuePanel(QWidget):
         return button
 
     def selected(self):
-        rows = self.table.selectionModel().selectedRows()
-        return self.rows[rows[0].row()] if rows else (None, None)
+        selection_model = self.table.selectionModel()
+        rows = selection_model.selectedRows() if selection_model else []
+        if rows and rows[0].row() < len(self.rows):
+            return self.rows[rows[0].row()]
+        return (None, None)
 
     def set_offline(self, error):
         self.summary.setText("Backend offline — the queue is kept by the API server")
-        self.summary.setToolTip(error)
+        self.summary.setToolTip(str(error or ""))
         self.run_button.setEnabled(False)
 
     def set_data(self, data):
         _, keep = self.selected()
-        keep_id = keep and keep["job_id"]
-        self.rows = ([("active", j) for j in data["active"]] + [("queued", j) for j in data["queued"]]
-                     + [("finished", j) for j in data["finished"]])
-        self.queued_count = len(data["queued"])
+        keep_id = keep and keep.get("job_id")
+        active_jobs = data.get("active", [])
+        queued_jobs = data.get("queued", [])
+        finished_jobs = data.get("finished", [])
+        self.rows = ([("active", j) for j in active_jobs] + [("queued", j) for j in queued_jobs]
+                     + [("finished", j) for j in finished_jobs])
+        self.queued_count = len(queued_jobs)
         now = time.time()
         self.table.blockSignals(True)
         self.table.setRowCount(0)
         for kind, job in self.rows:
             if kind == "active":
                 marker = "▶"
-                timing = f"running {clock(now - job.get('started', job['created']))}"
+                start = job.get("started") or job.get("created")
+                if job.get("status") == "pending" or not job.get("started"):
+                    timing = f"starting {clock(now - start)}" if start else "starting"
+                else:
+                    timing = f"running {clock(now - start)}" if start else "running"
             elif kind == "queued":
-                marker = str(job["position"] + 1)
-                timing = "queued " + time.strftime("%H:%M", time.localtime(job["created"]))
+                pos = job.get("position", 0)
+                marker = str(pos + 1)
+                created = job.get("created")
+                timing = ("queued " + time.strftime("%H:%M", time.localtime(created))) if created else "queued"
             else:
-                marker = FINISHED_MARKS.get(job["status"], "·")
+                marker = FINISHED_MARKS.get(job.get("status"), "·")
                 start = job.get("started")
-                timing = (f"took {clock(job['finished'] - start)}" if start and job.get("finished")
+                finished = job.get("finished")
+                timing = (f"took {clock(finished - start)}" if start and finished
                           else "never started")
             steps = job.get("effective_timesteps") or job.get("total_timesteps")
+            try:
+                steps_text = f"{int(steps):,}" if steps else "—"
+            except (ValueError, TypeError):
+                steps_text = str(steps) if steps else "—"
+
+            exp_id = str(job.get("experiment_id") or job.get("job_id") or "—")
+            status_text = str(job.get("status") or "—")
+
             row = self.table.rowCount()
             self.table.insertRow(row)
-            for col, text in enumerate((marker, job["experiment_id"], f"{steps:,}" if steps else "—",
-                                        job["status"], timing)):
+            for col, text in enumerate((marker, exp_id, steps_text, status_text, timing)):
                 cell = QTableWidgetItem(text)
                 if col == 0:
                     cell.setTextAlignment(Qt.AlignmentFlag.AlignCenter)
                 self.table.setItem(row, col, cell)
-            if job["job_id"] == keep_id:
+            if job.get("job_id") == keep_id:
                 self.table.selectRow(row)
         self.table.blockSignals(False)
-        self.running = data["running"]
-        active = len(data["active"])
+        self.running = bool(data.get("running", False))
+        active = len(active_jobs)
         self.summary.setText(f"{active} running  ·  {self.queued_count} queued")
         self.summary.setToolTip("")
         if self.running:
@@ -129,7 +154,7 @@ class QueuePanel(QWidget):
                                + ("  The job already training will finish." if active else ""))
         else:
             self.state.setText("Queue empty. Add experiments with “Add to queue”.")
-        self.run_button.setText("⏸  Pause queue" if self.running else "▶  Start queue")
+        self.run_button.setText("Pause queue" if self.running else "Start queue")
         self.run_button.setObjectName("" if self.running else "primary")
         self.run_button.setStyle(self.run_button.style())
         self.run_button.setEnabled(self.running or self.queued_count > 0)
@@ -137,23 +162,26 @@ class QueuePanel(QWidget):
 
     def update_buttons(self):
         kind, job = self.selected()
-        queued = kind == "queued"
-        self.up_button.setEnabled(queued and job["position"] > 0)
-        self.down_button.setEnabled(queued and job["position"] < self.queued_count - 1)
+        queued = kind == "queued" and job is not None
+        pos = (job.get("position") if job else None)
+        pos = pos if pos is not None else -1
+        self.up_button.setEnabled(queued and pos > 0)
+        self.down_button.setEnabled(queued and pos < self.queued_count - 1)
         self.remove_button.setEnabled(queued)
         self.open_button.setEnabled(job is not None)
 
     def move_selected(self, delta):
         kind, job = self.selected()
-        if kind == "queued":
-            self.on_move(job["job_id"], job["position"] + delta)
+        if kind == "queued" and job and "job_id" in job:
+            pos = job.get("position", 0)
+            self.on_move(job["job_id"], pos + delta)
 
     def remove_selected(self):
         kind, job = self.selected()
-        if kind == "queued":
+        if kind == "queued" and job and "job_id" in job:
             self.on_remove(job["job_id"])
 
     def open_selected(self):
         _, job = self.selected()
-        if job is not None:
+        if job is not None and "job_id" in job:
             self.on_open(job["job_id"])

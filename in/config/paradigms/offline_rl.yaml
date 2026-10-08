@@ -16,6 +16,5 @@ constraints:
 allowed_agents:
   - cql
   - iql
-  - cew
 forbidden_agents:
   - ppo

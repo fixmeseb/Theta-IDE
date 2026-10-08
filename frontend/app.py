@@ -1,26 +1,57 @@
-"""Spyder-inspired research workspace. Configs are composed and trained by the NeSyRL backend."""
+"""Spyder-inspired research workspace for deep learning and reinforcement learning experimentation."""
 import argparse
-from dataclasses import asdict, replace
-from datetime import datetime
 import json
 import os
-from pathlib import Path
 import sys
+from dataclasses import asdict, replace
+from datetime import datetime
+from pathlib import Path
 from typing import Optional
+
+import yaml
 
 if sys.platform == "darwin" and "QTWEBENGINE_CHROMIUM_FLAGS" not in os.environ:
     os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = "--disable-gpu"
 
-from PyQt6.QtCore import Qt, QTimer, QRegularExpression, QUrl
-from PyQt6.QtGui import QAction, QFont, QRegularExpressionValidator, QDesktopServices, QIcon
+from PyQt6.QtCore import QRegularExpression, Qt, QTimer, QUrl
+from PyQt6.QtGui import QAction, QDesktopServices, QFont, QIcon, QRegularExpressionValidator
 from PyQt6.QtWidgets import (
-    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QFormLayout,
-    QDockWidget, QTabWidget, QPlainTextEdit, QLineEdit, QComboBox, QSpinBox, QCheckBox,
-    QDoubleSpinBox, QPushButton, QTreeWidget, QTreeWidgetItem, QToolBar,
-    QTableWidget, QTableWidgetItem, QHeaderView, QAbstractItemView,
-    QProgressBar, QScrollArea, QFileDialog, QMessageBox, QDialog, QSplitter,
-    QFrame, QToolButton, QSlider, QStyle, QLabel,
+    QAbstractItemView,
+    QApplication,
+    QCheckBox,
+    QComboBox,
+    QDialog,
+    QDockWidget,
+    QDoubleSpinBox,
+    QFileDialog,
+    QFormLayout,
+    QFrame,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QLineEdit,
+    QMainWindow,
+    QMessageBox,
+    QPlainTextEdit,
+    QProgressBar,
+    QPushButton,
+    QScrollArea,
+    QSlider,
+    QSpinBox,
+    QSplitter,
+    QStyle,
+    QTableWidget,
+    QTableWidgetItem,
+    QTabWidget,
+    QToolBar,
+    QToolButton,
+    QTreeWidget,
+    QTreeWidgetItem,
+    QVBoxLayout,
+    QWidget,
 )
+
+from . import wheel_guard
 from .api import DEFAULT_URL, Backend
 from .model import (BASE_EXPERIMENT, FINAL_STATUSES, LIVE_STATUSES, RESULT_COLUMNS, SOURCE_FILTERS, STATUS_FILTERS,
                     Config, Store, available_metrics, disk_run, example_runs, latest, matches_filters, metric_points,
@@ -30,17 +61,37 @@ from .theme import STYLE, ThemeManager, theme_color
 from .theme_builder import ThemeBuilder
 from .widgets import Chart, MetricCard, SortableItem, ToggleSlider, YamlHighlighter, label
 from .about import AboutDialog, AsciiTheta
+from .api import DEFAULT_URL, Backend
+from .app_icon import DESKTOP_FILE_NAME, ICON_PATH, app_icon, install_desktop_entry, set_windows_app_id
+from .components_panel import ComponentsPanel
 from .config_tree import ConfigTreeWidget
 from .config_viewer import ConfigViewer
-from .components_panel import ComponentsPanel
+from .hub import HubClient, HubDialog
+from .model import (
+    BASE_EXPERIMENT,
+    FINAL_STATUSES,
+    LIVE_STATUSES,
+    Config,
+    Store,
+    available_metrics,
+    example_runs,
+    latest,
+    metric_points,
+    new_run,
+    sample,
+)
 from .plots import PlotViewer
+from .plugins import PluginManager
 from .queue_panel import QueuePanel
-from .sidetabs import SideTabs
+from .settings import SettingsManager
+from .sidetabs import SideTabs, svg_icon
 from .tensorboard import TensorBoardPanel
 from .terminal import TerminalPanel
-from .plugins import PluginManager
-from .hub import HubClient, HubDialog
-
+from .theme import STYLE, ThemeManager, theme_color
+from .theme_builder import ThemeBuilder
+from .titlebar import apply_title_bar
+from .widgets import Chart, MetricCard, ToggleSlider, YamlHighlighter, label
+from .workflows import WorkflowsPanel
 
 # Metrics the monitor's second chart can show: key -> (card title, chart title, subtitle, value format)
 SECOND_METRICS = {
@@ -74,16 +125,28 @@ class Window(QMainWindow):
         )
         self.pane_sliders = {}
         self.plugin_sliders = {}
+        data_p = Path(data_dir).resolve()
+        if data_p.name == "runs" and data_p.parent.name == ".thetaide":
+            workspace_dir = data_p.parent.parent
+            ide_data_dir = data_p.parent
+        elif data_p.name == ".thetaide":
+            workspace_dir = data_p.parent
+            ide_data_dir = data_p
+        else:
+            workspace_dir = data_p.parent
+            ide_data_dir = data_p
+
         self.plugin_manager = PluginManager(
             self,
-            [Path(__file__).parent / "plugins", Path(data_dir) / "plugins"],
+            [Path(__file__).parent / "plugins" / "core", Path(__file__).parent / "plugins", ide_data_dir / "plugins"],
             settings_manager=self.settings_manager,
         )
         self.plugin_manager.discover()
         self.hub_client = HubClient(
-            workspace_dir=Path(data_dir).resolve().parent,
-            data_dir=Path(data_dir),
+            workspace_dir=workspace_dir,
+            data_dir=ide_data_dir,
             on_change_callback=self._on_hub_component_changed,
+            settings_manager=self.settings_manager,
         )
         saved, errors = self.store.load()
         self.runs = saved or example_runs()
@@ -125,10 +188,14 @@ class Window(QMainWindow):
         self.init_default_experiment()
         self.tabs.tabOrderChanged.connect(lambda _: self.save_layout())
         self.load_layout()
+        if hasattr(self, "settings_manager"):
+            self.tabs.set_auto_hide(bool(self.settings_manager.get("sidebar", "auto_hide", default=False)))
+        self.tabs.autoHideChanged.connect(self.on_sidebar_auto_hide_changed)
         self.make_menus()
         self.theme_status = label("", "muted")
         self.statusBar().addWidget(self.theme_status)
         self.theme_manager.changed.connect(self.theme_changed)
+        self.theme_manager.committed.connect(self.persist_theme_choice)
         self.theme_changed()
         self.state_label = label("TRAINING   •   idle  ", "muted")
         self.statusBar().addPermanentWidget(self.state_label)
@@ -165,60 +232,66 @@ class Window(QMainWindow):
         self.setCentralWidget(self.tabs)
 
         # 1. Components Panel
-        self.components_panel = ComponentsPanel(log_fn=self.log, parent=self)
+        self.components_panel = ComponentsPanel(hub_client=self.hub_client, log_fn=self.log, parent=self)
         self.tabs.addTab(self.components_panel, "Components", "components", "Components", tab_id="components")
 
         # 2. Experiment (Config) Panel
         config_panel = QWidget()
         config_layout = QVBoxLayout(config_panel)
         config_layout.setContentsMargins(18, 14, 18, 14)
-        config_layout.setSpacing(10)
-
-        actions_bar = QHBoxLayout()
-        actions_bar.setSpacing(8)
-        actions_bar.addWidget(self.button("+  New in group…", self.new_experiment))
-        actions_bar.addWidget(self.button("📑  Duplicate…", self.duplicate_experiment))
-        self.start_button = self.button("▶  Launch training", self.launch_training, True)
-        self.start_button.setToolTip("Train the loaded experiment config through the backend (F5)")
-        self.start_button.setEnabled(False)
-        actions_bar.addWidget(self.start_button)
-        self.queue_button = self.button("＋  Add to queue", self.add_to_queue)
-        self.queue_button.setToolTip("Queue the loaded config; queued jobs train one at a time, in order (Ctrl+Shift+Q)")
-        self.queue_button.setEnabled(False)
-        actions_bar.addWidget(self.queue_button)
-        self.stop_button = self.button("■  Stop", self.stop_run)
-        self.stop_button.setEnabled(False)
-        actions_bar.addWidget(self.stop_button)
-        actions_bar.addWidget(self.button("💾  Save YAML", self.save_current_config))
-        actions_bar.addWidget(self.button("Export recipe YAML…", self.export_config))
-        actions_bar.addStretch()
-
-        self.btn_toggle_yaml = QPushButton("{ }  View Hydra YAML")
-        self.btn_toggle_yaml.setCheckable(True)
-        self.btn_toggle_yaml.setChecked(False)
-        self.btn_toggle_yaml.setToolTip("Toggle preview of the resolved Hydra YAML configuration")
-        self.btn_toggle_yaml.clicked.connect(lambda: self.toggle_yaml_preview())
-        actions_bar.addWidget(self.btn_toggle_yaml)
-
-        config_layout.addLayout(actions_bar)
+        config_layout.setSpacing(0)
 
         splitter = QSplitter(Qt.Orientation.Horizontal)
         self.config_splitter = splitter
 
-        # 1. Config Tree (mirrors in/config/experiment/)
+        # 1. Config Tree (mirrors in/config/experiment/) - extends to top!
         self.config_tree = ConfigTreeWidget(mode="experiments")
         self.config_tree.setMinimumWidth(220)
         self.tree = self.config_tree.tree  # backwards compatibility alias
         self.config_tree.file_selected.connect(self.on_config_file_selected)
         splitter.addWidget(self.config_tree)
 
-        # 2. Boxed Config Viewer (takes up the main area of the screen)
+        # 2. Right Side Section (contains actions bar and viewer / preview)
+        right_panel = QWidget()
+        right_layout = QVBoxLayout(right_panel)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(10)
+
+        actions_bar = QHBoxLayout()
+        actions_bar.setSpacing(8)
+        self.start_button = self.button("Launch training", self.launch_training, True)
+        self.start_button.setToolTip("Train the loaded experiment config through the backend (F5)")
+        self.start_button.setEnabled(False)
+        actions_bar.addWidget(self.start_button)
+        self.queue_button = self.button("Add to queue", self.add_to_queue)
+        self.queue_button.setToolTip("Queue the loaded config; queued jobs train one at a time, in order (Ctrl+Shift+Q)")
+        self.queue_button.setEnabled(False)
+        actions_bar.addWidget(self.queue_button)
+        self.stop_button = self.button("Stop", self.stop_run)
+        self.stop_button.setEnabled(False)
+        actions_bar.addWidget(self.stop_button)
+        actions_bar.addWidget(self.button("Export recipe YAML…", self.export_config))
+        actions_bar.addStretch()
+
+        self.btn_toggle_yaml = QPushButton("View Hydra YAML")
+        self.btn_toggle_yaml.setCheckable(True)
+        self.btn_toggle_yaml.setChecked(False)
+        self.btn_toggle_yaml.setToolTip("Toggle preview of the resolved Hydra YAML configuration")
+        self.btn_toggle_yaml.clicked.connect(lambda: self.toggle_yaml_preview())
+        actions_bar.addWidget(self.btn_toggle_yaml)
+
+        right_layout.addLayout(actions_bar)
+
+        preview_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.preview_splitter = preview_splitter
+
+        # Boxed Config Viewer (takes up the main area of the screen)
         self.config_viewer = ConfigViewer()
         self.config_viewer.config_changed.connect(self.update_config)
         self.config_viewer.save_requested.connect(self.on_config_saved)
-        splitter.addWidget(self.config_viewer)
+        preview_splitter.addWidget(self.config_viewer)
 
-        # 3. Preview Panel (Hydra YAML - hidden by default!)
+        # Preview Panel (Hydra YAML - hidden by default!)
         preview_panel = QWidget()
         preview_layout = QVBoxLayout(preview_panel)
         preview_layout.setContentsMargins(0, 0, 0, 0)
@@ -253,14 +326,22 @@ class Window(QMainWindow):
 
         self.preview_panel = preview_panel
         self.preview_panel.hide()  # Hidden by default!
-        splitter.addWidget(preview_panel)
+        preview_splitter.addWidget(preview_panel)
 
-        splitter.setSizes([260, 1000, 0])
+        preview_splitter.setSizes([1000, 0])
+        right_layout.addWidget(preview_splitter, 1)
+
+        splitter.addWidget(right_panel)
+        splitter.setSizes([260, 1000])
         config_layout.addWidget(splitter, 1)
         self.config_panel = config_panel
         self.tabs.addTab(self.config_panel, "Experiment", "config", "Experiment", tab_id="config")
 
-        # 3. Training Monitor Panel
+        # 3. Workflows Panel (String Diagrams)
+        self.workflows_panel = WorkflowsPanel(log_fn=self.log, parent=self)
+        self.tabs.addTab(self.workflows_panel, "Workflows", "workflow", "Workflows", tab_id="workflows")
+
+        # 4. Training Monitor Panel
         monitor = QWidget()
         layout = QVBoxLayout(monitor)
         layout.setContentsMargins(20, 18, 20, 14)
@@ -289,23 +370,23 @@ class Window(QMainWindow):
         self.run_combo.currentIndexChanged.connect(self.on_run_combo_changed)
         nav_row.addWidget(self.run_combo, 1)
 
-        self.btn_prev_run = QPushButton("◀ Prev")
+        self.btn_prev_run = QPushButton("Previous")
         self.btn_prev_run.setToolTip("View previous experiment run in history")
         self.btn_prev_run.clicked.connect(self.select_prev_run)
         nav_row.addWidget(self.btn_prev_run)
 
-        self.btn_next_run = QPushButton("Next ▶")
+        self.btn_next_run = QPushButton("Next")
         self.btn_next_run.setToolTip("View next experiment run in history")
         self.btn_next_run.clicked.connect(self.select_next_run)
         nav_row.addWidget(self.btn_next_run)
 
-        self.btn_live_jump = QPushButton("🟢 Jump to Live")
+        self.btn_live_jump = QPushButton("Jump to live")
         self.btn_live_jump.setToolTip("Return view to the currently training run")
         self.btn_live_jump.clicked.connect(self.jump_to_live_run)
         self.btn_live_jump.hide()
         nav_row.addWidget(self.btn_live_jump)
 
-        self.btn_pin_baseline = QPushButton("📌 Pin as Baseline")
+        self.btn_pin_baseline = QPushButton("Pin as baseline")
         self.btn_pin_baseline.setCheckable(True)
         self.btn_pin_baseline.setToolTip("Pin this run to overlay as a dashed baseline curve on other runs")
         self.btn_pin_baseline.clicked.connect(self.toggle_pin_baseline)
@@ -319,7 +400,7 @@ class Window(QMainWindow):
         caption_row = QHBoxLayout()
         self.run_caption = label("Configure an experiment, then launch training.", "muted")
         caption_row.addWidget(self.run_caption, 1)
-        self.storage_label = label("📁 results/logs/  •  🗄️ results/jobs/jobs.db", "muted")
+        self.storage_label = label("results/logs/  ·  results/jobs/jobs.db", "muted")
         caption_row.addWidget(self.storage_label)
         layout.addLayout(caption_row)
         row = QHBoxLayout()
@@ -347,7 +428,7 @@ class Window(QMainWindow):
         self.monitor_note.setWordWrap(True)
         monitor_footer = QHBoxLayout()
         monitor_footer.addWidget(self.monitor_note, 1)
-        monitor_footer.addWidget(self.button("Open TensorBoard  →", self.show_tensorboard))
+        monitor_footer.addWidget(self.button("Open TensorBoard", self.show_tensorboard))
         layout.addLayout(monitor_footer)
         self.monitor_panel = monitor
         self.tabs.addTab(self.monitor_panel, "Training monitor", "monitor", "Monitor", tab_id="monitor")
@@ -428,6 +509,7 @@ class Window(QMainWindow):
 
         self.settings_panel = self.make_settings()
         self.tabs.set_settings_widget(self.settings_panel)
+        self.tabs.logoClicked.connect(lambda: getattr(self, "settings_view", None) and self.settings_view.reset_to_ascii())
         self.tabs.currentChanged.connect(self.tab_changed)
 
     def dock(self, title, name, widget, area):
@@ -449,20 +531,21 @@ class Window(QMainWindow):
         else:
             self.btn_toggle_yaml.setChecked(checked)
         self.preview_panel.setVisible(checked)
-        if checked:
-            self.config_splitter.setSizes([240, 600, 420])
-            self.request_compose()
-        else:
-            self.config_splitter.setSizes([240, 1000, 0])
+        if hasattr(self, "preview_splitter"):
+            if checked:
+                self.preview_splitter.setSizes([600, 420])
+                self.request_compose()
+            else:
+                self.preview_splitter.setSizes([1000, 0])
 
     def on_config_file_selected(self, file_path, rel_path):
         self.active_config_path = file_path
         self.active_config_rel_path = rel_path
         self.config_viewer.load_file(file_path, rel_path)
 
-        norm_rel = str(Path(rel_path)).replace("\\", "/")
+        norm_rel = Path(rel_path).as_posix()
         if norm_rel.startswith("experiment/") and not Path(rel_path).name.startswith("_"):
-            exp_name = str(Path(norm_rel).relative_to("experiment").with_suffix(""))
+            exp_name = Path(norm_rel).relative_to("experiment").with_suffix("").as_posix()
             self.current_experiment = exp_name
             self.start_button.setEnabled(self.compose_valid)
             self.queue_button.setEnabled(self.compose_valid)
@@ -528,291 +611,16 @@ class Window(QMainWindow):
             self.console.clear()
 
     def make_settings(self):
-        panel = QWidget()
-        layout = QVBoxLayout(panel)
-        layout.setContentsMargins(20, 18, 20, 18)
-        layout.setSpacing(14)
+        from .settings_view import SettingsView
+        self.settings_view = SettingsView(self)
+        return self.settings_view
 
-        layout.addWidget(label("WORKSPACE & PREFERENCES", "eyebrow"))
-        layout.addWidget(label("Settings & About", "heading"))
-        layout.addWidget(label("Configure visual themes, backend connectivity, workspace storage, and quick commands.", "muted"))
-
-        splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.setChildrenCollapsible(False)
-
-        # Left Column: Settings Cards
-        left_container = QWidget()
-        left_layout = QVBoxLayout(left_container)
-        left_layout.setContentsMargins(0, 0, 10, 0)
-        left_layout.setSpacing(14)
-
-        # Card 1: Appearance & Theme
-        theme_card = QFrame()
-        theme_card.setObjectName("card")
-        tc_layout = QVBoxLayout(theme_card)
-        tc_layout.setContentsMargins(14, 12, 14, 12)
-        tc_layout.setSpacing(10)
-        tc_layout.addWidget(label("APPEARANCE", "eyebrow"))
-        tc_layout.addWidget(label("Theme & Palette", "heading"))
-        tc_layout.addWidget(label("Select a color palette or customize individual UI roles.", "muted"))
-        theme_row = QHBoxLayout()
-        theme_row.addWidget(label("Active theme:", "muted"))
-        self.settings_theme_select = QComboBox()
-        for name in self.theme_manager.themes():
-            self.settings_theme_select.addItem(name)
-        self.settings_theme_select.setCurrentText(self.theme_manager.active["name"])
-        self.settings_theme_select.currentTextChanged.connect(self.settings_theme_selected)
-        theme_row.addWidget(self.settings_theme_select, 1)
-        btn_builder = QPushButton("Customize palette…")
-        btn_builder.clicked.connect(self.show_theme_builder)
-        theme_row.addWidget(btn_builder)
-        tc_layout.addLayout(theme_row)
-        left_layout.addWidget(theme_card)
-
-        # Card 1.5: Sidebar Navigation & Panes
-        sidebar_card = QFrame()
-        sidebar_card.setObjectName("card")
-        sb_layout = QVBoxLayout(sidebar_card)
-        sb_layout.setContentsMargins(14, 12, 14, 12)
-        sb_layout.setSpacing(10)
-        sb_layout.addWidget(label("SIDEBAR & NAVIGATION", "eyebrow"))
-        sb_layout.addWidget(label("Panels & Visibility", "heading"))
-        sb_layout.addWidget(label("Toggle which panels appear in the sidebar. Drag icons on the left activity bar to reorder.", "muted"))
-
-        panes_grid = QVBoxLayout()
-        panes_grid.setSpacing(8)
-
-        pane_metadata = [
-            ("components", "Components", "Modular configs (agent, env, model, paradigms, site, hydra)"),
-            ("config", "Experiment builder", "Hydra configurations & hyperparameter tuner"),
-            ("monitor", "Training monitor", "Overview charts & live training curves"),
-            ("results", "Results browser", "Experiment runs, comparison, & metrics"),
-            ("plots", "Plot viewer", "Saved figure plots & multi-seed comparisons"),
-            ("tensorboard", "TensorBoard", "Interactive TensorBoard event visualizer"),
-            ("queue", "Job queue", "Local sequential run scheduler & manager"),
-            ("terminal", "Terminal", "Embedded terminal shell"),
-            ("console", "Console", "Live Theta IDE system log & command line"),
-        ]
-
-        self.pane_sliders = {}
-        for pid, name, desc in pane_metadata:
-            row = QHBoxLayout()
-            info_layout = QVBoxLayout()
-            info_layout.setSpacing(1)
-            title_lbl = label(name)
-            title_lbl.setStyleSheet("font-weight: 600;")
-            desc_lbl = label(desc, "muted")
-            info_layout.addWidget(title_lbl)
-            info_layout.addWidget(desc_lbl)
-            row.addLayout(info_layout, 1)
-
-            slider = ToggleSlider(checked=self.tabs.is_tab_visible(pid))
-            slider.setToolTip(f"Show or hide {name} in the sidebar")
-            slider.setAccessibleName(f"Toggle {name} visibility in sidebar")
-            slider.toggled.connect(lambda chk, p=pid: self.on_pane_slider_toggled(p, chk))
-            self.pane_sliders[pid] = slider
-            row.addWidget(slider)
-            panes_grid.addLayout(row)
-
-        sb_layout.addLayout(panes_grid)
-
-        sb_btn_row = QHBoxLayout()
-        btn_reset_sidebar = QPushButton("Restore default sidebar")
-        btn_reset_sidebar.setToolTip("Show all panels and restore original sidebar order")
-        btn_reset_sidebar.clicked.connect(self.reset_sidebar_layout)
-        sb_btn_row.addWidget(btn_reset_sidebar)
-        sb_btn_row.addStretch()
-        sb_layout.addLayout(sb_btn_row)
-
-        left_layout.addWidget(sidebar_card)
-
-        # Card 1.8: Plugins & Extensions
-        plugins_card = QFrame()
-        plugins_card.setObjectName("card")
-        pc_layout = QVBoxLayout(plugins_card)
-        pc_layout.setContentsMargins(14, 12, 14, 12)
-        pc_layout.setSpacing(10)
-        pc_layout.addWidget(label("EXTENSIONS & PLUGINS", "eyebrow"))
-        pc_layout.addWidget(label("Installed Plugins", "heading"))
-        pc_layout.addWidget(label("Enable or disable modular plugins. Extensions dynamically mount panels into the sidebar.", "muted"))
-
-        self.plugins_grid = QVBoxLayout()
-        self.plugins_grid.setSpacing(8)
-        self.plugin_sliders = {}
-        pc_layout.addLayout(self.plugins_grid)
-        self.refresh_plugins_ui()
-
-        hub_btn_row = QHBoxLayout()
-        btn_browse_hub = QPushButton("🌐 Browse Community Hub…")
-        btn_browse_hub.setToolTip("Explore and install community plugins, RL methods, and models")
-        btn_browse_hub.clicked.connect(lambda: self.open_hub("plugin"))
-        hub_btn_row.addWidget(btn_browse_hub)
-        hub_btn_row.addStretch()
-        pc_layout.addLayout(hub_btn_row)
-
-        left_layout.addWidget(plugins_card)
-
-        # Card 1.9: Hotkeys & Action-Key Navigation
-        hotkeys_card = QFrame()
-        hotkeys_card.setObjectName("card")
-        hk_layout = QVBoxLayout(hotkeys_card)
-        hk_layout.setContentsMargins(14, 12, 14, 12)
-        hk_layout.setSpacing(10)
-        hk_layout.addWidget(label("KEYBOARD SHORTCUTS & NAVIGATION", "eyebrow"))
-        hk_layout.addWidget(label("Action Key & Pane Hotkeys", "heading"))
-        hk_layout.addWidget(
-            label("Revolve IDE navigation around an Action key (Ctrl+B / Caps Lock by default). "
-                  "Press or hold the Action key, then press 0–9 to quickly move between open panes.", "muted")
-        )
-
-        ak_row = QHBoxLayout()
-        ak_row.addWidget(label("Primary Action Key:", "muted"))
-        self.settings_action_key_combo = QComboBox()
-        for k, title in [
-            ("ctrl+b", "Ctrl + B / Caps Lock (tmux default)"),
-            ("caps_lock", "Caps Lock"),
-            ("alt", "Alt / Option"),
-            ("ctrl", "Control"),
-            ("meta", "Command / Meta"),
-            ("shift", "Shift"),
-        ]:
-            self.settings_action_key_combo.addItem(title, k)
-        cur_action_key = self.settings_manager.action_key.lower()
-        idx = self.settings_action_key_combo.findData(cur_action_key)
-        if idx >= 0:
-            self.settings_action_key_combo.setCurrentIndex(idx)
-        else:
-            self.settings_action_key_combo.addItem(cur_action_key.replace("_", " ").title(), cur_action_key)
-            self.settings_action_key_combo.setCurrentText(cur_action_key.replace("_", " ").title())
-        self.settings_action_key_combo.currentIndexChanged.connect(self._on_action_key_changed)
-        ak_row.addWidget(self.settings_action_key_combo, 1)
-        hk_layout.addLayout(ak_row)
-
-        hk_table = QLabel(
-            "<table style='font-size: 11px; line-height: 1.6; color: rgba(255,255,255,0.75);'>"
-            "<tr><td style='padding-right: 20px;'><code>Action + 0</code> ➔ Settings & About</td>"
-            "<td><code>Action + 5</code> ➔ Plot viewer</td></tr>"
-            "<tr><td style='padding-right: 20px;'><code>Action + 1</code> ➔ Components</td>"
-            "<td><code>Action + 6</code> ➔ TensorBoard</td></tr>"
-            "<tr><td style='padding-right: 20px;'><code>Action + 2</code> ➔ Experiment builder</td>"
-            "<td><code>Action + 7</code> ➔ Job queue</td></tr>"
-            "<tr><td style='padding-right: 20px;'><code>Action + 3</code> ➔ Training monitor</td>"
-            "<td><code>Action + 8</code> ➔ Terminal</td></tr>"
-            "<tr><td style='padding-right: 20px;'><code>Action + 4</code> ➔ Results browser</td>"
-            "<td><code>Action + 9</code> ➔ Console</td></tr>"
-            "</table>"
-        )
-        hk_table.setStyleSheet("padding: 2px 0;")
-        hk_layout.addWidget(hk_table)
-
-        left_layout.addWidget(hotkeys_card)
-
-        # Card 2: Backend API Connection
-        backend_card = QFrame()
-        backend_card.setObjectName("card")
-        bc_layout = QVBoxLayout(backend_card)
-        bc_layout.setContentsMargins(14, 12, 14, 12)
-        bc_layout.setSpacing(10)
-        bc_layout.addWidget(label("BACKEND SERVICES", "eyebrow"))
-        bc_layout.addWidget(label("NeSyRL API & Training Engine", "heading"))
-        bc_layout.addWidget(label("Connects to the FastAPI backend managing training runs and pipelines.", "muted"))
-        url_row = QHBoxLayout()
-        url_row.addWidget(label("API URL:", "muted"))
-        self.settings_backend_url = QLineEdit(self.backend.base_url)
-        self.settings_backend_url.setReadOnly(True)
-        url_row.addWidget(self.settings_backend_url, 1)
-        btn_test = QPushButton("Test connection")
-        btn_test.clicked.connect(self.test_backend_connection)
-        url_row.addWidget(btn_test)
-        btn_docs = QPushButton("Swagger docs ↗")
-        btn_docs.clicked.connect(self.open_swagger_docs)
-        url_row.addWidget(btn_docs)
-        bc_layout.addLayout(url_row)
-        self.settings_backend_status = label("Status: Checking connection…", "muted")
-        bc_layout.addWidget(self.settings_backend_status)
-        left_layout.addWidget(backend_card)
-
-        # Card 3: Storage & Workspace
-        storage_card = QFrame()
-        storage_card.setObjectName("card")
-        sc_layout = QVBoxLayout(storage_card)
-        sc_layout.setContentsMargins(14, 12, 14, 12)
-        sc_layout.setSpacing(10)
-        sc_layout.addWidget(label("LOCAL STORAGE", "eyebrow"))
-        sc_layout.addWidget(label("Workspace & Cache", "heading"))
-        sc_layout.addWidget(label(f"Data root:  {self.store.root}", "muted"))
-        self.settings_runs_count_label = label(f"Total run records:  {len(self.runs)} runs", "muted")
-        sc_layout.addWidget(self.settings_runs_count_label)
-        btn_row = QHBoxLayout()
-        btn_reset_layout = QPushButton("Reset UI layout")
-        btn_reset_layout.setToolTip("Restore default pane sizes and layout")
-        btn_reset_layout.clicked.connect(lambda: (self.restoreState(self.default_layout), self.statusBar().showMessage("Restored default UI layout.", 4000)))
-        btn_row.addWidget(btn_reset_layout)
-        btn_open_settings = QPushButton("Open settings.toml ↗")
-        btn_open_settings.setToolTip(
-            f"Open the settings file in your default text editor\n{self.settings_manager.workspace_settings_path}"
-        )
-        btn_open_settings.clicked.connect(self.open_settings_file)
-        btn_row.addWidget(btn_open_settings)
-        btn_row.addStretch()
-        sc_layout.addLayout(btn_row)
-        settings_path_label = label(str(self.settings_manager.workspace_settings_path), "muted")
-        settings_path_label.setWordWrap(True)
-        sc_layout.addWidget(settings_path_label)
-        left_layout.addWidget(storage_card)
-        left_layout.addStretch()
-
-        left_scroll = QScrollArea()
-        left_scroll.setWidgetResizable(True)
-        left_scroll.setWidget(left_container)
-        left_scroll.setFrameShape(QFrame.Shape.NoFrame)
-
-        # Right Column: About ThetaIDE & ASCII Sculpture
-        right_card = QFrame()
-        right_card.setObjectName("card")
-        rc_layout = QVBoxLayout(right_card)
-        rc_layout.setContentsMargins(16, 14, 16, 14)
-        rc_layout.setSpacing(10)
-        rc_layout.addWidget(label("ABOUT THETA-IDE", "eyebrow"))
-        title_row = QHBoxLayout()
-        title_row.addWidget(label("ThetaIDE", "heading"))
-        badge = label("v0.1.0-alpha", "badge")
-        title_row.addWidget(badge)
-        title_row.addStretch()
-        rc_layout.addLayout(title_row)
-        desc = label("Neuro-symbolic reinforcement learning research studio.\n"
-                     "Jointly configure, inspect, and evaluate hybrid logic-neural agents "
-                     "with live monitoring and experiment comparison.", "muted")
-        desc.setWordWrap(True)
-        rc_layout.addWidget(desc)
-
-        self.settings_ascii = AsciiTheta(right_card)
-        rc_layout.addWidget(self.settings_ascii, 1)
-
-        anim_row = QHBoxLayout()
-        self.anim_toggle_btn = QPushButton("Pause animation")
-        self.anim_toggle_btn.setCheckable(True)
-        self.anim_toggle_btn.toggled.connect(self.toggle_ascii_animation)
-        anim_row.addWidget(self.anim_toggle_btn)
-        anim_row.addStretch()
-        anim_row.addWidget(label("3D Software-Rendered ASCII Sculpture", "muted"))
-        rc_layout.addLayout(anim_row)
-
-        splitter.addWidget(left_scroll)
-        splitter.addWidget(right_card)
-        splitter.setSizes([520, 500])
-
-        layout.addWidget(splitter, 1)
-        return panel
 
     def settings_theme_selected(self, theme_name):
         if theme_name and theme_name != self.theme_manager.active["name"]:
             theme = self.theme_manager.themes().get(theme_name)
             if theme:
                 self.select_theme(theme)
-                # Persist the selection to settings.toml
-                if hasattr(self, "settings_manager"):
-                    self.settings_manager.set("appearance", "theme", theme_name)
 
     def _on_settings_changed(self):
         """Called when settings.toml changes on disk (or when the app mutates it).
@@ -857,10 +665,27 @@ class Window(QMainWindow):
         if hasattr(self, "settings_action_key_combo"):
             cur = self.settings_manager.action_key.lower()
             idx = self.settings_action_key_combo.findData(cur)
-            if idx >= 0 and self.settings_action_key_combo.currentIndex() != idx:
+            if idx >= 0:
+                if self.settings_action_key_combo.currentIndex() != idx:
+                    self.settings_action_key_combo.blockSignals(True)
+                    self.settings_action_key_combo.setCurrentIndex(idx)
+                    self.settings_action_key_combo.blockSignals(False)
+            else:
                 self.settings_action_key_combo.blockSignals(True)
-                self.settings_action_key_combo.setCurrentIndex(idx)
+                self.settings_action_key_combo.addItem(cur.replace("_", "+").upper(), cur)
+                self.settings_action_key_combo.setCurrentIndex(self.settings_action_key_combo.count() - 1)
                 self.settings_action_key_combo.blockSignals(False)
+
+        # --- Menu Shortcuts hot-reload ---
+        if hasattr(self, "menu_actions"):
+            for aid, action in self.menu_actions.items():
+                sc = self.settings_manager.get("shortcuts", aid)
+                if sc is not None:
+                    action.setShortcut(sc)
+
+        # --- Settings view sync ---
+        if hasattr(self, "settings_view") and hasattr(self.settings_view, "sync_from_settings"):
+            self.settings_view.sync_from_settings()
 
     def _on_action_key_changed(self, index):
         if not hasattr(self, "settings_action_key_combo"):
@@ -878,9 +703,22 @@ class Window(QMainWindow):
             return self.hotkey_manager.switch_to_pane(str(target))
         return False
 
+    def on_sidebar_auto_hide_changed(self, enabled):
+        """Keep the menu item and the Settings switch in step, and remember the choice."""
+        for control in (getattr(self, "auto_hide_action", None), getattr(self, "auto_hide_slider", None)):
+            if control is not None and control.isChecked() != enabled:
+                control.blockSignals(True)
+                control.setChecked(enabled)
+                control.blockSignals(False)
+        if hasattr(self, "settings_manager"):
+            self.settings_manager.set("sidebar", "auto_hide", enabled)
+        self.statusBar().showMessage(
+            "Sidebar auto-hide on: hover the left edge to show it." if enabled else "Sidebar docked.", 4000)
+
     def on_pane_slider_toggled(self, pane_id, checked):
-        visible_count = sum(1 for s in self.pane_sliders.values() if s.isChecked())
-        if not checked and visible_count == 0:
+        # Count the other panes, so the guard holds whether or not this slider has already flipped
+        others_visible = sum(1 for pid, s in self.pane_sliders.items() if pid != pane_id and s.isChecked())
+        if not checked and others_visible == 0:
             slider = self.pane_sliders.get(pane_id)
             if slider:
                 slider.blockSignals(True)
@@ -925,78 +763,116 @@ class Window(QMainWindow):
             elif item.layout():
                 self._clear_layout(item.layout())
 
-    def refresh_plugins_ui(self):
-        if not hasattr(self, "plugins_grid"):
-            return
+    def _create_plugin_row(self, pid: str, manifest, is_core: bool = False):
+        row = QHBoxLayout()
+        row.setSpacing(10)
 
-        self._clear_layout(self.plugins_grid)
+        info_layout = QVBoxLayout()
+        info_layout.setSpacing(1)
+        badge = "  ·  Core" if is_core else ""
+        title_lbl = label(f"{manifest.name}  ·  v{manifest.version}{badge}")
+        title_lbl.setStyleSheet("font-weight: 500;")
+        info_layout.addWidget(title_lbl)
+        if manifest.description:
+            desc_lbl = label(manifest.description, "muted")
+            info_layout.addWidget(desc_lbl)
+        row.addLayout(info_layout, 1)
+
+        is_enabled = self.plugin_manager.is_plugin_enabled(pid)
+        slider = ToggleSlider(checked=is_enabled)
+        slider.setToolTip(f"Enable or disable {manifest.name}")
+        slider.setAccessibleName(f"Toggle {manifest.name} plugin")
+        slider.toggled.connect(lambda chk, p=pid: self.on_plugin_slider_toggled(p, chk))
+        self.plugin_sliders[pid] = slider
+        row.addWidget(slider)
+
+        instance = self.plugin_manager.instances.get(pid)
+        has_settings = False
+        if instance and hasattr(instance, "get_settings_widget"):
+            has_settings = True
+        elif hasattr(manifest, "extra") and isinstance(manifest.extra, dict) and manifest.extra.get("has_settings", False):
+            has_settings = True
+
+        if has_settings:
+            btn_settings = QToolButton()
+            btn_settings.setIcon(svg_icon("settings", {(QIcon.Mode.Normal, QIcon.State.Off): "text"}))
+            btn_settings.setToolTip(f"{manifest.name} Settings")
+            btn_settings.setFixedSize(30, 30)
+            btn_settings.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn_settings.clicked.connect(lambda _, p=pid: self.open_plugin_settings(p))
+            row.addWidget(btn_settings)
+
+        if not is_core:
+            btn_trash = QToolButton()
+            trash_icon_path = Path(__file__).parent / "icons" / "trash.svg"
+            if trash_icon_path.exists():
+                btn_trash.setIcon(QIcon(str(trash_icon_path)))
+            else:
+                btn_trash.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_TrashIcon))
+            btn_trash.setToolTip(f"Uninstall {manifest.name}")
+            btn_trash.setFixedSize(28, 28)
+            btn_trash.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn_trash.setStyleSheet(
+                "QToolButton { border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 4px; background: rgba(255, 255, 255, 0.04); } "
+                "QToolButton:hover { background: rgba(251, 73, 52, 0.2); border-color: #fb4934; }"
+            )
+            btn_trash.clicked.connect(lambda _, p=pid: self.uninstall_plugin_from_settings(p))
+            row.addWidget(btn_trash)
+
+        return row
+
+    def refresh_plugins_ui(self):
         self.plugin_sliders = {}
 
-        plugin_manifests = {}
+        has_core = hasattr(self, "core_plugins_grid") and self.core_plugins_grid is not None
+        has_community = hasattr(self, "plugins_grid") and self.plugins_grid is not None
+
+        if not has_core and not has_community:
+            return
+
+        if has_core:
+            self._clear_layout(self.core_plugins_grid)
+        if has_community:
+            self._clear_layout(self.plugins_grid)
+
+        core_manifests = {}
+        community_manifests = {}
+
         if hasattr(self, "plugin_manager") and self.plugin_manager.manifests:
             for pid, manifest in self.plugin_manager.manifests.items():
                 kind = getattr(manifest, "kind", None)
                 if not kind and hasattr(manifest, "extra") and isinstance(manifest.extra, dict):
                     kind = manifest.extra.get("kind", "plugin")
-                if kind is None or kind == "plugin":
-                    plugin_manifests[pid] = manifest
+                if kind is not None and kind != "plugin":
+                    continue
 
-        if plugin_manifests:
-            for pid, manifest in plugin_manifests.items():
-                row = QHBoxLayout()
-                row.setSpacing(10)
-
-                info_layout = QVBoxLayout()
-                info_layout.setSpacing(1)
-                title_lbl = label(f"{manifest.name}  ·  v{manifest.version}")
-                title_lbl.setStyleSheet("font-weight: 600;")
-                desc_lbl = label(manifest.description or f"Modular extension ({pid})", "muted")
-                info_layout.addWidget(title_lbl)
-                info_layout.addWidget(desc_lbl)
-                row.addLayout(info_layout, 1)
-
-                is_enabled = self.plugin_manager.is_plugin_enabled(pid)
-                slider = ToggleSlider(checked=is_enabled)
-                slider.setToolTip(f"Enable or disable {manifest.name}")
-                slider.setAccessibleName(f"Toggle {manifest.name} plugin")
-                slider.toggled.connect(lambda chk, p=pid: self.on_plugin_slider_toggled(p, chk))
-                self.plugin_sliders[pid] = slider
-                row.addWidget(slider)
-
-                btn_settings = QToolButton()
-                btn_settings.setText("⚙")
-                btn_settings.setToolTip(f"{manifest.name} Settings")
-                btn_settings.setFixedSize(28, 28)
-                btn_settings.setCursor(Qt.CursorShape.PointingHandCursor)
-                btn_settings.setStyleSheet(
-                    "QToolButton { border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 4px; background: rgba(255, 255, 255, 0.04); font-size: 16px; } "
-                    "QToolButton:hover { background: rgba(255, 255, 255, 0.1); border-color: rgba(255, 255, 255, 0.3); }"
-                )
-                btn_settings.clicked.connect(lambda _, p=pid: self.open_plugin_settings(p))
-                row.addWidget(btn_settings)
-
-                btn_trash = QToolButton()
-                trash_icon_path = Path(__file__).parent / "icons" / "trash.svg"
-                if trash_icon_path.exists():
-                    btn_trash.setIcon(QIcon(str(trash_icon_path)))
+                if getattr(manifest, "is_core", False):
+                    core_manifests[pid] = manifest
                 else:
-                    btn_trash.setIcon(self.style().standardIcon(QStyle.StandardPixmap.SP_TrashIcon))
-                btn_trash.setToolTip(f"Uninstall {manifest.name}")
-                btn_trash.setFixedSize(28, 28)
-                btn_trash.setCursor(Qt.CursorShape.PointingHandCursor)
-                btn_trash.setStyleSheet(
-                    "QToolButton { border: 1px solid rgba(255, 255, 255, 0.1); border-radius: 4px; background: rgba(255, 255, 255, 0.04); } "
-                    "QToolButton:hover { background: rgba(251, 73, 52, 0.2); border-color: #fb4934; }"
-                )
-                btn_trash.clicked.connect(lambda _, p=pid: self.uninstall_plugin_from_settings(p))
-                row.addWidget(btn_trash)
+                    community_manifests[pid] = manifest
 
-                self.plugins_grid.addLayout(row)
-        else:
-            self.plugins_grid.addWidget(label("No plugins discovered or installed.", "muted"))
+        # 1. Render Core Plugins
+        if has_core:
+            if core_manifests:
+                for pid, manifest in core_manifests.items():
+                    row = self._create_plugin_row(pid, manifest, is_core=True)
+                    self.core_plugins_grid.addLayout(row)
+            else:
+                self.core_plugins_grid.addWidget(label("No core plugins installed.", "muted"))
+
+        # 2. Render Community Plugins
+        if has_community:
+            if community_manifests:
+                for pid, manifest in community_manifests.items():
+                    row = self._create_plugin_row(pid, manifest, is_core=False)
+                    self.plugins_grid.addLayout(row)
+            else:
+                self.plugins_grid.addWidget(label("No community plugins installed.", "muted"))
 
     def uninstall_plugin_from_settings(self, plugin_id: str):
-        manifest = self.plugin_manager.manifests.get(plugin_id) if hasattr(self, "plugin_manager") else None
+        if not hasattr(self, "plugin_manager"):
+            return
+        manifest = self.plugin_manager.manifests.get(plugin_id)
         name = manifest.name if manifest else plugin_id
         reply = QMessageBox.question(
             self,
@@ -1008,22 +884,18 @@ class Window(QMainWindow):
         if reply != QMessageBox.StandardButton.Yes:
             return
 
-        if hasattr(self, "hub_client"):
-            comp = self.hub_client.get_component(plugin_id)
-            if comp:
-                self.hub_client.installer.uninstall(comp)
-                self.hub_client.refresh_installed_status()
+        self.plugin_manager.uninstall_plugin(plugin_id)
 
-        if hasattr(self, "plugin_manager"):
-            self.plugin_manager.mark_uninstalled(plugin_id)
-            self.plugin_manager.discover()
+        # Let the Hub refresh its installed-status badge if it's open.
+        if hasattr(self, "hub_client"):
+            self.hub_client.refresh_installed_status()
 
         self.refresh_plugins_ui()
         self.save_layout()
         self.statusBar().showMessage(f"Uninstalled plugin: {name}", 4000)
 
     def open_plugin_settings(self, plugin_id: str):
-        from PyQt6.QtWidgets import QDialogButtonBox, QVBoxLayout, QMessageBox, QDialog
+        from PyQt6.QtWidgets import QDialog, QDialogButtonBox, QMessageBox, QVBoxLayout
         
         instance = self.plugin_manager.instances.get(plugin_id)
         if not instance:
@@ -1056,35 +928,63 @@ class Window(QMainWindow):
 
     def _on_hub_component_changed(self, component_id: str, action: str):
         comp = self.hub_client.get_component(component_id) if hasattr(self, "hub_client") else None
-        # Non-plugin components (methods, models, envs) are filesystem assets, not UI plugins
+
+        # Determine target category folder in in/config/ (e.g. "agent", "model", "env", "experiment")
+        target_folder = None
+        target_config_rel = None
+        if comp:
+            folder_map = {
+                "method": "agent",
+                "model": "model",
+                "env": "env",
+                "experiment": "experiment",
+            }
+            target_folder = folder_map.get(comp.kind)
+            if target_folder:
+                target_config_rel = f"{target_folder}/{comp.id}.yaml"
+
+        # Refresh components panel and config tree so added or removed YAMLs update immediately without collapsing folders
+        if hasattr(self, "components_panel") and self.components_panel is not None:
+            self.components_panel.reload_components(
+                target_rel_path=target_config_rel if action == "install" else None,
+                ensure_expanded=target_folder,
+            )
+        if hasattr(self, "config_tree") and self.config_tree is not None:
+            self.config_tree.populate(ensure_expanded=target_folder)
+
+        # Non-plugin components (methods, models, envs) are filesystem assets only — no plugin UI to update.
         if comp and comp.kind != "plugin":
             self.statusBar().showMessage(f"Hub {action} finished: {component_id}", 4000)
             return
 
-        if hasattr(self, "plugin_manager"):
-            ids_to_process = {component_id, component_id.replace("-", "_"), component_id.replace("_", "-")}
-            for suffix in ("-notes", "_notes", "-sim", "_sim", "-plugin", "_plugin"):
-                if component_id.endswith(suffix):
-                    ids_to_process.add(component_id[:-len(suffix)])
+        if not hasattr(self, "plugin_manager"):
+            return
 
-            if comp and comp.target_path:
-                ids_to_process.add(Path(comp.target_path).name)
+        if action == "uninstall":
+            # Resolve the plugin id from the component's target_path (e.g. "plugins/my_plugin" → "my_plugin").
+            # Deactivate any running instance before discover() prunes its manifest.
+            pid = Path(comp.target_path).name if comp and comp.target_path else component_id
+            if pid in self.plugin_manager.instances:
+                self.plugin_manager.disable_plugin(pid)
+            self.plugin_manager.manifests.pop(pid, None)
+            self.plugin_manager.enabled_states.pop(pid, None)
+            self.plugin_manager.save_states()
 
-            for pid in ids_to_process:
-                if action == "uninstall":
-                    if hasattr(self.plugin_manager, "mark_uninstalled"):
-                        self.plugin_manager.mark_uninstalled(pid)
-                    else:
-                        self.plugin_manager.disable_plugin(pid)
-                elif action == "install":
-                    if hasattr(self.plugin_manager, "unmark_uninstalled"):
-                        self.plugin_manager.unmark_uninstalled(pid)
+        # Sync manifests with the current filesystem state.
+        self.plugin_manager.discover()
 
-            self.plugin_manager.discover()
-            self.refresh_plugins_ui()
-            self.statusBar().showMessage(f"Hub {action} finished: {component_id}", 4000)
+        if action == "install":
+            # Auto-enable if the user had it enabled before (e.g. re-installing).
+            pid = Path(comp.target_path).name if comp and comp.target_path else component_id
+            if pid in self.plugin_manager.manifests:
+                if self.plugin_manager.is_plugin_enabled(pid) and pid not in self.plugin_manager.instances:
+                    self.plugin_manager.enable_plugin(pid)
 
-    def open_hub(self, initial_kind: Optional[str] = None):
+        self.refresh_plugins_ui()
+        self.save_layout()
+        self.statusBar().showMessage(f"Hub {action} finished: {component_id}", 4000)
+
+    def open_hub(self, initial_kind: str | None = None):
         if hasattr(self, "hub_client"):
             dialog = HubDialog(self.hub_client, initial_kind=initial_kind, parent=self)
             dialog.exec()
@@ -1100,7 +1000,18 @@ class Window(QMainWindow):
                 s.setToolTip("Show or hide this panel in the sidebar")
 
     def reset_sidebar_layout(self):
-        default_order = ["components", "config", "monitor", "results", "plots", "tensorboard", "queue", "terminal", "console"]
+        default_order = [
+            "components",
+            "config",
+            "workflows",
+            "monitor",
+            "results",
+            "plots",
+            "tensorboard",
+            "queue",
+            "terminal",
+            "console",
+        ]
         self.tabs.apply_tab_order(default_order)
         for pid, slider in self.pane_sliders.items():
             slider.blockSignals(True)
@@ -1179,36 +1090,49 @@ class Window(QMainWindow):
     def toggle_ascii_animation(self, paused):
         if hasattr(self, "settings_ascii"):
             self.settings_ascii.set_paused(paused)
-        if hasattr(self, "anim_toggle_btn"):
+        if hasattr(self, "anim_toggle_btn") and getattr(self.anim_toggle_btn, "tab_id", None) != "animation" and hasattr(self.anim_toggle_btn, "isCheckable") and self.anim_toggle_btn.isCheckable():
             self.anim_toggle_btn.setText("Resume animation" if paused else "Pause animation")
 
     def make_menus(self):
+        self.menu_actions = {}
         file_menu = self.menuBar().addMenu("File")
-        for title, shortcut, callback in (("New experiment", "Ctrl+N", self.new_experiment),
-                                          ("Export draft YAML…", "Ctrl+Shift+S", self.export_config),
-                                          ("Save notes", "Ctrl+S", self.save_notes),
-                                          ("Quit", "Ctrl+Q", self.close)):
+        for aid, title, default_sc, callback in (
+            ("new_experiment", "New experiment", "Ctrl+N", self.new_experiment),
+            ("export_config", "Export draft YAML…", "Ctrl+Shift+S", self.export_config),
+            ("save_config", "Save configuration", "Ctrl+S", self.save_current_config),
+            ("quit", "Quit", "Ctrl+Q", self.close),
+        ):
             action = QAction(title, self)
-            action.setShortcut(shortcut)
+            sc = self.settings_manager.get("shortcuts", aid, default=default_sc) if hasattr(self, "settings_manager") else default_sc
+            if sc:
+                action.setShortcut(sc)
             action.triggered.connect(callback)
             file_menu.addAction(action)
+            self.menu_actions[aid] = action
+
         run_menu = self.menuBar().addMenu("Run")
-        for title, shortcut, callback in (("Launch training", "F5", self.launch_training),
-                                          ("Stop", "Shift+F5", self.stop_run),
-                                          ("Add to queue", "Ctrl+Shift+Q", self.add_to_queue),
-                                          ("Start or pause queue", "Ctrl+Shift+R",
-                                           lambda: self.set_queue_running(not self.queue_running)),
-                                          ("Start simulated demo", "Ctrl+F5", self.start_demo)):
+        for aid, title, default_sc, callback in (
+            ("launch_training", "Launch training", "F5", self.launch_training),
+            ("stop_run", "Stop", "Shift+F5", self.stop_run),
+            ("add_to_queue", "Add to queue", "Ctrl+Shift+Q", self.add_to_queue),
+            ("toggle_queue", "Start or pause queue", "Ctrl+Shift+R",
+             lambda: self.set_queue_running(not self.queue_running)),
+            ("start_demo", "Start simulated demo", "Ctrl+F5", self.start_demo),
+        ):
             action = QAction(title, self)
-            action.setShortcut(shortcut)
+            sc = self.settings_manager.get("shortcuts", aid, default=default_sc) if hasattr(self, "settings_manager") else default_sc
+            if sc:
+                action.setShortcut(sc)
             action.triggered.connect(callback)
             run_menu.addAction(action)
+            self.menu_actions[aid] = action
         view_menu = self.menuBar().addMenu("View")
         self.themes_menu = view_menu.addMenu("Themes")
         self.themes_menu.aboutToShow.connect(self.populate_themes_menu)
         view_menu.addAction("Theme builder…", self.show_theme_builder)
         view_menu.addAction("Components", lambda: self.tabs.setCurrentWidget(self.components_panel))
         view_menu.addAction("Experiment config", lambda: self.tabs.setCurrentWidget(self.config_panel))
+        view_menu.addAction("Workflows", lambda: self.tabs.setCurrentWidget(self.workflows_panel))
         view_menu.addAction("Training monitor", lambda: self.tabs.setCurrentWidget(self.monitor_panel))
         view_menu.addAction("Results browser", lambda: self.tabs.setCurrentWidget(self.results_panel))
         view_menu.addAction("Plot viewer", lambda: self.tabs.setCurrentWidget(self.plot_viewer))
@@ -1218,6 +1142,10 @@ class Window(QMainWindow):
         view_menu.addAction("Console", lambda: self.tabs.setCurrentWidget(self.console_panel))
         view_menu.addAction("Settings & About", lambda: self.tabs.setCurrentWidget(self.settings_panel))
         view_menu.addAction("Restore default layout", lambda: self.restoreState(self.default_layout))
+        self.auto_hide_action = QAction("Auto-hide sidebar", self, checkable=True)
+        self.auto_hide_action.setChecked(self.tabs.auto_hide)
+        self.auto_hide_action.toggled.connect(lambda on: self.tabs.set_auto_hide(on))
+        view_menu.addAction(self.auto_hide_action)
         view_menu.addSeparator()
         view_menu.addAction("Preferences: Open Settings File", self.open_settings_file)
         help_menu = self.menuBar().addMenu("Help")
@@ -1245,10 +1173,14 @@ class Window(QMainWindow):
             self.command.setFocus()
         if hasattr(self, "settings_panel") and self.tabs.widget(index) is self.settings_panel:
             self.test_backend_connection()
+            if hasattr(self, "settings_view"):
+                self.settings_view.reset_to_ascii()
 
     def show_about(self):
         if hasattr(self, "settings_panel"):
             self.tabs.setCurrentWidget(self.settings_panel)
+            if hasattr(self, "settings_view"):
+                self.settings_view.reset_to_ascii()
         else:
             dialog = AboutDialog(self)
             dialog.exec()
@@ -1258,6 +1190,10 @@ class Window(QMainWindow):
         self.theme_status.setText(f"  ●  Local workspace    /    {self.theme_manager.active['name']}")
         self.highlighter.rehighlight()
         self.tabs.refresh_icons()
+        for tree in (getattr(self, "config_tree", None),
+                     getattr(getattr(self, "components_panel", None), "components_tree", None)):
+            if tree is not None:
+                tree.refresh_icons()
         if hasattr(self, "settings_theme_select"):
             self.settings_theme_select.blockSignals(True)
             self.settings_theme_select.setCurrentText(self.theme_manager.active["name"])
@@ -1268,6 +1204,14 @@ class Window(QMainWindow):
             self.test_backend_connection()
         if hasattr(self, "terminal_panel"):
             self.terminal_panel.apply_theme(self.theme_manager.active)
+        if hasattr(self, "settings_view"):
+            self.settings_view.refresh_styles()
+        if self.isVisible():  # before the first show, showEvent colours the title bar
+            apply_title_bar(self, self.theme_manager.active["colors"])
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        apply_title_bar(self, self.theme_manager.active["colors"])  # the native window exists once shown
 
     def populate_themes_menu(self):
         self.themes_menu.clear()
@@ -1278,6 +1222,12 @@ class Window(QMainWindow):
             action.triggered.connect(lambda _, palette=theme: self.select_theme(palette))
         self.themes_menu.addSeparator()
         self.themes_menu.addAction("Theme builder…", self.show_theme_builder)
+
+    def persist_theme_choice(self, theme_name):
+        """Record a chosen theme in settings.toml. Every way of picking a theme (View menu, Settings
+        dropdown, theme builder) ends here, so a later settings reload can't revert to a stale name."""
+        if hasattr(self, "settings_manager") and self.settings_manager.theme != theme_name:
+            self.settings_manager.set("appearance", "theme", theme_name)
 
     def select_theme(self, theme):
         try:
@@ -1371,7 +1321,7 @@ class Window(QMainWindow):
             self.update_disk_status()
         if connected:
             self.backend_label.setText(f"BACKEND   ●   {self.backend.base_url}  ")
-            self.backend_label.setToolTip("Configs are composed and validated by the NeSyRL API.")
+            self.backend_label.setToolTip("Configs are composed and validated by the Theta-IDE backend API.")
         else:
             self.backend_label.setText("BACKEND   ○   offline  ")
             self.backend_label.setToolTip(f"{self.backend.base_url}: {error}\nStart it from the repository root with:\n"
@@ -1672,9 +1622,9 @@ class Window(QMainWindow):
             self.queue_running = data["running"]
             self.render_run()
         self.queue_panel.set_data(data)
-        where = {job["job_id"]: ("active", job) for job in data["active"]}
-        where.update({job["job_id"]: ("queued", job) for job in data["queued"]})
-        where.update({job["job_id"]: ("finished", job) for job in data["finished"]})
+        where = {job["job_id"]: ("active", job) for job in data.get("active", []) if isinstance(job, dict) and "job_id" in job}
+        where.update({job["job_id"]: ("queued", job) for job in data.get("queued", []) if isinstance(job, dict) and "job_id" in job})
+        where.update({job["job_id"]: ("finished", job) for job in data.get("finished", []) if isinstance(job, dict) and "job_id" in job})
         changed = False
         for run in [r for r in self.runs if r["status"] == "queued"]:
             kind, job = where.get(run["backend"]["job_id"], (None, None))
@@ -1825,12 +1775,6 @@ class Window(QMainWindow):
             idx = self.run_combo.currentIndex()
             self.btn_prev_run.setEnabled(idx > 0)
             self.btn_next_run.setEnabled(idx >= 0 and idx < self.run_combo.count() - 1)
-        if hasattr(self, "notes"):
-            self.notes.blockSignals(True)
-            self.notes.setPlainText(run["notes"])
-            self.notes.blockSignals(False)
-            self.note_target.setText(f"Linked to {run['config']['name']}\nRun {run['id']}")
-            self.note_status.setText("Notes save automatically as you type.")
         self.render_run()
         self.backfill_metrics(run)
         self.load_disk_metrics(run)
@@ -1938,15 +1882,15 @@ class Window(QMainWindow):
         if hasattr(self, "storage_label"):
             if live:
                 where = f"results/logs/{run['backend']['group']}/{run['backend']['experiment_id']}/"
-                self.storage_label.setText(f"📁 {where}  •  🗄️ results/jobs/jobs.db")
+                self.storage_label.setText(f"{where}  ·  results/jobs/jobs.db")
             else:
-                self.storage_label.setText("📁 Simulated demo run (in-memory)  •  🗄️ results/jobs/jobs.db")
+                self.storage_label.setText("Simulated demo run (in-memory)  ·  results/jobs/jobs.db")
 
         # Update Live Jump button
         if hasattr(self, "btn_live_jump"):
             if self.active and self.selected != self.active:
                 live_id = self.active["backend"]["experiment_id"] if not self.active["simulated"] else self.active["config"]["name"]
-                chip_text = f"🟢 Jump to Live ({live_id[:14]}…)" if len(live_id) > 14 else f"🟢 Jump to Live ({live_id})"
+                chip_text = f"Jump to live ({live_id[:14]}…)" if len(live_id) > 14 else f"Jump to live ({live_id})"
                 self.btn_live_jump.setText(chip_text)
                 self.btn_live_jump.show()
             else:
@@ -1956,17 +1900,17 @@ class Window(QMainWindow):
         if hasattr(self, "btn_pin_baseline"):
             if self.pinned_baseline_run is None:
                 self.btn_pin_baseline.setChecked(False)
-                self.btn_pin_baseline.setText("📌 Pin as Baseline")
+                self.btn_pin_baseline.setText("Pin as baseline")
                 self.btn_pin_baseline.setToolTip("Pin this run's curve to overlay as a dashed baseline when inspecting other runs")
             elif self.pinned_baseline_run is run:
                 self.btn_pin_baseline.setChecked(True)
-                self.btn_pin_baseline.setText("📌 Pinned Baseline")
+                self.btn_pin_baseline.setText("Pinned baseline")
                 self.btn_pin_baseline.setToolTip("This run is currently pinned as the baseline. Click to unpin.")
             else:
                 self.btn_pin_baseline.setChecked(False)
                 p_name = self.pinned_baseline_run["backend"]["experiment_id"] if not self.pinned_baseline_run["simulated"] else self.pinned_baseline_run["config"]["name"]
                 label_name = (p_name[:12] + "…") if len(p_name) > 12 else p_name
-                self.btn_pin_baseline.setText(f"📌 Replace Baseline ({label_name})")
+                self.btn_pin_baseline.setText(f"Replace baseline ({label_name})")
                 self.btn_pin_baseline.setToolTip(f"Baseline '{p_name}' is pinned. Click to replace it with this run.")
 
         # Update Prev/Next button states
@@ -2067,6 +2011,9 @@ class Window(QMainWindow):
             for col, (text, key) in enumerate(cells):
                 cell = SortableItem(text, key)
                 cell.setData(Qt.ItemDataRole.UserRole, run["id"])
+                # Experiment names read best left-aligned; every other value sits centered under its label.
+                cell.setTextAlignment((Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter) if col == 0
+                                      else Qt.AlignmentFlag.AlignCenter)
                 self.table.setItem(row, col, cell)
         self.table.setSortingEnabled(True)
         selection = self.table.selectionModel()
@@ -2086,11 +2033,11 @@ class Window(QMainWindow):
                 name = config["name"] if run["simulated"] else run["backend"]["experiment_id"]
                 status = run.get("status", "")
                 if status in LIVE_STATUSES:
-                    icon = "🟢 "
+                    icon = "● "
                 elif status == "completed":
                     icon = "✓ "
                 elif status in ("failed", "interrupted", "stopped"):
-                    icon = "✖ "
+                    icon = "✗ "
                 else:
                     icon = "○ "
                 last_reward = latest(run, "reward")
@@ -2205,16 +2152,6 @@ class Window(QMainWindow):
                 self.reward_chart.set_series(series)
                 self.selected = runs[0]
 
-    def notes_changed(self):
-        if hasattr(self, "notes") and self.selected:
-            self.selected["notes"] = self.notes.toPlainText()
-            ok = self.persist(self.selected)
-            if hasattr(self, "note_status"):
-                self.note_status.setText("Saved locally · linked to this run" if ok else "Save failed · see console")
-
-    def save_notes(self):
-        self.notes_changed()
-
     def load_selected_config(self):
         rows = self.table.selectionModel().selectedRows()
         if len(rows) != 1:
@@ -2318,33 +2255,59 @@ class Window(QMainWindow):
             self.stop_run()
         elif self.active:
             self.persist(self.active)  # training keeps running in the backend; reopening reconnects
+        if hasattr(self, "reloader") and self.reloader is not None:
+            self.reloader.stop()
         if hasattr(self, "terminal_panel"):
             self.terminal_panel.terminal.close()
         if hasattr(self, "hotkey_manager"):
             self.hotkey_manager.cleanup()
-        self.save_notes()
         event.accept()
+
+    def reload_frontend(self):
+        """Reload the frontend process cleanly."""
+        from .terminal_reloader import reload_frontend
+        reload_frontend(window=self, app=QApplication.instance())
 
 
 def main():
     parser = argparse.ArgumentParser(description="ThetaIDE PyQt frontend proof of concept")
     parser.add_argument("--data-dir", type=Path, default=Path(__file__).resolve().parent.parent / ".thetaide" / "runs")
     parser.add_argument("--api-url", default=os.environ.get("THETAIDE_API_URL", DEFAULT_URL),
-                        help="NeSyRL backend API (default: %(default)s)")
+                        help="Theta-IDE backend API (default: %(default)s)")
+    parser.add_argument("--install-desktop-entry", action="store_true",
+                        help="Linux: add ThetaIDE (with its icon) to the application menu and exit")
     args = parser.parse_args()
+    if args.install_desktop_entry:
+        entry, icon = install_desktop_entry()
+        print(f"Installed {entry}\nInstalled {icon}")
+        return 0
+    set_windows_app_id()  # before any window: the taskbar then shows ThetaIDE's icon, not python.exe's
+    if sys.platform == "darwin":
+        try:
+            import ctypes
+            libc = ctypes.CDLL(None)
+            if hasattr(libc, "setprogname"):
+                libc.setprogname(b"ThetaIDE")
+        except Exception:
+            pass
+
     QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
-    app = QApplication(sys.argv[:1])
+    QApplication.setApplicationName("ThetaIDE")
+    QApplication.setApplicationDisplayName("ThetaIDE")
+    QApplication.setDesktopFileName(DESKTOP_FILE_NAME)
+    QApplication.setOrganizationName("ThetaIDE")
+    QApplication.setOrganizationDomain("thetaide.org")
+
+    app = QApplication(["ThetaIDE"] + sys.argv[1:])
+    app.setApplicationName("ThetaIDE")
+    app.setApplicationDisplayName("ThetaIDE")
     app.setStyle("Fusion")
     app.setFont(QFont("Segoe UI", 10))
     app.setStyleSheet(STYLE)
+    app.wheel_guard = wheel_guard.install(app)
 
-    # Clean POSIX signal handling: allow Ctrl+C (SIGINT) and SIGTERM to quit QApplication cleanly
-    import signal
-    signal.signal(signal.SIGINT, lambda *_: app.quit())
-    signal.signal(signal.SIGTERM, lambda *_: app.quit())
-    sigint_timer = QTimer()
-    sigint_timer.start(250)
-    sigint_timer.timeout.connect(lambda: None)
+    if ICON_PATH.is_file():
+        app.setWindowIcon(app_icon())  # every window's title bar, the taskbar and (macOS) the Dock
 
     try:
         window = Window(args.data_dir, args.api_url)
@@ -2352,4 +2315,35 @@ def main():
         QMessageBox.critical(None, "Workspace unavailable", f"Could not open local run storage:\n{exc}")
         return 1
     window.show()
-    return app.exec()
+
+    from .terminal_reloader import TerminalReloader
+
+    reloader = TerminalReloader(window=window, app=app)
+    window.reloader = reloader
+    app.aboutToQuit.connect(reloader.stop)
+
+    # Clean POSIX signal handling: allow Ctrl+C (SIGINT) and SIGTERM to quit QApplication cleanly
+    import signal
+
+    def _sig_handler(*_):
+        reloader.stop()
+        app.quit()
+
+    signal.signal(signal.SIGINT, _sig_handler)
+    signal.signal(signal.SIGTERM, _sig_handler)
+    sigint_timer = QTimer()
+    sigint_timer.start(250)
+    sigint_timer.timeout.connect(lambda: None)
+
+    if sys.stdin.isatty():
+        sys.stdout.write(
+            "\033[90m[Theta-IDE] Ready · Press \033[1;36mCtrl+R\033[0m\033[90m in this terminal to reload frontend\033[0m\r\n"
+        )
+        sys.stdout.flush()
+
+    reloader.start()
+
+    try:
+        return app.exec()
+    finally:
+        reloader.stop()

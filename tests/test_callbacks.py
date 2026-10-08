@@ -42,3 +42,46 @@ def test_log_step_matches_lightning_and_falls_back_to_global_step():
     assert step(SimpleNamespace(global_step=0, fit_loop=loop(0)), 0) == 0  # evaluation before training
     assert step(SimpleNamespace(global_step=32, fit_loop=loop(4)), 2048) == 3
     assert step(SimpleNamespace(global_step=32), 2048) == 32  # attribute renamed in a future Lightning
+
+
+def test_build_trainer_callbacks_online_vs_offline(tmp_path, monkeypatch):
+    from omegaconf import OmegaConf
+    from src.app.core.lightning_builder import build_trainer
+    from lightning.pytorch.callbacks import ModelCheckpoint
+
+    monkeypatch.chdir(tmp_path)
+
+    # Online RL paradigm on cartpole
+    online_cfg = OmegaConf.create({
+        "group": "test_grp",
+        "experiment_id": "test_exp",
+        "seed": 42,
+        "paradigm": "online_rl",
+        "total_timesteps": 1000,
+        "intervals_count": 5,
+        "eval_episodes": 10,
+        "agent": {"name": "ppo"},
+        "env": {"name": "cartpole", "offline_only": False, "num_envs": 1, "num_steps": 10},
+    })
+    trainer_online, _, _ = build_trainer(online_cfg)
+    cb_types_online = [type(c) for c in trainer_online.callbacks]
+    assert EnvironmentEvaluatorCallback in cb_types_online
+
+    # Offline RL paradigm on cartpole (offline_only is False, but paradigm is offline_rl)
+    offline_cfg = OmegaConf.create({
+        "group": "test_grp",
+        "experiment_id": "test_exp",
+        "seed": 42,
+        "paradigm": "offline_rl",
+        "total_timesteps": 1000,
+        "intervals_count": 1,
+        "eval_episodes": 0,
+        "agent": {"name": "cql", "epochs_per_interval": 10},
+        "env": {"name": "cartpole", "offline_only": False, "monitor_metric": "val/loss"},
+    })
+    trainer_offline, _, _ = build_trainer(offline_cfg)
+    cb_types_offline = [type(c) for c in trainer_offline.callbacks]
+    assert EnvironmentEvaluatorCallback not in cb_types_offline
+    ckpt_cbs = [c for c in trainer_offline.callbacks if isinstance(c, ModelCheckpoint) and c.monitor == "val/loss"]
+    assert len(ckpt_cbs) >= 1
+

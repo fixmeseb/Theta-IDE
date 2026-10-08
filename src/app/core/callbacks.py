@@ -29,7 +29,13 @@ class EnvironmentEvaluatorCallback(L.Callback):
         should_eval = False
         target_transitions = 0
 
-        if pl_module.cfg.paradigm == "online_rl":
+        paradigm = (
+            pl_module.cfg.get("paradigm", "online_rl")
+            if hasattr(pl_module.cfg, "get")
+            else getattr(pl_module.cfg, "paradigm", "online_rl")
+        )
+
+        if paradigm == "online_rl":
             current_transitions = pl_module.global_step_count
             for i in range(1, pl_module.cfg.intervals_count + 1):
                 target_transitions = i * interval_size
@@ -75,7 +81,12 @@ class EnvironmentEvaluatorCallback(L.Callback):
             metrics["time/train"] = pure_training_time
             metrics["time/total"] = current_total_time
 
-        if pl_module.cfg.paradigm == "offline_rl":
+        paradigm = (
+            pl_module.cfg.get("paradigm", "online_rl")
+            if hasattr(pl_module.cfg, "get")
+            else getattr(pl_module.cfg, "paradigm", "online_rl")
+        )
+        if paradigm == "offline_rl":
             metrics["epoch"] = float(pl_module.current_epoch)
 
         log_step = self._lightning_log_step(trainer, transitions)

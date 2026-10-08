@@ -5,9 +5,6 @@ env_id: pyrenees
 offline_only: true
 gamma: 0.99
 gae_lambda: 0.95
-rules: step
-reasoner: nsfr
-architecture: mlp
 reward_type: outcome
 problem_type: pyrenees
 # 3 discrete actions: PS (0), WE (1), FWE (2)

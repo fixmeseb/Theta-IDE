@@ -4,6 +4,10 @@ defaults:
 
 paradigm: online_rl
 
+methods:
+  params:
+    architecture: cnn
+
 save_dataset: true
 seed: 1
 recover: false

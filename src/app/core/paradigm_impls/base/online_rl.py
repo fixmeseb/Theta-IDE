@@ -14,22 +14,17 @@ from src.app.core.paradigm_loader import register_component
 log = logging.getLogger(__name__)
 
 
+from src.app.data.rl_data_module import RLDataModule
+
+
 @register_component("SimulatorDataModule")
-class SimulatorDataModule(BaseDataModule):
-    """Data 'source' for online RL: the environment itself generates transitions.
+class SimulatorDataModule(RLDataModule):
+    """Data 'source' for online RL: environment rollouts drive training."""
 
-    Online RL doesn't use a static dataset; this is a stub to satisfy the interface.
-    The actual rollout loop is owned by OnlineRLRunner via train.py.
-    """
-
-    def setup(self, cfg) -> None:
-        pass  # Environment setup handled inside train.py
-
-    def train_dataloader(self):
-        raise NotImplementedError(
-            "Online RL generates data via environment rollouts, not a static DataLoader. "
-            "Use OnlineRLRunner.run() which calls the online training phase directly."
-        )
+    def __init__(self, cfg=None):
+        super().__init__(cfg)
+        if cfg is not None:
+            self.setup()
 
 
 @register_component("EpisodicRewardEvalProtocol")
@@ -53,22 +48,4 @@ class OnlineRLRunner(BaseParadigmRunner):
     or via cluster jobs, followed by the automated plotting phase.
     """
 
-    def run(
-        self,
-        cfg,
-        data_module: BaseDataModule,
-        eval_protocol: BaseEvalProtocol,
-        callbacks: list,
-        context: dict,
-    ) -> None:
-        from src.app.pipeline.local_runner import (
-            _setup_output_dirs,
-            run_methods,
-            run_plotting_phase,
-        )
-
-        _setup_output_dirs(cfg)
-        run_methods(cfg, context)
-
-        if not cfg.get("no_plot", False):
-            run_plotting_phase(cfg, context)
+    pass

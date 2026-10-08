@@ -122,18 +122,17 @@ class SamplePlugin(Plugin):
         self.assertNotIn("sample_plugin", self.window.tabs.tab_order)
 
     def test_persistence_of_plugin_state(self):
-        """State is persisted to .plugins.json and restored on reload."""
+        """State is persisted to settings.toml and restored on reload."""
         manager = self.window.plugin_manager
-        state_file = Path(self.temp_dir) / ".plugins.json"
 
         # Initially saved as disabled
         self.assertFalse(manager.is_plugin_enabled("sample_plugin"))
 
-        # Enable and verify disk write
+        # Enable and verify disk write to settings.toml
         manager.enable_plugin("sample_plugin")
-        self.assertTrue(state_file.exists())
-        saved_data = json.loads(state_file.read_text(encoding="utf-8"))
-        self.assertTrue(saved_data.get("sample_plugin"))
+        settings_file = self.window.settings_manager.workspace_settings_path
+        self.assertTrue(settings_file.exists())
+        self.assertIn("sample_plugin", self.window.settings_manager.plugins_enabled)
 
         # Simulate new Window instance loading same data directory
         new_window = Window(data_dir=self.temp_dir)
@@ -162,15 +161,15 @@ class SamplePlugin(Plugin):
         self.assertNotIn("sample_plugin", self.window.tabs.tabs)
 
     def test_uninstalled_plugin_lifecycle_and_disappearance(self):
-        """Uninstalling a plugin marks it uninstalled and removes it from the Settings menu."""
+        """Uninstalling a plugin removes its directory from disk and from Settings UI."""
         manager = self.window.plugin_manager
         self.assertIn("sample_plugin", manager.manifests)
         self.assertIn("sample_plugin", self.window.plugin_sliders)
 
-        # Mark uninstalled
-        manager.mark_uninstalled("sample_plugin")
+        # Uninstall removes files and unregisters manifest
+        manager.uninstall_plugin("sample_plugin")
         self.assertNotIn("sample_plugin", manager.manifests)
-        self.assertIn("sample_plugin", manager.uninstalled_ids)
+        self.assertFalse(self.plugin_dir.exists())
 
         # UI refresh removes it from settings menu
         self.window.refresh_plugins_ui()
@@ -180,7 +179,7 @@ class SamplePlugin(Plugin):
         manager.discover()
         self.assertNotIn("sample_plugin", manager.manifests)
 
-        # Simulate re-installing plugin archive into data_dir
+        # Simulate re-installing plugin archive into data_dir (e.g. from Hub)
         self.plugin_dir.mkdir(parents=True, exist_ok=True)
         (self.plugin_dir / "plugin.json").write_text(json.dumps({
             "id": self.plugin_id,
@@ -192,8 +191,7 @@ class SamplePlugin(Plugin):
             "entry_point": "SamplePlugin",
         }), encoding="utf-8")
 
-        # Re-marking as installed restores it
-        manager.unmark_uninstalled("sample_plugin")
+        # Re-discovery naturally restores it without needing blacklist manipulation
         manager.discover()
         self.assertIn("sample_plugin", manager.manifests)
         self.window.refresh_plugins_ui()

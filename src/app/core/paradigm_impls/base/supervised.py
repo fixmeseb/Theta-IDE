@@ -12,6 +12,7 @@ import inspect
 import logging
 from typing import Any
 
+import lightning as L
 import numpy as np
 import torch
 import torch.nn as nn
@@ -28,8 +29,9 @@ log = logging.getLogger(__name__)
 # 1. Generic Supervised Data Module
 # ---------------------------------------------------------------------------
 
+
 @register_component("SupervisedDataModule", "CrossValidationDataModule")
-class SupervisedDataModule(BaseDataModule):
+class SupervisedDataModule(L.LightningDataModule, BaseDataModule):
     """Domain-independent data module wrapping train, val, and test DataLoaders."""
 
     def __init__(
@@ -37,25 +39,68 @@ class SupervisedDataModule(BaseDataModule):
         train_loader: DataLoader | None = None,
         val_loader: DataLoader | None = None,
         test_loader: DataLoader | None = None,
+        cfg: Any = None,
     ):
+        super().__init__()
+        if train_loader is not None and not isinstance(train_loader, DataLoader) and cfg is None:
+            cfg = train_loader
+            train_loader = None
+
         self._train_loader = train_loader
         self._val_loader = val_loader
         self._test_loader = test_loader
         self._cfg = None
+        self._delegate = None
+        self.input_dim = 64
+        if cfg is not None:
+            self.setup(cfg=cfg)
 
-    def setup(self, cfg) -> None:
+    def setup(self, stage: str | None = None, cfg: Any = None) -> None:
         """Initialize data module from config if loaders were not passed at init."""
-        self._cfg = cfg
+        if cfg is not None and not isinstance(cfg, str):
+            self._cfg = cfg
+        elif stage is not None and not isinstance(stage, str) and cfg is None:
+            self._cfg = stage
+        if self._train_loader is None and self._cfg is not None:
+            dm_name = (
+                self._cfg.get("data_module") if hasattr(self._cfg, "get") else getattr(self._cfg, "data_module", None)
+            )
+            if dm_name and dm_name != "SupervisedDataModule":
+                from src.app.core.paradigm_loader import get_component
+
+                try:
+                    cls = get_component(dm_name)
+                except KeyError:
+                    cls = None
+                if cls is not None:
+                    self._delegate = cls(self._cfg)
+                    self.input_dim = getattr(self._delegate, "input_dim", 64)
+                    return
+
+            if hasattr(self._cfg, "get") and (
+                self._cfg.get("early_prediction")
+                or (hasattr(self._cfg, "env") and getattr(self._cfg.env, "name", None) == "mimic")
+            ):
+                from src.usr.eval.early_prediction.data_module import EPSepsisDataModule
+
+                self._delegate = EPSepsisDataModule(self._cfg)
+                self.input_dim = getattr(self._delegate, "input_dim", 64)
 
     def train_dataloader(self) -> DataLoader:
+        if self._delegate is not None:
+            return self._delegate.train_dataloader()
         if self._train_loader is None:
             raise RuntimeError("train_loader has not been set or loaded.")
         return self._train_loader
 
     def val_dataloader(self) -> DataLoader | None:
+        if self._delegate is not None:
+            return self._delegate.val_dataloader()
         return self._val_loader
 
     def test_dataloader(self) -> DataLoader | None:
+        if self._delegate is not None:
+            return self._delegate.test_dataloader()
         return self._test_loader
 
     def set_loaders(
@@ -68,11 +113,13 @@ class SupervisedDataModule(BaseDataModule):
         self._train_loader = train_loader
         self._val_loader = val_loader
         self._test_loader = test_loader
+        self._delegate = None
 
 
 # ---------------------------------------------------------------------------
 # 2. Generic Classification Evaluation Protocol
 # ---------------------------------------------------------------------------
+
 
 @register_component("ClassificationEvalProtocol")
 class ClassificationEvalProtocol(BaseEvalProtocol):
@@ -197,6 +244,7 @@ class ClassificationEvalProtocol(BaseEvalProtocol):
 # 3. Generic Supervised Runner
 # ---------------------------------------------------------------------------
 
+
 @register_component("SupervisedRunner")
 class SupervisedRunner(BaseParadigmRunner):
     """Domain-independent runner for supervised learning tasks.
@@ -235,24 +283,3 @@ class SupervisedRunner(BaseParadigmRunner):
         trainer = L.Trainer(**trainer_kwargs)
         trainer.fit(model, train_dataloaders=train_loader, val_dataloaders=val_loader)
         return trainer
-
-    def run(
-        self,
-        cfg: Any,
-        data_module: BaseDataModule,
-        eval_protocol: BaseEvalProtocol,
-        callbacks: list,
-        context: dict,
-    ) -> None:
-        """Standard execution loop for supervised experiments via methods dict."""
-        from src.app.pipeline.local_runner import (
-            _setup_output_dirs,
-            run_methods,
-            run_plotting_phase,
-        )
-
-        _setup_output_dirs(cfg)
-        run_methods(cfg, context)
-
-        if not cfg.get("no_plot", False):
-            run_plotting_phase(cfg, context)

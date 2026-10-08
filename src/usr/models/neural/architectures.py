@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 from torch.distributions.categorical import Categorical
 
+from src.app.core.model_registry import register_model
 from src.app.core.types import ActionResult
 
 
@@ -12,6 +13,7 @@ def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
     return layer
 
 
+@register_model("neural_blender_actor")
 class NeuralBlenderActor(nn.Module):
     def __init__(self, out_size=2):
         super().__init__()
@@ -38,6 +40,7 @@ class NeuralBlenderActor(nn.Module):
         return torch.softmax(logits, dim=-1)
 
 
+@register_model("neural_blender_mlp")
 class NeuralBlenderMLP(nn.Module):
     def __init__(self, num_in_features, out_size=2, hidden_sizes=[256, 256]):
         super().__init__()
@@ -73,9 +76,11 @@ class NeuralBlenderMLP(nn.Module):
         return logits
 
 
+@register_model("cnn", "nature_cnn", "cnn_actor")
 class CNNActor(nn.Module):
     def __init__(self, n_actions=18):
         super().__init__()
+        self.n_actions = n_actions
         self.network = nn.Sequential(
             layer_init(nn.Conv2d(4, 32, 8, stride=4)),
             nn.ReLU(),
@@ -117,6 +122,7 @@ class CNNActor(nn.Module):
         return self.actor(hidden)
 
 
+@register_model("value_network", "cnn_value_network")
 class ValueNetwork(nn.Module):
     def __init__(self):
         super().__init__()
@@ -137,6 +143,7 @@ class ValueNetwork(nn.Module):
         return self.network(x / 255.0)
 
 
+@register_model("mlp", "dnn", "mlpqnetwork")
 class MLPQNetwork(nn.Module):
     def __init__(self, n_actions, num_in_features=4, hidden_sizes=[64, 64], dueling=None, activation=None, dropout=0.0):
         super().__init__()
@@ -184,6 +191,7 @@ class MLPQNetwork(nn.Module):
             )
         else:
             self.head = layer_init(nn.Linear(last_size, n_actions), std=1.0)
+            self.value_head = layer_init(nn.Linear(last_size, 1), std=1.0)
 
     def forward(self, x):
         x = x.float().reshape(x.shape[0], -1)
@@ -202,7 +210,52 @@ class MLPQNetwork(nn.Module):
     def get_q_values(self, x):
         return self.forward(x)
 
+    def get_action_probs(self, x):
+        logits = self.forward(x)
+        return torch.softmax(logits, dim=-1)
 
+    def get_value(self, x, logic_state=None):
+        x = x.float().reshape(x.shape[0], -1)
+        if hasattr(self, "num_in_features") and x.shape[-1] < self.num_in_features:
+            pad = torch.zeros((x.shape[0], self.num_in_features - x.shape[-1]), dtype=x.dtype, device=x.device)
+            x = torch.cat([x, pad], dim=-1)
+        elif hasattr(self, "num_in_features") and x.shape[-1] > self.num_in_features:
+            x = x[:, : self.num_in_features]
+        feat = self.network(x)
+        return self.value_head(feat)
+
+    def get_action_and_value(self, x, action=None):
+        x = x.float().reshape(x.shape[0], -1)
+        if hasattr(self, "num_in_features") and x.shape[-1] < self.num_in_features:
+            pad = torch.zeros((x.shape[0], self.num_in_features - x.shape[-1]), dtype=x.dtype, device=x.device)
+            x = torch.cat([x, pad], dim=-1)
+        elif hasattr(self, "num_in_features") and x.shape[-1] > self.num_in_features:
+            x = x[:, : self.num_in_features]
+        feat = self.network(x)
+        val = self.value_head(feat)
+        if self.dueling:
+            adv = self.advantage_head(feat)
+            logits = val + (adv - adv.mean(dim=-1, keepdim=True))
+        else:
+            logits = self.head(feat)
+        probs = Categorical(logits=logits)
+        if action is None:
+            action = probs.sample()
+        return ActionResult(
+            action=action,
+            logprob=probs.log_prob(action),
+            entropy=probs.entropy(),
+            value=val,
+        )
+
+    def act(self, x, logic_state=None, epsilon=0.0):
+        probs = self.get_action_probs(x)
+        dist = Categorical(probs=probs)
+        action = dist.sample()
+        return action, dist.log_prob(action)
+
+
+@register_model("mlp_value_network")
 class MLPValueNetwork(nn.Module):
     def __init__(self, num_in_features=4, hidden_sizes=[64, 64], activation=None, dropout=0.0):
         super().__init__()
@@ -239,6 +292,7 @@ class MLPValueNetwork(nn.Module):
         return self.network(x)
 
 
+@register_model("q_network", "cnn_q_network")
 class QNetwork(nn.Module):
     def __init__(self, n_actions=18):
         super().__init__()

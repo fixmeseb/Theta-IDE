@@ -18,6 +18,7 @@ class PluginContext:
         self._storage_file = storage_file
         self._registered_tabs: List[str] = []
         self._experiment_listeners: List[Callable[[Optional[str], Optional[str]], None]] = []
+        self._storage_cache: Optional[Dict[str, Any]] = None  # lazy-loaded on first access
 
     # ── Sidebar & UI Contributions ──────────────────────────────────────────
 
@@ -38,11 +39,28 @@ class PluginContext:
             icon_name: SVG icon name in frontend/icons/ or absolute path to an .svg.
             short_label: Short text label under the icon in the sidebar (defaults to title).
         """
+        resolved_icon = icon_name
+        if resolved_icon and hasattr(self._window, "plugin_manager"):
+            manifest = self._window.plugin_manager.manifests.get(self.plugin_id)
+            if manifest and manifest.plugin_dir:
+                p_cand = Path(resolved_icon)
+                builtin_icon_dir = Path(__file__).resolve().parent.parent / "icons"
+                if not (p_cand.is_file() or (builtin_icon_dir / f"{resolved_icon}.svg").is_file()):
+                    for cand in [
+                        manifest.plugin_dir / resolved_icon,
+                        manifest.plugin_dir / f"{resolved_icon}.svg",
+                        manifest.plugin_dir / f"{self.plugin_id}.svg",
+                        manifest.plugin_dir / f"{manifest.id}.svg",
+                    ]:
+                        if cand.is_file():
+                            resolved_icon = str(cand)
+                            break
+
         if hasattr(self._window, "tabs") and self._window.tabs is not None:
             self._window.tabs.addTab(
                 widget=widget,
                 text=title,
-                icon=icon_name,
+                icon=resolved_icon,
                 short=short_label or title,
                 tab_id=tab_id,
             )
@@ -137,14 +155,19 @@ class PluginContext:
     # ── Plugin-Scoped Persistence ────────────────────────────────────────────
 
     def _read_storage(self) -> Dict[str, Any]:
+        if self._storage_cache is not None:
+            return self._storage_cache
         if not self._storage_file.exists():
-            return {}
+            self._storage_cache = {}
+            return self._storage_cache
         try:
-            return json.loads(self._storage_file.read_text(encoding="utf-8"))
+            self._storage_cache = json.loads(self._storage_file.read_text(encoding="utf-8"))
         except Exception:
-            return {}
+            self._storage_cache = {}
+        return self._storage_cache
 
     def _write_storage(self, data: Dict[str, Any]) -> None:
+        self._storage_cache = data
         try:
             self._storage_file.parent.mkdir(parents=True, exist_ok=True)
             self._storage_file.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
@@ -169,3 +192,4 @@ class PluginContext:
         for tab_id in list(self._registered_tabs):
             self.remove_sidebar_tab(tab_id)
         self._experiment_listeners.clear()
+        self._storage_cache = None

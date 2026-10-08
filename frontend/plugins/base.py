@@ -16,11 +16,12 @@ class PluginManifest:
     name: str
     version: str = "0.1.0"
     description: str = ""
-    author: str = "NeSyRL Team"
+    author: str = "ThetaIDE Team"
     default_enabled: bool = False
     icon: Optional[str] = None
     entry_point: str = "Plugin"
     plugin_dir: Optional[Path] = None
+    is_core: bool = False
     extra: Dict[str, Any] = field(default_factory=dict)
 
 

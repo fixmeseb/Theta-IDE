@@ -18,9 +18,10 @@ plots:
   convergence: {}
 
 methods:
-  iql_cp_tuned:
+  params:
     agent: iql
+
+  iql_cp_tuned:
     model: dnn
   iql_blendrl_cp_tuned:
-    agent: iql
     model: blendrl

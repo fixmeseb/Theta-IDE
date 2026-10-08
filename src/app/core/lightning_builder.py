@@ -15,6 +15,19 @@ from omegaconf import DictConfig, OmegaConf
 logger = logging.getLogger(__name__)
 
 
+def get_method_name(cfg) -> str:
+    """Resolve method/agent/model identifier safely from config across all paradigms."""
+    if hasattr(cfg, "agent") and cfg.agent is not None:
+        name = cfg.agent.get("name", None) if hasattr(cfg.agent, "get") else getattr(cfg.agent, "name", None)
+        if name:
+            return str(name)
+    if hasattr(cfg, "model") and cfg.model is not None:
+        name = cfg.model.get("name", None) if hasattr(cfg.model, "get") else getattr(cfg.model, "name", None)
+        if name:
+            return str(name)
+    return str(cfg.get("experiment_id", "default_method"))
+
+
 class SaveInitialCheckpointCallback(Callback):
     """Callback to save an initial, untrained model checkpoint before training starts."""
 
@@ -39,7 +52,8 @@ class SaveInitialCheckpointCallback(Callback):
             base_root = os.getcwd()
         parent_ckpt_root = os.path.join(base_root, "results/checkpoints", self.cfg.group, self.cfg.experiment_id)
         os.makedirs(parent_ckpt_root, exist_ok=True)
-        named_ckpt = os.path.join(parent_ckpt_root, f"{self.cfg.agent.name}.ckpt")
+        method_name = get_method_name(self.cfg)
+        named_ckpt = os.path.join(parent_ckpt_root, f"{method_name}.ckpt")
         if os.path.exists(init_ckpt):
             import shutil
 
@@ -75,7 +89,7 @@ def print_hardware_diagnostics():
 
 def infer_dynamic_timesteps(cfg):
     """Dynamically infer total timesteps based on offline dataset size."""
-    if cfg.paradigm == "offline_rl":
+    if cfg.get("paradigm") == "offline_rl":
         ds_path = cfg.get("dataset_path", None)
         if ds_path and os.path.exists(ds_path):
             try:
@@ -96,8 +110,9 @@ def infer_dynamic_timesteps(cfg):
 
 
 def setup_loggers(cfg, base_root):
+    method_name = get_method_name(cfg)
     log_dir = os.path.join(base_root, "results/logs", cfg.group, cfg.experiment_id)
-    loggers = [CSVLogger(log_dir, name=cfg.agent.name)]
+    loggers = [CSVLogger(log_dir, name=method_name)]
 
     use_tb = False
     if "tensorboard" in cfg:
@@ -107,7 +122,7 @@ def setup_loggers(cfg, base_root):
 
     if use_tb:
         tb_dir = os.path.join(base_root, "results/tensorboard", cfg.group, cfg.experiment_id)
-        tb_logger = TensorBoardLogger(tb_dir, name=cfg.agent.name, default_hp_metric=False)
+        tb_logger = TensorBoardLogger(tb_dir, name=method_name, default_hp_metric=False)
         _ = tb_logger.experiment
         loggers.append(tb_logger)
     return loggers
@@ -117,7 +132,11 @@ def build_trainer(cfg, model=None):
     print_hardware_diagnostics()
     infer_dynamic_timesteps(cfg)
 
-    agent_seed = cfg.agent.get("seed", cfg.seed)
+    agent_seed = (
+        cfg.agent.get("seed", cfg.seed)
+        if hasattr(cfg, "agent") and cfg.agent is not None and hasattr(cfg.agent, "get")
+        else cfg.seed
+    )
     if isinstance(agent_seed, DictConfig):
         agent_seed = agent_seed.get("seed", cfg.seed)
     L.seed_everything(agent_seed)
@@ -143,7 +162,8 @@ def build_trainer(cfg, model=None):
             trial_id = str(HydraConfig.get().job.num)
         except Exception as e:
             logger.debug("Could not inspect Hydra job num: %s", e)
-    ckpt_dir = os.path.join(base_root, "results/checkpoints", cfg.group, cfg.experiment_id, cfg.agent.name, trial_id)
+    method_name = get_method_name(cfg)
+    ckpt_dir = os.path.join(base_root, "results/checkpoints", cfg.group, cfg.experiment_id, method_name, trial_id)
 
     def graceful_shutdown(signum, frame):
         print(f"\n[SIGTERM] Received termination signal {signum}. Attempting graceful shutdown...")
@@ -160,9 +180,10 @@ def build_trainer(cfg, model=None):
         logger.debug("Unexpected error registering shutdown signal handlers: %s", e)
 
     is_offline_only = cfg.env.get("offline_only", False)
+    is_online = (cfg.get("paradigm") == "online_rl") and not is_offline_only
     callbacks = [SaveInitialCheckpointCallback(ckpt_dir, cfg)]
 
-    if is_offline_only:
+    if not is_online:
         monitor_metric = cfg.env.get("monitor_metric", "val/loss")
         monitor_mode = "max" if any(k in str(monitor_metric).lower() for k in ["f1", "reward", "auc", "acc"]) else "min"
         callbacks.append(
@@ -176,7 +197,11 @@ def build_trainer(cfg, model=None):
                 enable_version_counter=False,
             )
         )
-        eval_interval_epochs = cfg.agent.get("eval_interval_epochs", 1) if hasattr(cfg, "agent") else 1
+        eval_interval_epochs = (
+            cfg.agent.get("eval_interval_epochs", 1)
+            if hasattr(cfg, "agent") and cfg.agent is not None and hasattr(cfg.agent, "get")
+            else cfg.get("eval_interval_epochs", 1)
+        )
         if eval_interval_epochs:
             interval_dir = os.path.join(ckpt_dir, "intervals")
             callbacks.append(
@@ -205,7 +230,7 @@ def build_trainer(cfg, model=None):
             ]
         )
 
-    if cfg.paradigm == "online_rl":
+    if cfg.get("paradigm") == "online_rl":
         num_envs = getattr(model, "num_envs", cfg.env.num_envs) if model else cfg.env.num_envs
         num_steps = getattr(model, "num_steps", cfg.env.num_steps) if model else getattr(cfg.env, "num_steps", 256)
         batch_size = num_envs * num_steps
@@ -219,10 +244,20 @@ def build_trainer(cfg, model=None):
         limit_val_batches = 0
         check_val_every_n_epoch = 1000000
     else:
-        epochs_per_interval = cfg.agent.get("epochs_per_interval", 1)
-        intervals_count = 1 if is_offline_only else cfg.get("intervals_count", 1)
+        epochs_per_interval = (
+            cfg.agent.get("epochs_per_interval", 1)
+            if hasattr(cfg, "agent") and cfg.agent is not None and hasattr(cfg.agent, "get")
+            else cfg.get("epochs_per_interval", 1)
+        )
+        intervals_count = (
+            1 if (is_offline_only or cfg.get("paradigm") == "offline_rl") else cfg.get("intervals_count", 1)
+        )
         max_epochs = intervals_count * epochs_per_interval
-        eval_interval_epochs = cfg.agent.get("eval_interval_epochs", 1)
+        eval_interval_epochs = (
+            cfg.agent.get("eval_interval_epochs", 1)
+            if hasattr(cfg, "agent") and cfg.agent is not None and hasattr(cfg.agent, "get")
+            else cfg.get("eval_interval_epochs", 1)
+        )
         limit_val_batches = 1.0
         check_val_every_n_epoch = eval_interval_epochs if eval_interval_epochs else 1
 
@@ -328,8 +363,9 @@ def finalize_training(trainer, cfg, ckpt_dir, training_time, start_time, end_tim
     meta = collect_run_metadata(cfg)
     save_git_diff(ckpt_dir)
 
+    method_name = get_method_name(cfg)
     runtime_info = {
-        "agent": str(cfg.agent.name),
+        "agent": method_name,
         "experiment_id": str(cfg.experiment_id),
         "group": str(cfg.group),
         "training_time_seconds": round(training_time, 2),
@@ -412,9 +448,10 @@ def finalize_training(trainer, cfg, ckpt_dir, training_time, start_time, end_tim
     if os.path.abspath(final_ckpt_target) != os.path.abspath(parent_ckpt_target) and os.path.exists(final_ckpt_target):
         try:
             import shutil
+
             os.makedirs(parent_ckpt_dir, exist_ok=True)
             shutil.copy2(final_ckpt_target, parent_ckpt_target)
-            named_ckpt = os.path.join(parent_ckpt_dir, f"{cfg.agent.name}.ckpt")
+            named_ckpt = os.path.join(parent_ckpt_dir, f"{method_name}.ckpt")
             shutil.copy2(final_ckpt_target, named_ckpt)
         except Exception as e:
             logger.debug("Could not copy single-trial checkpoint to agent root: %s", e)

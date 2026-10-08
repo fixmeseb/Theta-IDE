@@ -9,101 +9,44 @@ resources:
   memory: "64G"
 
 methods:
+  params:
+    agent: cql
+    epochs_per_interval: 25
+    eval_interval_epochs: 5
+    lr: 2e-4
+    cql_alpha: 2.0
+    weight_decay: 1e-4
+
   cql_dnn:
-    agent: cql
     model: dnn
-    epochs_per_interval: 25
-    eval_interval_epochs: 5
-    lr: 2e-4
-    cql_alpha: 2.0
     ent_coef: 0.05
-    weight_decay: 1e-4
   cql_dueling_resnet:
-    agent: cql
     model: dueling_resnet
-    epochs_per_interval: 25
-    eval_interval_epochs: 5
-    lr: 2e-4
-    cql_alpha: 2.0
-    weight_decay: 1e-4
   cql_transformer:
-    agent: cql
     model: transformer
-    epochs_per_interval: 25
-    eval_interval_epochs: 5
-    lr: 2e-4
-    cql_alpha: 2.0
-    weight_decay: 1e-4
   cql_blendrl_rigid:
-    agent: cql
     model: blendrl
-    epochs_per_interval: 25
-    eval_interval_epochs: 5
-    lr: 2e-4
-    cql_alpha: 2.0
     blend_ent_coef: 0.1
     ent_coef: 0.05
-    weight_decay: 1e-4
   cql_blendrl_continuous:
-    agent: cql
     model: blendrl
-    epochs_per_interval: 25
-    eval_interval_epochs: 5
-    lr: 2e-4
-    cql_alpha: 2.0
     blend_ent_coef: 0.1
     ent_coef: 0.05
-    weight_decay: 1e-4
   cql_blendrl_dueling_resnet:
-    agent: cql
     model: blendrl
-    epochs_per_interval: 25
-    eval_interval_epochs: 5
-    lr: 2e-4
-    cql_alpha: 2.0
     blend_ent_coef: 0.1
-    weight_decay: 1e-4
   cql_blendrl_transformer:
-    agent: cql
     model: blendrl
-    epochs_per_interval: 25
-    eval_interval_epochs: 5
-    lr: 2e-4
-    cql_alpha: 2.0
     blend_ent_coef: 0.1
-    weight_decay: 1e-4
   cql_blendrl_cross_attention:
-    agent: cql
     model: blendrl
-    epochs_per_interval: 25
-    eval_interval_epochs: 5
-    lr: 2e-4
-    cql_alpha: 2.0
     blend_ent_coef: 0.1
-    weight_decay: 1e-4
   cql_blendrl_cew:
-    agent: cql
     model: blendrl
-    epochs_per_interval: 25
-    eval_interval_epochs: 5
-    lr: 2e-4
-    cql_alpha: 2.0
     blend_ent_coef: 0.1
-    weight_decay: 1e-4
   cql_blendrl_cew_only:
-    agent: cql
     model: blendrl
-    epochs_per_interval: 25
-    eval_interval_epochs: 5
-    lr: 2e-4
-    cql_alpha: 2.0
-    weight_decay: 1e-4
   cew_fyd:
-    agent: cew
     model: cew
-    epochs_per_interval: 25
-    eval_interval_epochs: 5
-    lr: 2e-4
-    weight_decay: 1e-4
     fyd: true
     fyd_top_k: 50

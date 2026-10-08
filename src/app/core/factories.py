@@ -12,75 +12,21 @@ from src.usr.models.neural.architectures import CNNActor, NeuralBlenderActor, Ne
 logger = logging.getLogger(__name__)
 
 
-def _safe_instantiate(module_class, **kwargs):
-    import inspect
+def get_neural_agent(env_name, n_actions, device, arch_name=None, hidden_sizes=None, num_in_features=None, **kwargs):
+    from src.app.core.model_registry import build_model
 
-    sig = inspect.signature(module_class.__init__)
-    has_var_keyword = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values())
-    if has_var_keyword:
-        return module_class(**kwargs)
-    valid_kwargs = {k: v for k, v in kwargs.items() if k in sig.parameters}
-    return module_class(**valid_kwargs)
+    if hidden_sizes is None:
+        hidden_sizes = [64, 64]
 
-
-def get_neural_agent(
-    env_name, n_actions, device, arch_name=None, hidden_sizes=[64, 64], num_in_features=None, **kwargs
-):
-    if num_in_features is None:
-        from src.app.core.env_vectorized import VectorizedBaseEnv
-
-        try:
-            temp_env = VectorizedBaseEnv.from_name(env_name, n_envs=1, mode="eval")
-            obs = temp_env.reset()
-            num_in_features = obs.shape[-1]
-            temp_env.close()
-        except Exception as e:
-            logger.debug("Could not infer num_in_features by instantiating %s: %s", env_name, e)
-
-    if arch_name in ["cross_attention", "cross_attention_transformer", "sepsis_cross_attention"]:
-        transformer_module_path = f"in/envs/{env_name}/transformer.py"
-        if not os.path.exists(transformer_module_path):
-            raise FileNotFoundError(f"Requested transformer architecture but {transformer_module_path} does not exist.")
-        module = load_module(transformer_module_path)
-        cls = getattr(module, "CrossAttentionPolicy", None) or getattr(module, "CrossAttentionSepsisPolicy")
-        return _safe_instantiate(cls, device=device, out_size=n_actions, num_in_features=num_in_features, **kwargs).to(
-            device
-        )
-
-    if arch_name in ["transformer", "sepsis_transformer"]:
-        transformer_module_path = f"in/envs/{env_name}/transformer.py"
-        if not os.path.exists(transformer_module_path):
-            raise FileNotFoundError(f"Requested transformer architecture but {transformer_module_path} does not exist.")
-        module = load_module(transformer_module_path)
-        cls = getattr(module, "TransformerPolicy", None) or getattr(module, "SepsisTransformerPolicy")
-        return _safe_instantiate(cls, device=device, out_size=n_actions, num_in_features=num_in_features, **kwargs).to(
-            device
-        )
-
-    if arch_name in ["dueling_resnet", "resnet"]:
-        mlp_module_path = f"in/envs/{env_name}/mlp.py"
-        if not os.path.exists(mlp_module_path):
-            raise FileNotFoundError(f"Requested resnet architecture but {mlp_module_path} does not exist.")
-        module = load_module(mlp_module_path)
-        cls = getattr(module, "DuelingResNetMLP", None) or getattr(module, "MLP")
-        return _safe_instantiate(
-            cls, device=device, out_size=n_actions, hidden_sizes=hidden_sizes, num_in_features=num_in_features, **kwargs
-        ).to(device)
-
-    if arch_name in ["mlp", "dnn", "standard_mlp"]:
-        mlp_module_path = f"in/envs/{env_name}/mlp.py"
-        if not os.path.exists(mlp_module_path):
-            raise FileNotFoundError(f"Requested MLP architecture but {mlp_module_path} does not exist.")
-        module = load_module(mlp_module_path)
-        cls = getattr(module, "StandardMLP", None) or getattr(module, "MLP")
-        return _safe_instantiate(
-            cls, device=device, out_size=n_actions, hidden_sizes=hidden_sizes, num_in_features=num_in_features, **kwargs
-        ).to(device)
-
-    if arch_name == "cnn":
-        return CNNActor(n_actions=n_actions).to(device)
-
-    raise ValueError(f"Unknown architecture '{arch_name}' requested for environment '{env_name}'.")
+    return build_model(
+        arch_name or "mlp",
+        env=env_name,
+        n_actions=n_actions,
+        device=device,
+        hidden_sizes=hidden_sizes,
+        num_in_features=num_in_features,
+        **kwargs,
+    )
 
 
 def get_blender(
@@ -109,6 +55,8 @@ def get_blender(
             net = NeuralBlenderActor(out_size=out_size)
         else:
             obs = env.reset()
+            if isinstance(obs, tuple):
+                obs = obs[0]
             num_in_features = np.prod(obs.shape[1:])
             net = NeuralBlenderMLP(num_in_features=num_in_features, out_size=out_size)
         net.to(device)
@@ -131,9 +79,14 @@ def load_cleanrl_envs(env_id, run_name=None, capture_video=False, num_envs=1):
     return envs
 
 
-def load_cleanrl_agent(pretrained: bool = False, device: str | torch.device = "cpu", model_path: str | None = None):
+def load_cleanrl_agent(
+    pretrained: bool = False,
+    device: str | torch.device = "cpu",
+    model_path: str | None = None,
+    n_actions: int = 18,
+):
     """Load CleanRL CNNActor, optionally restoring weights from a checkpoint path."""
-    agent = CNNActor(n_actions=18)
+    agent = CNNActor(n_actions=n_actions)
     if pretrained:
         if not model_path or not os.path.exists(model_path):
             raise FileNotFoundError(
@@ -144,20 +97,4 @@ def load_cleanrl_agent(pretrained: bool = False, device: str | torch.device = "c
         except Exception as e:
             raise RuntimeError(f"Failed loading CleanRL weights from '{model_path}': {e}")
     agent.to(device)
-    return agent
-
-
-def load_logic_ppo(agent, path):
-    new_actor_dic = OrderedDict()
-    new_critic_dic = OrderedDict()
-    dic = torch.load(path)
-    for name, value in dic.items():
-        if "actor." in name:
-            new_name = name.replace("actor.", "")
-            new_actor_dic[new_name] = value
-        if "critic." in name:
-            new_name = name.replace("critic.", "")
-            new_critic_dic[new_name] = value
-    agent.logic_actor.load_state_dict(new_actor_dic)
-    agent.logic_critic.load_state_dict(new_critic_dic)
     return agent

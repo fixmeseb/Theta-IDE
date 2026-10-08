@@ -27,8 +27,8 @@ import matplotlib.pyplot as plt
 
 from plot.base import BasePlotter, clean_label, get_canonical_method_name, get_method_aliases
 from plot.pyrenees_reporter import PyreneesReporter
-from src.usr.methods.method_registry import get_style as get_method_style
 from src.usr.eval.pyrenees_evaluator import PyreneesEvaluator
+from src.usr.methods.method_style_registry import get_style as get_method_style
 
 
 class ActionDistributionPlotter(BasePlotter):
@@ -50,18 +50,7 @@ class ActionDistributionPlotter(BasePlotter):
             return {}
 
         exp_cfg = self.get_experiment_config(exp_id)
-        active_aliases = set()
-        has_active_filter = False
-        for key in ["online_methods", "offline_methods"]:
-            val = exp_cfg.get(key, [])
-            if val:
-                has_active_filter = True
-                if isinstance(val, (list, tuple)):
-                    methods = list(val)
-                else:
-                    methods = [item.strip() for item in str(val).split(",") if item.strip()]
-                for m in methods:
-                    active_aliases.update(get_method_aliases(m))
+        active_aliases, has_active_filter = self.get_active_aliases(exp_cfg)
 
         known_problems = [
             "problem",

@@ -79,6 +79,21 @@ def test_job_store_recovers_dead_process(tmp_path):
     assert "stopped" in dead_job["error"]
 
 
+def test_job_store_connection_closed_on_error(tmp_path):
+    import sqlite3
+    db_path = tmp_path / "jobs.db"
+    store = JobStore(db_path)
+    saved_conn = None
+    with pytest.raises(RuntimeError):
+        with store._connection() as conn:
+            saved_conn = conn
+            raise RuntimeError("Forced failure")
+    assert saved_conn is not None
+    with pytest.raises(sqlite3.ProgrammingError):
+        saved_conn.execute("SELECT 1")
+
+
+
 def test_incremental_metrics_reader(tmp_path):
     csv_file = tmp_path / "metrics.csv"
     # Write initial header + 2 rows

@@ -19,7 +19,6 @@ class MockCfg:
 def mock_cfg_online():
     cfg = MockCfg(
         paradigm="online_rl",
-        task="rl",
         methods={"ppo_cp_tuned": {"agent": "ppo", "model": "dnn"}},
         intervals_count=1,
         eval_episodes=100,
@@ -34,7 +33,6 @@ def mock_cfg_online():
 def mock_cfg_offline():
     cfg = MockCfg(
         paradigm="offline_rl",
-        task="rl",
         methods={"iql_mimic": {"agent": "iql", "model": "dnn"}},
         intervals_count=1,
         eval_episodes=0,
@@ -49,7 +47,6 @@ def mock_cfg_offline():
 def mock_cfg_supervised():
     cfg = MockCfg(
         paradigm="supervised",
-        task="rl",
         methods={"ep_lstm": {"model": "lstm"}},
         intervals_count=1,
         eval_episodes=0,
@@ -68,14 +65,14 @@ def mock_cfg_supervised():
 
 @patch("src.app.pipeline.validation._load_raw_experiment_yaml", return_value={})
 def test_missing_paradigm(mock_yaml, mock_cfg_online):
-    mock_cfg_online.__dict__.update({"paradigm": None, "task": "rl"})
+    mock_cfg_online.__dict__.update({"paradigm": None})
     with pytest.raises(ConfigurationError, match="has no 'paradigm' declared"):
         validate_experiment_config(mock_cfg_online, "test_exp")
 
 
 @patch("src.app.pipeline.validation._load_raw_experiment_yaml", return_value={})
 def test_unknown_paradigm(mock_yaml, mock_cfg_online):
-    mock_cfg_online.__dict__.update({"paradigm": "unknown_xyz", "task": "rl"})
+    mock_cfg_online.__dict__.update({"paradigm": "unknown_xyz"})
     with pytest.raises(ConfigurationError, match="Unknown paradigm 'unknown_xyz'"):
         validate_experiment_config(mock_cfg_online, "test_exp")
 
@@ -100,7 +97,6 @@ def test_online_rl_requires_live_env(mock_yaml, mock_cfg_online):
 def test_intervals_count_gt1_offline_rl(mock_yaml, mock_cfg_offline):
     mock_cfg_offline.__dict__.update({
         "paradigm": "offline_rl",
-        "task": "rl",
         "intervals_count": 2,
         "eval_episodes": 0,
         "online_methods": "",
@@ -116,7 +112,6 @@ def test_intervals_count_gt1_offline_rl(mock_yaml, mock_cfg_offline):
 def test_eval_episodes_offline_rl(mock_yaml, mock_cfg_offline):
     mock_cfg_offline.__dict__.update({
         "paradigm": "offline_rl",
-        "task": "rl",
         "intervals_count": 1,
         "eval_episodes": 100,
         "online_methods": "",
@@ -132,7 +127,6 @@ def test_eval_episodes_offline_rl(mock_yaml, mock_cfg_offline):
 def test_missing_methods_online_rl(mock_yaml, mock_cfg_online):
     mock_cfg_online.__dict__.update({
         "paradigm": "online_rl",
-        "task": "rl",
         "intervals_count": 1,
         "eval_episodes": 100,
         "methods": {},
@@ -161,7 +155,6 @@ def test_explicit_intervals_count_in_raw_yaml(mock_yaml, mock_cfg_offline):
     """intervals_count declared explicitly in raw YAML should be caught even if cfg returns 1."""
     mock_cfg_offline.__dict__.update({
         "paradigm": "offline_rl",
-        "task": "rl",
         "eval_episodes": 0,
         "online_methods": "",
         "offline_methods": "iql/mimic",
@@ -176,7 +169,6 @@ def test_explicit_intervals_count_in_raw_yaml(mock_yaml, mock_cfg_offline):
 def test_explicit_eval_episodes_in_raw_yaml(mock_yaml, mock_cfg_offline):
     mock_cfg_offline.__dict__.update({
         "paradigm": "offline_rl",
-        "task": "rl",
         "intervals_count": 1,
         "online_methods": "",
         "offline_methods": "iql/mimic",
@@ -251,7 +243,7 @@ def test_cew_forbidden_in_online_rl(mock_yaml, mock_cfg_online):
     mock_cfg_online.__dict__["methods"] = {
         "cew_dnn": {"agent": "cew", "model": "dnn"}
     }
-    with pytest.raises(ConfigurationError, match="forbidden in paradigm 'online_rl'"):
+    with pytest.raises(ConfigurationError, match="(forbidden in paradigm 'online_rl'|not allowed in paradigm 'online_rl')"):
         validate_experiment_config(mock_cfg_online, "test_exp")
 
 

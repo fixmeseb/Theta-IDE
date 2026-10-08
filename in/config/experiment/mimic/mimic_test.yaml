@@ -1,65 +1,27 @@
 # @package _global_
 defaults:
-- mimic/_base
+  - mimic/_base
 
 methods:
+  params:
+    agent: cql
+    epochs_per_interval: 4
+    eval_interval_epochs: 1
+    lr: 1e-4
+    cql_alpha: 2.0
+    blend_ent_coef: 0.1
+    ent_coef: 0.05
+    weight_decay: 1e-4
+
   cql_dnn:
-    agent: cql
     model: dnn
-    epochs_per_interval: 4
-    eval_interval_epochs: 1
-    lr: 1e-4
-    cql_alpha: 2.0
-    blend_ent_coef: 0.1
-    ent_coef: 0.05
-    weight_decay: 1e-4
   cql_transformer:
-    agent: cql
     model: transformer
-    epochs_per_interval: 4
-    eval_interval_epochs: 1
-    lr: 1e-4
-    cql_alpha: 2.0
-    blend_ent_coef: 0.1
-    ent_coef: 0.05
-    weight_decay: 1e-4
   cql_blendrl_human_rigid:
-    agent: cql
     model: blendrl
-    epochs_per_interval: 4
-    eval_interval_epochs: 1
-    lr: 1e-4
-    cql_alpha: 2.0
-    blend_ent_coef: 0.1
-    ent_coef: 0.05
-    weight_decay: 1e-4
   cql_blendrl_human_continuous:
-    agent: cql
     model: blendrl
-    epochs_per_interval: 4
-    eval_interval_epochs: 1
-    lr: 1e-4
-    cql_alpha: 2.0
-    blend_ent_coef: 0.1
-    ent_coef: 0.05
-    weight_decay: 1e-4
   cql_blendrl_cross_attention:
-    agent: cql
     model: blendrl
-    epochs_per_interval: 4
-    eval_interval_epochs: 1
-    lr: 1e-4
-    cql_alpha: 2.0
-    blend_ent_coef: 0.1
-    ent_coef: 0.05
-    weight_decay: 1e-4
   cql_blendrl_human_transformer:
-    agent: cql
     model: blendrl
-    epochs_per_interval: 4
-    eval_interval_epochs: 1
-    lr: 1e-4
-    cql_alpha: 2.0
-    blend_ent_coef: 0.1
-    ent_coef: 0.05
-    weight_decay: 1e-4

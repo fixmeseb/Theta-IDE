@@ -1,4 +1,6 @@
 from pathlib import Path
+from typing import Any, cast
+
 import yaml
 
 
@@ -23,6 +25,13 @@ def parse_method_list(val):
     return [item.strip() for item in str(val).split(",") if item.strip()]
 
 
+def _config_to_dict(cfg: Any) -> dict[str, Any]:
+    """Resolve a DictConfig into a plain dict (OmegaConf types its result as a broad union)."""
+    from omegaconf import OmegaConf
+
+    return cast(dict[str, Any], OmegaConf.to_container(cfg, resolve=True))
+
+
 _RESERVED_METHOD_KEYS = {
     "params",
     "_params_",
@@ -36,8 +45,52 @@ _RESERVED_METHOD_KEYS = {
 }
 
 
-_KNOWN_ALGORITHMS = {"cql", "ppo", "iql", "cew"}
-_KNOWN_MODELS = {"dnn", "dueling_resnet", "blendrl", "transformer", "lstm", "cew", "nsfr", "neumann"}
+_KNOWN_ALGORITHMS = {"cql", "ppo", "iql"}
+_KNOWN_MODELS = {
+    "dnn",
+    "mlp",
+    "dueling_resnet",
+    "resnet",
+    "blendrl",
+    "blender",
+    "transformer",
+    "cross_attention",
+    "sepsis_transformer",
+    "sepsis_cross_attention",
+    "lstm",
+    "gru",
+    "cnn",
+    "nature_cnn",
+    "cew",
+    "nsfr",
+    "neumann",
+}
+
+
+def get_known_algorithms() -> set[str]:
+    """Return all known algorithm names, including any registered dynamically."""
+    algos = set(_KNOWN_ALGORITHMS)
+    try:
+        from src.usr.methods.agent_registry import AGENT_REGISTRY
+
+        algos.update(AGENT_REGISTRY.keys())
+    except Exception:
+        pass
+    return algos
+
+
+def get_known_models() -> set[str]:
+    """Return all known model architecture names, including any registered dynamically."""
+    models = set(_KNOWN_MODELS)
+    try:
+        from src.app.core.model_registry import MODEL_REGISTRY
+
+        models.update(MODEL_REGISTRY.keys())
+    except Exception:
+        pass
+    return models
+
+
 _MODEL_KEYS = {
     "architecture",
     "modules",
@@ -85,7 +138,7 @@ def resolve_study_best_params(from_study: str, method_name: str, group: str | No
     for cand in candidates:
         if cand.is_file() and cand.suffix in (".yaml", ".yml"):
             try:
-                with open(cand, "r", encoding="utf-8") as f:
+                with open(cand, encoding="utf-8") as f:
                     data = yaml.safe_load(f)
                     if isinstance(data, dict):
                         return data
@@ -93,7 +146,7 @@ def resolve_study_best_params(from_study: str, method_name: str, group: str | No
                 pass
         elif cand.is_dir() and (cand / "best_params.yaml").is_file():
             try:
-                with open(cand / "best_params.yaml", "r", encoding="utf-8") as f:
+                with open(cand / "best_params.yaml", encoding="utf-8") as f:
                     data = yaml.safe_load(f)
                     if isinstance(data, dict):
                         return data
@@ -136,12 +189,13 @@ def find_group_method_config(method_name: str, group: str | None = None) -> dict
     for path in candidates:
         if path.is_file():
             try:
-                with open(path, "r", encoding="utf-8") as f:
+                with open(path, encoding="utf-8") as f:
                     data = yaml.safe_load(f)
                     if isinstance(data, dict):
                         return data
             except Exception as e:
                 import logging
+
                 logging.getLogger("blendrl").warning("Failed to load method YAML %s: %s", path, e)
     return {}
 
@@ -166,7 +220,7 @@ def _extract_name_and_subparams(
                 subparams = {k: v for k, v in val.items() if k not in name_keys}
                 return ident, subparams
 
-        all_known = set(_KNOWN_ALGORITHMS) | set(_KNOWN_MODELS)
+        all_known = get_known_algorithms() | get_known_models()
         if known_names:
             all_known.update(known_names)
 
@@ -201,6 +255,7 @@ def load_model_base_config(model_name: str, config_dir=None) -> dict:
     if not model_name:
         return {}
     from pathlib import Path
+
     import yaml
 
     if config_dir is None:
@@ -213,7 +268,7 @@ def load_model_base_config(model_name: str, config_dir=None) -> dict:
     if not target.exists():
         return {}
     try:
-        with open(target, "r") as f:
+        with open(target) as f:
             data = yaml.safe_load(f)
         return dict(data) if isinstance(data, dict) else {}
     except Exception:
@@ -270,7 +325,11 @@ def resolve_composite_submodel(
         result["reasoner"] = base_cfg["reasoner"]
 
     # Merge shared params: methods.params.model.<arch> or methods.params.<arch>
-    if shared_model_params and resolved_type in shared_model_params and isinstance(shared_model_params[resolved_type], dict):
+    if (
+        shared_model_params
+        and resolved_type in shared_model_params
+        and isinstance(shared_model_params[resolved_type], dict)
+    ):
         result = deep_merge(result, shared_model_params[resolved_type])
     if shared_params and resolved_type in shared_params and isinstance(shared_params[resolved_type], dict):
         result = deep_merge(result, shared_params[resolved_type])
@@ -309,21 +368,21 @@ def parse_methods_dict(cfg) -> dict[str, dict]:
         return {}
 
     if isinstance(raw_methods, DictConfig):
-        raw_methods_dict = OmegaConf.to_container(raw_methods, resolve=True)
+        raw_methods_dict = _config_to_dict(raw_methods)
     elif hasattr(raw_methods, "items"):
         raw_methods_dict = dict(raw_methods)
     else:
         return {}
 
     # 1. Extract shared params from top-level config (e.g. cfg.params)
-    top_params = {}
+    top_params: dict[str, Any] = {}
     for top_key in ("params", "shared_params", "common_params"):
         val = getattr(cfg, top_key, None) if not isinstance(cfg, dict) else cfg.get(top_key)
         if val is None and hasattr(cfg, "get"):
             val = cfg.get(top_key, None)
         if val:
             if isinstance(val, DictConfig):
-                val_dict = OmegaConf.to_container(val, resolve=True)
+                val_dict = _config_to_dict(val)
             elif hasattr(val, "items"):
                 val_dict = dict(val)
             else:
@@ -331,12 +390,12 @@ def parse_methods_dict(cfg) -> dict[str, dict]:
             top_params = deep_merge(top_params, val_dict)
 
     # 2. Extract shared params from within methods dict (e.g. methods.params)
-    method_level_params = {}
+    method_level_params: dict[str, Any] = {}
     for res_key in _RESERVED_METHOD_KEYS:
         if res_key in raw_methods_dict:
             res_val = raw_methods_dict[res_key]
             if isinstance(res_val, DictConfig):
-                res_dict = OmegaConf.to_container(res_val, resolve=True)
+                res_dict = _config_to_dict(res_val)
             elif isinstance(res_val, dict):
                 res_dict = dict(res_val)
             else:
@@ -350,17 +409,19 @@ def parse_methods_dict(cfg) -> dict[str, dict]:
     shared_model = shared_params.get("model", {})
 
     # Extract shared tuning search space
-    shared_tune = {}
+    shared_tune: dict[str, Any] = {}
     for tune_key in ("tune", "search_space"):
         if tune_key in shared_params and isinstance(shared_params[tune_key], dict):
             shared_tune = deep_merge(shared_tune, shared_params[tune_key])
 
     # Extract universal global parameters (excluding agent, model, tune, and standalone algo/arch blocks)
     universal_global = {}
+    known_algos = get_known_algorithms()
+    known_models = get_known_models()
     for k, v in shared_params.items():
         if k in ("agent", "model", "tune", "search_space"):
             continue
-        if k in _KNOWN_ALGORITHMS or k in _KNOWN_MODELS:
+        if k in known_algos or k in known_models:
             continue
         universal_global[k] = v
 
@@ -372,7 +433,7 @@ def parse_methods_dict(cfg) -> dict[str, dict]:
         if any(nk in shared_agent for nk in ("name", "algorithm", "type", "algo")):
             default_agent_algo, default_agent_sub = _extract_name_and_subparams(shared_agent)
         else:
-            known_in_agent = [k for k in shared_agent if k in _KNOWN_ALGORITHMS]
+            known_in_agent = [k for k in shared_agent if k in known_algos]
             if len(known_in_agent) == 1:
                 default_agent_algo = known_in_agent[0]
 
@@ -407,7 +468,7 @@ def parse_methods_dict(cfg) -> dict[str, dict]:
             continue
 
         if isinstance(method_cfg, DictConfig):
-            m_dict = OmegaConf.to_container(method_cfg, resolve=True)
+            m_dict = _config_to_dict(method_cfg)
         elif isinstance(method_cfg, dict):
             m_dict = dict(method_cfg)
         else:
@@ -436,7 +497,11 @@ def parse_methods_dict(cfg) -> dict[str, dict]:
         # Tier 2: Algorithm-specific overrides from params.agent.<algo> or params.<algo>
         agent_params = dict(default_agent_sub)
         if m_agent_algo:
-            if isinstance(shared_agent, dict) and m_agent_algo in shared_agent and isinstance(shared_agent[m_agent_algo], dict):
+            if (
+                isinstance(shared_agent, dict)
+                and m_agent_algo in shared_agent
+                and isinstance(shared_agent[m_agent_algo], dict)
+            ):
                 agent_params = deep_merge(agent_params, shared_agent[m_agent_algo])
             if m_agent_algo in shared_params and isinstance(shared_params[m_agent_algo], dict):
                 agent_params = deep_merge(agent_params, shared_params[m_agent_algo])
@@ -444,7 +509,11 @@ def parse_methods_dict(cfg) -> dict[str, dict]:
         # Tier 2: Model-specific overrides from params.model.<arch> or params.<arch>
         model_params = dict(default_model_sub)
         if m_model_arch:
-            if isinstance(shared_model, dict) and m_model_arch in shared_model and isinstance(shared_model[m_model_arch], dict):
+            if (
+                isinstance(shared_model, dict)
+                and m_model_arch in shared_model
+                and isinstance(shared_model[m_model_arch], dict)
+            ):
                 model_params = deep_merge(model_params, shared_model[m_model_arch])
             if m_model_arch in shared_params and isinstance(shared_params[m_model_arch], dict):
                 model_params = deep_merge(model_params, shared_params[m_model_arch])
@@ -591,15 +660,16 @@ def parse_methods_dict(cfg) -> dict[str, dict]:
                 print(f"  [Loaded Tuned Params] {method_name} from study '{study_ref}': {tuned_params}")
                 for pk, pv in tuned_params.items():
                     if pk.startswith("agent."):
-                        agent_params[pk[len("agent."):]] = pv
+                        agent_params[pk[len("agent.") :]] = pv
                     elif pk.startswith("model."):
-                        model_params[pk[len("model."):]] = pv
+                        model_params[pk[len("model.") :]] = pv
                     elif pk in _MODEL_KEYS:
                         model_params[pk] = pv
                     else:
                         agent_params[pk] = pv
             else:
                 import logging
+
                 logging.getLogger("blendrl").warning(
                     "Method '%s' specified from_study='%s', but best_params.yaml was not found.",
                     method_name,
@@ -608,18 +678,29 @@ def parse_methods_dict(cfg) -> dict[str, dict]:
 
         # Support method-level tuning search spaces (Tier 3) merged with universal (Tier 2)
         raw_tune = m_dict.get("tune") or m_dict.get("search_space") or {}
-        combined_tune = deep_merge(shared_tune, raw_tune) if isinstance(raw_tune, dict) else (dict(shared_tune) if shared_tune else {})
+        combined_tune = (
+            deep_merge(shared_tune, raw_tune)
+            if isinstance(raw_tune, dict)
+            else (dict(shared_tune) if shared_tune else {})
+        )
         if combined_tune:
             resolved_mcfg["tune"] = combined_tune
+
+        if not isinstance(m_dict, dict):
+            m_dict = {}
 
         # Copy non-agent, non-model keys from m_dict (deep-merging if both are dicts)
         for k, v in m_dict.items():
             if k in ("agent", "model", "tune", "search_space", "from_study") or k in consumed_keys:
                 continue
             if k in agent_params:
-                agent_params[k] = deep_merge(agent_params[k], v) if isinstance(agent_params[k], dict) and isinstance(v, dict) else v
+                agent_params[k] = (
+                    deep_merge(agent_params[k], v) if isinstance(agent_params[k], dict) and isinstance(v, dict) else v
+                )
             if k in model_params:
-                model_params[k] = deep_merge(model_params[k], v) if isinstance(model_params[k], dict) and isinstance(v, dict) else v
+                model_params[k] = (
+                    deep_merge(model_params[k], v) if isinstance(model_params[k], dict) and isinstance(v, dict) else v
+                )
 
             if k in resolved_mcfg and isinstance(resolved_mcfg[k], dict) and isinstance(v, dict):
                 resolved_mcfg[k] = deep_merge(resolved_mcfg[k], v)
@@ -657,7 +738,6 @@ def parse_methods_dict(cfg) -> dict[str, dict]:
         result[str(method_name)] = resolved_mcfg
 
     return result
-
 
 
 def resolve_experiment_config_name(exp_input: str) -> str:

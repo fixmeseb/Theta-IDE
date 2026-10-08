@@ -1,36 +1,123 @@
 """Full-screen, simplified, boxed configuration viewer for Theta-IDE."""
-from pathlib import Path
+import math
 import random
+from pathlib import Path
+
 import yaml
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QFormLayout,
-    QLabel, QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QCheckBox,
-    QPushButton, QToolButton, QFrame, QScrollArea, QMessageBox
+    QAbstractSpinBox,
+    QCheckBox,
+    QComboBox,
+    QDoubleSpinBox,
+    QFormLayout,
+    QFrame,
+    QGridLayout,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QPushButton,
+    QScrollArea,
+    QSpinBox,
+    QToolButton,
+    QVBoxLayout,
+    QWidget,
 )
-from .widgets import label
+
+from .config_model import ConfigTree
+from .config_model import add_method as add_method_to
+from .config_model import remove_method as remove_method_from
+from .widgets import ComboBox, DoubleSpinBox, SpinBox, label
+
+# Forms stay readable on wide windows: the column of boxes stops growing past CONTENT_WIDTH,
+# and fields in label/field rows are capped by kind so a number doesn't get a 1,000px box.
+CONTENT_WIDTH = 860
+NUMBER_FIELD_WIDTH = 200
+TEXT_FIELD_WIDTH = 380
+
+
+class CompactDoubleSpinBox(DoubleSpinBox):
+    """Keeps six decimals of precision but shows 0.95 rather than 0.950000."""
+
+    def textFromValue(self, value):
+        text = f"{value:.{self.decimals()}f}".rstrip("0").rstrip(".")
+        return "0" if text in ("", "-0") else text
+
+
+def number_field(value):
+    """Spin box for a YAML number: floats step at one tenth of their magnitude, and values
+    that start non-negative (counts, coefficients) can't be pushed below zero."""
+    if isinstance(value, float):
+        spin = CompactDoubleSpinBox()
+        spin.setDecimals(6)
+        magnitude = math.floor(math.log10(abs(value))) if value else -1
+        spin.setSingleStep(10.0 ** (magnitude - 1))
+    else:
+        spin = SpinBox()
+    spin.setRange(0 if value >= 0 else -1000000, 100000000)
+    spin.setValue(value)
+    return spin
+
+_CONFIG_TREE = None
+_CONFIG_TREE_LOADED = False
+
+
+def config_tree():
+    """The parsed in/config tree, or None if it cannot be found.
+
+    Callers must handle None: the viewer falls back to free-text entry so it
+    still works when run outside a checkout.
+    """
+    global _CONFIG_TREE, _CONFIG_TREE_LOADED
+    if not _CONFIG_TREE_LOADED:
+        _CONFIG_TREE_LOADED = True
+        try:
+            _CONFIG_TREE = ConfigTree.discover()
+        except (FileNotFoundError, OSError):
+            _CONFIG_TREE = None
+    return _CONFIG_TREE
+
+
+def _leading_directives(text):
+    """The comment block a config opens with, kept verbatim across a save.
+
+    "# @package _global_" is a Hydra directive, not decoration: without it the
+    file's keys are not applied at the global package level, so methods and the
+    rest simply are not seen. Every one of the experiment configs starts with
+    it, and yaml.safe_dump drops comments, so it has to be re-attached by hand.
+    """
+    kept = []
+    for line in text.splitlines(keepends=True):
+        if line.strip() and not line.lstrip().startswith("#"):
+            break
+        kept.append(line)
+    return "".join(kept)
+
+
+def _read_group_base(tree, group):
+    """The group's _base.yaml as plain data, or {} when there is none."""
+    if tree is None or not group:
+        return {}
+    path = tree.config_root / "experiment" / group / "_base.yaml"
+    if not path.is_file():
+        return {}
+    try:
+        return yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError):
+        return {}
 
 
 class ConfigBox(QFrame):
     """Themed card container representing a section of configuration."""
-    def __init__(self, title, subtitle=None, parent=None):
+    def __init__(self, title=None, subtitle=None, parent=None):
         super().__init__(parent)
         self.setObjectName("card")
         self.layout = QVBoxLayout(self)
         self.layout.setContentsMargins(16, 14, 16, 14)
         self.layout.setSpacing(10)
-
-        header = QHBoxLayout()
-        header.setSpacing(8)
-        self.title_label = label(title.upper(), "eyebrow")
-        header.addWidget(self.title_label)
-        header.addStretch()
-        self.layout.addLayout(header)
-
-        if subtitle:
-            self.subtitle_label = label(subtitle, "muted")
-            self.subtitle_label.setWordWrap(True)
-            self.layout.addWidget(self.subtitle_label)
+        self.title_label = None
+        self.subtitle_label = None
 
     def add_widget(self, widget):
         self.layout.addWidget(widget)
@@ -47,6 +134,8 @@ class ConfigViewer(QWidget):
     config_changed = pyqtSignal()
     save_requested = pyqtSignal()
 
+    INHERIT = "(inherit from base)"
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.current_path = None
@@ -55,6 +144,7 @@ class ConfigViewer(QWidget):
         self.is_dirty = False
         self._block_updates = False
         self.field_widgets = {}
+        self._preamble = ""
 
         self._init_ui()
 
@@ -81,7 +171,7 @@ class ConfigViewer(QWidget):
 
         hb_layout.addStretch()
 
-        self.btn_save = QPushButton("💾 Save")
+        self.btn_save = QPushButton("Save")
         self.btn_save.setToolTip("Save changes to this configuration file (Ctrl+S)")
         self.btn_save.clicked.connect(self.save_to_disk)
         self.btn_save.setEnabled(False)
@@ -95,6 +185,7 @@ class ConfigViewer(QWidget):
         self.scroll.setObjectName("configScrollArea")
 
         self.container = QWidget()
+        self.container.setMaximumWidth(CONTENT_WIDTH)
         self.boxes_layout = QVBoxLayout(self.container)
         self.boxes_layout.setContentsMargins(12, 10, 12, 16)
         self.boxes_layout.setSpacing(14)
@@ -110,6 +201,7 @@ class ConfigViewer(QWidget):
 
         try:
             content = self.current_path.read_text(encoding="utf-8")
+            self._preamble = _leading_directives(content)
             data = yaml.safe_load(content) or {}
             self.raw_data = data if isinstance(data, dict) else {"content": data}
         except Exception as exc:
@@ -151,15 +243,68 @@ class ConfigViewer(QWidget):
         else:
             self._render_generic_boxes()
 
+        self._cap_form_fields()
         self.boxes_layout.addStretch()
         self._block_updates = False
+
+    def _group_name(self):
+        """The experiment group this file sits in, from experiment/<group>/<file>."""
+        parts = Path(str(self.current_rel_path or "")).parts
+        return parts[1] if len(parts) > 2 and parts[0] == "experiment" else None
+
+    def env_selection(self):
+        """The chosen environment, or None when it is inherited from the base."""
+        combo = getattr(self, "combo_env", None)
+        if combo is None or combo.currentData() == self.INHERIT:
+            return None
+        return combo.currentText()
+
+    def _inherited_paradigm(self):
+        """The paradigm this experiment inherits from its group's _base.yaml."""
+        tree, group = config_tree(), self._group_name()
+        if tree is None or group is None:
+            return None
+        return tree.group(group).paradigm
+
+    def _cap_form_fields(self):
+        """Limit field widths in every label/field form and two-column grid."""
+        for grid in self.container.findChildren(QGridLayout):
+            for index in range(grid.count()):
+                widget = grid.itemAt(index).widget()
+                if isinstance(widget, QAbstractSpinBox):
+                    widget.setMaximumWidth(NUMBER_FIELD_WIDTH)
+                elif isinstance(widget, (QComboBox, QLineEdit)):
+                    widget.setMaximumWidth(NUMBER_FIELD_WIDTH)
+            # An empty last column takes the slack, so fields stay next to their labels
+            grid.setColumnStretch(grid.columnCount(), 1)
+        for row_layout in self.container.findChildren(QHBoxLayout):
+            for index in range(row_layout.count()):
+                widget = row_layout.itemAt(index).widget()
+                if isinstance(widget, QAbstractSpinBox):
+                    widget.setMaximumWidth(NUMBER_FIELD_WIDTH)
+        for form in self.container.findChildren(QFormLayout):
+            for row in range(form.rowCount()):
+                item = form.itemAt(row, QFormLayout.ItemRole.FieldRole)
+                widget = item.widget() if item else None
+                label_item = form.itemAt(row, QFormLayout.ItemRole.LabelRole)
+                if widget is not None and label_item and isinstance(label_item.widget(), QLabel):
+                    # Labels sit at the top of their row; match the field height so the text lines up
+                    label_item.widget().setMinimumHeight(widget.sizeHint().height())
+                    label_item.widget().setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
+                if isinstance(widget, QAbstractSpinBox):
+                    widget.setMaximumWidth(NUMBER_FIELD_WIDTH)
+                elif isinstance(widget, (QComboBox, QLineEdit)):
+                    widget.setMaximumWidth(TEXT_FIELD_WIDTH)
 
     def _render_experiment_boxes(self):
         """Render standard boxes for an Experiment configuration."""
         data = self.raw_data
 
-        # Paradigm badge
-        paradigm = data.get("paradigm", "online_rl")
+        # Paradigm badge. Only 2 of the 66 experiments set `paradigm` themselves;
+        # the rest inherit it from their group's _base.yaml, so falling back to a
+        # fixed default would mislabel almost all of them and filter the form by
+        # the wrong rules.
+        paradigm = data.get("paradigm") or self._inherited_paradigm() or "online_rl"
         if paradigm:
             self.paradigm_badge.setText(str(paradigm).upper())
             self.paradigm_badge.show()
@@ -188,6 +333,43 @@ class ConfigViewer(QWidget):
         form_id.addRow("Group", self.txt_group)
         self.field_widgets["group"] = self.txt_group
 
+        # Paradigm + Environment, driven by in/config/paradigms constraints.
+        tree = config_tree()
+        if tree and tree.paradigms:
+            self.combo_paradigm = ComboBox()
+            self.combo_paradigm.addItems(sorted(tree.paradigms))
+            if paradigm in tree.paradigms:
+                self.combo_paradigm.setCurrentText(paradigm)
+            rules = tree.paradigms.get(self.combo_paradigm.currentText())
+            if rules and rules.description:
+                self.combo_paradigm.setToolTip(rules.description)
+            self.combo_paradigm.currentTextChanged.connect(self._on_paradigm_changed)
+            form_id.addRow("Paradigm", self.combo_paradigm)
+            self.field_widgets["paradigm"] = self.combo_paradigm
+
+            self.combo_env = ComboBox()
+            # Name what is inherited: "(inherit from base)" alone leaves the user
+            # with no way to tell which environment the run will actually use.
+            # The sentinel lives in the item's data, so the visible label is free
+            # to name what is actually inherited.
+            inherited_env = tree.group(self._group_name() or "").env
+            inherit_label = f"(inherit from base — {inherited_env})" if inherited_env else self.INHERIT
+            self.combo_env.addItem(inherit_label, self.INHERIT)
+            allowed_envs = [e.name for e in tree.environments_for(self.combo_paradigm.currentText())]
+            self.combo_env.addItems(allowed_envs)
+            current_env = data.get("env")
+            if isinstance(current_env, str) and current_env in allowed_envs:
+                self.combo_env.setCurrentText(current_env)
+            self.combo_env.setToolTip(
+                f"Environments compatible with {self.combo_paradigm.currentText()} "
+                f"(offline_only must match)"
+            )
+            self.combo_env.currentTextChanged.connect(
+                lambda v: self._on_field_edited("env", v) if self.env_selection() else None
+            )
+            form_id.addRow("Environment", self.combo_env)
+            self.field_widgets["env"] = self.combo_env
+
         # Defaults / Base
         defaults = data.get("defaults", [])
         if defaults:
@@ -207,7 +389,7 @@ class ConfigViewer(QWidget):
 
         # Total timesteps
         form_budget.addWidget(label("Total Timesteps"), 0, 0)
-        self.spin_timesteps = QSpinBox()
+        self.spin_timesteps = SpinBox()
         self.spin_timesteps.setRange(100, 100_000_000)
         self.spin_timesteps.setSingleStep(1_000)
         self.spin_timesteps.setValue(int(data.get("total_timesteps") or 10000))
@@ -219,7 +401,7 @@ class ConfigViewer(QWidget):
         form_budget.addWidget(label("Random Seed"), 0, 2)
         seed_row = QHBoxLayout()
         seed_row.setSpacing(6)
-        self.spin_seed = QSpinBox()
+        self.spin_seed = SpinBox()
         self.spin_seed.setRange(0, 2147483647)
         self.spin_seed.setValue(int(data.get("seed") if data.get("seed") is not None else 42))
         self.spin_seed.valueChanged.connect(lambda v: self._on_field_edited("seed", v))
@@ -227,15 +409,16 @@ class ConfigViewer(QWidget):
         self.field_widgets["seed"] = self.spin_seed
 
         btn_rand_seed = QToolButton()
-        btn_rand_seed.setText("🎲")
+        btn_rand_seed.setText("Random")
         btn_rand_seed.setToolTip("Pick a random seed")
         btn_rand_seed.clicked.connect(lambda: self.spin_seed.setValue(random.randint(1, 9999)))
         seed_row.addWidget(btn_rand_seed)
+        seed_row.addStretch()
         form_budget.addLayout(seed_row, 0, 3)
 
         # Intervals count
         form_budget.addWidget(label("Intervals Count"), 1, 0)
-        self.spin_intervals = QSpinBox()
+        self.spin_intervals = SpinBox()
         self.spin_intervals.setRange(1, 100)
         self.spin_intervals.setValue(int(data.get("intervals_count") or 4))
         self.spin_intervals.valueChanged.connect(lambda v: self._on_field_edited("intervals_count", v))
@@ -244,12 +427,32 @@ class ConfigViewer(QWidget):
 
         # Eval episodes
         form_budget.addWidget(label("Eval Episodes"), 1, 2)
-        self.spin_eval_ep = QSpinBox()
+        self.spin_eval_ep = SpinBox()
         self.spin_eval_ep.setRange(0, 1000)
         self.spin_eval_ep.setValue(int(data.get("eval_episodes") if data.get("eval_episodes") is not None else 100))
         self.spin_eval_ep.valueChanged.connect(lambda v: self._on_field_edited("eval_episodes", v))
         form_budget.addWidget(self.spin_eval_ep, 1, 3)
         self.field_widgets["eval_episodes"] = self.spin_eval_ep
+
+        # Disable fields the paradigm forbids rather than letting the pipeline
+        # reject them at launch. A greyed spin box is hard to tell from an
+        # editable one in a dark theme, and leaving the widget default showing
+        # would advertise a value the run will not use, so show what the group
+        # base actually pins and say where it came from.
+        if tree and paradigm in tree.paradigms:
+            rules = tree.paradigms[paradigm]
+            base = _read_group_base(tree, self._group_name())
+            for key, widget in (("intervals_count", self.spin_intervals),
+                                ("eval_episodes", self.spin_eval_ep)):
+                if rules.field_enabled(key):
+                    continue
+                widget.setEnabled(False)
+                if key in base:
+                    widget.setValue(int(base[key]))
+                    widget.setSuffix(f"   (fixed by {paradigm})")
+                else:
+                    widget.setSuffix(f"   (not used by {paradigm})")
+                widget.setToolTip(rules.disabled_reason(key))
 
         # Checkboxes: Tensorboard, Save Dataset, Recover
         chk_row = QHBoxLayout()
@@ -274,6 +477,7 @@ class ConfigViewer(QWidget):
         self.chk_no_plot.toggled.connect(lambda v: self._on_field_edited("no_plot", v))
         chk_row.addWidget(self.chk_no_plot)
 
+        chk_row.addStretch()
         form_budget.addLayout(chk_row, 2, 0, 1, 4)
 
         box_budget.add_layout(form_budget)
@@ -308,28 +512,69 @@ class ConfigViewer(QWidget):
                 sc_layout = QFormLayout(sub_card)
                 sc_layout.setVerticalSpacing(8)
 
-                title_lbl = label(f"Method: {m_name}", "heading")
-                sc_layout.addRow(title_lbl)
+                title_row = QHBoxLayout()
+                title_row.addWidget(label(f"Method: {m_name}", "cardTitle"))
+                title_row.addStretch()
+                btn_remove = QToolButton()
+                btn_remove.setText("Remove")
+                btn_remove.setToolTip(f"Remove method '{m_name}' from this experiment")
+                btn_remove.clicked.connect(lambda _, mn=m_name: self.remove_method(mn))
+                title_row.addWidget(btn_remove)
+                sc_layout.addRow(title_row)
 
-                # Agent
-                agent_val = m_spec.get("agent", "")
-                txt_agent = QLineEdit(str(agent_val))
-                txt_agent.textChanged.connect(lambda v, mn=m_name: self._on_method_param_edited(mn, "agent", v))
+                # Agent — restricted to what this paradigm permits
+                agent_val = str(m_spec.get("agent", ""))
+                if tree and tree.paradigms.get(paradigm):
+                    permitted = [a.name for a in tree.agents_for(paradigm)]
+                    txt_agent = ComboBox()
+                    txt_agent.addItems(permitted)
+                    if agent_val and agent_val not in permitted:
+                        # Never silently rewrite what is already on disk.
+                        txt_agent.insertItem(0, agent_val)
+                        txt_agent.setToolTip(
+                            f"'{agent_val}' is not permitted by {paradigm} "
+                            f"(allowed: {', '.join(permitted) or 'none declared'})"
+                        )
+                    else:
+                        txt_agent.setToolTip(f"Agents permitted by {paradigm}")
+                    txt_agent.setCurrentText(agent_val)
+                    txt_agent.currentTextChanged.connect(
+                        lambda v, mn=m_name: self._on_method_param_edited(mn, "agent", v)
+                    )
+                else:
+                    txt_agent = QLineEdit(agent_val)
+                    txt_agent.textChanged.connect(
+                        lambda v, mn=m_name: self._on_method_param_edited(mn, "agent", v)
+                    )
                 sc_layout.addRow("Agent Algorithm", txt_agent)
 
-                # Model
+                # Model — a dict value is a nested override, so keep it as text
                 model_val = m_spec.get("model", "")
                 if isinstance(model_val, dict):
                     model_str = yaml.safe_dump(model_val, default_flow_style=True).strip()
                 else:
                     model_str = str(model_val)
-                txt_model = QLineEdit(model_str)
-                txt_model.textChanged.connect(lambda v, mn=m_name: self._on_method_param_edited(mn, "model", v))
+                if tree and tree.models and not isinstance(model_val, dict):
+                    txt_model = ComboBox()
+                    known = sorted(tree.models)
+                    txt_model.addItems(known)
+                    if model_str and model_str not in known:
+                        txt_model.insertItem(0, model_str)
+                    txt_model.setCurrentText(model_str)
+                    txt_model.setToolTip("Architectures defined in in/config/model/")
+                    txt_model.currentTextChanged.connect(
+                        lambda v, mn=m_name: self._on_method_param_edited(mn, "model", v)
+                    )
+                else:
+                    txt_model = QLineEdit(model_str)
+                    txt_model.textChanged.connect(
+                        lambda v, mn=m_name: self._on_method_param_edited(mn, "model", v)
+                    )
                 sc_layout.addRow("Model Architecture", txt_model)
 
                 # Learning rate
                 if "lr" in m_spec:
-                    spin_lr = QDoubleSpinBox()
+                    spin_lr = CompactDoubleSpinBox()
                     spin_lr.setDecimals(6)
                     spin_lr.setRange(0.000001, 1.0)
                     spin_lr.setSingleStep(0.0001)
@@ -339,7 +584,7 @@ class ConfigViewer(QWidget):
 
                 # Batch size
                 if "batch_size" in m_spec:
-                    spin_bs = QSpinBox()
+                    spin_bs = SpinBox()
                     spin_bs.setRange(1, 131072)
                     spin_bs.setValue(int(m_spec["batch_size"]))
                     spin_bs.valueChanged.connect(lambda v, mn=m_name: self._on_method_param_edited(mn, "batch_size", v))
@@ -347,7 +592,7 @@ class ConfigViewer(QWidget):
 
                 # Gamma
                 if "gamma" in m_spec:
-                    spin_g = QDoubleSpinBox()
+                    spin_g = DoubleSpinBox()
                     spin_g.setDecimals(4)
                     spin_g.setRange(0.0, 1.0)
                     spin_g.setValue(float(m_spec["gamma"]))
@@ -367,6 +612,24 @@ class ConfigViewer(QWidget):
 
                 m_layout.addWidget(sub_card)
 
+        # Adding a method is how an experiment becomes a comparison, and 17 of
+        # the 46 experiments configure more than one.
+        add_row = QHBoxLayout()
+        add_row.addWidget(label("Add method:", "muted"))
+        self.combo_new_method = ComboBox()
+        permitted_agents = [a.name for a in tree.agents_for(paradigm)] if tree and paradigm in tree.paradigms else []
+        self.combo_new_method.addItems(permitted_agents)
+        self.combo_new_method.setToolTip(f"Agents permitted by {paradigm}")
+        add_row.addWidget(self.combo_new_method)
+        self.btn_add_method = QPushButton("Add")
+        self.btn_add_method.setEnabled(bool(permitted_agents))
+        if not permitted_agents:
+            self.btn_add_method.setToolTip(f"{paradigm} declares no allowed agents")
+        self.btn_add_method.clicked.connect(self.add_method)
+        add_row.addWidget(self.btn_add_method)
+        add_row.addStretch()
+        m_layout.addLayout(add_row)
+
         box_methods.add_layout(m_layout)
         self.boxes_layout.addWidget(box_methods)
 
@@ -379,14 +642,14 @@ class ConfigViewer(QWidget):
         env_cfg = data.get("env", {})
         if isinstance(env_cfg, dict):
             grid_et.addWidget(label("Parallel Envs (num_envs)"), 0, 0)
-            spin_num_envs = QSpinBox()
+            spin_num_envs = SpinBox()
             spin_num_envs.setRange(1, 1024)
             spin_num_envs.setValue(int(env_cfg.get("num_envs") or 4))
             spin_num_envs.valueChanged.connect(lambda v: self._on_nested_edited("env", "num_envs", v))
             grid_et.addWidget(spin_num_envs, 0, 1)
 
             grid_et.addWidget(label("Steps per Env (num_steps)"), 0, 2)
-            spin_num_steps = QSpinBox()
+            spin_num_steps = SpinBox()
             spin_num_steps.setRange(1, 100000)
             spin_num_steps.setValue(int(env_cfg.get("num_steps") or 128))
             spin_num_steps.valueChanged.connect(lambda v: self._on_nested_edited("env", "num_steps", v))
@@ -395,14 +658,14 @@ class ConfigViewer(QWidget):
         trainer_cfg = data.get("trainer", {})
         if isinstance(trainer_cfg, dict):
             grid_et.addWidget(label("Accelerator"), 1, 0)
-            combo_accel = QComboBox()
+            combo_accel = ComboBox()
             combo_accel.addItems(["cpu", "gpu", "mps", "auto"])
             combo_accel.setCurrentText(str(trainer_cfg.get("accelerator") or "cpu"))
             combo_accel.currentTextChanged.connect(lambda v: self._on_nested_edited("trainer", "accelerator", v))
             grid_et.addWidget(combo_accel, 1, 1)
 
             grid_et.addWidget(label("Max Epochs"), 1, 2)
-            spin_epochs = QSpinBox()
+            spin_epochs = SpinBox()
             spin_epochs.setRange(1, 1000)
             spin_epochs.setValue(int(trainer_cfg.get("max_epochs") or 1))
             spin_epochs.valueChanged.connect(lambda v: self._on_nested_edited("trainer", "max_epochs", v))
@@ -460,11 +723,7 @@ class ConfigViewer(QWidget):
                     chk.toggled.connect(lambda val, key=k: self._on_field_edited(key, val))
                     form.addRow(k, chk)
                 elif isinstance(v, (int, float)):
-                    spin = QDoubleSpinBox() if isinstance(v, float) else QSpinBox()
-                    spin.setRange(-1000000, 100000000)
-                    if isinstance(v, float):
-                        spin.setDecimals(6)
-                    spin.setValue(v)
+                    spin = number_field(v)
                     spin.valueChanged.connect(lambda val, key=k: self._on_field_edited(key, val))
                     form.addRow(k, spin)
                 else:
@@ -500,6 +759,40 @@ class ConfigViewer(QWidget):
             return
         self.raw_data[key] = value
         self._mark_dirty()
+
+    def add_method(self, agent=None, model="dnn"):
+        """Add a method to the open experiment. Returns its name, or None."""
+        agent = agent or (self.combo_new_method.currentText() if hasattr(self, "combo_new_method") else "")
+        if not agent:
+            return None
+        name = add_method_to(self.raw_data, agent, model)
+        self._mark_dirty()
+        self._render_boxes()
+        return name
+
+    def remove_method(self, name):
+        """Remove a method from the open experiment. Returns True if it went."""
+        if not remove_method_from(self.raw_data, name):
+            return False
+        self._mark_dirty()
+        self._render_boxes()
+        return True
+
+    def _on_paradigm_changed(self, value):
+        if self._block_updates:
+            return
+        self.raw_data["paradigm"] = value
+        # An env or agent valid under the old paradigm may be forbidden under the
+        # new one, so drop stale choices and rebuild against the new constraints.
+        tree = config_tree()
+        if tree and value in tree.paradigms:
+            rules = tree.paradigms[value]
+            env_name = self.raw_data.get("env")
+            if isinstance(env_name, str) and env_name in tree.environments:
+                if not rules.permits_environment(tree.environments[env_name]):
+                    self.raw_data.pop("env", None)
+        self._mark_dirty()
+        self._render_boxes()
 
     def _on_nested_edited(self, parent_key, child_key, value):
         if self._block_updates:
@@ -548,7 +841,7 @@ class ConfigViewer(QWidget):
             return False
         try:
             yaml_str = yaml.safe_dump(self.raw_data, sort_keys=False)
-            self.current_path.write_text(yaml_str, encoding="utf-8")
+            self.current_path.write_text(self._preamble + yaml_str, encoding="utf-8")
             self.is_dirty = False
             self._update_dirty_ui()
             self.save_requested.emit()
@@ -564,6 +857,13 @@ class ConfigViewer(QWidget):
 
         if "experiment_id" in data:
             overrides.append(f"++experiment_id='{data['experiment_id']}'")
+
+        # Hydra config-group selections (defaults in in/config/config.yaml)
+        for group in ("paradigm", "env"):
+            value = data.get(group)
+            if isinstance(value, str) and value and value != self.INHERIT:
+                overrides.append(f"{group}={value}")
+
         if "seed" in data:
             overrides.append(f"seed={data['seed']}")
         if "total_timesteps" in data:

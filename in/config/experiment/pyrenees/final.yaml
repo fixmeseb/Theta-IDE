@@ -11,23 +11,17 @@ resources:
   time: "04:00:00"
 
 methods:
+  params:
+    agent: cql
+    epochs_per_interval: 50
+    eval_interval_epochs: 5
+    batch_size: 256
+    lr: 3e-4
+    cql_alpha: 1.0
+    soft_target_tau: 0.005
+    blender_lr: 3e-4
+
   cql_dnn:
-    agent: cql
     model: dnn
-    epochs_per_interval: 50
-    eval_interval_epochs: 5
-    batch_size: 256
-    lr: 3e-4
-    cql_alpha: 1.0
-    soft_target_tau: 0.005
-    blender_lr: 3e-4
   cql_blendrl_human_neural:
-    agent: cql
     model: blendrl
-    epochs_per_interval: 50
-    eval_interval_epochs: 5
-    batch_size: 256
-    lr: 3e-4
-    cql_alpha: 1.0
-    soft_target_tau: 0.005
-    blender_lr: 3e-4

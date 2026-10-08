@@ -2,7 +2,10 @@
 defaults:
   - early_prediction/_base
 
-task: early_prediction_sweep
+
+eval_protocol:
+  horizons: [1, 5, 9, 13, 17, 21, 25, 29, 33]
+
 
 early_prediction:
   checkpoint: "results/checkpoints/mimic/cql_literature"

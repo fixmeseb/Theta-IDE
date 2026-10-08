@@ -5,6 +5,9 @@ defaults:
 dataset_path: in/datasets/mimic/mimic_lazy_0_interventions_balanced.npz
 no_plot: true
 
+early_prediction:
+  checkpoint: null
+
 data:
   window_hours: 12
   tau_train: 12

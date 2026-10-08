@@ -5,9 +5,6 @@ offline_only: true
 preprocess_on_load: false
 gamma: 0.99
 gae_lambda: 0.95
-rules: default
-reasoner: nsfr
-architecture: dnn
 reward_type: outcome
 dataset_name: cchs.npz
 

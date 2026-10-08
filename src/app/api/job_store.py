@@ -1,4 +1,5 @@
 """SQLite persistence layer for experiment jobs and execution queue."""
+
 from __future__ import annotations
 
 import json
@@ -8,6 +9,7 @@ import signal
 import sqlite3
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -33,8 +35,17 @@ class JobStore:
         conn.row_factory = sqlite3.Row
         return conn
 
+    @contextmanager
+    def _connection(self):
+        conn = self._get_connection()
+        try:
+            with conn:
+                yield conn
+        finally:
+            conn.close()
+
     def _init_db(self) -> None:
-        with self._lock, self._get_connection() as conn:
+        with self._lock, self._connection() as conn:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS jobs (
                     job_id TEXT PRIMARY KEY,
@@ -79,30 +90,33 @@ class JobStore:
         actual_job_id = job_id or job.get("job_id")
         if not actual_job_id:
             return
-        with self._lock, self._get_connection() as conn:
-            conn.execute("""
+        with self._lock, self._connection() as conn:
+            conn.execute(
+                """
                 INSERT OR REPLACE INTO jobs (
                     job_id, experiment, group_name, experiment_id, status, pid,
                     created, started, finished, returncode, error,
                     total_timesteps, effective_timesteps, agents_json, request_json
                 ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """, (
-                actual_job_id,
-                job.get("experiment"),
-                job.get("group"),
-                job.get("experiment_id"),
-                job.get("status", "pending"),
-                job.get("pid"),
-                job.get("created", time.time()),
-                job.get("started"),
-                job.get("finished"),
-                job.get("returncode"),
-                job.get("error"),
-                job.get("total_timesteps"),
-                job.get("effective_timesteps"),
-                json.dumps(job.get("agents", [])),
-                json.dumps(job.get("request", {})),
-            ))
+            """,
+                (
+                    actual_job_id,
+                    job.get("experiment"),
+                    job.get("group"),
+                    job.get("experiment_id"),
+                    job.get("status", "pending"),
+                    job.get("pid"),
+                    job.get("created", time.time()),
+                    job.get("started"),
+                    job.get("finished"),
+                    job.get("returncode"),
+                    job.get("error"),
+                    job.get("total_timesteps"),
+                    job.get("effective_timesteps"),
+                    json.dumps(job.get("agents", [])),
+                    json.dumps(job.get("request", {})),
+                ),
+            )
             conn.commit()
 
     def update_job(self, job_id: str, **kwargs: Any) -> None:
@@ -124,49 +138,49 @@ class JobStore:
                 values.append(v)
         values.append(job_id)
         sql = f"UPDATE jobs SET {', '.join(fields)} WHERE job_id = ?"
-        with self._lock, self._get_connection() as conn:
+        with self._lock, self._connection() as conn:
             conn.execute(sql, tuple(values))
             conn.commit()
 
     def get_job(self, job_id: str) -> dict[str, Any] | None:
-        with self._lock, self._get_connection() as conn:
+        with self._lock, self._connection() as conn:
             cur = conn.execute("SELECT * FROM jobs WHERE job_id = ?", (job_id,))
             row = cur.fetchone()
             return self._row_to_dict(row) if row else None
 
     def list_jobs(self) -> list[dict[str, Any]]:
-        with self._lock, self._get_connection() as conn:
+        with self._lock, self._connection() as conn:
             cur = conn.execute("SELECT * FROM jobs ORDER BY created DESC")
             return [self._row_to_dict(row) for row in cur.fetchall()]
 
     def get_queue(self) -> list[str]:
-        with self._lock, self._get_connection() as conn:
+        with self._lock, self._connection() as conn:
             cur = conn.execute("SELECT job_id FROM queue ORDER BY position ASC")
             return [row["job_id"] for row in cur.fetchall()]
 
     def set_queue(self, queue_order: list[str]) -> None:
-        with self._lock, self._get_connection() as conn:
+        with self._lock, self._connection() as conn:
             conn.execute("DELETE FROM queue")
             for job_id in queue_order:
                 conn.execute("INSERT INTO queue (job_id) VALUES (?)", (job_id,))
             conn.commit()
 
     def push_queue(self, job_id: str) -> int:
-        with self._lock, self._get_connection() as conn:
+        with self._lock, self._connection() as conn:
             conn.execute("INSERT OR IGNORE INTO queue (job_id) VALUES (?)", (job_id,))
             cur = conn.execute("SELECT count(*) as cnt FROM queue")
             conn.commit()
             return cur.fetchone()["cnt"] - 1
 
     def remove_from_queue(self, job_id: str) -> None:
-        with self._lock, self._get_connection() as conn:
+        with self._lock, self._connection() as conn:
             conn.execute("DELETE FROM queue WHERE job_id = ?", (job_id,))
             conn.commit()
 
     def recover_active_jobs(self) -> list[str]:
         """Check jobs that were running/pending at shutdown. Reconnect or mark failed."""
         recovered = []
-        with self._lock, self._get_connection() as conn:
+        with self._lock, self._connection() as conn:
             cur = conn.execute("SELECT * FROM jobs WHERE status IN ('pending', 'running')")
             active_jobs = [self._row_to_dict(row) for row in cur.fetchall()]
 
@@ -192,11 +206,14 @@ class JobStore:
                     recovered.append(job["job_id"])
                 else:
                     logger.info("Marking dead job %s as failed (pid %s no longer active)", job["job_id"], pid)
-                    conn.execute("""
+                    conn.execute(
+                        """
                         UPDATE jobs
                         SET status = 'failed', returncode = -1, finished = ?, error = ?
                         WHERE job_id = ?
-                    """, (time.time(), "Process terminated while server was stopped", job["job_id"]))
+                    """,
+                        (time.time(), "Process terminated while server was stopped", job["job_id"]),
+                    )
 
             conn.commit()
         return recovered

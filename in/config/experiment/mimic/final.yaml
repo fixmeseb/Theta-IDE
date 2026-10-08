@@ -30,8 +30,19 @@ methods:
         blend_q_values: true
 
   cql_dnn:
+    agent: cql
+    model: dnn
   cql_dueling_resnet:
+    agent: cql
+    model: dueling_resnet
   cql_blendrl_human_rigid:
+    agent: cql
+    model: blendrl
   cql_blendrl_human_dueling_resnet_rigid:
+    agent: cql
+    model: blendrl
   cql_blendrl_cew_dueling_resnet:
+    agent: cql
+    model: blendrl
+
 

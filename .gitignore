@@ -23,6 +23,7 @@ out/
 logs/
 plots/
 offline_dataset/
+cache/
 *.h5
 *.pkl
 *.pth
@@ -82,4 +83,4 @@ coverage.xml
 # Leftover artifacts
 temp/
 .src/
-*.pdf
+/docs

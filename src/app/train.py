@@ -28,14 +28,16 @@ from omegaconf import DictConfig, OmegaConf
 logger = logging.getLogger(__name__)
 
 try:
-    torch.serialization.add_safe_globals(
-        [
-            omegaconf.dictconfig.DictConfig,
-            omegaconf.listconfig.ListConfig,
-            omegaconf.base.Container,
-            omegaconf.nodes.UntypedNode,
-        ]
-    )
+    safe_types = [
+        omegaconf.dictconfig.DictConfig,
+        omegaconf.listconfig.ListConfig,
+        omegaconf.base.Container,
+    ]
+    for node_name in ["AnyNode", "Node", "ValueNode", "UntypedNode"]:
+        if hasattr(omegaconf.nodes, node_name):
+            safe_types.append(getattr(omegaconf.nodes, node_name))
+    if hasattr(torch.serialization, "add_safe_globals"):
+        torch.serialization.add_safe_globals(safe_types)
 except (AttributeError, TypeError) as e:
     logger.debug("PyTorch safe globals registration skipped: %s", e)
 except Exception as e:
@@ -43,7 +45,7 @@ except Exception as e:
 
 from src.app.core.lightning_builder import build_trainer, finalize_training
 from src.app.data.rl_data_module import RLDataModule
-from src.usr.methods.registry import auto_discover, get_agent_class
+from src.usr.methods.agent_registry import auto_discover, get_agent_class
 
 
 @hydra.main(version_base=None, config_path="../../in/config", config_name="config")
@@ -70,18 +72,56 @@ def main(cfg: DictConfig):
     if "env" in cfg and "reward_type" in cfg.env:
         os.environ["MIMIC_REWARD_TYPE"] = str(cfg.env.reward_type)
 
-    if cfg.get("paradigm") == "supervised":
-        from src.usr.eval.early_prediction.data_module import EPSepsisDataModule
-        from src.usr.eval.early_prediction.lightning_module import EPSepsisLightningModule
+    paradigm_name = cfg.get("paradigm", "online_rl")
+    from src.app.core.paradigm_loader import get_component, load_paradigm_definition
 
-        datamodule = EPSepsisDataModule(cfg)
+    paradigm_def = load_paradigm_definition(paradigm_name)
+
+    # 1. Resolve Data Module from explicit config or paradigm definition
+    dm_name = cfg.get("data_module") or (cfg.env.get("data_module") if hasattr(cfg, "env") else None)
+    DataModuleCls = get_component(dm_name) if dm_name else paradigm_def.data_module_cls
+    if DataModuleCls is None:
+        DataModuleCls = RLDataModule
+
+    datamodule = DataModuleCls(cfg)
+
+    # 2. Build Model / Agent based on paradigm
+    if paradigm_name == "supervised":
         input_dim = getattr(datamodule, "input_dim", 64)
 
-        model_cfg = cfg.get("model", {})
+        model_cfg = cfg.get("model", {}) if hasattr(cfg, "get") else getattr(cfg, "model", {})
         arch_name = str(model_cfg.get("architecture", model_cfg.get("name", "lstm"))).lower()
         lr = float(model_cfg.get("lr", cfg.get("lr", 1e-3)))
 
+        # Check if an explicit LightningModule component was registered for this architecture
+        target_module_name = model_cfg.get("lightning_module") or model_cfg.get("module")
+        SupervisedModelCls = None
+        if target_module_name:
+            try:
+                SupervisedModelCls = get_component(target_module_name)
+            except KeyError:
+                SupervisedModelCls = None
+        if SupervisedModelCls is None:
+            from src.usr.eval.early_prediction.lightning_module import EPSepsisLightningModule
+
+            SupervisedModelCls = EPSepsisLightningModule
+
         kwargs = {}
+        if hasattr(model_cfg, "items"):
+            reserved = {
+                "architecture",
+                "name",
+                "lightning_module",
+                "module",
+                "lr",
+                "type",
+                "epochs_per_interval",
+                "eval_interval_epochs",
+            }
+            for k, v in model_cfg.items():
+                if k not in reserved and v is not None:
+                    kwargs[k] = v
+
         for k in (
             "hidden_dim",
             "num_layers",
@@ -99,13 +139,13 @@ def main(cfg: DictConfig):
             "pos_weight",
             "weight_decay",
         ):
-            if hasattr(model_cfg, "get") and model_cfg.get(k) is not None:
-                kwargs[k] = model_cfg.get(k)
-            elif hasattr(cfg, "get") and cfg.get(k) is not None:
+            if k not in kwargs and hasattr(cfg, "get") and cfg.get(k) is not None:
                 kwargs[k] = cfg.get(k)
 
-        print(f"Supervised Paradigm: constructing {arch_name.upper()} model (input_dim={input_dim}, lr={lr})")
-        model = EPSepsisLightningModule(architecture_name=arch_name, input_dim=input_dim, lr=lr, **kwargs)
+        print(
+            f"Supervised Paradigm: constructing {SupervisedModelCls.__name__} ({arch_name.upper()}, input_dim={input_dim}, lr={lr})"
+        )
+        model = SupervisedModelCls(architecture_name=arch_name, input_dim=input_dim, lr=lr, **kwargs)
     else:
         auto_discover()
         agent_cfg = cfg.agent
@@ -115,7 +155,6 @@ def main(cfg: DictConfig):
         if not base_algo_name:
             raise ValueError("Could not extract algorithm name from config.")
 
-        datamodule = RLDataModule(cfg)
         AgentClass = get_agent_class(base_algo_name)
         print(f"Resolved agent class: {AgentClass.__name__}")
         model = AgentClass(cfg)

@@ -7,17 +7,11 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 
+from src.usr.methods.agent_registry import register_agent
 from src.usr.methods.base_agent import OfflineAgentBase
-from src.usr.methods.registry import register_agent
 
 
-@register_agent(
-    "iql",
-    "iql_dnn",
-    "blendrl_iql",
-    "iql_blendrl_human_neural",
-    "blendrl_iql_human_neural",
-)
+@register_agent("iql", "blendrl_iql")
 class IQLAgent(OfflineAgentBase):
     """Unified Implicit Q-Learning (IQL) Offline RL Agent.
 
@@ -28,69 +22,102 @@ class IQLAgent(OfflineAgentBase):
         super().__init__(cfg)
         self.save_hyperparameters()
 
+        self.lr = float(self.get_cfg("lr", self.get_cfg("agent.lr", 3e-4)))
+        self.tau = float(self.get_cfg("tau", self.get_cfg("expectile", 0.7)))
+        self.beta = float(self.get_cfg("beta", self.get_cfg("temperature", 3.0)))
+
         self._init_env(n_envs=1)
-        self.gamma = float(self.get_cfg("gamma", getattr(self.cfg.env, "gamma", 0.99)))
+        self.gamma = float(self.get_cfg("gamma", 0.99))
 
         hidden_sizes = self.get_cfg("hidden_sizes", [256, 256])
         if hidden_sizes is not None:
             hidden_sizes = list(hidden_sizes)
 
-        num_in_features = np.prod(self.observation_space)
-        if cfg.env.architecture == "mlp":
-            from src.usr.models.neural.architectures import MLPQNetwork, MLPValueNetwork
+        default_rules = self.get_cfg("rules", "default")
+        default_reasoner = self.get_cfg("reasoner", "nsfr")
+        default_arch = self.get_cfg("architecture", "mlp")
 
-            self.q_network = MLPQNetwork(
-                n_actions=self.n_actions, num_in_features=num_in_features, hidden_sizes=hidden_sizes
-            )
-            self.q_network2 = MLPQNetwork(
-                n_actions=self.n_actions, num_in_features=num_in_features, hidden_sizes=hidden_sizes
-            )
-            self.value_network = MLPValueNetwork(num_in_features=num_in_features, hidden_sizes=hidden_sizes)
+        num_in_features = (
+            int(np.prod(self.observation_space))
+            if hasattr(self, "observation_space") and self.observation_space
+            else None
+        )
+        model_arch = self.resolve_model_name(default=default_arch)
 
-            self.target_q_network = MLPQNetwork(
-                n_actions=self.n_actions, num_in_features=num_in_features, hidden_sizes=hidden_sizes
-            )
-            self.target_q_network2 = MLPQNetwork(
-                n_actions=self.n_actions, num_in_features=num_in_features, hidden_sizes=hidden_sizes
-            )
-        else:
-            from src.usr.models.neural.architectures import QNetwork, ValueNetwork
+        # ── Q-Networks via Model Registry ──────────────────────────
+        from src.app.core.model_registry import build_model
 
-            self.q_network = QNetwork(n_actions=self.n_actions)
-            self.q_network2 = QNetwork(n_actions=self.n_actions)
-            self.value_network = ValueNetwork()
-
-            self.target_q_network = QNetwork(n_actions=self.n_actions)
-            self.target_q_network2 = QNetwork(n_actions=self.n_actions)
-
+        self.q_network = build_model(
+            model_arch,
+            env=self.env,
+            n_actions=self.n_actions,
+            device=self.device,
+            hidden_sizes=hidden_sizes,
+            obs_dim=num_in_features,
+        )
+        self.q_network2 = build_model(
+            model_arch,
+            env=self.env,
+            n_actions=self.n_actions,
+            device=self.device,
+            hidden_sizes=hidden_sizes,
+            obs_dim=num_in_features,
+        )
+        self.target_q_network = build_model(
+            model_arch,
+            env=self.env,
+            n_actions=self.n_actions,
+            device=self.device,
+            hidden_sizes=hidden_sizes,
+            obs_dim=num_in_features,
+        )
+        self.target_q_network2 = build_model(
+            model_arch,
+            env=self.env,
+            n_actions=self.n_actions,
+            device=self.device,
+            hidden_sizes=hidden_sizes,
+            obs_dim=num_in_features,
+        )
         self.target_q_network.load_state_dict(self.q_network.state_dict())
         self.target_q_network2.load_state_dict(self.q_network2.state_dict())
 
-        # Check if modular/hybrid actor is configured
-        has_modules = bool(self.get_cfg("modules", []))
-        algo_name = str(cfg.agent.get("algorithm", cfg.agent.get("name", "")))
-        is_hybrid = self.get_cfg("actor_mode", "neural") in ["hybrid", "logic"] or "blendrl" in algo_name
-        self.is_modular = has_modules or is_hybrid
+        # ── Value Network via Model Registry ───────────────────────
+        is_cnn = model_arch in ("cnn", "nature_cnn", "cnn_actor", "q_network", "cnn_q_network")
+        default_val_arch = "value_network" if is_cnn else "mlp_value_network"
+        val_arch = self.get_cfg("value_architecture", default_val_arch)
+        self.value_network = build_model(
+            val_arch,
+            env=self.env,
+            device=self.device,
+            hidden_sizes=hidden_sizes,
+            obs_dim=num_in_features,
+        )
+
+        # ── Policy / Actor via Model Registry ──────────────────────
+        self.is_modular = self.is_hybrid_configured()
 
         if self.is_modular:
-            from src.usr.models.blendrl.agents.blender_agent import BlenderActorCritic
-
-            self.model = BlenderActorCritic(
-                self.env,
-                self.get_cfg("rules", cfg.env.rules),
-                self.get_cfg("actor_mode", "hybrid"),
-                self.get_cfg("blender_mode", "neural"),
-                self.get_cfg("blend_function", "softmax"),
-                self.get_cfg("reasoner", cfg.env.reasoner),
-                self.device,
-                architecture=self.get_cfg("architecture", cfg.env.architecture),
+            self.model = build_model(
+                "blendrl",
+                env=self.env,
+                device=self.device,
+                rules=self.get_cfg("rules", default_rules),
+                actor_mode=self.get_cfg("actor_mode", "hybrid"),
+                blender_mode=self.get_cfg("blender_mode", "neural"),
+                blend_function=self.get_cfg("blend_function", "softmax"),
+                reasoner=self.get_cfg("reasoner", default_reasoner),
+                architecture=self.get_cfg("architecture", default_arch),
                 cfg=self.cfg,
             )
         else:
-            from src.app.core.factories import get_neural_agent
-
-            self.actor = get_neural_agent(
-                cfg.env.name, self.n_actions, self.device, arch_name=cfg.env.architecture, hidden_sizes=hidden_sizes
+            self.actor = build_model(
+                model_arch,
+                env=self.env,
+                n_actions=self.n_actions,
+                device=self.device,
+                hidden_sizes=hidden_sizes,
+                obs_dim=num_in_features,
             )
 
     def _prepare_logic_obs(self, obs, logic_obs=None):
@@ -106,20 +133,6 @@ class IQLAgent(OfflineAgentBase):
 
     def on_train_epoch_start(self):
         super().on_train_epoch_start()
-        if self.is_modular and hasattr(self.model, "self_organize_cew_modules"):
-            epochs_per_interval = self.get_cfg("epochs_per_interval", 1)
-            if self.current_epoch % epochs_per_interval == 0:
-                datamodule = self.trainer.datamodule
-                sample_size = min(len(datamodule.reader), 10000)
-                if sample_size > 0:
-                    batch = datamodule.reader.sample(sample_size)
-                    organize_obs = batch["logic_obs"] if batch["logic_obs"] is not None else batch["obs"]
-                    if self.model.self_organize_cew_modules(organize_obs):
-                        lr = self.get_cfg("lr", 3e-4)
-                        actor_params = list(self.model.policy_modules.parameters()) + list(
-                            self.model.blender.parameters()
-                        )
-                        self.trainer.strategy.optimizers[2] = optim.Adam(actor_params, lr=lr)
 
     def training_step(self, batch, batch_idx):
         datamodule = getattr(self.trainer, "datamodule", None)
@@ -149,8 +162,8 @@ class IQLAgent(OfflineAgentBase):
             next_v = self.value_network(next_obs).view(-1)
             q_target = rewards + self.gamma * next_v * (1 - dones)
 
-        current_q1 = self.q_network(obs)
-        current_q2 = self.q_network2(obs)
+        current_q1 = self._compute_q(self.q_network, obs)
+        current_q2 = self._compute_q(self.q_network2, obs)
         current_q1_a = current_q1.gather(1, actions.unsqueeze(1)).view(-1)
         current_q2_a = current_q2.gather(1, actions.unsqueeze(1)).view(-1)
 
@@ -161,8 +174,8 @@ class IQLAgent(OfflineAgentBase):
 
         # 2. Update Value-network
         with torch.no_grad():
-            t_q1 = self.target_q_network(obs)
-            t_q2 = self.target_q_network2(obs)
+            t_q1 = self._compute_q(self.target_q_network, obs)
+            t_q2 = self._compute_q(self.target_q_network2, obs)
             t_q = torch.min(t_q1, t_q2)
             t_q_a = t_q.gather(1, actions.unsqueeze(1)).view(-1)
 
@@ -240,15 +253,22 @@ class IQLAgent(OfflineAgentBase):
     def get_value(self, obs, logic_obs=None):
         return self.value_network(obs)
 
+    def _compute_q(self, net, x):
+        return net.get_q_values(x) if hasattr(net, "get_q_values") else net(x)
+
+    def get_q_values(self, obs, logic_obs=None):
+        return self._compute_q(self.q_network, obs)
+
     def configure_optimizers(self):
-        opt_q = optim.Adam(list(self.q_network.parameters()) + list(self.q_network2.parameters()), lr=self.cfg.agent.lr)
-        opt_v = optim.Adam(self.value_network.parameters(), lr=self.cfg.agent.lr)
+        lr = self.lr
+        opt_q = optim.Adam(list(self.q_network.parameters()) + list(self.q_network2.parameters()), lr=lr)
+        opt_v = optim.Adam(self.value_network.parameters(), lr=lr)
 
         if self.is_modular:
             actor_params = list(self.model.policy_modules.parameters()) + list(self.model.blender.parameters())
-            opt_a = optim.Adam(actor_params, lr=self.cfg.agent.lr)
+            opt_a = optim.Adam(actor_params, lr=lr)
         else:
-            opt_a = optim.Adam(self.actor.parameters(), lr=self.cfg.agent.lr)
+            opt_a = optim.Adam(self.actor.parameters(), lr=lr)
         return [opt_q, opt_v, opt_a]
 
     def validation_step(self, batch, batch_idx):
@@ -267,8 +287,8 @@ class IQLAgent(OfflineAgentBase):
         dones = val_batch["done"].to(self.device, non_blocking=True)
 
         with torch.no_grad():
-            q1 = self.target_q_network(obs).gather(1, actions.unsqueeze(1)).squeeze(1)
-            q2 = self.target_q_network2(obs).gather(1, actions.unsqueeze(1)).squeeze(1)
+            q1 = self._compute_q(self.target_q_network, obs).gather(1, actions.unsqueeze(1)).squeeze(1)
+            q2 = self._compute_q(self.target_q_network2, obs).gather(1, actions.unsqueeze(1)).squeeze(1)
             target_v = torch.min(q1, q2)
             v = self.value_network(obs).squeeze(-1)
             u = target_v - v
@@ -278,8 +298,8 @@ class IQLAgent(OfflineAgentBase):
 
             next_v = self.value_network(next_obs).squeeze(-1)
             q_target = rewards + self.gamma * next_v * (1 - dones)
-            pred_q1 = self.q_network(obs).gather(1, actions.unsqueeze(1)).squeeze(1)
-            pred_q2 = self.q_network2(obs).gather(1, actions.unsqueeze(1)).squeeze(1)
+            pred_q1 = self._compute_q(self.q_network, obs).gather(1, actions.unsqueeze(1)).squeeze(1)
+            pred_q2 = self._compute_q(self.q_network2, obs).gather(1, actions.unsqueeze(1)).squeeze(1)
             q_loss = F.mse_loss(pred_q1, q_target) + F.mse_loss(pred_q2, q_target)
 
             val_loss = value_loss + q_loss

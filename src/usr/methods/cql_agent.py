@@ -8,8 +8,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import torch.optim as optim
 
+from src.usr.methods.agent_registry import register_agent
 from src.usr.methods.base_agent import OfflineAgentBase
-from src.usr.methods.registry import register_agent
 
 
 @register_agent("cql", "blendrl_cql")
@@ -24,72 +24,125 @@ class CQLAgent(OfflineAgentBase):
         super().__init__(cfg)
         self.save_hyperparameters()
         self.lr = self.get_cfg("lr", 3e-4)
-        self.gamma = float(self.get_cfg("gamma", getattr(self.cfg.env, "gamma", 0.99)))
+        self.gamma = float(self.get_cfg("gamma", 0.99))
 
         self._init_env(n_envs=1)
-        algorithm = self.get_cfg("algorithm", self.get_cfg("name", cfg.env.name))
+        env_name = self.get_cfg("env.name", getattr(getattr(self.cfg, "env", None), "name", "cartpole"))
+        algorithm = self.get_cfg("algorithm", self.get_cfg("name", env_name))
 
         # Check if modular/hybrid architecture is configured
-        has_modules = bool(self.get_cfg("modules", []))
-        is_hybrid = self.get_cfg("actor_mode", "neural") in ["hybrid", "logic"] or "blendrl" in str(algorithm)
+        self.is_modular = self.is_hybrid_configured()
 
-        self.is_modular = has_modules or is_hybrid
+        default_rules = self.get_cfg("rules", "default")
+        default_reasoner = self.get_cfg("reasoner", "nsfr")
+        default_arch = self.get_cfg("architecture", "mlp")
 
         if self.is_modular:
-            from src.usr.models.blendrl.agents.blender_agent import BlenderActorCritic
+            from src.app.core.model_registry import build_model
 
-            self.model = BlenderActorCritic(
-                self.env,
-                self.get_cfg("rules", cfg.env.rules),
-                self.get_cfg("actor_mode", "hybrid"),
-                self.get_cfg("blender_mode", "neural"),
-                self.get_cfg("blend_function", "softmax"),
-                self.get_cfg("reasoner", cfg.env.reasoner),
-                self.device,
-                architecture=self.get_cfg("architecture", cfg.env.architecture),
+            self.model = build_model(
+                "blendrl",
+                env=self.env,
+                device=self.device,
+                rules=self.get_cfg("rules", default_rules),
+                actor_mode=self.get_cfg("actor_mode", "hybrid"),
+                blender_mode=self.get_cfg("blender_mode", "neural"),
+                blend_function=self.get_cfg("blend_function", "softmax"),
+                reasoner=self.get_cfg("reasoner", default_reasoner),
+                architecture=self.get_cfg("architecture", default_arch),
                 modules=self.get_cfg("modules", None),
                 cfg=self.cfg,
             )
-            self.target_model = BlenderActorCritic(
-                self.env,
-                self.get_cfg("rules", cfg.env.rules),
-                self.get_cfg("actor_mode", "hybrid"),
-                self.get_cfg("blender_mode", "neural"),
-                self.get_cfg("blend_function", "softmax"),
-                self.get_cfg("reasoner", cfg.env.reasoner),
-                self.device,
-                architecture=self.get_cfg("architecture", cfg.env.architecture),
+            self.target_model = build_model(
+                "blendrl",
+                env=self.env,
+                device=self.device,
+                rules=self.get_cfg("rules", default_rules),
+                actor_mode=self.get_cfg("actor_mode", "hybrid"),
+                blender_mode=self.get_cfg("blender_mode", "neural"),
+                blend_function=self.get_cfg("blend_function", "softmax"),
+                reasoner=self.get_cfg("reasoner", default_reasoner),
+                architecture=self.get_cfg("architecture", default_arch),
                 modules=self.get_cfg("modules", None),
                 cfg=self.cfg,
             )
             self.target_model.load_state_dict(self.model.state_dict())
         else:
-            hidden_sizes = self.get_cfg("hidden_sizes", [256, 256])
-            if hidden_sizes is not None:
-                hidden_sizes = list(hidden_sizes)
-            architecture = self.get_cfg("architecture", getattr(cfg.env, "architecture", "mlp"))
-            from src.app.core.factories import get_neural_agent
+            from src.app.core.model_registry import build_model
 
-            obs_dim = (
-                self.observation_space[-1] if hasattr(self, "observation_space") and self.observation_space else None
+            model_arch = self.resolve_model_name(default=default_arch)
+
+            is_cew = (
+                model_arch == "cew"
+                or self.get_cfg("architecture") == "cew"
+                or self.get_cfg("model") == "cew"
+                or str(self.get_cfg("algorithm", "")).startswith("cew")
             )
-            self.q_network = get_neural_agent(
-                cfg.env.name,
-                self.n_actions,
-                self.device,
-                arch_name=architecture,
-                hidden_sizes=hidden_sizes,
-                num_in_features=obs_dim,
-            )
-            self.target_q_network = get_neural_agent(
-                cfg.env.name,
-                self.n_actions,
-                self.device,
-                arch_name=architecture,
-                hidden_sizes=hidden_sizes,
-                num_in_features=obs_dim,
-            )
-            self.target_q_network.load_state_dict(self.q_network.state_dict())
+
+            if is_cew:
+                obs_dim = (
+                    int(np.prod(self.observation_space))
+                    if hasattr(self, "observation_space") and self.observation_space
+                    else None
+                )
+                cew_cfg = self.get_cfg("cew", {}) or {}
+                cew_kwargs = dict(
+                    cql_alpha=float(self.get_cfg("cql_alpha", 1.0)),
+                    lr=float(self.get_cfg("lr", 3e-4)),
+                    ecm_dthr=float(cew_cfg.get("ecm_dthr", self.get_cfg("ecm_dthr", 0.1))),
+                    eps=float(self.get_cfg("eps", 0.1)),
+                    kappa=float(self.get_cfg("kappa", 0.6)),
+                    fyd="fyd" in str(self.get_cfg("algorithm", ""))
+                    or bool(self.get_cfg("fyd", cew_cfg.get("fyd", False))),
+                    fyd_top_k=self.get_cfg("fyd_top_k", cew_cfg.get("fyd_top_k", None)),
+                    stabilize=bool(self.get_cfg("stabilize", True)),
+                )
+                self.q_model = build_model(
+                    "cew",
+                    env=self.env,
+                    device=self.device,
+                    obs_dim=obs_dim,
+                    n_actions=self.n_actions,
+                    **cew_kwargs,
+                )
+                self.target_q_model = build_model(
+                    "cew",
+                    env=self.env,
+                    device=self.device,
+                    obs_dim=obs_dim,
+                    n_actions=self.n_actions,
+                    **cew_kwargs,
+                )
+                self.q_network = self.q_model
+                self.target_q_network = self.target_q_model
+            else:
+                hidden_sizes = self.get_cfg("hidden_sizes", [256, 256])
+                if hidden_sizes is not None:
+                    hidden_sizes = list(hidden_sizes)
+                from src.app.core.model_registry import build_model
+
+                obs_dim = (
+                    self.observation_space[-1]
+                    if hasattr(self, "observation_space") and self.observation_space
+                    else None
+                )
+                self.q_network = build_model(
+                    model_arch,
+                    env=self.env,
+                    n_actions=self.n_actions,
+                    device=self.device,
+                    hidden_sizes=hidden_sizes,
+                    obs_dim=obs_dim,
+                )
+                self.target_q_network = build_model(
+                    model_arch,
+                    env=self.env,
+                    n_actions=self.n_actions,
+                    device=self.device,
+                    hidden_sizes=hidden_sizes,
+                    obs_dim=obs_dim,
+                )
+                self.target_q_network.load_state_dict(self.q_network.state_dict())
 
     def _prepare_logic_obs(self, obs, logic_obs=None):
         if logic_obs is not None:
@@ -103,6 +156,8 @@ class CQLAgent(OfflineAgentBase):
         if self.is_modular:
             logic_obs = self._prepare_logic_obs(obs, logic_obs)
             return self.model.get_q_values(obs, logic_obs)
+        elif hasattr(self, "q_model"):
+            return self.q_model.get_q_values(obs)
         else:
             return self.q_network.get_q_values(obs) if hasattr(self.q_network, "get_q_values") else self.q_network(obs)
 
@@ -151,28 +206,6 @@ class CQLAgent(OfflineAgentBase):
 
     def setup(self, stage: str | None = None):
         super().setup(stage)
-        if self.is_modular and hasattr(self.model, "self_organize_cew_modules"):
-            has_cew = any(m_type == "cew" for m_type in getattr(self.model, "module_types", []))
-            if has_cew:
-                datamodule = getattr(self.trainer, "datamodule", None)
-                if datamodule is not None and hasattr(datamodule, "reader") and datamodule.reader is not None:
-                    sample_size = min(len(datamodule.reader), 10000)
-                    if sample_size > 0:
-                        batch = datamodule.reader.sample(sample_size)
-                        organize_obs = (
-                            batch["obs"] if ("obs" in batch and batch["obs"] is not None) else batch.get("logic_obs")
-                        )
-                        changed1 = self.model.self_organize_cew_modules(organize_obs)
-                        changed2 = False
-                        if (
-                            hasattr(self, "target_model")
-                            and self.target_model is not None
-                            and hasattr(self.target_model, "self_organize_cew_modules")
-                        ):
-                            changed2 = self.target_model.self_organize_cew_modules(organize_obs)
-                        if changed1 or changed2:
-                            if hasattr(self, "target_model") and self.target_model is not None:
-                                self.target_model.load_state_dict(self.model.state_dict())
 
     def on_train_start(self):
         if hasattr(self.trainer.datamodule, "reader") and self.trainer.datamodule.reader is not None:
@@ -182,39 +215,6 @@ class CQLAgent(OfflineAgentBase):
 
     def on_train_epoch_start(self):
         super().on_train_epoch_start()
-        if self.is_modular and hasattr(self.model, "self_organize_cew_modules"):
-            has_cew = any(m_type == "cew" for m_type in getattr(self.model, "module_types", []))
-            if has_cew:
-                datamodule = getattr(self.trainer, "datamodule", None)
-                if datamodule is not None and hasattr(datamodule, "reader") and datamodule.reader is not None:
-                    epochs_per_interval = self.get_cfg("epochs_per_interval", 1)
-                    if self.current_epoch > 0 and self.current_epoch % epochs_per_interval == 0:
-                        sample_size = min(len(datamodule.reader), 10000)
-                        if sample_size > 0:
-                            batch = datamodule.reader.sample(sample_size)
-                            organize_obs = (
-                                batch["obs"]
-                                if ("obs" in batch and batch["obs"] is not None)
-                                else batch.get("logic_obs")
-                            )
-                            changed1 = self.model.self_organize_cew_modules(organize_obs)
-                            changed2 = False
-                            if (
-                                hasattr(self, "target_model")
-                                and self.target_model is not None
-                                and hasattr(self.target_model, "self_organize_cew_modules")
-                            ):
-                                changed2 = self.target_model.self_organize_cew_modules(organize_obs)
-                            if changed1 or changed2:
-                                if hasattr(self, "target_model") and self.target_model is not None:
-                                    self.target_model.load_state_dict(self.model.state_dict())
-                                new_opt = self.configure_optimizers()
-                                if (
-                                    hasattr(self.trainer, "strategy")
-                                    and hasattr(self.trainer.strategy, "optimizers")
-                                    and len(self.trainer.strategy.optimizers) > 0
-                                ):
-                                    self.trainer.strategy.optimizers[0] = new_opt
 
     def training_step(self, batch, batch_idx):
         datamodule = getattr(self.trainer, "datamodule", None)
@@ -290,7 +290,9 @@ class CQLAgent(OfflineAgentBase):
                 probs, weights_act = self.model.actor(obs, logic_obs)
                 log_probs = torch.log(probs + 1e-12)
                 entropy = -(probs * log_probs).sum(dim=1)
-                blend_entropy = -(weights_act * torch.log(weights_act + 1e-12)).sum(dim=1) if weights_act is not None else None
+                blend_entropy = (
+                    -(weights_act * torch.log(weights_act + 1e-12)).sum(dim=1) if weights_act is not None else None
+                )
                 ent_coef = self.get_cfg("ent_coef", 0.01)
                 blend_ent_coef = self.get_cfg("blend_ent_coef", 0.01)
                 blend_entropy_loss = blend_entropy.mean() if isinstance(blend_entropy, torch.Tensor) else 0.0
@@ -426,7 +428,9 @@ class CQLAgent(OfflineAgentBase):
             q_action = all_q_values.gather(1, actions.unsqueeze(1)).squeeze(1)
             if bellman_loss_fn in ["smooth_l1", "huber"]:
                 if val_weights is not None:
-                    bellman_loss = (F.smooth_l1_loss(q_action, q_target, beta=1.0, reduction="none") * val_weights).mean()
+                    bellman_loss = (
+                        F.smooth_l1_loss(q_action, q_target, beta=1.0, reduction="none") * val_weights
+                    ).mean()
                 else:
                     bellman_loss = F.smooth_l1_loss(q_action, q_target, beta=1.0)
             else:
@@ -506,48 +510,33 @@ class CQLAgent(OfflineAgentBase):
             if not param_groups:
                 return optim.Adam(self.model.parameters(), lr=lr, weight_decay=weight_decay)
             return optim.Adam(param_groups)
-        return optim.Adam(self.q_network.parameters(), lr=lr, weight_decay=weight_decay)
+        elif hasattr(self, "q_model"):
+            params = [p for p in self.q_model.parameters() if p.requires_grad]
+            if not params:
+                params = [torch.zeros(1, requires_grad=True)]
+            return optim.Adam(params, lr=lr, weight_decay=weight_decay)
+        params = [p for p in self.q_network.parameters() if p.requires_grad]
+        if not params:
+            params = [torch.zeros(1, requires_grad=True)]
+        return optim.Adam(params, lr=lr, weight_decay=weight_decay)
 
     def on_save_checkpoint(self, checkpoint: dict[str, Any]) -> None:
-        if self.is_modular:
-            cew_states = []
-            for i, m in enumerate(self.model.policy_modules):
-                if i < len(self.model.module_types) and self.model.module_types[i] == "cew":
-                    cew_states.append(
-                        {
-                            "index": i,
-                            "antecedents": getattr(m, "antecedents", None),
-                            "rules": getattr(m, "rules", None),
-                            "n_inputs": getattr(m, "n_inputs", None),
-                            "n_outputs": getattr(m, "n_outputs", None),
-                        }
-                    )
-            if cew_states:
-                checkpoint["cew_modules_state"] = cew_states
+        for attr in ("q_model", "model"):
+            m = getattr(self, attr, None)
+            if hasattr(m, "extra_state"):
+                state = m.extra_state()
+                checkpoint["extra_state"] = state
+                checkpoint["cew_extra"] = state
 
     def on_load_checkpoint(self, checkpoint: dict[str, Any]) -> None:
-        sd = checkpoint.get("state_dict", {})
-        if self.is_modular:
-            from src.usr.methods.cew_utils import MultiFLC
+        extra = checkpoint.get("extra_state", checkpoint.get("cew_extra", {}))
+        for attr in ("q_model", "model"):
+            m = getattr(self, attr, None)
+            if hasattr(m, "load_extra_state") and extra:
+                m.load_extra_state(extra)
 
-            for i, m_type in enumerate(self.model.module_types):
-                if m_type == "cew":
-                    prefix = f"model.policy_modules.{i}."
-                    if f"{prefix}flcs.0.links" in sd:
-                        new_m = MultiFLC.from_state_dict_shapes(prefix, sd, self.n_actions)
-                        self.model.policy_modules[i] = new_m
-                        if hasattr(self.model, "actor") and hasattr(self.model.actor, "policy_modules"):
-                            self.model.actor.policy_modules[i] = new_m
-
-                        target_prefix = f"target_model.policy_modules.{i}."
-                        if (
-                            hasattr(self, "target_model")
-                            and self.target_model is not None
-                            and f"{target_prefix}flcs.0.links" in sd
-                        ):
-                            new_target = MultiFLC.from_state_dict_shapes(target_prefix, sd, self.n_actions)
-                            self.target_model.policy_modules[i] = new_target
-                            if hasattr(self.target_model, "actor") and hasattr(
-                                self.target_model.actor, "policy_modules"
-                            ):
-                                self.target_model.actor.policy_modules[i] = new_target
+        if hasattr(self, "target_q_model") and self.target_q_model is not None and hasattr(self, "q_model"):
+            if hasattr(self.q_model, "clone_topology_to"):
+                self.q_model.clone_topology_to(self.target_q_model)
+            elif hasattr(self.target_q_model, "clone_topology_from"):
+                self.target_q_model.clone_topology_from(self.q_model)

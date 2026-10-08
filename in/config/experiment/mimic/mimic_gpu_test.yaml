@@ -1,51 +1,23 @@
 # @package _global_
 defaults:
-- mimic/_base
+  - mimic/_base
 
 consolidate: true
+
 methods:
+  params:
+    agent: cql
+    epochs_per_interval: 2
+    eval_interval_epochs: 1
+    batch_size: 1024
+    cql_alpha: 2.0
+    weight_decay: 1e-4
+
   cql_dnn:
-    agent: cql
     model: dnn
-    epochs_per_interval: 2
-    eval_interval_epochs: 1
-    batch_size: 1024
-    cql: &id001
-      cql_alpha: 2.0
-      weight_decay: 1e-4
-
-    cew: &id002
-      ecm_dthr: 0.1
-      fyd_top_k: 50
-
-    blendrl: &id003
-      blender_mode: neural
-      blend_function: softmax
-
   cql_blendrl_human_neural:
-    agent: cql
     model: blendrl
-    epochs_per_interval: 2
-    eval_interval_epochs: 1
-    batch_size: 1024
-    cql: *id001
-    cew: *id002
-    blendrl: *id003
   cql_blendrl_human_cew:
-    agent: cql
     model: blendrl
-    epochs_per_interval: 2
-    eval_interval_epochs: 1
-    batch_size: 1024
-    cql: *id001
-    cew: *id002
-    blendrl: *id003
   cew_fyd:
-    agent: cew
-    model: dnn
-    epochs_per_interval: 2
-    eval_interval_epochs: 1
-    batch_size: 1024
-    cql: *id001
-    cew: *id002
-    blendrl: *id003
+    model: cew

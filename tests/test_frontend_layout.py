@@ -128,19 +128,23 @@ class TestWindowLayoutAndSliders(unittest.TestCase):
         self.temp_dir.cleanup()
 
     def test_default_tab_order(self):
-        expected_order = ["components", "config", "monitor", "results", "plots", "tensorboard", "queue", "terminal", "console"]
+        expected_order = ["components", "config", "workflows", "monitor", "results", "plots", "tensorboard", "queue", "terminal", "console"]
         self.assertEqual(self.window.tabs.tab_order, expected_order)
 
     def test_pane_sliders_registered(self):
-        expected_panes = ["components", "config", "monitor", "results", "plots", "tensorboard", "queue", "terminal", "console"]
+        expected_panes = ["components", "config", "workflows", "monitor", "results", "plots", "tensorboard", "queue", "terminal", "console"]
         for pane_id in expected_panes:
             self.assertIn(pane_id, self.window.pane_sliders)
             slider = self.window.pane_sliders[pane_id]
             self.assertIsInstance(slider, ToggleSlider)
-            self.assertTrue(slider.isChecked())
+            # Sliders start in step with the default sidebar visibility in settings.toml
+            self.assertEqual(slider.isChecked(), pane_id in self.window.settings_manager.sidebar_visible)
 
     def test_toggle_slider_hides_pane(self):
+        # Plots is hidden by default, so show it first
+        self.window.pane_sliders["plots"].setChecked(True)
         self.assertTrue(self.window.tabs.is_tab_visible("plots"))
+
         # Toggle plots off
         self.window.pane_sliders["plots"].setChecked(False)
         self.assertFalse(self.window.tabs.is_tab_visible("plots"))
@@ -151,7 +155,7 @@ class TestWindowLayoutAndSliders(unittest.TestCase):
 
     def test_cannot_hide_all_panes(self):
         # Turn off all panes except one
-        panes = ["components", "config", "monitor", "results", "plots", "tensorboard", "queue", "terminal", "console"]
+        panes = ["components", "config", "workflows", "monitor", "results", "plots", "tensorboard", "queue", "terminal", "console"]
         for p in panes[:-1]:
             self.window.pane_sliders[p].setChecked(False)
 
@@ -171,7 +175,7 @@ class TestWindowLayoutAndSliders(unittest.TestCase):
 
         # Reset
         self.window.reset_sidebar_layout()
-        default_order = ["components", "config", "monitor", "results", "plots", "tensorboard", "queue", "terminal", "console"]
+        default_order = ["components", "config", "workflows", "monitor", "results", "plots", "tensorboard", "queue", "terminal", "console"]
         self.assertEqual(self.window.tabs.tab_order, default_order)
         for p in default_order:
             self.assertTrue(self.window.tabs.is_tab_visible(p))
@@ -183,10 +187,8 @@ class TestWindowLayoutAndSliders(unittest.TestCase):
         self.window.pane_sliders["console"].setChecked(False)
         self.window.save_layout()
 
-        self.assertTrue(self.window.layout_file.exists())
-        data = json.loads(self.window.layout_file.read_text(encoding="utf-8"))
-        self.assertEqual(data["tab_order"][0], "terminal")
-        self.assertFalse(data["visible_tabs"]["console"])
+        self.assertEqual(self.window.settings_manager.sidebar_order[0], "terminal")
+        self.assertNotIn("console", self.window.settings_manager.sidebar_visible)
 
         # Create a new Window pointing to the same data directory
         window2 = Window(self.data_dir)

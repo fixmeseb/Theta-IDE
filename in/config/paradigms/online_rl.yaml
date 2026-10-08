@@ -17,4 +17,3 @@ allowed_agents:
 forbidden_agents:
   - cql
   - iql
-  - cew

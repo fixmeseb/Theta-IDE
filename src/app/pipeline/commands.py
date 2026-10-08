@@ -43,7 +43,9 @@ def build_method_overrides(
     paradigm = cfg.get("paradigm", "offline_rl") if cfg is not None else "offline_rl"
     agent_val = method_cfg.get("agent")
     if isinstance(agent_val, dict):
-        agent_algo = agent_val.get("name") or agent_val.get("algorithm") or agent_val.get("type") or agent_val.get("algo")
+        agent_algo = (
+            agent_val.get("name") or agent_val.get("algorithm") or agent_val.get("type") or agent_val.get("algo")
+        )
         agent_subparams = {k: v for k, v in agent_val.items() if k not in ("name", "algorithm", "type", "algo")}
     else:
         agent_algo = agent_val
@@ -51,7 +53,9 @@ def build_method_overrides(
 
     model_val = method_cfg.get("model")
     if isinstance(model_val, dict):
-        model_arch = model_val.get("name") or model_val.get("architecture") or model_val.get("type") or model_val.get("base")
+        model_arch = (
+            model_val.get("name") or model_val.get("architecture") or model_val.get("type") or model_val.get("base")
+        )
         model_subparams = {k: v for k, v in model_val.items() if k not in ("name", "architecture", "type", "base")}
     else:
         model_arch = model_val
@@ -101,10 +105,12 @@ def build_method_overrides(
     else:
         if not agent_algo:
             raise ValueError(f"Method '{method_name}' is missing required key 'agent' for paradigm '{paradigm}'.")
-        overrides.extend([
-            f"agent={agent_algo}",
-            f"++agent.name={agent_name}",
-        ])
+        overrides.extend(
+            [
+                f"agent={agent_algo}",
+                f"++agent.name={agent_name}",
+            ]
+        )
 
     if (paradigm in ("offline_rl", "supervised")) and dataset_path is not None:
         safe_ds_path = str(dataset_path)
@@ -125,7 +131,11 @@ def build_method_overrides(
         "search_space",
         "from_study",
     }
-    if model_arch == "blendrl" and not method_cfg.get("explicit_modules", False) and not merged_model_params.get("explicit_modules", False):
+    if (
+        model_arch == "blendrl"
+        and not method_cfg.get("explicit_modules", False)
+        and not merged_model_params.get("explicit_modules", False)
+    ):
         _INTERNAL_KEYS.add("modules")
     _MODEL_KEYS = {
         "architecture",
@@ -162,7 +172,15 @@ def build_method_overrides(
                 _flatten_overrides(f"model.{k}", v)
             else:
                 _flatten_overrides(f"agent.{k}", v)
-                if k in ("epochs_per_interval", "eval_interval_epochs", "gamma", "reward_scale", "pos_action_weight", "bellman_loss", "weight_decay"):
+                if k in (
+                    "epochs_per_interval",
+                    "eval_interval_epochs",
+                    "gamma",
+                    "reward_scale",
+                    "pos_action_weight",
+                    "bellman_loss",
+                    "weight_decay",
+                ):
                     overrides.append(f"++{k}={_format_hydra_val(v)}")
 
     # Optuna Sweeper overrides (active ONLY if is_sweep is True or study_name is provided)

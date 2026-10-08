@@ -45,11 +45,17 @@ _DEFAULT_TOML = """\
 [appearance]
 # Active color theme.  Built-in choices:
 #   "Gruvbox Dark", "Gruvbox Light", "Nord", "Dracula", "Catppuccin",
-#   "Catppuccin Latte", "Paper"
+#   "Catppuccin Macchiato", "Catppuccin Latte", "Paper",
+#   "Apollo", "Athena", "Ares", "Dionysus", "Poseidon"
 theme = "Catppuccin"
 
 # Enable the rotating 3-D ASCII sculpture on the Settings & About panel.
 ascii_animation = true
+ascii_speed = 1.0
+ascii_size = 1.0
+ascii_thickness = 1.0
+ascii_tilt = 1.0
+ascii_distance = 4.8
 
 [backend]
 # FastAPI backend that manages training runs and pipelines.
@@ -63,6 +69,7 @@ timeout = 5
 order = [
     "components",
     "config",
+    "workflows",
     "monitor",
     "results",
     "plots",
@@ -77,6 +84,7 @@ order = [
 visible = [
     "components",
     "config",
+    "workflows",
     "monitor",
     "results",
     "terminal",
@@ -86,6 +94,11 @@ visible = [
 [plugins]
 # List of plugin IDs that are currently enabled.
 enabled = []
+
+[hub]
+# What to do with configuration files when uninstalling a component from Theta Hub.
+# Options: "ask" (prompt each time), "keep" (preserve configs), "remove" (delete configs)
+uninstall_configs = "ask"
 
 [hotkeys]
 # Enable custom keyboard shortcuts.
@@ -167,9 +180,16 @@ def _write_toml_file(path: Path, data: dict) -> None:
             # Top-level scalar (unusual but tolerated)
             lines.append(f"{section} = {_toml_value(value)}")
         else:
-            lines.append(f"\n[{section}]")
-            for k, v in value.items():
-                lines.append(f"{k} = {_toml_value(v)}")
+            scalars = {k: v for k, v in value.items() if not isinstance(v, dict)}
+            subdicts = {k: v for k, v in value.items() if isinstance(v, dict)}
+            if scalars or not subdicts:
+                lines.append(f"\n[{section}]")
+                for k, v in scalars.items():
+                    lines.append(f"{k} = {_toml_value(v)}")
+            for sub, subval in subdicts.items():
+                lines.append(f"\n[{section}.{sub}]")
+                for k, v in subval.items():
+                    lines.append(f"{k} = {_toml_value(v)}")
     content = "\n".join(lines).lstrip("\n") + "\n"
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".toml.tmp")
@@ -213,8 +233,13 @@ class SettingsManager(QObject):
         super().__init__(parent)
 
         # Canonical workspace settings file sits one level above data_dir
-        # (e.g. data_dir=.thetaide/runs  →  .thetaide/settings.toml)
-        self._workspace_path = Path(data_dir).parent / "settings.toml"
+        # (e.g. data_dir=.thetaide/runs  →  .thetaide/settings.toml),
+        # but stays inside data_dir for custom or temporary directories.
+        p = Path(data_dir)
+        if p.name == "runs" or p.parent.name == ".thetaide":
+            self._workspace_path = p.parent / "settings.toml"
+        else:
+            self._workspace_path = p / "settings.toml"
         # User-global settings file (lower priority)
         self._user_path = Path.home() / ".config" / "thetaide" / "settings.toml"
 
@@ -308,6 +333,41 @@ class SettingsManager(QObject):
         return bool(self.get("appearance", "ascii_animation", default=True))
 
     @property
+    def ascii_speed(self) -> float:
+        try:
+            return float(self.get("appearance", "ascii_speed", default=1.0))
+        except (ValueError, TypeError):
+            return 1.0
+
+    @property
+    def ascii_size(self) -> float:
+        try:
+            return float(self.get("appearance", "ascii_size", default=1.0))
+        except (ValueError, TypeError):
+            return 1.0
+
+    @property
+    def ascii_thickness(self) -> float:
+        try:
+            return float(self.get("appearance", "ascii_thickness", default=1.0))
+        except (ValueError, TypeError):
+            return 1.0
+
+    @property
+    def ascii_tilt(self) -> float:
+        try:
+            return float(self.get("appearance", "ascii_tilt", default=1.0))
+        except (ValueError, TypeError):
+            return 1.0
+
+    @property
+    def ascii_distance(self) -> float:
+        try:
+            return float(self.get("appearance", "ascii_distance", default=4.8))
+        except (ValueError, TypeError):
+            return 4.8
+
+    @property
     def backend_url(self) -> str:
         return self.get("backend", "url", default="http://127.0.0.1:8000")
 
@@ -327,6 +387,14 @@ class SettingsManager(QObject):
         return list(v) if isinstance(v, list) else []
 
     @property
+    def hub_uninstall_configs(self) -> str:
+        return str(self.get("hub", "uninstall_configs", default="ask"))
+
+    @hub_uninstall_configs.setter
+    def hub_uninstall_configs(self, val: str) -> None:
+        self.set("hub", "uninstall_configs", val)
+
+    @property
     def hotkeys_enabled(self) -> bool:
         return bool(self.get("hotkeys", "enabled", default=True))
 
@@ -344,6 +412,15 @@ class SettingsManager(QObject):
     @property
     def hotkeys_terminal_precedence(self) -> bool:
         return bool(self.get("hotkeys", "terminal_precedence", default=True))
+
+    @property
+    def hotkey_bindings(self) -> dict[str, str]:
+        v = self.get("hotkeys", "bindings", default=None)
+        if isinstance(v, dict):
+            return dict(v)
+        # Default bindings derived from hotkey_panes
+        panes = self.hotkey_panes
+        return {pid: f"Action + {i}" for i, pid in enumerate(panes)}
 
     @property
     def hotkey_panes(self) -> list[str]:

@@ -23,7 +23,6 @@ lark
 igraph
 captum
 rtpt
--r src/usr/models/fyd_repo/requirements.txt
 
 # Utilities & Data
 kneed
@@ -43,6 +42,7 @@ lz4
 tyro
 pyyaml
 tensorboard
+setuptools<80
 wandb
 
 # Video & Visualization

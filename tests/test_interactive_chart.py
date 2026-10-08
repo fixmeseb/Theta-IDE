@@ -1,6 +1,9 @@
-"""Unit tests for interactive PyQt Chart widget (hover tooltips, box zoom, reset)."""
 import os
 import unittest
+import pytest
+
+pytest.importorskip("PyQt6")
+
 from PyQt6.QtCore import Qt, QPointF, QEvent
 from PyQt6.QtGui import QMouseEvent
 from PyQt6.QtWidgets import QApplication

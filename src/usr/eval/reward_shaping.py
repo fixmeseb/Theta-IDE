@@ -48,15 +48,32 @@ class EPRewardShaper:
 
     def __init__(
         self,
-        ep_ckpt_dir: str = "results/checkpoints/early_prediction",
+        ep_ckpt_dir: str | None = None,
         device: torch.device | None = None,
         lambda_coef: float = 1.0,
         gamma: float = 0.99,
         window_hours: int = 12,
         use_volatility: bool = True,
         ep_architecture: str | None = None,
+        **kwargs,
     ):
-        self.ep_ckpt_dir = Path(ep_ckpt_dir)
+        from omegaconf import DictConfig
+
+        if isinstance(ep_ckpt_dir, (dict, DictConfig)):
+            cfg = ep_ckpt_dir
+            rs_cfg = {}
+            if hasattr(cfg, "env") and cfg.env is not None and hasattr(cfg.env, "get"):
+                rs_cfg = cfg.env.get("reward_shaping", {}) or {}
+            elif hasattr(cfg, "get"):
+                rs_cfg = cfg.get("reward_shaping", {}) or {}
+            ep_ckpt_dir = rs_cfg.get("ep_ckpt_dir", "results/checkpoints/early_prediction")
+            lambda_coef = float(rs_cfg.get("lambda_coef", lambda_coef))
+            gamma = float(rs_cfg.get("gamma", gamma))
+            window_hours = int(rs_cfg.get("window_hours", window_hours))
+            use_volatility = bool(rs_cfg.get("use_volatility", use_volatility))
+            ep_architecture = rs_cfg.get("ep_arch", rs_cfg.get("ep_architecture", ep_architecture))
+
+        self.ep_ckpt_dir = Path(ep_ckpt_dir or "results/checkpoints/early_prediction")
         self.device = device or torch.device("cuda" if torch.cuda.is_available() else "cpu")
         self.lambda_coef = lambda_coef
         self.gamma = gamma
@@ -75,25 +92,45 @@ class EPRewardShaper:
             print(f"WARNING: EP checkpoint directory {self.ep_ckpt_dir} does not exist.")
             return
 
-        # Find all .pt files (shallow search up to 2 levels to avoid NFS storms)
-        pt_files = sorted(
+        # Find all .pt and .ckpt files (shallow search up to 2 levels to avoid NFS storms)
+        ckpt_files = sorted(
             list(self.ep_ckpt_dir.glob("*.pt"))
             + list(self.ep_ckpt_dir.glob("*/*.pt"))
             + list(self.ep_ckpt_dir.glob("*/*/*.pt"))
+            + list(self.ep_ckpt_dir.glob("*.ckpt"))
+            + list(self.ep_ckpt_dir.glob("*/*.ckpt"))
+            + list(self.ep_ckpt_dir.glob("*/*/*.ckpt"))
         )
-        if self.ep_architecture:
-            pt_files = [f for f in pt_files if self.ep_architecture in f.stem]
+        seen = set()
+        deduped = []
+        for f in ckpt_files:
+            if f not in seen:
+                seen.add(f)
+                deduped.append(f)
+        ckpt_files = deduped
 
-        if not pt_files:
-            print(f"WARNING: No EP .pt checkpoints found in {self.ep_ckpt_dir}")
+        if self.ep_architecture:
+            ckpt_files = [f for f in ckpt_files if self.ep_architecture in f.stem]
+
+        if not ckpt_files:
+            print(f"WARNING: No EP checkpoints found in {self.ep_ckpt_dir}")
             return
 
-        for pt_file in pt_files:
+        for ckpt_file in ckpt_files:
             try:
-                data = torch.load(pt_file, map_location=self.device, weights_only=False)
-                m_type = data.get("model_type", "lstm")
-                input_dim = data.get("input_dim", 196)
-                params = data.get("hyperparams", {})
+                data = torch.load(ckpt_file, map_location=self.device, weights_only=False)
+                hparams = data.get("hyper_parameters", {}) if isinstance(data, dict) else {}
+                arch_name = hparams.get("architecture_name", "")
+
+                m_type = data.get("model_type")
+                if not m_type:
+                    if arch_name.startswith("transformer") or "transformer" in ckpt_file.stem.lower():
+                        m_type = "transformer"
+                    else:
+                        m_type = "lstm"
+
+                input_dim = data.get("input_dim", hparams.get("input_dim", 196))
+                params = data.get("hyperparams", hparams)
 
                 if m_type == "lstm":
                     model = SepsisLSTM(
@@ -121,11 +158,24 @@ class EPRewardShaper:
                 else:
                     continue
 
-                model.load_state_dict(data["model_state_dict"])
+                if "model_state_dict" in data:
+                    raw_sd = data["model_state_dict"]
+                elif "state_dict" in data:
+                    raw_sd = data["state_dict"]
+                else:
+                    raw_sd = data
+
+                model_sd = {}
+                for k, v in raw_sd.items():
+                    key = k[6:] if k.startswith("model.") else k
+                    if not key.startswith("loss_fn."):
+                        model_sd[key] = v
+
+                model.load_state_dict(model_sd, strict=False)
                 model.eval()
                 self._models.append((model, m_type, input_dim))
             except Exception as e:
-                print(f"WARNING: Could not load EP checkpoint {pt_file}: {e}")
+                print(f"WARNING: Could not load EP checkpoint {ckpt_file}: {e}")
 
         print(f"EPRewardShaper: Loaded {len(self._models)} EP model(s) from {self.ep_ckpt_dir}")
 

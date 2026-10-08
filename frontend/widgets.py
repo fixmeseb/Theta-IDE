@@ -2,14 +2,52 @@ import math
 import re
 from PyQt6.QtCore import Qt, QRectF, QSize
 from PyQt6.QtGui import QColor, QPainter, QPainterPath, QPen, QFont, QSyntaxHighlighter, QTextCharFormat, QLinearGradient
-from PyQt6.QtWidgets import QWidget, QLabel, QVBoxLayout, QFrame, QAbstractButton, QTableWidgetItem
+from PyQt6.QtWidgets import (
+    QWidget, QLabel, QVBoxLayout, QFrame, QAbstractButton,
+    QComboBox, QDoubleSpinBox, QSpinBox, QTableWidgetItem,
+)
 from .theme import theme_color
 
 
-def label(text, kind=None):
+class _WheelNeedsFocus:
+    """Only edit the value when the widget has been clicked into.
+
+    Qt gives spin boxes and combo boxes WheelFocus by default, so they take
+    focus from a passing wheel event and then consume it. Scrolling a long form
+    silently rewrites every field the pointer crosses. Ignoring the event
+    instead lets it reach the scroll area, which is what the user meant.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+
+    def wheelEvent(self, event):
+        if self.hasFocus():
+            super().wheelEvent(event)
+        else:
+            event.ignore()
+
+
+class SpinBox(_WheelNeedsFocus, QSpinBox):
+    pass
+
+
+class DoubleSpinBox(_WheelNeedsFocus, QDoubleSpinBox):
+    pass
+
+
+class ComboBox(_WheelNeedsFocus, QComboBox):
+    pass
+
+
+def label(text, kind=None, wrap=False):
+    """A QLabel styled by `kind` (its object name). wrap=True lets long text flow onto more lines
+    instead of setting a minimum width for its whole layout."""
     result = QLabel(text)
     if kind:
         result.setObjectName(kind)
+    result.setWordWrap(wrap)
     return result
 
 
@@ -273,7 +311,7 @@ class Chart(QWidget):
         if self.custom_x_range:
             painter.setFont(QFont("Segoe UI", 8))
             painter.setPen(QColor(theme_color("comment")))
-            painter.drawText(QRectF(16, 28, 220, 16), Qt.AlignmentFlag.AlignLeft, "🔍 Zoomed (double-click to reset)")
+            painter.drawText(QRectF(16, 28, 220, 16), Qt.AlignmentFlag.AlignLeft, "Zoomed (double-click to reset)")
 
         def y_of(value):
             return area.bottom() - area.height() * (value - lo) / max(1e-12, hi - lo)

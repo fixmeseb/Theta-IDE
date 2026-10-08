@@ -29,6 +29,10 @@ class BaseAgent(L.LightningModule, ABC):
 
     def __init__(self, cfg: dict[str, Any]):
         super().__init__()
+        from omegaconf import DictConfig, OmegaConf
+
+        if isinstance(cfg, dict) and not isinstance(cfg, DictConfig):
+            cfg = OmegaConf.create(cfg)
         self.cfg = cfg
         self.automatic_optimization = False
 
@@ -82,11 +86,12 @@ class BaseAgent(L.LightningModule, ABC):
             val, found = _get_nested(cfg.model, key)
             if found:
                 return val
-            for sub_k, sub_v in cfg.model.items():
-                if isinstance(sub_v, (dict, DictConfig)):
-                    val, found = _get_nested(sub_v, key)
-                    if found:
-                        return val
+            if isinstance(cfg.model, (dict, DictConfig)):
+                for sub_k, sub_v in cfg.model.items():
+                    if isinstance(sub_v, (dict, DictConfig)):
+                        val, found = _get_nested(sub_v, key)
+                        if found:
+                            return val
 
         # Search in env config
         if hasattr(cfg, "env"):
@@ -99,6 +104,84 @@ class BaseAgent(L.LightningModule, ABC):
         if found:
             return val
 
+        return default
+
+    def is_hybrid_configured(self) -> bool:
+        """Determine whether a hybrid / symbolic-neural BlendRL policy is configured.
+
+        Checks:
+        1. Explicit actor_mode ('hybrid', 'logic')
+        2. Configured modules list
+        3. Model specification is 'blendrl', 'blender', or 'hybrid'
+        4. Algorithm or agent name contains 'blendrl'
+        """
+        if self.get_cfg("actor_mode", "neural") in ("hybrid", "logic"):
+            return True
+        if bool(self.get_cfg("modules", [])):
+            return True
+
+        # Check model config (Tier 3 Composite Model specification)
+        model_cfg = getattr(self.cfg, "model", None)
+        if isinstance(model_cfg, str) and model_cfg.strip().lower() in ("blendrl", "blender", "hybrid"):
+            return True
+        if isinstance(model_cfg, (dict, DictConfig)):
+            if "blendrl" in model_cfg or "blender" in model_cfg:
+                return True
+            name = model_cfg.get("name") or model_cfg.get("architecture") or model_cfg.get("type")
+            if name and str(name).strip().lower() in ("blendrl", "blender", "hybrid"):
+                return True
+
+        # Check algorithm / agent name
+        algo = self.get_cfg("algorithm", self.get_cfg("name", ""))
+        if "blendrl" in str(algo).lower():
+            return True
+        agent_cfg = getattr(self.cfg, "agent", None)
+        if isinstance(agent_cfg, str) and "blendrl" in agent_cfg.lower():
+            return True
+
+        return False
+
+    def resolve_model_name(self, default: str = "mlp") -> str:
+        """Resolve the model architecture name from config across all paradigms."""
+        model_cfg = getattr(self.cfg, "model", None)
+        if isinstance(model_cfg, str) and model_cfg.strip():
+            name = model_cfg.strip()
+            if name.lower() in ("blendrl", "blender", "hybrid"):
+                arch = self.get_cfg("architecture", None)
+                if arch and isinstance(arch, str) and arch.strip().lower() not in ("blendrl", "blender", "hybrid"):
+                    return arch.strip()
+                return default
+            return name
+        if isinstance(model_cfg, (dict, DictConfig)):
+            # If composite model like model: {blendrl: {neural: dueling_resnet, ...}}
+            blendrl_cfg = model_cfg.get("blendrl", model_cfg.get("blender", None))
+            if isinstance(blendrl_cfg, (dict, DictConfig)):
+                neural_arch = blendrl_cfg.get("neural", None)
+                if neural_arch:
+                    if isinstance(neural_arch, (dict, DictConfig)):
+                        keys = [k for k in neural_arch.keys() if not str(k).startswith("_")]
+                        if keys:
+                            return str(keys[0]).strip()
+                    return str(neural_arch).strip()
+            name = model_cfg.get("architecture") or model_cfg.get("name") or model_cfg.get("type")
+            if name:
+                name_str = str(name).strip()
+                if name_str.lower() in ("blendrl", "blender", "hybrid"):
+                    return default
+                return name_str
+            # If wrapped under a single key, e.g. {dueling_resnet: {...}}
+            keys = [k for k in model_cfg.keys() if not str(k).startswith("_")]
+            if len(keys) == 1 and isinstance(model_cfg[keys[0]], (dict, DictConfig)):
+                k = str(keys[0]).strip()
+                if k.lower() in ("blendrl", "blender", "hybrid"):
+                    return default
+                return k
+
+        arch = self.get_cfg("architecture", None)
+        if arch and isinstance(arch, str):
+            arch_str = arch.strip()
+            if arch_str.lower() not in ("blendrl", "blender", "hybrid"):
+                return arch_str
         return default
 
     # ──────────────────────────────────────────────
@@ -131,10 +214,11 @@ class BaseAgent(L.LightningModule, ABC):
         if n_envs is None:
             n_envs = self.get_cfg("num_envs", 4)
 
-        algorithm = self.get_cfg("algorithm", self.get_cfg("name", self.cfg.env.name))
+        env_name = self.get_cfg("env.name", getattr(getattr(self.cfg, "env", None), "name", None) or "cartpole")
+        algorithm = self.get_cfg("algorithm", self.get_cfg("name", env_name))
 
         self.env = VectorizedBaseEnv.from_name(
-            self.cfg.env.name, n_envs=n_envs, mode=algorithm, seed=self.get_cfg("seed", getattr(self.cfg, "seed", 1))
+            env_name, n_envs=n_envs, mode=algorithm, seed=self.get_cfg("seed", getattr(self.cfg, "seed", 1))
         )
 
         obs = self.env.reset()
@@ -208,6 +292,29 @@ class OfflineAgentBase(BaseAgent):
             if hasattr(datamodule, "val_reader") and datamodule.val_reader is not None:
                 datamodule.val_reader.device = self.device
 
+    def configure_callbacks(self):
+        """Attach model-registered callbacks to the trainer.
+
+        Discovers and instantiates callbacks requested by any model or sub-module
+        implementing HasModelCallbacks (e.g. CEWModel or BlenderActorCritic).
+        """
+        from src.app.core.protocols import HasModelCallbacks, walk_model_modules
+
+        callbacks = []
+        for m in walk_model_modules(self):
+            if isinstance(m, HasModelCallbacks) or hasattr(m, "get_callbacks"):
+                callbacks.extend(m.get_callbacks())
+
+        # Deduplicate callbacks by class
+        seen_types = set()
+        unique_callbacks = []
+        for cb in callbacks:
+            cb_type = type(cb)
+            if cb_type not in seen_types:
+                seen_types.add(cb_type)
+                unique_callbacks.append(cb)
+        return unique_callbacks
+
     def on_train_epoch_start(self):
         """Set dataset limit based on current training interval.
 
@@ -226,6 +333,7 @@ class OfflineAgentBase(BaseAgent):
                 datamodule.reader.set_limit(min(current_limit, len(datamodule.reader)))
             else:
                 datamodule.reader.set_limit(len(datamodule.reader))
+        self._handle_optimizer_rebind()
 
     def _log_offline_transitions(self):
         """Calculate and log the current transition count for offline training."""
@@ -245,3 +353,84 @@ class OfflineAgentBase(BaseAgent):
             )
         self.log("transitions", float(current_transitions), logger=False, prog_bar=True)
         return current_transitions
+
+    def _handle_optimizer_rebind(self) -> None:
+        """Check all model components for dynamic topology changes.
+
+        Any model (standalone or inside a composite model) that implements
+        DynamicTopologyProtocol (or sets _request_optimizer_rebind = True)
+        triggers optimizer rebinding and target-network synchronization here.
+        """
+        from src.app.core.protocols import walk_model_modules
+
+        candidates = walk_model_modules(self)
+        needs_rebind = False
+        for m in candidates:
+            if hasattr(m, "has_topology_changed") and m.has_topology_changed():
+                needs_rebind = True
+                break
+            elif getattr(m, "_request_optimizer_rebind", False):
+                needs_rebind = True
+                break
+
+        if not needs_rebind:
+            return
+
+        # Clear flag on all candidates
+        for m in candidates:
+            if hasattr(m, "reset_topology_changed"):
+                m.reset_topology_changed()
+            elif getattr(m, "_request_optimizer_rebind", False):
+                m._request_optimizer_rebind = False
+
+        self._rebind_optimizer()
+
+    def _rebind_optimizer(self) -> None:
+        """Rebind optimizer after a model topology change and sync target networks."""
+        # Sync target network if present and topology-aware
+        for src_attr, tgt_attr in (
+            ("q_model", "target_q_model"),
+            ("q_network", "target_q_network"),
+            ("model", "target_model"),
+        ):
+            src = getattr(self, src_attr, None)
+            tgt = getattr(self, tgt_attr, None)
+            if src is not None and tgt is not None and src is not tgt:
+                if hasattr(src, "clone_topology_to"):
+                    src.clone_topology_to(tgt)
+                elif hasattr(tgt, "clone_topology_from"):
+                    tgt.clone_topology_from(src)
+
+        # Sync any constituent target modules (e.g. inside BlenderActorCritic)
+        src_blender = getattr(self, "model", None)
+        tgt_blender = getattr(self, "target_model", None)
+        if src_blender is not None and tgt_blender is not None and src_blender is not tgt_blender:
+            if hasattr(src_blender, "clone_topology_to"):
+                src_blender.clone_topology_to(tgt_blender)
+            else:
+                src_modules = list(getattr(src_blender, "policy_modules", None) or [])
+                tgt_modules = list(getattr(tgt_blender, "policy_modules", None) or [])
+                for s, t in zip(src_modules, tgt_modules):
+                    if hasattr(s, "clone_topology_to"):
+                        s.clone_topology_to(t)
+                    elif hasattr(t, "clone_topology_from"):
+                        t.clone_topology_from(s)
+
+        # Rebind optimizer
+        try:
+            new_opt = self.configure_optimizers()
+            if isinstance(new_opt, list):
+                opts = new_opt
+            else:
+                opts = [new_opt]
+            strategy_opts = getattr(getattr(self, "trainer", None), "strategy", None)
+            if strategy_opts is not None and hasattr(strategy_opts, "optimizers"):
+                for i, opt in enumerate(opts):
+                    if i < len(strategy_opts.optimizers):
+                        strategy_opts.optimizers[i] = opt
+            if hasattr(self, "opt"):
+                self.opt = opts[0] if opts else self.opt
+        except Exception as e:
+            import logging
+
+            logging.getLogger(__name__).warning("_rebind_optimizer failed: %s", e)

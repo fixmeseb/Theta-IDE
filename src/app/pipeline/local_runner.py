@@ -9,7 +9,8 @@ from pathlib import Path
 
 from src.app.pipeline.commands import build_method_overrides, get_sweep_direction
 from src.app.pipeline.config import normalize_agent_name
-from src.app.pipeline.datasets import fast_purge_dir, resolve_dataset_path, run_experiment
+from src.app.pipeline.datasets import fast_purge_dir, resolve_dataset_for_method, run_experiment
+from src.app.pipeline.engine import resolve_engine
 from src.app.pipeline.optuna_utils import (
     create_optuna_study,
     delete_optuna_study,
@@ -17,10 +18,10 @@ from src.app.pipeline.optuna_utils import (
     promote_best_trial_checkpoint,
 )
 
-
 # ---------------------------------------------------------------------------
 # Shared setup
 # ---------------------------------------------------------------------------
+
 
 def _setup_output_dirs(cfg) -> None:
     """Purge and recreate checkpoint, log, and plot directories unless recovering."""
@@ -45,39 +46,6 @@ def _setup_output_dirs(cfg) -> None:
 # Method dispatch
 # ---------------------------------------------------------------------------
 
-def _resolve_dataset_for_method(method_name, method_cfg, cfg):
-    """Resolve the dataset path for an offline method."""
-    explicit_ds = method_cfg.get("dataset_path") or cfg.get("dataset_path")
-    if explicit_ds and Path(explicit_ds).exists():
-        return Path(explicit_ds)
-
-    # For offline paradigms, dataset comes from the environment config
-    env_dataset = None
-    env_name = None
-    if hasattr(cfg, "env"):
-        env_dataset = cfg.env.get("dataset_name", None)
-        env_name = cfg.env.get("name", None)
-        if env_dataset:
-            try:
-                return resolve_dataset_path(
-                    dataset_id=str(env_dataset).replace(".npz", ""),
-                    group=env_name or cfg.get("group", ""),
-                    experiment_id=cfg.get("experiment_id", ""),
-                    yaml_ds_path=str(explicit_ds) if explicit_ds else None,
-                )
-            except FileNotFoundError:
-                pass
-
-    # Fallback: look in standard dataset directories
-    ds_root = Path("in/datasets") / cfg.group / cfg.experiment_id
-    if ds_root.exists():
-        return ds_root
-
-    raise FileNotFoundError(
-        f"Cannot resolve dataset for method '{method_name}'. "
-        f"No dataset_name in env config and no datasets found at {ds_root}."
-    )
-
 
 def run_methods(cfg, context) -> None:
     """Execute all methods declared in cfg.methods."""
@@ -88,11 +56,13 @@ def run_methods(cfg, context) -> None:
     paradigm = cfg.get("paradigm", "offline_rl")
 
     for method_name, method_cfg in methods.items():
-        # Convert OmegaConf to plain dict if needed
         if hasattr(method_cfg, "items"):
-            method_cfg = dict(method_cfg)
-        else:
-            method_cfg = dict(method_cfg)
+            from omegaconf import DictConfig, OmegaConf
+
+            if isinstance(method_cfg, DictConfig):
+                method_cfg = OmegaConf.to_container(method_cfg, resolve=True)
+            else:
+                method_cfg = dict(method_cfg)
 
         agent_name = normalize_agent_name(method_name)
         method_tune = method_cfg.get("tune") or method_cfg.get("search_space") or {}
@@ -106,13 +76,13 @@ def run_methods(cfg, context) -> None:
         dataset_path = None
         if paradigm in ("offline_rl", "supervised"):
             try:
-                dataset_path = _resolve_dataset_for_method(method_name, method_cfg, cfg)
+                dataset_path = resolve_dataset_for_method(method_name, method_cfg, cfg)
             except FileNotFoundError as e:
                 print(f"Error: {e}")
                 sys.exit(1)
             print(f"Using dataset from: {dataset_path}")
 
-        agent_str = f"agent={method_cfg.get('agent')}, " if method_cfg.get('agent') else ""
+        agent_str = f"agent={method_cfg.get('agent')}, " if method_cfg.get("agent") else ""
         mode_str = " [Optuna Sweep]" if method_is_sweep else ""
         print(f"\n=== Training: {method_name} ({agent_str}model={method_cfg.get('model')}){mode_str} ===")
 
@@ -130,23 +100,26 @@ def run_methods(cfg, context) -> None:
             if cfg.get("remake", False):
                 delete_optuna_study(storage_url, study_name)
             direction = (
-                cfg.get("tuning", {}).get("direction")
-                if hasattr(cfg, "get") and cfg.get("tuning")
-                else None
+                cfg.get("tuning", {}).get("direction") if hasattr(cfg, "get") and cfg.get("tuning") else None
             ) or get_sweep_direction(cfg, paradigm)
             create_optuna_study(storage_url, study_name, direction=direction)
 
-        run_experiment(overrides)
+        engine_script, engine_python = resolve_engine(method_cfg, cfg)
+        run_experiment(
+            overrides,
+            site_cfg=getattr(cfg, "site", None),
+            script_entrypoint=engine_script,
+            python_executable=engine_python,
+        )
 
         if method_is_sweep:
-            promote_best_trial_checkpoint(
-                cfg.group, cfg.experiment_id, agent_name, storage_url, study_name
-            )
+            promote_best_trial_checkpoint(cfg.group, cfg.experiment_id, agent_name, storage_url, study_name)
 
 
 # ---------------------------------------------------------------------------
 # Plotting
 # ---------------------------------------------------------------------------
+
 
 def run_plotting_phase(cfg, context) -> None:
     """Run automated plotting after training completes."""
@@ -164,6 +137,7 @@ def run_plotting_phase(cfg, context) -> None:
 # ---------------------------------------------------------------------------
 # Main entry point
 # ---------------------------------------------------------------------------
+
 
 def run_local_training(cfg, context) -> None:
     """Execute all phases sequentially: setup → methods → plot."""
