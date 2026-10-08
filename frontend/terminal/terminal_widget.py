@@ -377,10 +377,12 @@ class TerminalWidget(QWidget):
     session_started = pyqtSignal()
     session_exited = pyqtSignal(int)
 
-    def __init__(self, cwd: Optional[str] = None, parent: Optional[QWidget] = None):
+    def __init__(self, cwd: Optional[str] = None, parent: Optional[QWidget] = None,
+                 command: Optional[list[str]] = None, env: Optional[dict[str, str]] = None):
         super().__init__(parent)
         self.cwd = cwd or str(Path.cwd())
-        self.pty = PtySession(cwd=self.cwd, parent=self)
+        self.pty = PtySession(cwd=self.cwd, command=command, parent=self)
+        self.pty.extra_env = dict(env or {})
         self.bridge = TerminalBridge(self)
         self._is_ready = False
         self._pending_theme: Optional[dict] = None
@@ -455,6 +457,16 @@ class TerminalWidget(QWidget):
         self.session_started.emit()
         self.fit_terminal()
         self.focus_terminal()
+
+    def configure(self, command: Optional[list[str]] = None, cwd: Optional[str] = None,
+                  env: Optional[dict[str, str]] = None):
+        """Set the shell, start folder and extra environment. Applies from the next shell
+        started (New Shell / restart); the running one is left alone."""
+        self.pty.command = command
+        if cwd:
+            self.cwd = cwd
+            self.pty.cwd = cwd
+        self.pty.extra_env = dict(env or {})
 
     def clear(self):
         """Clear and reset xterm terminal viewport."""
@@ -646,7 +658,8 @@ class TerminalWidget(QWidget):
 class TerminalPanel(QWidget):
     """Pure, modern interactive terminal pane with compact toolbar controls."""
 
-    def __init__(self, cwd: Optional[str] = None, parent: Optional[QWidget] = None):
+    def __init__(self, cwd: Optional[str] = None, parent: Optional[QWidget] = None,
+                 command: Optional[list[str]] = None, env: Optional[dict[str, str]] = None):
         super().__init__(parent)
         self.cwd = cwd or str(Path.cwd())
 
@@ -687,7 +700,7 @@ class TerminalPanel(QWidget):
         root_layout.addWidget(self.toolbar)
 
         # Full-bleed, edge-to-edge interactive terminal
-        self.terminal = TerminalWidget(cwd=self.cwd, parent=self)
+        self.terminal = TerminalWidget(cwd=self.cwd, parent=self, command=command, env=env)
         root_layout.addWidget(self.terminal, 1)
 
         self.terminal.session_started.connect(self._on_session_started)

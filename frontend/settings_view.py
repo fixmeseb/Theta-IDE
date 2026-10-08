@@ -11,6 +11,7 @@ from PyQt6.QtWidgets import (
     QApplication,
     QComboBox,
     QDoubleSpinBox,
+    QFileDialog,
     QFrame,
     QGraphicsDropShadowEffect,
     QGridLayout,
@@ -107,6 +108,12 @@ TAB_SPECS = [
         "title": "Backend API",
         "subtitle": "FastAPI daemon connection and server status",
         "icon": "backend",
+    },
+    {
+        "id": "terminal",
+        "title": "Terminal",
+        "subtitle": "Shell, start folder and Python environment for the Terminal pane",
+        "icon": "terminal",
     },
     {
         "id": "storage",
@@ -232,6 +239,7 @@ TAB_SIZES = {
     "community_plugins": (860, 640),
     "hotkeys": (940, 760),
     "backend": (760, 460),
+    "terminal": (780, 520),
     "storage": (780, 480),
     "animation": (740, 560),
 }
@@ -616,7 +624,12 @@ class SettingsView(QWidget):
         stack.addWidget(p_backend)
         self.page_widgets["backend"] = p_backend
 
-        # Page 5: Workspace & Storage
+        # Page 5: Terminal
+        p_terminal = self._build_terminal_page()
+        stack.addWidget(p_terminal)
+        self.page_widgets["terminal"] = p_terminal
+
+        # Page 6: Workspace & Storage
         p_storage = self._build_storage_page()
         stack.addWidget(p_storage)
         self.page_widgets["storage"] = p_storage
@@ -1489,6 +1502,162 @@ class SettingsView(QWidget):
             self.anim_toggle_active.blockSignals(False)
             if hasattr(self, "anim_status_lbl") and self.anim_status_lbl:
                 self.anim_status_lbl.setText("Running" if is_anim else "Paused")
+
+    def _build_terminal_page(self) -> QWidget:
+        """Shell, start folder and venv for the Terminal pane, saved to [terminal] in settings.toml."""
+        from .terminal.pty_session import available_shells, get_default_shell
+
+        sm = self.window.settings_manager
+        container = QWidget()
+        layout = QVBoxLayout(container)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(12)
+
+        card = QFrame()
+        card.setObjectName("card")
+        c_layout = QVBoxLayout(card)
+        c_layout.setContentsMargins(18, 16, 18, 16)
+        c_layout.setSpacing(12)
+        c_layout.addWidget(label("Shell", "cardTitle"))
+        sub = label("Changes apply to the next shell you open. Use Restart terminal to apply them now.", "muted")
+        sub.setWordWrap(True)
+        c_layout.addWidget(sub)
+
+        def row(caption, *widgets):
+            line = QHBoxLayout()
+            line.setSpacing(10)
+            cap = label(caption, "muted")
+            cap.setFixedWidth(110)
+            line.addWidget(cap)
+            for widget in widgets:
+                line.addWidget(widget)
+            line.addStretch()
+            c_layout.addLayout(line)
+
+        # Shell picker: auto-detect, the shells found on this machine, or a custom command line
+        self.terminal_shell_combo = QComboBox()
+        self.terminal_shell_combo.setMaximumWidth(320)
+        default = get_default_shell()
+        self.terminal_shell_combo.addItem(f"Auto-detect ({Path(default[0]).stem})", "")
+        self.terminal_shell_combo.setItemData(0, " ".join(default), Qt.ItemDataRole.ToolTipRole)
+        for name, command in available_shells():
+            self.terminal_shell_combo.addItem(name, command)
+            self.terminal_shell_combo.setItemData(self.terminal_shell_combo.count() - 1, command,
+                                                  Qt.ItemDataRole.ToolTipRole)
+        self.terminal_shell_combo.addItem("Custom command…", None)
+        row("Shell", self.terminal_shell_combo)
+
+        self.terminal_shell_edit = QLineEdit()
+        self.terminal_shell_edit.setPlaceholderText('e.g. "C:/tools/nu.exe" or /bin/zsh -l')
+        self.terminal_shell_edit.setMaximumWidth(420)
+        self.terminal_shell_edit.setStyleSheet("font-family: 'Consolas', monospace; font-size: 12px;")
+        row("Command", self.terminal_shell_edit)
+
+        self.terminal_shell_status = label("", "muted")
+        self.terminal_shell_status.setWordWrap(True)
+        c_layout.addWidget(self.terminal_shell_status)
+
+        # Start folder
+        self.terminal_cwd_edit = QLineEdit(sm.terminal_cwd)
+        self.terminal_cwd_edit.setPlaceholderText(f"Launch folder ({Path.cwd().name})")
+        self.terminal_cwd_edit.setMaximumWidth(320)
+        browse = QPushButton("Browse…")
+        browse.setCursor(Qt.CursorShape.PointingHandCursor)
+        browse.clicked.connect(self._browse_terminal_cwd)
+        row("Start folder", self.terminal_cwd_edit, browse)
+
+        # Project venv
+        venv_line = QHBoxLayout()
+        venv_info = QVBoxLayout()
+        venv_info.setSpacing(1)
+        venv_title = label("Use the project venv")
+        venv_title.setStyleSheet("font-weight: 500; font-size: 12px;")
+        venv_info.addWidget(venv_title)
+        venv_sub = label("Puts venv/ first on PATH, so python, pytest and run_pipeline.py use the backend environment.", "muted")
+        venv_sub.setWordWrap(True)
+        venv_info.addWidget(venv_sub)
+        venv_line.addLayout(venv_info, 1)
+        self.terminal_venv_slider = ToggleSlider(checked=sm.terminal_activate_venv)
+        self.terminal_venv_slider.setAccessibleName("Toggle project venv in the terminal")
+        self.terminal_venv_slider.toggled.connect(lambda on: sm.set("terminal", "activate_venv", bool(on)))
+        venv_line.addWidget(self.terminal_venv_slider)
+        c_layout.addLayout(venv_line)
+
+        restart_row = QHBoxLayout()
+        btn_restart = QPushButton("Restart terminal")
+        btn_restart.setToolTip("Close the current shell and open a new one with these settings")
+        btn_restart.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_restart.clicked.connect(self._restart_terminal)
+        restart_row.addWidget(btn_restart)
+        restart_row.addStretch()
+        c_layout.addLayout(restart_row)
+
+        layout.addWidget(card)
+        layout.addStretch()
+
+        self._load_terminal_shell(sm.terminal_shell)
+        self.terminal_shell_combo.currentIndexChanged.connect(self._on_terminal_shell_picked)
+        self.terminal_shell_edit.editingFinished.connect(self._on_terminal_command_edited)
+        self.terminal_cwd_edit.editingFinished.connect(
+            lambda: sm.set("terminal", "cwd", self.terminal_cwd_edit.text().strip()))
+        return container
+
+    def _load_terminal_shell(self, shell: str):
+        """Show the saved shell: a matching preset, auto-detect, or Custom with its command line."""
+        index = self.terminal_shell_combo.findData(shell) if shell else 0
+        custom = index < 0
+        if custom:
+            index = self.terminal_shell_combo.count() - 1
+        self.terminal_shell_combo.blockSignals(True)
+        self.terminal_shell_combo.setCurrentIndex(index)
+        self.terminal_shell_combo.blockSignals(False)
+        self.terminal_shell_edit.setText(shell)
+        self.terminal_shell_edit.setEnabled(custom)
+        self._update_terminal_shell_status(shell)
+
+    def _update_terminal_shell_status(self, shell: str):
+        from .terminal.pty_session import parse_shell_command
+
+        if shell and parse_shell_command(shell) is None:
+            self.terminal_shell_status.setText("That program was not found, so the default shell will be used.")
+            self.terminal_shell_status.setObjectName("configError")
+        else:
+            self.terminal_shell_status.setText("")
+            self.terminal_shell_status.setObjectName("muted")
+        self.terminal_shell_status.style().polish(self.terminal_shell_status)
+        self.terminal_shell_status.setVisible(bool(self.terminal_shell_status.text()))
+
+    def _on_terminal_shell_picked(self, index: int):
+        command = self.terminal_shell_combo.itemData(index)
+        if command is None:  # Custom: edit the command line; it is saved when editing finishes
+            self.terminal_shell_edit.setEnabled(True)
+            self.terminal_shell_edit.setFocus()
+            return
+        self.terminal_shell_edit.setText(command)
+        self.terminal_shell_edit.setEnabled(False)
+        self._update_terminal_shell_status(command)
+        self.window.settings_manager.set("terminal", "shell", command)
+
+    def _on_terminal_command_edited(self):
+        command = self.terminal_shell_edit.text().strip()
+        self._update_terminal_shell_status(command)
+        self.window.settings_manager.set("terminal", "shell", command)
+
+    def _browse_terminal_cwd(self):
+        start = self.terminal_cwd_edit.text().strip() or str(Path.cwd())
+        folder = QFileDialog.getExistingDirectory(self, "Terminal start folder", start)
+        if folder:
+            self.terminal_cwd_edit.setText(folder)
+            self.window.settings_manager.set("terminal", "cwd", folder)
+
+    def _restart_terminal(self):
+        panel = getattr(self.window, "terminal_panel", None)
+        if panel is None:
+            return
+        command, cwd, env = self.window.terminal_config()
+        panel.terminal.configure(command=command, cwd=cwd, env=env)
+        panel.terminal.restart_session()
+        self.window.statusBar().showMessage("Terminal restarted with the new settings.", 4000)
 
     def _build_backend_page(self) -> QWidget:
         container = QWidget()
