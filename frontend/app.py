@@ -299,6 +299,7 @@ class Window(QMainWindow):
 
         # Boxed Config Viewer (takes up the main area of the screen)
         self.config_viewer = ConfigViewer()
+        self.config_viewer.auto_save = True
         self.config_viewer.btn_save = self.btn_save
         self.config_viewer.config_changed.connect(self.update_config)
         self.config_viewer.save_requested.connect(self.on_config_saved)

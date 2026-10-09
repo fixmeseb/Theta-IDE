@@ -297,6 +297,7 @@ class TestConfigViewer(unittest.TestCase):
             encoding="utf-8"
         )
         self.viewer = ConfigViewer()
+        self.viewer.auto_save = True
         self.viewer.load_file(self.file_path, "experiment/test_exp.yaml")
 
     def tearDown(self):
@@ -370,6 +371,53 @@ class TestConfigViewer(unittest.TestCase):
         labels = [lbl.text() for lbl in box_1.findChildren(QLabel)]
         self.assertNotIn("Experiment ID", labels)
 
+    def test_paradigm_badge_hidden_in_experiment_pane(self):
+        self.assertTrue(self.viewer.paradigm_badge.isHidden())
+        header_widgets = [
+            self.viewer.header_bar.layout().itemAt(i).widget()
+            for i in range(self.viewer.header_bar.layout().count())
+            if self.viewer.header_bar.layout().itemAt(i).widget() is not None
+        ]
+        self.assertNotIn(self.viewer.paradigm_badge, header_widgets)
+
+    def test_experiment_identity_box_removed_and_first_box_is_budget(self):
+        cards = self.viewer.findChildren(ConfigBox)
+        self.assertEqual(len(cards), 4)
+
+        all_labels = [lbl.text() for lbl in self.viewer.findChildren(QLabel)]
+        self.assertNotIn("Group", all_labels)
+        self.assertNotIn("Paradigm", all_labels)
+        self.assertNotIn("Inherits Defaults", all_labels)
+
+        budget_card = cards[0]
+        budget_labels = [lbl.text() for lbl in budget_card.findChildren(QLabel)]
+        self.assertIn("Total Timesteps", budget_labels)
+        self.assertIn("Random Seed", budget_labels)
+
+    def test_redundant_params_stripped_from_experiment_yamls(self):
+        exp_file = Path(self.temp_dir.name) / "custom_exp.yaml"
+        exp_file.write_text(
+            "experiment_id: custom_exp\n"
+            "group: cartpole\n"
+            "seed: 42\n"
+            "total_timesteps: 10000\n",
+            encoding="utf-8"
+        )
+        viewer = ConfigViewer()
+        viewer.auto_save = True
+        viewer.load_file(exp_file, "experiment/cartpole/custom_exp.yaml")
+
+        self.assertNotIn("experiment_id", viewer.raw_data)
+        self.assertNotIn("group", viewer.raw_data)
+
+        viewer.save_to_disk()
+        saved_text = exp_file.read_text(encoding="utf-8")
+        saved_data = yaml.safe_load(saved_text)
+        self.assertNotIn("experiment_id", saved_data)
+        self.assertNotIn("group", saved_data)
+        self.assertEqual(saved_data.get("seed"), 42)
+        self.assertEqual(saved_data.get("total_timesteps"), 10000)
+
     def test_redundant_params_filtered_in_generic_boxes(self):
         agent_file = Path(self.temp_dir.name) / "agent_test.yaml"
         agent_file.write_text("algorithm: test_algo\nlr: 0.001\nbatch_size: 64\n", encoding="utf-8")
@@ -411,10 +459,11 @@ class TestConfigViewer(unittest.TestCase):
         self.assertFalse(old_file.exists())
         self.assertTrue(new_file.exists())
 
-        # Parameters in raw_data and disk file should have experiment_id updated
-        self.assertEqual(self.viewer.raw_data.get("experiment_id"), "renamed_exp")
+        # Redundant experiment_id is stripped from experiment YAMLs
+        self.assertNotIn("experiment_id", self.viewer.raw_data)
         disk_data = yaml.safe_load(new_file.read_text(encoding="utf-8"))
-        self.assertEqual(disk_data.get("experiment_id"), "renamed_exp")
+        self.assertNotIn("experiment_id", disk_data)
+        self.assertEqual(self.viewer.txt_exp_id.text(), "renamed_exp")
 
         # Signal emitted
         self.assertEqual(len(renamed_signals), 1)
@@ -428,7 +477,8 @@ class TestConfigViewer(unittest.TestCase):
         self.viewer._commit_title_edit()
 
         self.assertEqual(self.viewer.file_title.text(), "Test_Exp")
-        self.assertEqual(self.viewer.raw_data.get("experiment_id"), "Test_Exp")
+        self.assertEqual(self.viewer.txt_exp_id.text(), "Test_Exp")
+        self.assertNotIn("experiment_id", self.viewer.raw_data)
         self.assertEqual(self.viewer.current_path.name, "Test_Exp.yaml")
         self.assertTrue(self.viewer.current_path.exists())
 

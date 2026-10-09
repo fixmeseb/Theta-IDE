@@ -78,6 +78,7 @@ class ComponentsPanel(QWidget):
         self.content_splitter = QSplitter(Qt.Orientation.Horizontal)
 
         self.viewer = ConfigViewer()
+        self.viewer.auto_save = True
         self.viewer.btn_save = self.btn_save
         self.viewer.config_changed.connect(self._on_viewer_changed)
         self.viewer.save_requested.connect(self._on_viewer_saved)

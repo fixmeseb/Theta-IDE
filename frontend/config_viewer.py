@@ -167,6 +167,7 @@ class ConfigViewer(QWidget):
         self._committing_rename = False
         self.field_widgets = {}
         self._preamble = ""
+        self.auto_save = False
 
         self._init_ui()
 
@@ -199,7 +200,6 @@ class ConfigViewer(QWidget):
 
         self.paradigm_badge = label("", "badge")
         self.paradigm_badge.hide()
-        hb_layout.addWidget(self.paradigm_badge)
 
         self.dirty_status = label("", "muted")
         self.dirty_status.hide()
@@ -306,18 +306,18 @@ class ConfigViewer(QWidget):
                 self._cancel_title_edit()
                 return
 
-            # Rewrite title / identity parameters in self.raw_data
-            for key in ("experiment_id", "algorithm", "name", "architecture", "reasoner", "id"):
-                if key in self.raw_data:
-                    self.raw_data[key] = new_title
-
             is_experiment = (
                 (old_rel and old_rel.startswith("experiment/"))
                 or "methods" in self.raw_data
                 or any("_base" in str(d) for d in self.raw_data.get("defaults", []))
             )
+            for key in ("algorithm", "name", "architecture", "reasoner", "id"):
+                if key in self.raw_data:
+                    self.raw_data[key] = new_title
+
             if is_experiment:
-                self.raw_data["experiment_id"] = new_title
+                self.raw_data.pop("experiment_id", None)
+                self.raw_data.pop("group", None)
             elif old_rel and old_rel.startswith("agent/"):
                 self.raw_data["algorithm"] = new_title
             elif old_rel and old_rel.startswith("env/"):
@@ -413,6 +413,7 @@ class ConfigViewer(QWidget):
             self._preamble = _leading_directives(content)
             data = yaml.safe_load(content) or {}
             self.raw_data = data if isinstance(data, dict) else {"content": data}
+            self._clean_redundant_params()
         except Exception as exc:
             self.file_title.setText(f"Error loading {self.current_path.stem}")
             return
@@ -474,6 +475,35 @@ class ConfigViewer(QWidget):
             return None
         return tree.group(group).paradigm
 
+    def _inherited_env(self):
+        """The environment this experiment inherits from its group's _base.yaml."""
+        tree, group = config_tree(), self._group_name()
+        if tree is None or group is None or group not in tree.groups:
+            return None
+        return tree.group(group).env
+
+    def _clean_redundant_params(self):
+        """Strip redundant parameters inherited from defaults or matching filename stem."""
+        if not self.raw_data or not isinstance(self.raw_data, dict):
+            return
+        is_experiment = (
+            (self.current_rel_path and self.current_rel_path.startswith("experiment/"))
+            or "methods" in self.raw_data
+            or any("_base" in str(d) for d in self.raw_data.get("defaults", []))
+        )
+        if is_experiment:
+            self.raw_data.pop("group", None)
+            stem = self.current_path.stem if self.current_path else ""
+            if self.raw_data.get("experiment_id") == stem:
+                self.raw_data.pop("experiment_id", None)
+            if self.raw_data.get("paradigm") == self._inherited_paradigm():
+                self.raw_data.pop("paradigm", None)
+            inh_env = self._inherited_env()
+            if isinstance(self.raw_data.get("env"), str) and (
+                self.raw_data["env"] == inh_env or self.raw_data["env"] == self.INHERIT
+            ):
+                self.raw_data.pop("env", None)
+
     def _cap_form_fields(self):
         """Limit field widths in every label/field form and two-column grid."""
         for grid in self.container.findChildren(QGridLayout):
@@ -508,30 +538,17 @@ class ConfigViewer(QWidget):
         """Render standard boxes for an Experiment configuration."""
         data = self.raw_data
 
-        # Paradigm badge. Only 2 of the 66 experiments set `paradigm` themselves;
-        # the rest inherit it from their group's _base.yaml, so falling back to a
-        # fixed default would mislabel almost all of them and filter the form by
-        # the wrong rules.
+        # Paradigm is inherited from group base by default.
         paradigm = data.get("paradigm") or self._inherited_paradigm() or "online_rl"
-        if paradigm:
-            self.paradigm_badge.setText(str(paradigm).upper())
-            self.paradigm_badge.show()
-        else:
-            self.paradigm_badge.hide()
+        self.paradigm_badge.hide()
 
-        # --- BOX 1: EXPERIMENT IDENTITY ---
-        box_id = ConfigBox("1. Experiment & Identity", "Core experiment metadata and template inheritance")
-        form_id = QFormLayout()
-        form_id.setVerticalSpacing(8)
-
-        # Group
+        # Metadata / constraint helper widgets (not rendered into visual layout)
         group_val = data.get("group")
         if not group_val:
             parts = Path(self.current_rel_path).parts
             group_val = parts[1] if len(parts) > 2 else "ungrouped"
         self.txt_group = QLineEdit(str(group_val))
         self.txt_group.textChanged.connect(lambda v: self._on_field_edited("group", v))
-        form_id.addRow("Group", self.txt_group)
         self.field_widgets["group"] = self.txt_group
 
         # Paradigm + Environment, driven by in/config/paradigms constraints.
@@ -545,14 +562,9 @@ class ConfigViewer(QWidget):
             if rules and rules.description:
                 self.combo_paradigm.setToolTip(rules.description)
             self.combo_paradigm.currentTextChanged.connect(self._on_paradigm_changed)
-            form_id.addRow("Paradigm", self.combo_paradigm)
             self.field_widgets["paradigm"] = self.combo_paradigm
 
             self.combo_env = ComboBox()
-            # Name what is inherited: "(inherit from base)" alone leaves the user
-            # with no way to tell which environment the run will actually use.
-            # The sentinel lives in the item's data, so the visible label is free
-            # to name what is actually inherited.
             inherited_env = tree.group(self._group_name() or "").env
             inherit_label = f"(inherit from base — {inherited_env})" if inherited_env else self.INHERIT
             self.combo_env.addItem(inherit_label, self.INHERIT)
@@ -568,22 +580,10 @@ class ConfigViewer(QWidget):
             self.combo_env.currentTextChanged.connect(
                 lambda v: self._on_field_edited("env", v) if self.env_selection() else None
             )
-            form_id.addRow("Environment", self.combo_env)
             self.field_widgets["env"] = self.combo_env
 
-        # Defaults / Base
-        defaults = data.get("defaults", [])
-        if defaults:
-            def_str = ", ".join(str(d) for d in defaults)
-            lbl_def = label(def_str, "muted")
-            lbl_def.setWordWrap(True)
-            form_id.addRow("Inherits Defaults", lbl_def)
-
-        box_id.add_layout(form_id)
-        self.boxes_layout.addWidget(box_id)
-
-        # --- BOX 2: TRAINING BUDGET & ROLLOUT SCHEDULE ---
-        box_budget = ConfigBox("2. Training Budget & Schedule", "Timesteps, evaluation frequency, and random seeds")
+        # --- BOX 1: TRAINING BUDGET & ROLLOUT SCHEDULE ---
+        box_budget = ConfigBox("1. Training Budget & Schedule", "Timesteps, evaluation frequency, and random seeds")
         form_budget = QGridLayout()
         form_budget.setVerticalSpacing(10)
         form_budget.setHorizontalSpacing(16)
@@ -684,9 +684,9 @@ class ConfigViewer(QWidget):
         box_budget.add_layout(form_budget)
         self.boxes_layout.addWidget(box_budget)
 
-        # --- BOX 3: METHODS & AGENT ARCHITECTURES ---
+        # --- BOX 2: METHODS & AGENT ARCHITECTURES ---
         methods_dict = data.get("methods", {})
-        box_methods = ConfigBox("3. Methods & Algorithms", "Configured agents, policies, and hyperparameter overrides")
+        box_methods = ConfigBox("2. Methods & Algorithms", "Configured agents, policies, and hyperparameter overrides")
         m_layout = QVBoxLayout()
         m_layout.setSpacing(10)
 
@@ -855,8 +855,8 @@ class ConfigViewer(QWidget):
         box_methods.add_layout(m_layout)
         self.boxes_layout.addWidget(box_methods)
 
-        # --- BOX 4: ENVIRONMENT & TRAINER SETTINGS ---
-        box_env_trainer = ConfigBox("4. Environment & Trainer", "Simulation rollouts and training accelerator options")
+        # --- BOX 3: ENVIRONMENT & TRAINER SETTINGS ---
+        box_env_trainer = ConfigBox("3. Environment & Trainer", "Simulation rollouts and training accelerator options")
         grid_et = QGridLayout()
         grid_et.setVerticalSpacing(10)
         grid_et.setHorizontalSpacing(16)
@@ -896,8 +896,8 @@ class ConfigViewer(QWidget):
         box_env_trainer.add_layout(grid_et)
         self.boxes_layout.addWidget(box_env_trainer)
 
-        # --- BOX 5: CLUSTER & HARDWARE RESOURCES ---
-        box_res = ConfigBox("5. Compute & Slurm Resources", "Resource allocation for cluster runs (time, gpus, cores)")
+        # --- BOX 4: CLUSTER & HARDWARE RESOURCES ---
+        box_res = ConfigBox("4. Compute & Slurm Resources", "Resource allocation for cluster runs (time, gpus, cores)")
         grid_res = QGridLayout()
         grid_res.setHorizontalSpacing(16)
         grid_res.setVerticalSpacing(8)
@@ -1062,20 +1062,30 @@ class ConfigViewer(QWidget):
         self._mark_dirty()
 
     def _mark_dirty(self):
-        self.save_to_disk()
+        self.is_dirty = True
+        if getattr(self, "auto_save", False):
+            self.save_to_disk()
+        else:
+            self._update_dirty_ui()
         self.config_changed.emit()
 
     def _update_dirty_ui(self):
-        self.is_dirty = False
-        self.dirty_status.setText("")
-        self.dirty_status.hide()
-        self.dirty_changed.emit(False)
+        if self.is_dirty and not getattr(self, "auto_save", False):
+            self.dirty_status.setText("● Modified (unsaved)")
+            self.dirty_status.show()
+            self.dirty_changed.emit(True)
+        else:
+            self.is_dirty = False
+            self.dirty_status.setText("")
+            self.dirty_status.hide()
+            self.dirty_changed.emit(False)
 
     def save_to_disk(self, show_error: bool = False):
         """Save current YAML dictionary back to disk."""
         if not self.current_path:
             return False
         try:
+            self._clean_redundant_params()
             yaml_str = yaml.safe_dump(self.raw_data, sort_keys=False)
             self.current_path.write_text(self._preamble + yaml_str, encoding="utf-8")
             self.is_dirty = False
@@ -1094,8 +1104,9 @@ class ConfigViewer(QWidget):
         overrides = []
         data = self.raw_data
 
-        if "experiment_id" in data:
-            overrides.append(f"++experiment_id='{data['experiment_id']}'")
+        exp_id = data.get("experiment_id") or (self.current_path.stem if self.current_path else None)
+        if exp_id:
+            overrides.append(f"++experiment_id='{exp_id}'")
 
         # Hydra config-group selections (defaults in in/config/config.yaml)
         for group in ("paradigm", "env"):
