@@ -47,4 +47,3 @@ methods:
     model: cew
     fyd: true
     fyd_top_k: 50
-env: pyrenees
