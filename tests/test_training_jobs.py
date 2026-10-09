@@ -110,11 +110,23 @@ def test_metric_points_keep_evaluation_and_training_rows_separate():
             {"losses/total_loss": 1.5, "losses/entropy": 0.69, "losses/approx_kl": 0.001, "transitions": 512.0},
             {"eval/reward": 20.0, "step": 0.0},  # epoch-level duplicate without transitions
             {"time/train": 0.3, "transitions": 600.0}]
-    evaluation, training = metric_points(rows)
+    evaluation, training, timing = metric_points(rows)
     assert (evaluation["step"], evaluation["reward"], evaluation["reward_std"], evaluation["entropy"]) == (0, 20.0, 8.5, None)
     assert (training["step"], training["reward"], training["loss"], training["entropy"], training["approx_kl"]) == \
         (512, None, 1.5, 0.69, 0.001)
     assert set(evaluation) == set(training) == {"step", *METRIC_COLUMNS}
+    # Columns outside METRIC_COLUMNS are kept under their own names, not dropped.
+    assert (timing["step"], timing["time/train"], timing["reward"]) == (600, 0.3, None)
+
+
+def test_metric_points_keep_metrics_from_any_engine():
+    """SB3 (through ContractLogger) logs loss names the Lightning agents never use."""
+    rows = [{"step": 1000.0, "transitions": 1000.0, "eval/reward": 15.0, "losses/train/value_loss": 3.5},
+            {"transitions": 2000.0, "custom/success_rate": 0.4, "epoch": 3.0}]
+    first, second = metric_points(rows)
+    assert (first["reward"], first["losses/train/value_loss"]) == (15.0, 3.5)
+    assert "step" in first and first["step"] == 1000  # the counter becomes the position, not a metric
+    assert second["custom/success_rate"] == 0.4 and "epoch" not in second
 
 
 @pytest.mark.slow

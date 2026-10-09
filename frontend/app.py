@@ -1,20 +1,18 @@
 """Spyder-inspired research workspace for deep learning and reinforcement learning experimentation."""
 import argparse
-import json
 import os
 import sys
-from dataclasses import asdict, replace
+from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
 
 import yaml
 
 if sys.platform == "darwin" and "QTWEBENGINE_CHROMIUM_FLAGS" not in os.environ:
     os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = "--disable-gpu"
 
-from PyQt6.QtCore import QRegularExpression, Qt, QTimer, QUrl
-from PyQt6.QtGui import QAction, QDesktopServices, QFont, QIcon, QRegularExpressionValidator
+from PyQt6.QtCore import Qt, QTimer, QUrl
+from PyQt6.QtGui import QAction, QDesktopServices, QFont, QIcon
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -22,31 +20,20 @@ from PyQt6.QtWidgets import (
     QComboBox,
     QDialog,
     QDockWidget,
-    QDoubleSpinBox,
     QFileDialog,
-    QFormLayout,
-    QFrame,
     QHBoxLayout,
     QHeaderView,
-    QLabel,
     QLineEdit,
     QMainWindow,
     QMessageBox,
     QPlainTextEdit,
-    QProgressBar,
     QPushButton,
-    QScrollArea,
-    QSlider,
-    QSpinBox,
     QSplitter,
     QStyle,
+    QTabWidget,
     QTableWidget,
     QTableWidgetItem,
-    QTabWidget,
-    QToolBar,
     QToolButton,
-    QTreeWidget,
-    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -54,55 +41,30 @@ from PyQt6.QtWidgets import (
 from . import wheel_guard
 from .api import DEFAULT_URL, Backend
 from .model import (BASE_EXPERIMENT, FINAL_STATUSES, LIVE_STATUSES, RESULT_COLUMNS, SOURCE_FILTERS, STATUS_FILTERS,
-                    Config, Store, available_metrics, disk_run, example_runs, latest, matches_filters, metric_points,
+                    Config, Store, disk_run, example_runs, matches_filters, metric_points,
                     metric_points_from_api, new_run, result_row, run_source, sample)
 from .settings import SettingsManager
 from .theme import STYLE, ThemeManager, theme_color
 from .theme_builder import ThemeBuilder
-from .widgets import Chart, MetricCard, SortableItem, ToggleSlider, YamlHighlighter, label
-from .about import AboutDialog, AsciiTheta
-from .api import DEFAULT_URL, Backend
+from .widgets import Chart, SortableItem, ToggleSlider, YamlHighlighter, label
+from .about import AboutDialog
 from .app_icon import DESKTOP_FILE_NAME, ICON_PATH, app_icon, install_desktop_entry, set_windows_app_id
 from .components_panel import ComponentsPanel
 from .config_tree import ConfigTreeWidget
 from .config_viewer import ConfigViewer
 from .hub import HubClient, HubDialog
-from .model import (
-    BASE_EXPERIMENT,
-    FINAL_STATUSES,
-    LIVE_STATUSES,
-    Config,
-    Store,
-    available_metrics,
-    example_runs,
-    latest,
-    metric_points,
-    new_run,
-    sample,
-)
+from .monitor import ENV_MAX_REWARD, MonitorPanel
+from .results.panel import ResultsPanel
 from .plots import PlotViewer
 from .plugins import PluginManager
 from .queue_panel import QueuePanel
-from .settings import SettingsManager
 from .sidetabs import SideTabs, svg_icon
 from .tensorboard import TensorBoardPanel
 from .terminal import TerminalPanel
-from .theme import STYLE, ThemeManager, theme_color
-from .theme_builder import ThemeBuilder
 from .titlebar import apply_title_bar
-from .widgets import Chart, MetricCard, ToggleSlider, YamlHighlighter, label
 from .workflows import WorkflowsPanel
 
 # Metrics the monitor's second chart can show: key -> (card title, chart title, subtitle, value format)
-SECOND_METRICS = {
-    "loss": ("TRAINING LOSS", "Total loss", "policy + 0.5 × value − 0.01 × entropy", ".4f"),
-    "value_loss": ("VALUE LOSS", "Value loss", "value-function error · critic MSE loss", ".3f"),
-    "policy_loss": ("POLICY LOSS", "Policy loss", "PPO clipped surrogate objective", ".4f"),
-    "entropy": ("POLICY ENTROPY", "Policy entropy", "how random actions are · ln 2 ≈ 0.693 is uniform", ".3f"),
-    "approx_kl": ("APPROX. KL", "Approximate KL per update", "size of each policy update", ".5f"),
-}
-# Highest possible evaluation reward per environment, drawn as the reward chart's ceiling.
-ENV_MAX_REWARD = {"cartpole": 500}
 
 
 class Window(QMainWindow):
@@ -342,95 +304,10 @@ class Window(QMainWindow):
         self.tabs.addTab(self.workflows_panel, "Workflows", "workflow", "Workflows", tab_id="workflows")
 
         # 4. Training Monitor Panel
-        monitor = QWidget()
-        layout = QVBoxLayout(monitor)
-        layout.setContentsMargins(20, 18, 20, 14)
-        layout.setSpacing(14)
-        # Eyebrow row with curve smoothing slider
-        eyebrow_row = QHBoxLayout()
-        eyebrow_row.addWidget(label("EXPERIMENT / OVERVIEW", "eyebrow"))
-        eyebrow_row.addStretch()
-        self.smoothing_label = label("Smoothing: 0%", "muted")
-        eyebrow_row.addWidget(self.smoothing_label)
-        self.smoothing_slider = QSlider(Qt.Orientation.Horizontal)
-        self.smoothing_slider.setRange(0, 95)
-        self.smoothing_slider.setValue(0)
-        self.smoothing_slider.setFixedWidth(110)
-        self.smoothing_slider.setToolTip("Exponential moving average smoothing for training curves (0% = raw)")
-        self.smoothing_slider.valueChanged.connect(self.on_smoothing_changed)
-        eyebrow_row.addWidget(self.smoothing_slider)
-        layout.addLayout(eyebrow_row)
-
-        # Run navigator toolbar: Run selector combo, prev/next, jump to live, pin baseline
-        nav_row = QHBoxLayout()
-        nav_row.setSpacing(8)
-        self.run_combo = QComboBox()
-        self.run_combo.setMinimumWidth(320)
-        self.run_combo.setToolTip("Select any current or past experiment run to inspect")
-        self.run_combo.currentIndexChanged.connect(self.on_run_combo_changed)
-        nav_row.addWidget(self.run_combo, 1)
-
-        self.btn_prev_run = QPushButton("Previous")
-        self.btn_prev_run.setToolTip("View previous experiment run in history")
-        self.btn_prev_run.clicked.connect(self.select_prev_run)
-        nav_row.addWidget(self.btn_prev_run)
-
-        self.btn_next_run = QPushButton("Next")
-        self.btn_next_run.setToolTip("View next experiment run in history")
-        self.btn_next_run.clicked.connect(self.select_next_run)
-        nav_row.addWidget(self.btn_next_run)
-
-        self.btn_live_jump = QPushButton("Jump to live")
-        self.btn_live_jump.setToolTip("Return view to the currently training run")
-        self.btn_live_jump.clicked.connect(self.jump_to_live_run)
-        self.btn_live_jump.hide()
-        nav_row.addWidget(self.btn_live_jump)
-
-        self.btn_pin_baseline = QPushButton("Pin as baseline")
-        self.btn_pin_baseline.setCheckable(True)
-        self.btn_pin_baseline.setToolTip("Pin this run to overlay as a dashed baseline curve on other runs")
-        self.btn_pin_baseline.clicked.connect(self.toggle_pin_baseline)
-        nav_row.addWidget(self.btn_pin_baseline)
-
-        layout.addLayout(nav_row)
-
-        self.run_title = label("Your next experiment", "heading")
-        layout.addWidget(self.run_title)
-
-        caption_row = QHBoxLayout()
-        self.run_caption = label("Configure an experiment, then launch training.", "muted")
-        caption_row.addWidget(self.run_caption, 1)
-        self.storage_label = label("results/logs/  ·  results/jobs/jobs.db", "muted")
-        caption_row.addWidget(self.storage_label)
-        layout.addLayout(caption_row)
-        row = QHBoxLayout()
-        self.reward_card = MetricCard("EPISODE REWARD", "synthetic evaluation / mean")
-        self.loss_card = MetricCard("TRAINING LOSS", "total loss across minibatches")
-        self.steps_card = MetricCard("TIMESTEPS", "configured training budget")
-        for card in (self.reward_card, self.loss_card, self.steps_card):
-            row.addWidget(card)
-        layout.addLayout(row)
-        self.progress = QProgressBar()
-        self.progress.setTextVisible(False)
-        self.progress.setFixedHeight(5)
-        layout.addWidget(self.progress)
-        self.reward_chart = Chart("reward", "Episode reward  ·  mean ± 1 std over evaluation episodes",
-                                  band="reward_std")
-        self.second_metric = "loss"
-        self.loss_chart = Chart(self.second_metric, SECOND_METRICS[self.second_metric][1], zero_based=False)
-        self.metric_select = QComboBox()
-        self.metric_select.setToolTip("Metric shown in this chart and the second card")
-        self.metric_select.currentIndexChanged.connect(self.second_metric_changed)
-        self.loss_chart.set_corner_widget(self.metric_select)
-        layout.addWidget(self.reward_chart, 3)
-        layout.addWidget(self.loss_chart, 2)
-        self.monitor_note = label("", "muted")
-        self.monitor_note.setWordWrap(True)
-        monitor_footer = QHBoxLayout()
-        monitor_footer.addWidget(self.monitor_note, 1)
-        monitor_footer.addWidget(self.button("Open TensorBoard", self.show_tensorboard))
-        layout.addLayout(monitor_footer)
-        self.monitor_panel = monitor
+        self.monitor = MonitorPanel(self)
+        for name in MonitorPanel.EXPOSED:  # existing code and tests reach these through the window
+            setattr(self, name, getattr(self.monitor, name))
+        self.monitor_panel = self.monitor
         self.tabs.addTab(self.monitor_panel, "Training monitor", "monitor", "Monitor", tab_id="monitor")
 
         # 4. Results Browser Panel
@@ -484,7 +361,14 @@ class Window(QMainWindow):
         actions.addWidget(self.button("View plot", self.view_selected_plot))
         actions.addStretch()
         results_layout.addLayout(actions)
-        self.results_panel = results
+        # Results: every metric of the ticked runs (ResultsPanel), plus the run table it is replacing,
+        # kept as a second tab until its Load config / Compare / View plot actions move over.
+        self.results_view = ResultsPanel(self.backend, self.settings_manager, load_config=self.load_results_config)
+        self.results_tabs = QTabWidget()
+        self.results_tabs.setDocumentMode(True)
+        self.results_tabs.addTab(self.results_view, "Curves")
+        self.results_tabs.addTab(results, "Run list")
+        self.results_panel = self.results_tabs
         self.tabs.addTab(self.results_panel, "Results browser", "results", "Results", tab_id="results")
 
         # 5. Plot Viewer
@@ -1319,6 +1203,8 @@ class Window(QMainWindow):
             self.request_disk_runs()  # list runs on disk, including ones started outside the app
         elif was_connected != connected:
             self.update_disk_status()
+        if not connected and hasattr(self, "results_view"):
+            self.results_view.set_offline()
         if connected:
             self.backend_label.setText(f"BACKEND   ●   {self.backend.base_url}  ")
             self.backend_label.setToolTip("Configs are composed and validated by the Theta-IDE backend API.")
@@ -1548,7 +1434,7 @@ class Window(QMainWindow):
         # Live hardware telemetry badge
         hw = data.get("hardware", {})
         if hw and hw.get("cpu_percent") is not None:
-            self.monitor_note.setText(f"System: CPU {hw['cpu_percent']:.1f}%  •  Process RAM {hw.get('memory_mb', 0):.0f} MB")
+            self.monitor.show_hardware(hw)
 
         if job.get("status") in FINAL_STATUSES:
             detail = f" (exit code {job.get('returncode')})" if job.get("returncode") not in (None, 0) else ""
@@ -1764,82 +1650,29 @@ class Window(QMainWindow):
 
     def select_run(self, run):
         self.selected = run
-        if hasattr(self, "run_combo"):
-            self.run_combo.blockSignals(True)
-            for idx in range(self.run_combo.count()):
-                if self.run_combo.itemData(idx) == run["id"]:
-                    self.run_combo.setCurrentIndex(idx)
-                    break
-            self.run_combo.blockSignals(False)
-        if hasattr(self, "btn_prev_run") and hasattr(self, "btn_next_run") and hasattr(self, "run_combo"):
-            idx = self.run_combo.currentIndex()
-            self.btn_prev_run.setEnabled(idx > 0)
-            self.btn_next_run.setEnabled(idx >= 0 and idx < self.run_combo.count() - 1)
+        if hasattr(self, "monitor"):
+            self.monitor.show_selected(run)
         self.render_run()
         self.backfill_metrics(run)
         self.load_disk_metrics(run)
 
-    def on_smoothing_changed(self, value):
-        self.smoothing_label.setText(f"Smoothing: {value}%")
-        factor = value / 100.0
-        self.reward_chart.set_smoothing(factor)
-        self.loss_chart.set_smoothing(factor)
+    # ── Training monitor (widgets and drawing live in MonitorPanel) ──────────
 
-    def on_run_combo_changed(self, index):
-        if index < 0:
-            return
-        run_id = self.run_combo.itemData(index)
-        if not run_id:
-            return
-        target_run = self.by_id(run_id)
-        if target_run and target_run != self.selected:
-            self.select_run(target_run)
+    def render_run(self):
+        if hasattr(self, "monitor"):
+            self.monitor.render()
 
     def select_prev_run(self):
-        if not hasattr(self, "run_combo"):
-            return
-        idx = self.run_combo.currentIndex()
-        if idx > 0:
-            self.run_combo.setCurrentIndex(idx - 1)
+        self.monitor.select_prev_run()
 
     def select_next_run(self):
-        if not hasattr(self, "run_combo"):
-            return
-        idx = self.run_combo.currentIndex()
-        if idx < self.run_combo.count() - 1:
-            self.run_combo.setCurrentIndex(idx + 1)
+        self.monitor.select_next_run()
 
     def jump_to_live_run(self):
-        if self.active:
-            self.select_run(self.active)
+        self.monitor.jump_to_live_run()
 
     def toggle_pin_baseline(self):
-        if not self.selected:
-            return
-        if self.pinned_baseline_run is self.selected:
-            self.pinned_baseline_run = None
-        else:
-            self.pinned_baseline_run = self.selected
-        self.render_run()
-
-    def sync_metric_select(self, run):
-        """Offer the second-chart metrics this run has; keep the user's choice when available."""
-        available = [key for key in SECOND_METRICS if key in available_metrics(run)] or ["loss"]
-        chosen = self.second_metric if self.second_metric in available else available[0]
-        self.metric_select.blockSignals(True)
-        self.metric_select.clear()
-        for key in available:
-            self.metric_select.addItem(SECOND_METRICS[key][1], key)
-        self.metric_select.setCurrentIndex(available.index(chosen))
-        self.metric_select.blockSignals(False)
-        self.loss_chart.position_corner()
-        return chosen
-
-    def second_metric_changed(self, index):
-        key = self.metric_select.itemData(index)
-        if key:
-            self.second_metric = key
-            self.render_run()
+        self.monitor.toggle_pin_baseline()
 
     def backfill_metrics(self, run):
         """Fetch the full metrics of a finished trained run recorded before all metrics were kept."""
@@ -1862,126 +1695,6 @@ class Window(QMainWindow):
             self.persist(run)
             if self.selected is run:
                 self.render_run()
-
-    def render_run(self):
-        run = self.selected
-        if not run:
-            return
-        config = run["config"]
-        metrics = run["metrics"]
-        live = not run["simulated"]
-        title = run["backend"]["experiment_id"] if live else config["name"]
-        if run.get("origin") == "cli":  # found in results/logs: no app job, and any environment or method
-            source = "COMMAND LINE"
-            setup = f"{config['env']}  /  {' + '.join(run['backend'].get('agents') or ['?']).upper()}"
-        else:
-            source = f"LIVE · job {run['backend']['job_id'][:8]}" if live else "SIMULATED"
-            setup = "CartPole-v1  /  PPO"
-        self.run_title.setText(title)
-        self.run_caption.setText(f"{setup}  /  seed {config['seed']}   •   {run['status'].upper()}   •   {source}")
-        if hasattr(self, "storage_label"):
-            if live:
-                where = f"results/logs/{run['backend']['group']}/{run['backend']['experiment_id']}/"
-                self.storage_label.setText(f"{where}  ·  results/jobs/jobs.db")
-            else:
-                self.storage_label.setText("Simulated demo run (in-memory)  ·  results/jobs/jobs.db")
-
-        # Update Live Jump button
-        if hasattr(self, "btn_live_jump"):
-            if self.active and self.selected != self.active:
-                live_id = self.active["backend"]["experiment_id"] if not self.active["simulated"] else self.active["config"]["name"]
-                chip_text = f"Jump to live ({live_id[:14]}…)" if len(live_id) > 14 else f"Jump to live ({live_id})"
-                self.btn_live_jump.setText(chip_text)
-                self.btn_live_jump.show()
-            else:
-                self.btn_live_jump.hide()
-
-        # Update Pin Baseline button
-        if hasattr(self, "btn_pin_baseline"):
-            if self.pinned_baseline_run is None:
-                self.btn_pin_baseline.setChecked(False)
-                self.btn_pin_baseline.setText("Pin as baseline")
-                self.btn_pin_baseline.setToolTip("Pin this run's curve to overlay as a dashed baseline when inspecting other runs")
-            elif self.pinned_baseline_run is run:
-                self.btn_pin_baseline.setChecked(True)
-                self.btn_pin_baseline.setText("Pinned baseline")
-                self.btn_pin_baseline.setToolTip("This run is currently pinned as the baseline. Click to unpin.")
-            else:
-                self.btn_pin_baseline.setChecked(False)
-                p_name = self.pinned_baseline_run["backend"]["experiment_id"] if not self.pinned_baseline_run["simulated"] else self.pinned_baseline_run["config"]["name"]
-                label_name = (p_name[:12] + "…") if len(p_name) > 12 else p_name
-                self.btn_pin_baseline.setText(f"Replace baseline ({label_name})")
-                self.btn_pin_baseline.setToolTip(f"Baseline '{p_name}' is pinned. Click to replace it with this run.")
-
-        # Update Prev/Next button states
-        if hasattr(self, "btn_prev_run") and hasattr(self, "btn_next_run") and hasattr(self, "run_combo"):
-            idx = self.run_combo.currentIndex()
-            self.btn_prev_run.setEnabled(idx > 0)
-            self.btn_next_run.setEnabled(idx >= 0 and idx < self.run_combo.count() - 1)
-
-        reward = latest(run, "reward")
-        second = self.sync_metric_select(run)
-        card_title, chart_title, subtitle, fmt = SECOND_METRICS[second]
-        second_value = latest(run, second)
-        step = max((m["step"] for m in metrics), default=0)
-        requested = config["total_timesteps"]
-        # PPO trains whole rollouts, so the real budget can exceed the requested one (10,000 -> 10,240).
-        # Records from before the backend reported it fall back to the steps actually run.
-        budget = (run["backend"].get("effective_timesteps") or max(step, requested)) if live else requested
-        self.reward_card.value.setText("—" if reward is None else f"{reward:.1f}")
-        self.loss_card.title.setText(card_title)
-        self.loss_card.value.setText("—" if second_value is None else format(second_value, fmt))
-        self.loss_card.subtitle.setText(subtitle if live else "synthetic training loss")
-        self.steps_card.value.setText(f"{step:,}")
-        self.progress.setValue(min(100, round(100 * step / max(1, budget))))
-        if live:
-            self.reward_card.subtitle.setText("evaluation / mean episode reward")
-            rounding = f"\n{requested:,} requested, rounded up to whole PPO rollouts" if budget != requested else ""
-            self.steps_card.subtitle.setText(f"of {budget:,} environment steps{rounding}")
-            where = f"results/logs/{run['backend']['group']}/{run['backend']['experiment_id']}/"
-            if run["status"] == "queued":
-                position = run.get("queue_position")
-                ahead = f"position {position + 1}" if position is not None else "waiting"
-                note = (f"In the job queue ({ahead}). Queued experiments train one at a time; "
-                        "this view follows it when it starts.")
-                if not self.queue_running:
-                    note += " The queue is paused: press Start queue in the Queue tab."
-            elif run["status"] == "starting" or (run["status"] == "running" and not metrics):
-                note = "Starting the pipeline — the first evaluation usually appears after about 15 seconds."
-            elif run["status"] == "running" and run.get("phase") == "plotting":
-                note = f"Training finished — the pipeline is generating plots in results/plots/{run['backend']['group']}/…"
-            elif run["status"] == "incomplete":
-                note = (f"Metrics from {where} · this run was started outside the app and has no recorded end "
-                        "time: it may still be training, or it stopped early.")
-            elif run["status"] in FINAL_STATUSES:
-                note = f"Final metrics from {where}"
-                if run["status"] == "completed":
-                    note += f" · plots in results/plots/{run['backend']['group']}/{run['backend']['experiment_id']}/"
-            else:
-                note = f"Live metrics from {where} · updated every second while training."
-            self.monitor_note.setText(f"●  {note}")
-        else:
-            self.reward_card.subtitle.setText("synthetic evaluation / mean")
-            self.steps_card.subtitle.setText("configured training budget")
-            self.monitor_note.setText("●  Selected run     •     Synthetic metrics / frontend demonstration")
-        xmax = budget if live else None
-        has_spread = any(m.get("reward_std") is not None for m in metrics)
-        self.reward_chart.set_metric("reward", "Episode reward  ·  mean ± 1 std over evaluation episodes"
-                                     if has_spread else "Episode reward")
-        self.reward_chart.set_series([(title, metrics, "#b8bb26")], xmax, ENV_MAX_REWARD.get(config["env"]))
-        self.loss_chart.set_metric(second, chart_title)
-        self.loss_chart.set_series([(title, metrics, "#83a598")], xmax)
-
-        # Baseline overlay
-        if self.pinned_baseline_run and self.pinned_baseline_run is not run:
-            b_metrics = self.pinned_baseline_run["metrics"]
-            b_name = self.pinned_baseline_run["backend"]["experiment_id"] if not self.pinned_baseline_run["simulated"] else self.pinned_baseline_run["config"]["name"]
-            b_title = f"{b_name} (baseline)"
-            self.reward_chart.set_baseline_series([(b_title, b_metrics, "#d3869b")])
-            self.loss_chart.set_baseline_series([(b_title, b_metrics, "#d3869b")])
-        else:
-            self.reward_chart.set_baseline_series([])
-            self.loss_chart.set_baseline_series([])
 
     def refresh_runs(self, *_):
         self.plot_viewer.update_runs(self.runs)
@@ -2024,42 +1737,15 @@ class Window(QMainWindow):
         self.table.blockSignals(False)
         self.update_disk_status()
 
-        # Sync run_combo dropdown in Monitor
-        if hasattr(self, "run_combo"):
-            self.run_combo.blockSignals(True)
-            self.run_combo.clear()
-            for run in self.runs:
-                config = run["config"]
-                name = config["name"] if run["simulated"] else run["backend"]["experiment_id"]
-                status = run.get("status", "")
-                if status in LIVE_STATUSES:
-                    icon = "● "
-                elif status == "completed":
-                    icon = "✓ "
-                elif status in ("failed", "interrupted", "stopped"):
-                    icon = "✗ "
-                else:
-                    icon = "○ "
-                last_reward = latest(run, "reward")
-                rew_str = f"  ·  {last_reward:.1f} rew" if last_reward is not None else ""
-                seed_str = f" (seed {config['seed']})"
-                self.run_combo.addItem(f"{icon}{name}{seed_str}{rew_str}", run["id"])
-
-            if self.selected:
-                for idx in range(self.run_combo.count()):
-                    if self.run_combo.itemData(idx) == self.selected["id"]:
-                        self.run_combo.setCurrentIndex(idx)
-                        break
-            self.run_combo.blockSignals(False)
-
-        if hasattr(self, "btn_prev_run") and hasattr(self, "btn_next_run") and hasattr(self, "run_combo"):
-            idx = self.run_combo.currentIndex()
-            self.btn_prev_run.setEnabled(idx > 0)
-            self.btn_next_run.setEnabled(idx >= 0 and idx < self.run_combo.count() - 1)
+        # Sync the Monitor's run selector
+        if hasattr(self, "monitor"):
+            self.monitor.set_runs(self.runs, self.selected)
 
     def request_disk_runs(self):
         """Ask the backend for every results/logs folder (GET /api/runs)."""
         self.backend.get("/api/runs", self.disk_runs_received)
+        if hasattr(self, "results_view"):
+            self.results_view.refresh()
 
     def disk_runs_received(self, data, error):
         if error:
@@ -2149,7 +1835,7 @@ class Window(QMainWindow):
                 for i, r in enumerate(runs[:5]):
                     name = f"{r['config'].get('name', r['id'])} (seed {r['config'].get('seed', 0)})"
                     series.append((name, r.get("metrics", []), palette[i % len(palette)]))
-                self.reward_chart.set_series(series)
+                self.monitor.show_comparison(series)
                 self.selected = runs[0]
 
     def load_selected_config(self):
@@ -2158,13 +1844,29 @@ class Window(QMainWindow):
             self.statusBar().showMessage("Select exactly one run to load its saved config.", 5000)
             return
         run = self.by_id(self.table.item(rows[0].row(), 0).data(Qt.ItemDataRole.UserRole))
+        problem = self.load_run_config(run)
+        if problem:
+            self.statusBar().showMessage(problem, 8000)
+
+    def load_run_config(self, run):
+        """Put a run record's builder config into the experiment builder; return why not, or None."""
         if run.get("origin") == "cli" and not run.get("builder_compatible"):
-            self.statusBar().showMessage("The experiment builder only edits single-method CartPole/PPO runs; "
-                                         "this run's config is in its results/logs folder.", 8000)
-            return
+            return ("The experiment builder only edits single-method CartPole/PPO runs; "
+                    "this run's config is in its results/logs folder.")
         self.set_config(Config(**run["config"]))
         self.tabs.setCurrentWidget(self.config_panel)
         self.log(f"Loaded exact configuration from {run['id']}. Launch to create a new run.")
+        return None
+
+    def load_results_config(self, run_key):
+        """The Results panel's Load in experiment builder: find the run record for a results/logs folder."""
+        group, experiment_id = run_key.split("/", 1)
+        run = next((r for r in self.runs if not r["simulated"] and r["backend"].get("group") == group
+                    and r["backend"].get("experiment_id") == experiment_id), None)
+        if run is None:
+            return ("No builder config is saved for this run (only runs Theta-IDE launched or listed have one). "
+                    "Its full saved config is in the Config tab.")
+        return self.load_run_config(run)
 
     def compare(self):
         rows = self.table.selectionModel().selectedRows()

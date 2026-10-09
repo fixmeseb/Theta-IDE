@@ -18,6 +18,25 @@ class Backend(QObject):
     def get(self, path, callback):
         self._track(self.manager.get(self._request(path)), callback)
 
+    def get_bytes(self, path, callback):
+        """GET a file as raw bytes: callback(bytes | None, error | None)."""
+        reply = self.manager.get(self._request(path))
+        reply.finished.connect(lambda: self._bytes_finished(reply, callback))
+
+    def _bytes_finished(self, reply, callback):
+        body = bytes(reply.readAll())
+        error = None
+        if reply.error() != QNetworkReply.NetworkError.NoError:
+            error = reply.errorString()
+            status = reply.attribute(QNetworkRequest.Attribute.HttpStatusCodeAttribute)
+            if status is not None:
+                try:
+                    error = f"HTTP {status}: {json.loads(body)['detail']}"
+                except (ValueError, KeyError, TypeError):
+                    pass
+        reply.deleteLater()
+        callback(None if error else body, error)
+
     def post(self, path, payload, callback):
         body = QByteArray(json.dumps(payload).encode("utf-8"))
         self._track(self.manager.post(self._request(path), body), callback)

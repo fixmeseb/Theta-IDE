@@ -144,3 +144,75 @@ def test_newest_version_is_chosen_by_number(client, tmp_path, monkeypatch):
     assert data["agents"][0]["best_reward"] == 99.0  # version_10, not version_9
     metrics = client.get("/api/runs/g/multi/ppo/metrics").json()
     assert metrics["source"].replace("\\", "/").endswith("version_10/metrics.csv")
+
+
+def test_metrics_returns_every_column_and_supports_versions_and_since(client, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _write_run(tmp_path, "g", "multi", versions={0: ([1.0, 2.0], True), 1: ([5.0, 6.0, 7.0], True)})
+    newest = client.get("/api/runs/g/multi/ppo/metrics").json()
+    assert newest["version"] == "version_1" and newest["versions"] == ["version_0", "version_1"]
+    assert newest["columns"] == ["epoch", "eval/reward", "transitions"] and newest["total_rows"] == 6
+    older = client.get("/api/runs/g/multi/ppo/metrics", params={"version": "0"}).json()
+    assert older["version"] == "version_0" and older["total_rows"] == 4
+    # `since` returns only rows after the ones the caller already has.
+    tail = client.get("/api/runs/g/multi/ppo/metrics", params={"since": 4}).json()
+    assert len(tail["metrics"]) == 2 and tail["metrics"][0]["eval/reward"] == "7.0"
+    assert client.get("/api/runs/g/multi/ppo/metrics", params={"version": "9"}).status_code == 404
+
+
+def _write_artifacts(root):
+    run = _write_run(root, "g", "exp")
+    plots = root / "results" / "plots" / "g" / "exp"
+    (plots / "losses" / "ppo").mkdir(parents=True)
+    (plots / "losses" / "ppo" / "losses_value_loss.png").write_bytes(b"\x89PNG fake")
+    (plots / "time_report.csv").write_bytes(b"Method,Avg\nppo,1.0\n")
+    (plots / "hyperparameters_report.md").write_text("# Report\n", encoding="utf-8")
+    ckpt = root / "results" / "checkpoints" / "g" / "exp" / "ppo" / "0"
+    ckpt.mkdir(parents=True)
+    (ckpt / "best_model.ckpt").write_bytes(b"weights")
+    tb = root / "results" / "tensorboard" / "g" / "exp" / "ppo" / "version_0"
+    tb.mkdir(parents=True)
+    (tb / "events.out.tfevents.1.host.0").write_bytes(b"tb")
+    # Another run's file, which this run's file endpoint must refuse.
+    other = root / "results" / "plots" / "g" / "other"
+    other.mkdir(parents=True)
+    (other / "secret.csv").write_text("x\n1\n", encoding="utf-8")
+    return run
+
+
+def test_manifest_lists_every_artifact_of_a_run(client, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _write_artifacts(tmp_path)
+    data = client.get("/api/runs/g/exp/manifest").json()
+    kinds = {a["path"]: a["kind"] for a in data["artifacts"]}
+    assert kinds == {
+        "logs/g/exp/config.yaml": "config",
+        "logs/g/exp/ppo/version_0/metrics.csv": "metrics",
+        "logs/g/exp/ppo/version_0/runtime.json": "metadata",
+        "plots/g/exp/hyperparameters_report.md": "report",
+        "plots/g/exp/losses/ppo/losses_value_loss.png": "figure",  # nested plots are found too
+        "plots/g/exp/time_report.csv": "table",
+        "checkpoints/g/exp/ppo/0/best_model.ckpt": "checkpoint",
+        "tensorboard/g/exp/ppo/version_0/events.out.tfevents.1.host.0": "tensorboard",
+    }
+    assert data["agents"] == {"ppo": ["version_0"]} and data["truncated"] is False
+    metrics = next(a for a in data["artifacts"] if a["kind"] == "metrics")
+    assert (metrics["root"], metrics["agent"], metrics["version"]) == ("logs", "ppo", "version_0")
+    assert metrics["size"] > 0 and metrics["modified"] > 0
+    assert client.get("/api/runs/g/missing/manifest").status_code == 404
+
+
+def test_run_files_are_served_only_from_that_run(client, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    _write_artifacts(tmp_path)
+    ok = client.get("/api/runs/g/exp/files/plots/g/exp/time_report.csv")
+    assert ok.status_code == 200 and ok.content == b"Method,Avg\nppo,1.0\n"
+    assert client.get("/api/runs/g/exp/files/plots/g/exp/nope.csv").status_code == 404
+    # Another run's file, a path climbing out of results/, and bad segments are all refused.
+    assert client.get("/api/runs/g/exp/files/plots/g/other/secret.csv").status_code == 403
+    assert client.get("/api/runs/g/exp/files/plots/g/exp/..%2F..%2F..%2F..%2Fsecret.txt").status_code in (403, 404)
+    (tmp_path / "secret.txt").write_text("top secret", encoding="utf-8")
+    escaped = client.get("/api/runs/g/exp/files/logs/g/exp/../../../../secret.txt")
+    assert escaped.status_code in (403, 404) and "top secret" not in escaped.text
+    assert client.get("/api/runs/g/exp/files/" + str(tmp_path / "secret.txt")).status_code in (403, 404)
+    assert client.get("/api/runs/g/..%5Cexp/manifest").status_code in (400, 404)

@@ -18,7 +18,8 @@ venv/
 /prompt_notes_sonnet5.md
 
 # Large Data & Logs
-results/
+# Anchored to the repository root: an unanchored "results/" also hid frontend/results/ (source code).
+/results/
 out/
 logs/
 plots/

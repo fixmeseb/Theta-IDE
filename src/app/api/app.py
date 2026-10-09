@@ -114,6 +114,7 @@ def list_experiments():
 
 def _latest_version_file(agent_dir: Path, name: str) -> Path | None:
     """`name` inside the newest version_N folder of an agent's log directory (by N, so version_10 > version_9)."""
+
     def number(path: Path) -> int:
         suffix = path.parent.name.removeprefix("version_")
         return int(suffix) if suffix.isdigit() else -1
@@ -184,8 +185,11 @@ def _run_config_summary(run_dir: Path) -> dict[str, Any]:
         "seed": cfg.get("seed"),
         "total_timesteps": cfg.get("total_timesteps"),
         "paradigm": cfg.get("paradigm"),
-        "methods": {name: {key: settings.get(key) for key in ("agent", "model", "lr", "batch_size", "gamma")}
-                    for name, settings in methods.items() if isinstance(settings, dict)},
+        "methods": {
+            name: {key: settings.get(key) for key in ("agent", "model", "lr", "batch_size", "gamma")}
+            for name, settings in methods.items()
+            if isinstance(settings, dict)
+        },
     }
 
 
@@ -209,8 +213,11 @@ def list_runs():
                             metadata = json.load(f)
                     except Exception:
                         pass
-                agents = [summary for agent_dir in sorted(p for p in run_dir.iterdir() if p.is_dir())
-                          if (summary := _agent_summary(agent_dir)) is not None]
+                agents = [
+                    summary
+                    for agent_dir in sorted(p for p in run_dir.iterdir() if p.is_dir())
+                    if (summary := _agent_summary(agent_dir)) is not None
+                ]
                 runs.append(
                     {
                         "group": run_dir.parent.name,
@@ -224,22 +231,169 @@ def list_runs():
     return {"runs": runs}
 
 
+def _version_number(name: str) -> int:
+    suffix = name.removeprefix("version_")
+    return int(suffix) if suffix.isdigit() else -1
+
+
 @app.get("/api/runs/{group}/{experiment_id}/{agent}/metrics")
-def get_metrics(group: str, experiment_id: str, agent: str):
-    # Metrics live in version_N subdirectories; use the newest.
-    metrics_file = _latest_version_file(Path(f"results/logs/{group}/{experiment_id}/{agent}"), "metrics.csv")
+def get_metrics(group: str, experiment_id: str, agent: str, version: str | None = None, since: int = 0):
+    """Every row of an agent's metrics.csv, with every column the engine logged.
+
+    `version` picks a version_N folder (default: the newest). `since` skips rows the caller
+    already has, so a client following a run that is still training fetches only new rows;
+    `total_rows` tells it where to resume.
+    """
+    for part in (group, experiment_id, agent):
+        _check_path_segment(part)
+    agent_dir = Path(f"results/logs/{group}/{experiment_id}/{agent}")
+    versions = sorted(
+        (p.name for p in agent_dir.glob("version_*") if (p / "metrics.csv").is_file()), key=_version_number
+    )
+    if version is None:
+        metrics_file = _latest_version_file(agent_dir, "metrics.csv")
+    else:
+        name = version if version.startswith("version_") else f"version_{version}"
+        _check_path_segment(name)
+        metrics_file = agent_dir / name / "metrics.csv"
     if not metrics_file or not metrics_file.exists():
         raise HTTPException(status_code=404, detail="Metrics not found")
 
-    metrics = []
     try:
-        with open(metrics_file) as f:
+        with open(metrics_file, encoding="utf-8", newline="") as f:
             reader = csv.DictReader(f)
-            for row in reader:
-                metrics.append(row)
-    except Exception as e:
+            rows = list(reader)
+            columns = list(reader.fieldnames or [])
+    except (OSError, csv.Error) as e:
         raise HTTPException(status_code=500, detail=str(e))
-    return {"metrics": metrics, "source": str(metrics_file)}
+    return {
+        "metrics": rows[max(since, 0) :],
+        "columns": columns,
+        "total_rows": len(rows),
+        "version": metrics_file.parent.name,
+        "versions": versions,
+        "source": str(metrics_file),
+    }
+
+
+# ── Run manifest: every artifact a run produced ───────────────────────────────
+
+# Top-level folders of results/ that hold per-run output as <root>/<group>/<experiment_id>/...
+RESULT_ROOTS = ("logs", "plots", "checkpoints", "tensorboard", "datasets")
+MANIFEST_LIMIT = 5000
+
+_KIND_BY_SUFFIX = {
+    ".csv": "table",
+    ".tsv": "table",
+    ".png": "figure",
+    ".jpg": "figure",
+    ".jpeg": "figure",
+    ".svg": "figure",
+    ".pdf": "figure",
+    ".md": "report",
+    ".txt": "report",
+    ".html": "report",
+    ".yaml": "config",
+    ".yml": "config",
+    ".json": "metadata",
+    ".ckpt": "checkpoint",
+    ".pt": "checkpoint",
+    ".pth": "checkpoint",
+    ".zip": "checkpoint",
+    ".npz": "cache",
+    ".npy": "cache",
+    ".pkl": "cache",
+    ".parquet": "cache",
+    ".log": "log",
+}
+
+
+def _check_path_segment(part: str) -> None:
+    """Reject URL path parts that could step outside results/ (e.g. '..' or an encoded slash)."""
+    if not part or part in (".", "..") or any(c in part for c in "/\\\x00") or ":" in part:
+        raise HTTPException(status_code=400, detail=f"Invalid path segment: {part!r}")
+
+
+def _artifact_kind(root: str, path: Path) -> str:
+    if root == "logs" and path.name == "metrics.csv":
+        return "metrics"
+    if root == "tensorboard" and path.name.startswith("events.out.tfevents"):
+        return "tensorboard"
+    return _KIND_BY_SUFFIX.get(path.suffix.lower(), "other")
+
+
+def _run_dirs(group: str, experiment_id: str) -> dict[str, Path]:
+    """The existing results/<root>/<group>/<experiment_id> folders of one run, by root."""
+    _check_path_segment(group)
+    _check_path_segment(experiment_id)
+    dirs = {root: Path("results") / root / group / experiment_id for root in RESULT_ROOTS}
+    return {root: path for root, path in dirs.items() if path.is_dir()}
+
+
+@app.get("/api/runs/{group}/{experiment_id}/manifest")
+def get_manifest(group: str, experiment_id: str):
+    """Every file a run produced across results/{logs,plots,checkpoints,tensorboard,datasets}.
+
+    Each artifact has a `path` relative to results/ (fetch it from .../files/{path}), a `kind`
+    (metrics, table, figure, report, config, metadata, checkpoint, cache, tensorboard, log,
+    other), and the `agent` and `version` folders it sits under, when it has them.
+    `agents` maps each agent with logged metrics to its version folders, oldest first.
+    """
+    dirs = _run_dirs(group, experiment_id)
+    if not dirs:
+        raise HTTPException(status_code=404, detail="Run not found")
+    artifacts: list[dict[str, Any]] = []
+    truncated = False
+    for root, run_dir in dirs.items():
+        for path in sorted(run_dir.rglob("*")):
+            if not path.is_file():
+                continue
+            if len(artifacts) >= MANIFEST_LIMIT:
+                truncated = True
+                break
+            parts = path.relative_to(run_dir).parts
+            agent = parts[0] if len(parts) > 1 else None
+            version = next((p for p in parts[1:-1] if p.startswith("version_")), None)
+            stat = path.stat()
+            artifacts.append(
+                {
+                    "path": path.relative_to("results").as_posix(),
+                    "root": root,
+                    "kind": _artifact_kind(root, path),
+                    "agent": agent,
+                    "version": version,
+                    "size": stat.st_size,
+                    "modified": stat.st_mtime,
+                }
+            )
+    agents: dict[str, list[str]] = {}
+    for item in artifacts:
+        if item["kind"] == "metrics" and item["agent"] and item["version"]:
+            agents.setdefault(item["agent"], []).append(item["version"])
+    return {
+        "group": group,
+        "experiment_id": experiment_id,
+        "agents": {name: sorted(versions, key=_version_number) for name, versions in sorted(agents.items())},
+        "artifacts": artifacts,
+        "truncated": truncated,
+    }
+
+
+@app.get("/api/runs/{group}/{experiment_id}/files/{path:path}")
+def get_run_file(group: str, experiment_id: str, path: str):
+    """One artifact of a run, by the `path` its manifest lists (relative to results/).
+
+    Only files inside this run's own results/<root>/<group>/<experiment_id> folders are served.
+    """
+    dirs = _run_dirs(group, experiment_id)
+    results_dir = Path("results").resolve()
+    target = (results_dir / path).resolve()
+    allowed = [d.resolve() for d in dirs.values()]
+    if not any(target.is_relative_to(d) for d in allowed):
+        raise HTTPException(status_code=403, detail="Path is outside this run's results")
+    if not target.is_file():
+        raise HTTPException(status_code=404, detail="File not found")
+    return FileResponse(target)
 
 
 @app.get("/api/runs/{group}/{experiment_id}/plots")
