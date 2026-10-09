@@ -4,7 +4,7 @@ from pathlib import Path
 
 import yaml
 from PyQt6.QtCore import QSize, Qt, pyqtSignal
-from PyQt6.QtGui import QIcon
+from PyQt6.QtGui import QBrush, QColor, QIcon
 from PyQt6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -39,9 +39,12 @@ from .widgets import label
 TOOL_ICON_COLORS = {
     (QIcon.Mode.Normal, QIcon.State.Off): "text",
     (QIcon.Mode.Active, QIcon.State.Off): "accent",
+    (QIcon.Mode.Selected, QIcon.State.Off): "accent",
     (QIcon.Mode.Disabled, QIcon.State.Off): "disabled",
     (QIcon.Mode.Normal, QIcon.State.On): "accent",
     (QIcon.Mode.Active, QIcon.State.On): "accent",
+    (QIcon.Mode.Selected, QIcon.State.On): "accent",
+    (QIcon.Mode.Disabled, QIcon.State.On): "disabled",
 }
 
 TREE_GEAR_COLORS = {
@@ -220,12 +223,14 @@ class ConfigTreeWidget(QWidget):
     file_selected = pyqtSignal(object, str)  # (Path, rel_path)
     duplicate_requested = pyqtSignal(str)     # (rel_path)
     new_in_group_requested = pyqtSignal()
+    save_requested = pyqtSignal()
 
     def __init__(self, root_dir=None, parent=None, mode="all"):
         super().__init__(parent)
         self.root_dir = Path(root_dir) if root_dir else find_config_root()
         self.mode = mode  # "all", "experiments", "components"
         self.current_rel_path = None
+        self._dirty_paths = set()
         self._init_ui()
         self.populate()
 
@@ -283,6 +288,56 @@ class ConfigTreeWidget(QWidget):
         self.btn_duplicate.clicked.connect(self.prompt_duplicate)
         header.addWidget(self.btn_duplicate)
 
+        self.btn_save = None
+
+        if self.mode == "components":
+            self.btn_hub = self._tool_button("hub", "Component Hub")
+            self.btn_hub.setCheckable(True)
+            self.btn_hub.setChecked(False)
+            self.btn_hub.setToolTip("Browse and install new RL methods, models, and environments from the Community Hub")
+            header.addWidget(self.btn_hub)
+
+            self.btn_toggle_raw = self._tool_button("raw_yaml", "View Raw YAML")
+            self.btn_toggle_raw.setCheckable(True)
+            self.btn_toggle_raw.setChecked(False)
+            self.btn_toggle_raw.setToolTip("Toggle side-by-side view of the raw YAML file content")
+            header.addWidget(self.btn_toggle_raw)
+
+            self.btn_launch = None
+            self.btn_start = None
+            self.start_button = None
+            self.btn_export = None
+            self.btn_toggle_yaml = None
+        elif self.mode in ("experiments", "experiment"):
+            self.btn_hub = None
+            self.btn_toggle_raw = None
+
+            self.btn_launch = self._tool_button("launch", "Launch training")
+            self.btn_launch.setToolTip("Train the loaded experiment config through the backend (F5)")
+            self.btn_launch.setEnabled(False)
+            self.btn_start = self.btn_launch
+            self.start_button = self.btn_launch
+            header.addWidget(self.btn_launch)
+
+            self.btn_export = self._tool_button("export", "Export recipe YAML…")
+            self.btn_export.setToolTip("Export recipe YAML…")
+            header.addWidget(self.btn_export)
+
+            self.btn_toggle_yaml = self._tool_button("raw_yaml", "View Hydra YAML")
+            self.btn_toggle_yaml.setCheckable(True)
+            self.btn_toggle_yaml.setChecked(False)
+            self.btn_toggle_yaml.setToolTip("Toggle preview of the resolved Hydra YAML configuration")
+            header.addWidget(self.btn_toggle_yaml)
+        else:
+            self.btn_hub = None
+            self.btn_toggle_raw = None
+            self.btn_launch = None
+            self.btn_start = None
+            self.start_button = None
+            self.btn_export = None
+            self.btn_toggle_yaml = None
+
+        self.header_layout = header
         layout.addLayout(header)
 
         # Search filter (hidden by default, toggled via magnifying glass button)
@@ -308,15 +363,7 @@ class ConfigTreeWidget(QWidget):
         self.tree.customContextMenuRequested.connect(self._show_context_menu)
         layout.addWidget(self.tree, 1)
 
-        # Status footer
-        if self.mode in ("experiments", "experiment"):
-            footer_text = f"●  in/config/experiment/ ({self.root_dir.name})"
-        elif self.mode == "components":
-            footer_text = f"●  in/config/ [components] ({self.root_dir.name})"
-        else:
-            footer_text = f"●  in/config/ ({self.root_dir.name})"
-        self.footer = label(footer_text, "muted")
-        layout.addWidget(self.footer)
+        self.footer = None
 
     def get_expanded_paths(self) -> set[str]:
         """Return the set of relative directory paths that are currently expanded."""
@@ -491,7 +538,9 @@ class ConfigTreeWidget(QWidget):
             "rel_path": rel_path,
             "is_experiment": is_exp,
             "is_base": is_base,
+            "base_name": display_name,
         })
+        node.setData(0, Qt.ItemDataRole.ForegroundRole, None)
         node.setToolTip(0, rel_path)
         return node
 
@@ -545,8 +594,8 @@ class ConfigTreeWidget(QWidget):
                 return True
         return super().eventFilter(obj, event)
 
-    def select_file(self, target_rel_path: str, emit_signal: bool = True):
-        """Find and select an item by its relative path."""
+    def find_file_item(self, target_rel_path: str):
+        """Find the QTreeWidgetItem corresponding to a relative path."""
         target_norm = str(Path(target_rel_path)).replace("\\", "/")
 
         def find_item(parent):
@@ -568,7 +617,26 @@ class ConfigTreeWidget(QWidget):
                     return found
             return None
 
-        found = find_item(self.tree)
+        return find_item(self.tree)
+
+    def set_file_dirty(self, rel_path: str, is_dirty: bool = False):
+        """Keep file names clean; state is auto-saved directly to disk."""
+        if not rel_path:
+            return
+        target_norm = str(Path(rel_path)).replace("\\", "/")
+        item = self.find_file_item(target_norm)
+        if not item:
+            return
+
+        data = item.data(0, Qt.ItemDataRole.UserRole) or {}
+        base_name = data.get("base_name") or item.text(0).rstrip(" ●")
+        item.setText(0, base_name)
+        item.setData(0, Qt.ItemDataRole.ForegroundRole, None)
+        item.setToolTip(0, data.get("rel_path", rel_path))
+
+    def select_file(self, target_rel_path: str, emit_signal: bool = True):
+        """Find and select an item by its relative path."""
+        found = self.find_file_item(target_rel_path)
         if found:
             self.tree.setCurrentItem(found)
             # Ensure all parent items are expanded

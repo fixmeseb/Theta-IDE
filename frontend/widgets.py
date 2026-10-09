@@ -4,7 +4,7 @@ from PyQt6.QtCore import Qt, QRectF, QSize
 from PyQt6.QtGui import QColor, QPainter, QPainterPath, QPen, QFont, QSyntaxHighlighter, QTextCharFormat, QLinearGradient
 from PyQt6.QtWidgets import (
     QWidget, QLabel, QVBoxLayout, QFrame, QAbstractButton,
-    QComboBox, QDoubleSpinBox, QSpinBox, QTableWidgetItem,
+    QComboBox, QDoubleSpinBox, QSpinBox, QTableWidgetItem, QScrollArea,
 )
 from .theme import theme_color
 
@@ -39,6 +39,81 @@ class DoubleSpinBox(_WheelNeedsFocus, QDoubleSpinBox):
 
 class ComboBox(_WheelNeedsFocus, QComboBox):
     pass
+
+
+class SmoothScrollArea(QScrollArea):
+    """QScrollArea that respects pixelDelta for high-precision, smooth trackpad and mouse scrolling."""
+
+    def viewportEvent(self, event):
+        if event.type() == event.Type.Wheel:
+            pixel_delta = event.pixelDelta()
+            if not pixel_delta.isNull():
+                handled = False
+                if pixel_delta.y() != 0 and self.verticalScrollBar().maximum() > 0:
+                    bar = self.verticalScrollBar()
+                    bar.setValue(bar.value() - pixel_delta.y())
+                    handled = True
+                if pixel_delta.x() != 0 and self.horizontalScrollBar().maximum() > 0:
+                    hbar = self.horizontalScrollBar()
+                    hbar.setValue(hbar.value() - pixel_delta.x())
+                    handled = True
+                if handled:
+                    event.accept()
+                    return True
+            angle_delta = event.angleDelta()
+            if not angle_delta.isNull():
+                handled = False
+                if angle_delta.y() != 0 and self.verticalScrollBar().maximum() > 0:
+                    bar = self.verticalScrollBar()
+                    step = bar.singleStep() if bar.singleStep() > 0 else 20
+                    delta = int(round(angle_delta.y() / 120.0 * step * 2))
+                    bar.setValue(bar.value() - delta)
+                    handled = True
+                if angle_delta.x() != 0 and self.horizontalScrollBar().maximum() > 0:
+                    hbar = self.horizontalScrollBar()
+                    step = hbar.singleStep() if hbar.singleStep() > 0 else 20
+                    delta = int(round(angle_delta.x() / 120.0 * step * 2))
+                    hbar.setValue(hbar.value() - delta)
+                    handled = True
+                if handled:
+                    event.accept()
+                    return True
+        return super().viewportEvent(event)
+
+    def wheelEvent(self, event):
+        pixel_delta = event.pixelDelta()
+        if not pixel_delta.isNull():
+            handled = False
+            if pixel_delta.y() != 0 and self.verticalScrollBar().maximum() > 0:
+                bar = self.verticalScrollBar()
+                bar.setValue(bar.value() - pixel_delta.y())
+                handled = True
+            if pixel_delta.x() != 0 and self.horizontalScrollBar().maximum() > 0:
+                hbar = self.horizontalScrollBar()
+                hbar.setValue(hbar.value() - pixel_delta.x())
+                handled = True
+            if handled:
+                event.accept()
+                return
+        angle_delta = event.angleDelta()
+        if not angle_delta.isNull():
+            handled = False
+            if angle_delta.y() != 0 and self.verticalScrollBar().maximum() > 0:
+                bar = self.verticalScrollBar()
+                step = bar.singleStep() if bar.singleStep() > 0 else 20
+                delta = int(round(angle_delta.y() / 120.0 * step * 2))
+                bar.setValue(bar.value() - delta)
+                handled = True
+            if angle_delta.x() != 0 and self.horizontalScrollBar().maximum() > 0:
+                hbar = self.horizontalScrollBar()
+                step = hbar.singleStep() if hbar.singleStep() > 0 else 20
+                delta = int(round(angle_delta.x() / 120.0 * step * 2))
+                hbar.setValue(hbar.value() - delta)
+                handled = True
+            if handled:
+                event.accept()
+                return
+        super().wheelEvent(event)
 
 
 def label(text, kind=None, wrap=False):

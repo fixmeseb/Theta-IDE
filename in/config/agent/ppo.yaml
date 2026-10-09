@@ -1,5 +1,5 @@
 # PPO algorithm hyperparameters
-algorithm: ppo
+algorithm: PPO
 lr: 3e-4
 num_envs: 4
 num_steps: 128

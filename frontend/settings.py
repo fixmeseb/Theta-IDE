@@ -19,6 +19,7 @@ which writes the change back into the workspace ``settings.toml`` and emits
 """
 from __future__ import annotations
 
+import copy
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -48,6 +49,9 @@ _DEFAULT_TOML = """\
 #   "Catppuccin Macchiato", "Catppuccin Latte", "Paper",
 #   "Apollo", "Athena", "Ares", "Dionysus", "Poseidon"
 theme = "Catppuccin"
+
+# Display zoom factor (1.0 = 100%). Use Cmd++ / Cmd+- to resize.
+zoom = 1.0
 
 # Enable the rotating 3-D ASCII sculpture on the Settings & About panel.
 ascii_animation = true
@@ -153,6 +157,12 @@ cwd = ""
 # Put the backend venv (venv/) first on PATH, so python, pytest and run_pipeline.py
 # use the project's environment without activating it by hand.
 activate_venv = true
+
+[shortcuts]
+# Application-wide keyboard shortcuts (customizable in Settings -> Hotkeys).
+zoom_in = "Ctrl++"
+zoom_out = "Ctrl+-"
+reset_zoom = "Ctrl+0"
 """
 
 
@@ -333,6 +343,25 @@ class SettingsManager(QObject):
 
         self.changed.emit()
 
+    def persist_key(self, section: str, key: str, value: Any) -> None:
+        """Persist a single preference to disk without emitting the ``changed`` signal.
+
+        Useful for debounced settings (like live display scaling) where the UI has
+        already applied the change and re-evaluating the full settings cascade is unnecessary.
+        """
+        node = self._data.setdefault(section, {})
+        node[key] = value
+
+        on_disk = _parse_toml_file(self._workspace_path)
+        disk_node = on_disk.setdefault(section, {})
+        if disk_node.get(key) != value:
+            disk_node[key] = value
+            self._watcher.removePath(str(self._workspace_path))
+            try:
+                _write_toml_file(self._workspace_path, on_disk)
+            finally:
+                self._watcher.addPath(str(self._workspace_path))
+
     # ------------------------------------------------------------------
     # Convenience helpers for the most-touched sections
     # ------------------------------------------------------------------
@@ -379,6 +408,17 @@ class SettingsManager(QObject):
             return float(self.get("appearance", "ascii_distance", default=4.8))
         except (ValueError, TypeError):
             return 4.8
+
+    @property
+    def zoom(self) -> float:
+        try:
+            return float(self.get("appearance", "zoom", default=1.0))
+        except (ValueError, TypeError):
+            return 1.0
+
+    @zoom.setter
+    def zoom(self, val: float) -> None:
+        self.set("appearance", "zoom", round(float(val), 2))
 
     @property
     def backend_url(self) -> str:
@@ -467,6 +507,11 @@ class SettingsManager(QObject):
         ]
 
     @property
+    def shortcuts(self) -> dict[str, str]:
+        v = self.get("shortcuts", default=None)
+        return dict(v) if isinstance(v, dict) else {}
+
+    @property
     def workspace_settings_path(self) -> Path:
         """Absolute path to the workspace ``settings.toml``."""
         return self._workspace_path
@@ -498,6 +543,8 @@ class SettingsManager(QObject):
         # Some editors (Vim, Neovim) replace the file via rename; re-watch.
         self._watcher.removePath(str(self._workspace_path))
         self._watcher.removePath(str(self._user_path))
+        old_data = copy.deepcopy(self._data)
         self._reload()
         self._watch_files()
-        self.changed.emit()
+        if old_data != self._data:
+            self.changed.emit()

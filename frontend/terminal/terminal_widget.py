@@ -428,6 +428,9 @@ class TerminalWidget(QWidget):
             self.apply_theme(self._pending_theme)
             self._pending_theme = None
 
+        if hasattr(self, "_font_size") and self._font_size:
+            self.bridge.font_size_received.emit(self._font_size)
+
         # Only claim focus if the terminal is currently visible to the user
         if self.isVisible():
             self.focus_terminal()
@@ -476,6 +479,12 @@ class TerminalWidget(QWidget):
         """Trigger fitAddon.fit() in xterm.js."""
         if self._is_ready:
             self.web_view.page().runJavaScript("if (typeof fitTerminal === 'function') fitTerminal();")
+
+    def set_font_size(self, size: int):
+        """Update terminal font size and refit."""
+        self._font_size = size
+        if self._is_ready:
+            self.bridge.font_size_received.emit(size)
 
     def focus_terminal(self):
         """Focus keyboard events on the terminal."""
@@ -735,6 +744,10 @@ class TerminalPanel(QWidget):
 
     def _clear_terminal(self):
         self.terminal.clear()
+
+    def set_font_size(self, size: int):
+        """Update font size of underlying terminal."""
+        self.terminal.set_font_size(size)
 
     def apply_theme(self, theme_dict: dict):
         """Apply active theme palette to terminal and toolbar."""

@@ -4,7 +4,7 @@ import random
 from pathlib import Path
 
 import yaml
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import QEvent, Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QAbstractSpinBox,
     QCheckBox,
@@ -28,7 +28,7 @@ from PyQt6.QtWidgets import (
 from .config_model import ConfigTree, default_method_model
 from .config_model import add_method as add_method_to
 from .config_model import remove_method as remove_method_from
-from .widgets import ComboBox, DoubleSpinBox, SpinBox, label
+from .widgets import ComboBox, DoubleSpinBox, SpinBox, label, SmoothScrollArea
 
 # Forms stay readable on wide windows: the column of boxes stops growing past CONTENT_WIDTH,
 # and fields in label/field rows are capped by kind so a number doesn't get a 1,000px box.
@@ -126,6 +126,23 @@ class ConfigBox(QFrame):
         self.layout.addLayout(sub_layout)
 
 
+class TitleLabel(QLabel):
+    """Clickable heading label that emits double_clicked on double-click."""
+    double_clicked = pyqtSignal()
+
+    def __init__(self, text="", parent=None):
+        super().__init__(text, parent)
+        self.setObjectName("heading")
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def mouseDoubleClickEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.double_clicked.emit()
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
+
+
 class ConfigViewer(QWidget):
     """Modern, wide, boxed configuration viewer that displays experiment and
 
@@ -133,6 +150,9 @@ class ConfigViewer(QWidget):
     """
     config_changed = pyqtSignal()
     save_requested = pyqtSignal()
+    dirty_state_changed = pyqtSignal(str, bool)
+    dirty_changed = pyqtSignal(bool)
+    file_renamed = pyqtSignal(str, str)
 
     INHERIT = "(inherit from base)"
 
@@ -143,6 +163,8 @@ class ConfigViewer(QWidget):
         self.raw_data = {}
         self.is_dirty = False
         self._block_updates = False
+        self._is_editing_title = False
+        self._committing_rename = False
         self.field_widgets = {}
         self._preamble = ""
 
@@ -159,30 +181,40 @@ class ConfigViewer(QWidget):
         hb_layout.setContentsMargins(12, 6, 12, 6)
         hb_layout.setSpacing(10)
 
-        self.file_title = label("No config loaded", "heading")
+        self.file_title = TitleLabel("No config loaded")
+        self.file_title.double_clicked.connect(self._start_title_edit)
         hb_layout.addWidget(self.file_title)
+
+        self.title_editor = QLineEdit()
+        self.title_editor.setObjectName("titleEditor")
+        self.title_editor.setStyleSheet(
+            "font-size: 20px; font-weight: 600; padding: 2px 8px; border-radius: 4px;"
+        )
+        self.title_editor.setMinimumWidth(200)
+        self.title_editor.setMaximumWidth(400)
+        self.title_editor.hide()
+        self.title_editor.returnPressed.connect(self._commit_title_edit)
+        self.title_editor.installEventFilter(self)
+        hb_layout.addWidget(self.title_editor)
 
         self.paradigm_badge = label("", "badge")
         self.paradigm_badge.hide()
         hb_layout.addWidget(self.paradigm_badge)
 
         self.dirty_status = label("", "muted")
-        hb_layout.addWidget(self.dirty_status)
+        self.dirty_status.hide()
 
         hb_layout.addStretch()
 
-        self.btn_save = QPushButton("Save")
-        self.btn_save.setToolTip("Save changes to this configuration file (Ctrl+S)")
-        self.btn_save.clicked.connect(self.save_to_disk)
-        self.btn_save.setEnabled(False)
-        hb_layout.addWidget(self.btn_save)
+        self.btn_save = None
 
         root_layout.addWidget(self.header_bar)
 
         # Main Scroll Area holding the boxes
-        self.scroll = QScrollArea()
+        self.scroll = SmoothScrollArea()
         self.scroll.setWidgetResizable(True)
         self.scroll.setObjectName("configScrollArea")
+        self.scroll.verticalScrollBar().setSingleStep(16)
 
         self.container = QWidget()
         self.container.setMaximumWidth(CONTENT_WIDTH)
@@ -192,6 +224,183 @@ class ConfigViewer(QWidget):
 
         self.scroll.setWidget(self.container)
         root_layout.addWidget(self.scroll, 1)
+
+    def eventFilter(self, obj, event):
+        if obj is getattr(self, "title_editor", None):
+            if event.type() == QEvent.Type.KeyPress:
+                if event.key() == Qt.Key.Key_Escape:
+                    self._cancel_title_edit()
+                    return True
+            elif event.type() == QEvent.Type.FocusOut:
+                if getattr(self, "_is_editing_title", False) and not getattr(self, "_committing_rename", False):
+                    current_stem = self.current_path.stem if self.current_path else ""
+                    raw_text = self.title_editor.text().strip()
+                    if raw_text and raw_text != current_stem:
+                        self._commit_title_edit()
+                    else:
+                        self._cancel_title_edit()
+                return False
+        return super().eventFilter(obj, event)
+
+    def _start_title_edit(self, event=None):
+        if not self.current_path or not self.current_rel_path:
+            return
+        self._is_editing_title = True
+        self.file_title.hide()
+        current_stem = self.current_path.stem
+        self.title_editor.setText(current_stem)
+        self.title_editor.show()
+        self.title_editor.setFocus()
+        self.title_editor.selectAll()
+
+    def _cancel_title_edit(self):
+        self._is_editing_title = False
+        self.title_editor.hide()
+        self.file_title.show()
+
+    def _commit_title_edit(self):
+        if not getattr(self, "_is_editing_title", False) or getattr(self, "_committing_rename", False):
+            return
+        self._committing_rename = True
+        try:
+            raw_text = self.title_editor.text().strip()
+            new_title = raw_text
+            if new_title.endswith(".yaml"):
+                new_title = new_title[:-5].strip()
+            elif new_title.endswith(".yml"):
+                new_title = new_title[:-4].strip()
+
+            old_title = self.current_path.stem if self.current_path else ""
+            if not new_title or new_title == old_title:
+                self._cancel_title_edit()
+                return
+
+            invalid_chars = set('/\\:*?"<>|')
+            if any(c in invalid_chars for c in new_title):
+                QMessageBox.warning(
+                    self,
+                    "Invalid Name",
+                    "The config name cannot contain invalid characters: / \\ : * ? \" < > |",
+                )
+                self._cancel_title_edit()
+                return
+
+            old_path = self.current_path
+            old_rel = self.current_rel_path
+            new_filename = f"{new_title}{old_path.suffix or '.yaml'}"
+            new_path = old_path.with_name(new_filename)
+
+            is_same_file = False
+            if old_path.exists() and new_path.exists():
+                try:
+                    is_same_file = old_path.samefile(new_path)
+                except Exception:
+                    is_same_file = (old_path.name.lower() == new_path.name.lower())
+
+            if new_path.exists() and not is_same_file:
+                QMessageBox.warning(
+                    self,
+                    "File Already Exists",
+                    f"A configuration file named '{new_filename}' already exists in this folder.",
+                )
+                self._cancel_title_edit()
+                return
+
+            # Rewrite title / identity parameters in self.raw_data
+            for key in ("experiment_id", "algorithm", "name", "architecture", "reasoner", "id"):
+                if key in self.raw_data:
+                    self.raw_data[key] = new_title
+
+            is_experiment = (
+                (old_rel and old_rel.startswith("experiment/"))
+                or "methods" in self.raw_data
+                or any("_base" in str(d) for d in self.raw_data.get("defaults", []))
+            )
+            if is_experiment:
+                self.raw_data["experiment_id"] = new_title
+            elif old_rel and old_rel.startswith("agent/"):
+                self.raw_data["algorithm"] = new_title
+            elif old_rel and old_rel.startswith("env/"):
+                self.raw_data["name"] = new_title
+            elif old_rel and old_rel.startswith("model/"):
+                if "reasoner" in self.raw_data:
+                    self.raw_data["reasoner"] = new_title
+                else:
+                    self.raw_data["architecture"] = new_title
+
+            # Recursive string replacement for any exact matches of old_title
+            def _replace_matching(d):
+                if isinstance(d, dict):
+                    for k, v in list(d.items()):
+                        if isinstance(v, str) and v.lower() == old_title.lower():
+                            d[k] = new_title
+                        elif isinstance(v, (dict, list)):
+                            _replace_matching(v)
+                elif isinstance(d, list):
+                    for idx, item in enumerate(d):
+                        if isinstance(item, str) and item.lower() == old_title.lower():
+                            d[idx] = new_title
+                        elif isinstance(item, (dict, list)):
+                            _replace_matching(item)
+
+            _replace_matching(self.raw_data)
+
+            # Check if methods dict has a method named after old_title
+            if "methods" in self.raw_data and isinstance(self.raw_data["methods"], dict):
+                methods = self.raw_data["methods"]
+                if old_title in methods:
+                    methods[new_title] = methods.pop(old_title)
+
+            # Rename file on disk if it exists
+            if old_path.exists():
+                if old_path.name.lower() == new_path.name.lower() and old_path.name != new_path.name:
+                    # Case-only rename: use intermediate temporary file to guarantee APFS/FAT directory entry update
+                    temp_path = old_path.with_name(f"{old_path.stem}__theta_tmp_rename{old_path.suffix}")
+                    old_path.rename(temp_path)
+                    temp_path.rename(new_path)
+                else:
+                    old_path.rename(new_path)
+
+            self.current_path = new_path
+            new_rel = str(Path(old_rel).with_name(new_filename)).replace("\\", "/")
+            self.current_rel_path = new_rel
+
+            # Save updated content to disk
+            yaml_str = yaml.safe_dump(self.raw_data, sort_keys=False)
+            self.current_path.write_text(self._preamble + yaml_str, encoding="utf-8")
+            self.is_dirty = False
+            self._update_dirty_ui()
+
+            # End edit mode
+            self._is_editing_title = False
+            self.title_editor.hide()
+            self.file_title.setText(new_title)
+            self.file_title.setToolTip(f"{new_rel}\n(Double-click to rename)")
+            self.file_title.show()
+
+            self._render_boxes()
+
+            self.file_renamed.emit(old_rel, new_rel)
+            self.dirty_state_changed.emit(old_rel, False)
+            self.dirty_state_changed.emit(new_rel, False)
+            self.config_changed.emit()
+            self.save_requested.emit()
+        except Exception as exc:
+            QMessageBox.critical(self, "Rename Failed", f"Could not rename file:\n{exc}")
+            self._cancel_title_edit()
+        finally:
+            self._committing_rename = False
+
+    @property
+    def txt_exp_id(self):
+        class _TitleProxy:
+            def __init__(proxy_self, viewer):
+                proxy_self._viewer = viewer
+            def text(proxy_self):
+                return proxy_self._viewer.file_title.text()
+            def setText(proxy_self, val):
+                proxy_self._viewer.file_title.setText(val)
+        return _TitleProxy(self)
 
     def load_file(self, file_path: Path, rel_path: str):
         """Parse YAML file and render visual boxes."""
@@ -205,8 +414,7 @@ class ConfigViewer(QWidget):
             data = yaml.safe_load(content) or {}
             self.raw_data = data if isinstance(data, dict) else {"content": data}
         except Exception as exc:
-            self.file_title.setText(f"Error loading {self.current_path.name}")
-            self.dirty_status.setText(str(exc))
+            self.file_title.setText(f"Error loading {self.current_path.stem}")
             return
 
         self._render_boxes()
@@ -229,8 +437,8 @@ class ConfigViewer(QWidget):
                         sub.widget().deleteLater()
 
         # Update header
-        self.file_title.setText(self.current_path.name)
-        self.file_title.setToolTip(str(self.current_rel_path))
+        self.file_title.setText(self.current_path.stem)
+        self.file_title.setToolTip(f"{self.current_rel_path}\n(Double-click to rename)")
 
         is_experiment = (
             self.current_rel_path.startswith("experiment/") or
@@ -315,13 +523,6 @@ class ConfigViewer(QWidget):
         box_id = ConfigBox("1. Experiment & Identity", "Core experiment metadata and template inheritance")
         form_id = QFormLayout()
         form_id.setVerticalSpacing(8)
-
-        # Experiment ID / Name
-        exp_id_val = str(data.get("experiment_id") or self.current_path.stem)
-        self.txt_exp_id = QLineEdit(exp_id_val)
-        self.txt_exp_id.textChanged.connect(lambda v: self._on_field_edited("experiment_id", v))
-        form_id.addRow("Experiment ID", self.txt_exp_id)
-        self.field_widgets["experiment_id"] = self.txt_exp_id
 
         # Group
         group_val = data.get("group")
@@ -733,11 +934,22 @@ class ConfigViewer(QWidget):
         scalars = {k: v for k, v in data.items() if not isinstance(v, (dict, list))}
         complex_items = {k: v for k, v in data.items() if isinstance(v, (dict, list))}
 
-        if scalars:
-            box_props = ConfigBox("Parameters", f"Primary settings in {self.current_path.name}")
+        stem = self.current_path.stem if self.current_path else ""
+        filtered_scalars = {}
+        for k, v in scalars.items():
+            if k in ("name", "algorithm", "architecture", "reasoner", "experiment_id", "id"):
+                continue
+            if k in ("type", "env_id") and str(v).lower() == stem.lower():
+                continue
+            if isinstance(v, str) and v.lower() == stem.lower() and k in ("model", "agent"):
+                continue
+            filtered_scalars[k] = v
+
+        if filtered_scalars:
+            box_props = ConfigBox("Parameters", f"Primary settings in {self.current_path.stem}")
             form = QFormLayout()
             form.setVerticalSpacing(8)
-            for k, v in scalars.items():
+            for k, v in filtered_scalars.items():
                 if isinstance(v, bool):
                     chk = QCheckBox()
                     chk.setChecked(v)
@@ -850,22 +1062,16 @@ class ConfigViewer(QWidget):
         self._mark_dirty()
 
     def _mark_dirty(self):
-        self.is_dirty = True
-        self._update_dirty_ui()
+        self.save_to_disk()
         self.config_changed.emit()
 
     def _update_dirty_ui(self):
-        if self.is_dirty:
-            self.dirty_status.setText("● Modified (unsaved)")
-            self.dirty_status.setObjectName("configError")
-            self.btn_save.setEnabled(True)
-        else:
-            self.dirty_status.setText("✓ In sync with disk")
-            self.dirty_status.setObjectName("configOk")
-            self.btn_save.setEnabled(False)
-        self.dirty_status.setStyle(self.dirty_status.style())
+        self.is_dirty = False
+        self.dirty_status.setText("")
+        self.dirty_status.hide()
+        self.dirty_changed.emit(False)
 
-    def save_to_disk(self):
+    def save_to_disk(self, show_error: bool = False):
         """Save current YAML dictionary back to disk."""
         if not self.current_path:
             return False
@@ -874,10 +1080,13 @@ class ConfigViewer(QWidget):
             self.current_path.write_text(self._preamble + yaml_str, encoding="utf-8")
             self.is_dirty = False
             self._update_dirty_ui()
+            if self.current_rel_path:
+                self.dirty_state_changed.emit(self.current_rel_path, False)
             self.save_requested.emit()
             return True
         except Exception as exc:
-            QMessageBox.critical(self, "Save Error", f"Could not save file to disk:\n{exc}")
+            if show_error:
+                QMessageBox.critical(self, "Save Error", f"Could not save file to disk:\n{exc}")
             return False
 
     def get_overrides(self):
