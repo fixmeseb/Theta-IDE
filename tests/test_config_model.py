@@ -119,7 +119,9 @@ def test_every_environment_is_offered_by_some_paradigm(tree):
     covered = set()
     for name in tree.paradigms:
         covered |= {e.name for e in tree.environments_for(name)}
-    assert covered == set(tree.environments)
+    # Nested configs are also registered under their file stem (atari/pong as "pong"), so compare
+    # the distinct environments, not the dictionary keys.
+    assert covered == {e.name for e in tree.environments.values()}
 
 
 def test_cartpole_is_available_for_online_rl(tree):
