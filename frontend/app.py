@@ -302,7 +302,7 @@ class Window(QMainWindow):
         self.preview_splitter = preview_splitter
 
         # Multi-tabbed Config Tab Manager (replaces single ConfigViewer)
-        self.config_tab_manager = ConfigTabManager(self)
+        self.config_tab_manager = ConfigTabManager(self.settings_manager, self)
         self.config_tab_manager.auto_save = True
         self.config_tab_manager.btn_save = self.btn_save
         self.config_tab_manager.config_changed.connect(self.update_config)
@@ -310,6 +310,7 @@ class Window(QMainWindow):
         self.config_tab_manager.dirty_state_changed.connect(self.config_tree.set_file_dirty)
         self.config_tab_manager.file_renamed.connect(self.on_config_file_renamed)
         self.config_tab_manager.current_tab_changed.connect(self.on_config_tab_switched)
+        self.config_tree.dir_renamed.connect(self.config_tab_manager.on_dir_renamed)
         preview_splitter.addWidget(self.config_tab_manager)
 
         # Preview Panel (Hydra YAML - hidden by default!)

@@ -20,6 +20,14 @@ from .config_viewer import ConfigViewer
 class PreviewTabBar(QTabBar):
     """Custom tab bar that renders preview tabs in italic text."""
 
+    def sizeHint(self):
+        hint = super().sizeHint()
+        return hint.__class__(hint.width(), 30)
+
+    def tabSizeHint(self, index):
+        hint = super().tabSizeHint(index)
+        return hint.__class__(hint.width(), 30)
+
     def paintEvent(self, event):
         painter = QStylePainter(self)
         opt = QStyleOptionTab()
@@ -44,6 +52,8 @@ class ConfigTabManager(QTabWidget):
     - Close confirmation dialog for dirty tabs.
     - Tab navigation shortcuts: Ctrl+W (close), Ctrl+Tab / Ctrl+Shift+Tab (cycle tabs).
     - Backwards-compatible proxy via current_viewer().
+    - Hides the tab bar when only a single tab is open.
+    - 30px height alignment matching the filetree header buttons.
     """
 
     current_tab_changed = pyqtSignal(str, object)  # (rel_path, viewer)
@@ -53,12 +63,28 @@ class ConfigTabManager(QTabWidget):
     save_requested = pyqtSignal()
     config_changed = pyqtSignal()
 
-    def __init__(self, parent=None):
+    def __init__(self, settings_manager=None, parent=None):
+        if isinstance(settings_manager, QWidget) and parent is None:
+            parent = settings_manager
+            settings_manager = None
         super().__init__(parent)
+        self.settings_manager = settings_manager
         self.setTabBar(PreviewTabBar(self))
         self.setTabsClosable(True)
         self.setMovable(True)
         self.setDocumentMode(True)
+        self.setStyleSheet("""
+            QTabBar {
+                height: 30px;
+                border: none;
+            }
+            QTabBar::tab {
+                height: 30px;
+                padding: 0 14px;
+                border-bottom: 2px solid transparent;
+            }
+        """)
+        self.tabBar().setVisible(False)
 
         self._tabs: dict[str, ConfigViewer] = {}  # normalized rel_path -> ConfigViewer
         self._preview_rel_path: Optional[str] = None
@@ -68,7 +94,7 @@ class ConfigTabManager(QTabWidget):
         self.btn_save = None
 
         # Fallback viewer used when no tabs are open, ensuring current_viewer() is never None
-        self._fallback_viewer = ConfigViewer(parent=self)
+        self._fallback_viewer = ConfigViewer(settings_manager=self.settings_manager, parent=self)
         self._fallback_viewer.hide()
 
         self.tabCloseRequested.connect(self.close_tab_by_index)
@@ -76,6 +102,14 @@ class ConfigTabManager(QTabWidget):
         self.tabBar().tabBarDoubleClicked.connect(self._on_tab_double_clicked)
 
         self._setup_shortcuts()
+
+    def tabInserted(self, index: int):
+        super().tabInserted(index)
+        self.tabBar().setVisible(self.count() > 1)
+
+    def tabRemoved(self, index: int):
+        super().tabRemoved(index)
+        self.tabBar().setVisible(self.count() > 1)
 
     def _setup_shortcuts(self):
         # Close tab: Ctrl+W / Cmd+W
@@ -152,7 +186,7 @@ class ConfigTabManager(QTabWidget):
                 return old_preview_viewer
 
         # 3. Create a new viewer in a new tab
-        viewer = ConfigViewer(parent=self)
+        viewer = ConfigViewer(settings_manager=self.settings_manager, parent=self)
         viewer.auto_save = self.auto_save
         viewer.btn_save = self.btn_save
 
@@ -161,6 +195,8 @@ class ConfigTabManager(QTabWidget):
         viewer.dirty_state_changed.connect(lambda p, d, v=viewer: self._on_viewer_dirty_state_changed(v, d))
         viewer.dirty_changed.connect(lambda d, v=viewer: self._on_viewer_dirty_changed(v, d))
         viewer.file_renamed.connect(self._on_viewer_file_renamed)
+        if hasattr(viewer, "dir_renamed"):
+            viewer.dir_renamed.connect(self.on_dir_renamed)
 
         viewer.load_file(file_path, rel_path)
 
@@ -237,6 +273,16 @@ class ConfigTabManager(QTabWidget):
                 is_prev = (self._preview_rel_path == new_norm)
                 self._update_tab_display(idx, new_norm, is_preview=is_prev, is_dirty=viewer.is_dirty)
         self.file_renamed.emit(old_rel, new_rel)
+
+    def on_dir_renamed(self, old_dir_rel: str, new_dir_rel: str):
+        """Update open tabs when an entire directory/group is renamed."""
+        old_prefix = Path(old_dir_rel).as_posix().rstrip("/") + "/"
+        new_prefix = Path(new_dir_rel).as_posix().rstrip("/") + "/"
+        for old_rel in list(self._tabs.keys()):
+            if old_rel.startswith(old_prefix):
+                suffix = old_rel[len(old_prefix):]
+                new_rel = new_prefix + suffix
+                self._on_viewer_file_renamed(old_rel, new_rel)
 
     def _on_current_changed(self, index: int):
         """Notify listeners when the active tab switches."""

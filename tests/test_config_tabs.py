@@ -169,6 +169,28 @@ class TestConfigTabManager(unittest.TestCase):
         self.assertEqual(self.mgr.tabText(0), "exp_renamed")
         self.assertEqual(renamed_signals, [("experiment/demo/exp1.yaml", "experiment/demo/exp_renamed.yaml")])
 
+    def test_single_tab_hides_tab_bar_and_multiple_tabs_shows_tab_bar(self):
+        # 0 tabs: hidden
+        self.assertTrue(self.mgr.tabBar().isHidden())
+
+        # 1 tab: hidden
+        self.mgr.open_file(self.f1, "experiment/demo/exp1.yaml", pinned=True)
+        self.assertEqual(self.mgr.count(), 1)
+        self.assertTrue(self.mgr.tabBar().isHidden())
+
+        # 2 tabs: visible
+        self.mgr.open_file(self.f2, "experiment/demo/exp2.yaml", pinned=True)
+        self.assertEqual(self.mgr.count(), 2)
+        self.assertFalse(self.mgr.tabBar().isHidden())
+
+        # Close back to 1 tab: hidden
+        self.mgr.close_current_tab()
+        self.assertEqual(self.mgr.count(), 1)
+        self.assertTrue(self.mgr.tabBar().isHidden())
+
+    def test_tab_bar_height_alignment(self):
+        self.assertEqual(self.mgr.tabBar().sizeHint().height(), 30)
+
 
 if __name__ == "__main__":
     unittest.main()

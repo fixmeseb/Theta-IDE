@@ -61,6 +61,10 @@ ascii_thickness = 1.0
 ascii_tilt = 1.0
 ascii_distance = 4.8
 
+# Show all resolved group defaults in the experiment configuration panel.
+# When disabled (false), only explicit overrides and configured methods are shown.
+show_resolved_defaults = false
+
 [backend]
 # FastAPI backend that manages training runs and pipelines.
 url = "http://127.0.0.1:8000"
@@ -419,6 +423,14 @@ class SettingsManager(QObject):
     @zoom.setter
     def zoom(self, val: float) -> None:
         self.set("appearance", "zoom", round(float(val), 2))
+
+    @property
+    def show_resolved_defaults(self) -> bool:
+        return bool(self.get("appearance", "show_resolved_defaults", default=False))
+
+    @show_resolved_defaults.setter
+    def show_resolved_defaults(self, val: bool) -> None:
+        self.set("appearance", "show_resolved_defaults", bool(val))
 
     @property
     def backend_url(self) -> str:

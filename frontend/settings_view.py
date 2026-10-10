@@ -857,11 +857,37 @@ class SettingsView(QWidget):
         sc_layout.addLayout(btn_row)
 
         layout.addWidget(sculpture_card)
+
+        # Card 4: Experiment Panel Preferences
+        exp_card = QFrame()
+        exp_card.setObjectName("card")
+        ec_layout = QVBoxLayout(exp_card)
+        ec_layout.setContentsMargins(16, 14, 16, 14)
+        ec_layout.setSpacing(8)
+
+        ec_layout.addWidget(label("Experiment Panel Configuration", "cardTitle"))
+        ec_sub = label("Control how configurations and inherited defaults are displayed in the Experiment panel.", "muted")
+        ec_sub.setWordWrap(True)
+        ec_layout.addWidget(ec_sub)
+
+        row_defaults = QHBoxLayout()
+        row_defaults.addWidget(label("Show Resolved Defaults (Experiment Panel)", "muted"), 1)
+        self.defaults_toggle = ToggleSlider(checked=self.window.settings_manager.show_resolved_defaults)
+        self.defaults_toggle.toggled.connect(self._on_show_resolved_defaults_toggled)
+        self.window.toggle_resolved_defaults = self.defaults_toggle
+        row_defaults.addWidget(self.defaults_toggle)
+        ec_layout.addLayout(row_defaults)
+
+        layout.addWidget(exp_card)
         layout.addStretch()
         return container
 
     def _open_animation_settings_dialog(self):
         self.show_tab("animation")
+
+    def _on_show_resolved_defaults_toggled(self, checked: bool):
+        if hasattr(self.window, "settings_manager") and self.window.settings_manager:
+            self.window.settings_manager.show_resolved_defaults = checked
 
     def _on_ascii_setting_toggled(self, checked: bool):
         if hasattr(self.window, "settings_manager") and self.window.settings_manager:
@@ -1610,6 +1636,13 @@ class SettingsView(QWidget):
             self.anim_toggle_active.blockSignals(False)
             if hasattr(self, "anim_status_lbl") and self.anim_status_lbl:
                 self.anim_status_lbl.setText("Running" if is_anim else "Paused")
+
+        # 7. Experiment panel resolved defaults toggle
+        if hasattr(self, "defaults_toggle") and self.defaults_toggle:
+            is_def = bool(sm.get("appearance", "show_resolved_defaults", default=False))
+            self.defaults_toggle.blockSignals(True)
+            self.defaults_toggle.setChecked(is_def)
+            self.defaults_toggle.blockSignals(False)
 
     def _build_terminal_page(self) -> QWidget:
         """Shell, start folder and venv for the Terminal pane, saved to [terminal] in settings.toml."""

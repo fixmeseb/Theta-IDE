@@ -4,9 +4,11 @@ import random
 from pathlib import Path
 
 import yaml
-from PyQt6.QtCore import QEvent, Qt, pyqtSignal
+from PyQt6.QtCore import QByteArray, QEvent, QMimeData, QPoint, QSize, Qt, pyqtSignal
+from PyQt6.QtGui import QColor, QCursor, QDrag, QIcon, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import (
     QAbstractSpinBox,
+    QApplication,
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
@@ -30,6 +32,8 @@ from PyQt6.QtWidgets import (
 from .config_model import ConfigTree, default_method_model
 from .config_model import add_method as add_method_to
 from .config_model import remove_method as remove_method_from
+from .sidetabs import svg_icon
+from .theme import theme_color
 from .widgets import ComboBox, DoubleSpinBox, SpinBox, label, SmoothScrollArea
 
 # Forms stay readable on wide windows: the column of boxes stops growing past CONTENT_WIDTH,
@@ -37,6 +41,34 @@ from .widgets import ComboBox, DoubleSpinBox, SpinBox, label, SmoothScrollArea
 CONTENT_WIDTH = 860
 NUMBER_FIELD_WIDTH = 200
 TEXT_FIELD_WIDTH = 380
+
+SUBTLE_ICON_COLORS = {
+    (QIcon.Mode.Normal, QIcon.State.Off): "muted",
+    (QIcon.Mode.Active, QIcon.State.Off): "text",
+    (QIcon.Mode.Selected, QIcon.State.Off): "accent",
+    (QIcon.Mode.Normal, QIcon.State.On): "accent",
+}
+
+
+def _make_subtle_tool_button(icon_name: str, tooltip: str, size: int = 24, icon_size: int = 14) -> QToolButton:
+    """Create a subtle icon-only tool button (trash, close, plus) without prominent borders."""
+    btn = QToolButton()
+    btn.setIcon(svg_icon(icon_name, SUBTLE_ICON_COLORS))
+    btn.setIconSize(QSize(icon_size, icon_size))
+    btn.setFixedSize(size, size)
+    btn.setToolTip(tooltip)
+    btn.setStyleSheet("""
+        QToolButton {
+            background: transparent;
+            border: none;
+            border-radius: 3px;
+            padding: 0px;
+        }
+        QToolButton:hover {
+            background: #3c3836;
+        }
+    """)
+    return btn
 
 
 def _parse_yaml_value(text: str):
@@ -180,6 +212,165 @@ class TitleLabel(QLabel):
         super().mouseDoubleClickEvent(event)
 
 
+class InlineTitleEditor(QLineEdit):
+    """Line editor supporting cancellation on Escape key press."""
+    escape_pressed = pyqtSignal()
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key.Key_Escape:
+            self.escape_pressed.emit()
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+
+class MethodDragHandle(QToolButton):
+    """Grip icon button to initiate dragging and reordering of method cards."""
+
+    def __init__(self, method_name: str, parent=None):
+        super().__init__(parent)
+        self.method_name = method_name
+        self.setIcon(svg_icon("grip", SUBTLE_ICON_COLORS))
+        self.setIconSize(QSize(14, 14))
+        self.setFixedSize(22, 22)
+        self.setCursor(Qt.CursorShape.SizeAllCursor)
+        self.setToolTip("Drag to reorder method")
+        self.setStyleSheet("""
+            QToolButton {
+                background: transparent;
+                border: none;
+                border-radius: 3px;
+                padding: 0;
+            }
+            QToolButton:hover {
+                background: #3c3836;
+            }
+        """)
+        self._drag_start_pos = None
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_start_pos = event.pos()
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if (event.buttons() & Qt.MouseButton.LeftButton) and self._drag_start_pos is not None:
+            distance = (event.pos() - self._drag_start_pos).manhattanLength()
+            if distance >= QApplication.startDragDistance():
+                self._start_drag()
+                self._drag_start_pos = None
+                return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        self._drag_start_pos = None
+        super().mouseReleaseEvent(event)
+
+    def _start_drag(self):
+        drag = QDrag(self)
+        mime = QMimeData()
+        mime.setData("application/x-theta-method", QByteArray(self.method_name.encode("utf-8")))
+        drag.setMimeData(mime)
+
+        p = self.parent()
+        while p and not isinstance(p, (ConfigBox, QFrame)):
+            p = p.parent()
+        target_widget = p or self
+        pixmap = target_widget.grab()
+        ghost = QPixmap(pixmap.size())
+        ghost.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(ghost)
+        painter.setOpacity(0.65)
+        painter.drawPixmap(0, 0, pixmap)
+        painter.end()
+
+        drag.setPixmap(ghost)
+        drag.setHotSpot(self._drag_start_pos or QPoint(pixmap.width() // 2, 15))
+        drag.exec(Qt.DropAction.MoveAction)
+
+
+class MethodCardsContainer(QWidget):
+    """Container holding method cards that accepts drops and displays drop indicator line."""
+
+    def __init__(self, viewer, parent=None):
+        super().__init__(parent)
+        self.viewer = viewer
+        self.layout = QVBoxLayout(self)
+        self.layout.setContentsMargins(0, 0, 0, 0)
+        self.layout.setSpacing(10)
+        self.setAcceptDrops(True)
+        self._drop_index = None
+        self._cards: list[tuple[str, QWidget]] = []
+
+    def add_method_card(self, method_name: str, card: QWidget):
+        self._cards.append((method_name, card))
+        self.layout.addWidget(card)
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasFormat("application/x-theta-method"):
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasFormat("application/x-theta-method"):
+            idx = self._calculate_drop_index(event.position().y())
+            if idx != self._drop_index:
+                self._drop_index = idx
+                self.update()
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def dragLeaveEvent(self, event):
+        self._drop_index = None
+        self.update()
+        event.accept()
+
+    def dropEvent(self, event):
+        if event.mimeData().hasFormat("application/x-theta-method"):
+            method_name = bytes(event.mimeData().data("application/x-theta-method")).decode("utf-8")
+            target_idx = self._drop_index
+            self._drop_index = None
+            self.update()
+            if target_idx is not None:
+                self.viewer.reorder_method(method_name, target_idx)
+            event.acceptProposedAction()
+        else:
+            event.ignore()
+
+    def _calculate_drop_index(self, y: float) -> int:
+        if not self._cards:
+            return 0
+        for i, (_, card) in enumerate(self._cards):
+            geom = card.geometry()
+            if y < geom.center().y():
+                return i
+        return len(self._cards)
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if self._drop_index is not None and self._cards:
+            painter = QPainter(self)
+            try:
+                acc_color = QColor(theme_color("accent"))
+            except Exception:
+                acc_color = QColor("#fabd2f")
+            pen = QPen(acc_color, 2)
+            painter.setPen(pen)
+            w = self.width()
+            if self._drop_index == 0:
+                y = self._cards[0][1].geometry().top() - 2
+            elif self._drop_index >= len(self._cards):
+                y = self._cards[-1][1].geometry().bottom() + 4
+            else:
+                top_bottom = self._cards[self._drop_index - 1][1].geometry().bottom()
+                next_top = self._cards[self._drop_index][1].geometry().top()
+                y = (top_bottom + next_top) // 2
+            painter.drawLine(8, y, w - 8, y)
+            painter.end()
+
+
 class ConfigViewer(QWidget):
     """Modern, wide, boxed configuration viewer that displays experiment and
 
@@ -190,11 +381,17 @@ class ConfigViewer(QWidget):
     dirty_state_changed = pyqtSignal(str, bool)
     dirty_changed = pyqtSignal(bool)
     file_renamed = pyqtSignal(str, str)
+    group_renamed = pyqtSignal(str, str)
+    dir_renamed = pyqtSignal(str, str)
 
     INHERIT = "(inherit from base)"
 
-    def __init__(self, parent=None):
+    def __init__(self, settings_manager=None, parent=None):
+        if isinstance(settings_manager, QWidget) and parent is None:
+            parent = settings_manager
+            settings_manager = None
         super().__init__(parent)
+        self.settings_manager = settings_manager
         self.current_path = None
         self.current_rel_path = None
         self.raw_data = {}
@@ -202,12 +399,26 @@ class ConfigViewer(QWidget):
         self._block_updates = False
         self._is_editing_title = False
         self._committing_rename = False
+        self._is_editing_group = False
+        self._committing_group_rename = False
         self.field_widgets = {}
         self._preamble = ""
         self.auto_save = False
-        self.view_mode = "overrides"
+        self.view_mode = "resolved" if (settings_manager and settings_manager.show_resolved_defaults) else "overrides"
+        if self.settings_manager:
+            self.settings_manager.changed.connect(self._on_settings_changed)
 
         self._init_ui()
+
+    def _on_settings_changed(self):
+        if self.settings_manager:
+            new_mode = "resolved" if self.settings_manager.show_resolved_defaults else "overrides"
+            if new_mode != self.view_mode:
+                self.view_mode = new_mode
+                self.chk_view_mode.blockSignals(True)
+                self.chk_view_mode.setChecked(new_mode == "resolved")
+                self.chk_view_mode.blockSignals(False)
+                self._render_boxes()
 
     def _init_ui(self):
         root_layout = QVBoxLayout(self)
@@ -220,18 +431,29 @@ class ConfigViewer(QWidget):
         hb_layout.setContentsMargins(12, 6, 12, 6)
         hb_layout.setSpacing(10)
 
-        self.group_badge = QLabel("")
-        self.group_badge.setObjectName("breadcrumbGroup")
-        self.group_badge.setStyleSheet(
-            "font-size: 16px; font-weight: 600; color: #888888; padding: 2px 2px;"
-        )
+        self.group_badge = TitleLabel("")
+        self.group_badge.setObjectName("heading")
+        self.group_badge.setToolTip("Group (double-click to rename)")
+        self.group_badge.double_clicked.connect(self._start_group_edit)
         self.group_badge.hide()
         hb_layout.addWidget(self.group_badge)
+
+        self.group_editor = QLineEdit()
+        self.group_editor.setObjectName("groupEditor")
+        self.group_editor.setStyleSheet(
+            "font-size: 20px; font-weight: 600; padding: 2px 8px; border-radius: 4px;"
+        )
+        self.group_editor.setMinimumWidth(120)
+        self.group_editor.setMaximumWidth(300)
+        self.group_editor.hide()
+        self.group_editor.returnPressed.connect(self._commit_group_edit)
+        self.group_editor.installEventFilter(self)
+        hb_layout.addWidget(self.group_editor)
 
         self.breadcrumb_sep = QLabel("/")
         self.breadcrumb_sep.setObjectName("breadcrumbSep")
         self.breadcrumb_sep.setStyleSheet(
-            "font-size: 16px; font-weight: 500; color: #666666; padding: 0 4px;"
+            "font-size: 20px; font-weight: 500; color: #888888; padding: 0 4px;"
         )
         self.breadcrumb_sep.hide()
         hb_layout.addWidget(self.breadcrumb_sep)
@@ -260,14 +482,12 @@ class ConfigViewer(QWidget):
 
         hb_layout.addStretch()
 
+        # Maintained for programmatic and test compatibility; hidden from visual header
         self.chk_view_mode = QCheckBox("Show Resolved Defaults")
         self.chk_view_mode.setObjectName("chkViewMode")
-        self.chk_view_mode.setStyleSheet("font-size: 12px; color: #a89984;")
-        self.chk_view_mode.setToolTip("Toggle between showing only explicit overrides vs. all resolved group defaults")
-        self.chk_view_mode.setChecked(False)
+        self.chk_view_mode.setChecked(self.view_mode == "resolved")
         self.chk_view_mode.toggled.connect(self._on_view_mode_toggled)
         self.chk_view_mode.hide()
-        hb_layout.addWidget(self.chk_view_mode)
 
         self.btn_save = None
 
@@ -303,7 +523,124 @@ class ConfigViewer(QWidget):
                     else:
                         self._cancel_title_edit()
                 return False
+        elif obj is getattr(self, "group_editor", None):
+            if event.type() == QEvent.Type.KeyPress:
+                if event.key() == Qt.Key.Key_Escape:
+                    self._cancel_group_edit()
+                    return True
+            elif event.type() == QEvent.Type.FocusOut:
+                if getattr(self, "_is_editing_group", False) and not getattr(self, "_committing_group_rename", False):
+                    grp = self._group_name() or ""
+                    raw_text = self.group_editor.text().strip()
+                    if raw_text.startswith("[") and raw_text.endswith("]"):
+                        raw_text = raw_text[1:-1].strip()
+                    if raw_text and raw_text != grp:
+                        self._commit_group_edit()
+                    else:
+                        self._cancel_group_edit()
+                return False
         return super().eventFilter(obj, event)
+
+    def _start_group_edit(self, event=None):
+        grp = self._group_name()
+        if not grp or not self.current_path or not self.current_rel_path:
+            return
+        self._is_editing_group = True
+        self.group_badge.hide()
+        self.group_editor.setText(grp)
+        self.group_editor.show()
+        self.group_editor.setFocus()
+        self.group_editor.selectAll()
+
+    def _cancel_group_edit(self):
+        self._is_editing_group = False
+        self.group_editor.hide()
+        self.group_badge.show()
+
+    def _commit_group_edit(self):
+        if not getattr(self, "_is_editing_group", False) or getattr(self, "_committing_group_rename", False):
+            return
+        self._committing_group_rename = True
+        try:
+            old_grp = self._group_name()
+            new_grp = self.group_editor.text().strip()
+            if new_grp.startswith("[") and new_grp.endswith("]"):
+                new_grp = new_grp[1:-1].strip()
+
+            if not new_grp or new_grp == old_grp:
+                self._cancel_group_edit()
+                return
+
+            invalid_chars = set('/\\:*?"<>|')
+            if any(c in invalid_chars for c in new_grp):
+                QMessageBox.warning(
+                    self,
+                    "Invalid Name",
+                    "The group name cannot contain invalid characters: / \\ : * ? \" < > |",
+                )
+                self._cancel_group_edit()
+                return
+
+            if self.current_path and self.current_rel_path:
+                rel_parts_count = len(Path(self.current_rel_path).parts)
+                cur = self.current_path
+                for _ in range(rel_parts_count):
+                    cur = cur.parent
+                config_root = cur
+            else:
+                tree = config_tree()
+                if not tree or not hasattr(tree, "config_root"):
+                    from .config_tree import find_config_root
+                    config_root = find_config_root()
+                else:
+                    config_root = tree.config_root
+
+            old_group_dir = config_root / "experiment" / old_grp
+            if not old_group_dir.exists() or not old_group_dir.is_dir():
+                QMessageBox.warning(self, "Rename Failed", f"Group folder '{old_grp}' does not exist on disk.")
+                self._cancel_group_edit()
+                return
+
+            new_group_dir = config_root / "experiment" / new_grp
+            if new_group_dir.exists() and old_group_dir.resolve() != new_group_dir.resolve():
+                QMessageBox.warning(
+                    self,
+                    "Folder Already Exists",
+                    f"A group folder named '{new_grp}' already exists.",
+                )
+                self._cancel_group_edit()
+                return
+
+            if old_group_dir.name.lower() == new_group_dir.name.lower() and old_group_dir.name != new_group_dir.name:
+                temp_dir = old_group_dir.with_name(f"{old_group_dir.name}__theta_tmp_grp")
+                old_group_dir.rename(temp_dir)
+                temp_dir.rename(new_group_dir)
+            else:
+                old_group_dir.rename(new_group_dir)
+
+            rel_parts = list(Path(str(self.current_rel_path)).parts)
+            if len(rel_parts) >= 2 and rel_parts[0] == "experiment":
+                rel_parts[1] = new_grp
+            new_rel = "/".join(rel_parts)
+            old_rel = self.current_rel_path
+
+            self.current_rel_path = new_rel
+            self.current_path = config_root / new_rel
+
+            self._is_editing_group = False
+            self.group_editor.hide()
+            self.group_badge.setText(f"[{new_grp}]")
+            self.group_badge.show()
+
+            self.file_renamed.emit(old_rel, new_rel)
+            self.dir_renamed.emit(f"experiment/{old_grp}", f"experiment/{new_grp}")
+            self.group_renamed.emit(old_grp, new_grp)
+            self.config_changed.emit()
+        except Exception as exc:
+            QMessageBox.critical(self, "Rename Failed", f"Could not rename group:\n{exc}")
+            self._cancel_group_edit()
+        finally:
+            self._committing_group_rename = False
 
     def _start_title_edit(self, event=None):
         if not self.current_path or not self.current_rel_path:
@@ -506,6 +843,7 @@ class ConfigViewer(QWidget):
 
         if is_base:
             self.group_badge.setText(f"[{group}]" if group else "[group]")
+            self.group_badge.setToolTip(f"{self.current_rel_path}\n(Base configuration for {group})")
             self.group_badge.show()
             self.breadcrumb_sep.hide()
             self.file_title.setText("Group Defaults")
@@ -517,6 +855,7 @@ class ConfigViewer(QWidget):
                 self.group_badge.setText(f"[{group}] / {sub_crumbs}")
             else:
                 self.group_badge.setText(f"[{group}]")
+            self.group_badge.setToolTip(f"Group: {group}\n(Double-click to rename group)")
             self.group_badge.show()
             self.breadcrumb_sep.show()
             self.file_title.setText(self.current_path.stem)
@@ -533,11 +872,15 @@ class ConfigViewer(QWidget):
             any("_base" in str(d) for d in self.raw_data.get("defaults", []))
         )
 
+        if self.settings_manager:
+            self.view_mode = "resolved" if self.settings_manager.show_resolved_defaults else "overrides"
+            self.chk_view_mode.blockSignals(True)
+            self.chk_view_mode.setChecked(self.view_mode == "resolved")
+            self.chk_view_mode.blockSignals(False)
+
         if is_experiment:
-            self.chk_view_mode.show()
             self._render_experiment_boxes()
         else:
-            self.chk_view_mode.hide()
             self._render_generic_boxes()
 
         self._cap_form_fields()
@@ -707,7 +1050,7 @@ class ConfigViewer(QWidget):
         # Experiment Description / Commit Note
         desc_row = QHBoxLayout()
         desc_row.setSpacing(10)
-        desc_row.addWidget(label("Description", "eyebrow"))
+        desc_row.addWidget(label("Description"))
         self.txt_description = QLineEdit()
         self.txt_description.setPlaceholderText("Optional commit-style notes or hypothesis for this experiment...")
         self.txt_description.setText(str(data.get("description") or ""))
@@ -858,31 +1201,37 @@ class ConfigViewer(QWidget):
                 p_row.addWidget(line_v, 1)
 
                 if has_params and pk in methods_dict.get("params", {}):
-                    btn_del_p = QToolButton()
-                    btn_del_p.setText("✕")
-                    btn_del_p.setToolTip(f"Remove universal parameter '{pk}'")
+                    btn_del_p = _make_subtle_tool_button("close", f"Remove universal parameter '{pk}'", size=20, icon_size=12)
                     btn_del_p.clicked.connect(lambda _, k=pk: self._remove_universal_param(k))
                     p_row.addWidget(btn_del_p)
                 p_layout.addLayout(p_row)
 
             # Row to add a new universal parameter
             add_p_row = QHBoxLayout()
-            add_p_row.setSpacing(8)
+            add_p_row.setSpacing(6)
             combo_add_pk = ComboBox()
             combo_add_pk.setEditable(True)
-            combo_add_pk.setPlaceholderText("Param name (e.g. lr, gamma)...")
+            combo_add_pk.setPlaceholderText("Add universal parameter (e.g. lr, gamma)...")
             common_universal = ["lr", "gamma", "epochs_per_interval", "eval_interval_epochs", "cql_alpha", "weight_decay", "batch_size", "ent_coef"]
             combo_add_pk.addItems(common_universal)
             combo_add_pk.setEditText("")
             add_p_row.addWidget(combo_add_pk, 1)
 
-            txt_add_pv = QLineEdit()
-            txt_add_pv.setPlaceholderText("Value...")
-            add_p_row.addWidget(txt_add_pv, 1)
-
-            btn_do_add_p = QPushButton("Add")
+            btn_do_add_p = _make_subtle_tool_button("plus", "Add universal parameter with default value", size=26, icon_size=14)
+            btn_do_add_p.setStyleSheet("""
+                QToolButton {
+                    background: #32302f;
+                    border: 1px solid #504945;
+                    border-radius: 4px;
+                    padding: 0;
+                }
+                QToolButton:hover {
+                    background: #3c3836;
+                    border-color: #a89984;
+                }
+            """)
             btn_do_add_p.clicked.connect(
-                lambda: self._add_universal_param(combo_add_pk.currentText().strip(), txt_add_pv.text().strip())
+                lambda: self._add_universal_param(combo_add_pk.currentText().strip())
             )
             add_p_row.addWidget(btn_do_add_p)
             p_layout.addLayout(add_p_row)
@@ -896,7 +1245,8 @@ class ConfigViewer(QWidget):
         if not methods_dict:
             m_layout.addWidget(label("Inherits default method from base template.", "muted"))
         else:
-            # Sub-cards for each method
+            # Sub-cards for each method wrapped in MethodCardsContainer for drag reordering
+            method_container = MethodCardsContainer(self)
             for m_name, m_spec in methods_dict.items():
                 if m_name == "params" or not isinstance(m_spec, dict):
                     continue
@@ -906,11 +1256,56 @@ class ConfigViewer(QWidget):
                 sc_layout.setVerticalSpacing(8)
 
                 title_row = QHBoxLayout()
-                title_row.addWidget(label(f"Method: {m_name}", "cardTitle"))
+                title_row.setSpacing(6)
+
+                btn_grip = MethodDragHandle(m_name, sub_card)
+                title_row.addWidget(btn_grip)
+
+                m_title = TitleLabel(m_name)
+                m_title.setObjectName("cardTitle")
+                m_title.setToolTip(f"{m_name}\n(Double-click to rename)")
+                title_row.addWidget(m_title)
+
+                m_edit = InlineTitleEditor(m_name)
+                m_edit.setObjectName("methodEditor")
+                m_edit.setStyleSheet("font-size: 16px; font-weight: 600; padding: 2px 6px; border-radius: 4px;")
+                m_edit.hide()
+                title_row.addWidget(m_edit)
+
+                committing_m_rename = [False]
+
+                def _start_m_rename(lbl=m_title, edt=m_edit, name=m_name):
+                    committing_m_rename[0] = False
+                    lbl.hide()
+                    edt.setText(name)
+                    edt.show()
+                    edt.setFocus()
+                    edt.selectAll()
+
+                def _cancel_m_rename(lbl=m_title, edt=m_edit):
+                    committing_m_rename[0] = True
+                    edt.hide()
+                    lbl.show()
+
+                def _commit_m_rename(lbl=m_title, edt=m_edit, name=m_name):
+                    if committing_m_rename[0]:
+                        return
+                    committing_m_rename[0] = True
+                    new_val = edt.text().strip()
+                    if new_val and new_val != name:
+                        self.rename_method(name, new_val)
+                    else:
+                        edt.hide()
+                        lbl.show()
+
+                m_title.double_clicked.connect(_start_m_rename)
+                m_edit.returnPressed.connect(_commit_m_rename)
+                m_edit.escape_pressed.connect(_cancel_m_rename)
+                m_edit.editingFinished.connect(_commit_m_rename)
+
                 title_row.addStretch()
-                btn_remove = QToolButton()
-                btn_remove.setText("Remove")
-                btn_remove.setToolTip(f"Remove method '{m_name}' from this experiment")
+
+                btn_remove = _make_subtle_tool_button("trash", f"Remove method '{m_name}' from this experiment", size=24, icon_size=14)
                 btn_remove.clicked.connect(lambda _, mn=m_name: self.remove_method(mn))
                 title_row.addWidget(btn_remove)
                 sc_layout.addRow(title_row)
@@ -979,9 +1374,7 @@ class ConfigViewer(QWidget):
                     spin_lr.setValue(float(m_spec["lr"]))
                     spin_lr.valueChanged.connect(lambda v, mn=m_name: self._on_method_param_edited(mn, "lr", v))
                     row_lr.addWidget(spin_lr, 1)
-                    btn_del = QToolButton()
-                    btn_del.setText("✕")
-                    btn_del.setToolTip("Remove lr parameter")
+                    btn_del = _make_subtle_tool_button("close", "Remove lr parameter", size=20, icon_size=12)
                     btn_del.clicked.connect(lambda _, mn=m_name: self._remove_method_param(mn, "lr"))
                     row_lr.addWidget(btn_del)
                     sc_layout.addRow("Learning Rate (lr)", row_lr)
@@ -994,9 +1387,7 @@ class ConfigViewer(QWidget):
                     spin_bs.setValue(int(m_spec["batch_size"]))
                     spin_bs.valueChanged.connect(lambda v, mn=m_name: self._on_method_param_edited(mn, "batch_size", v))
                     row_bs.addWidget(spin_bs, 1)
-                    btn_del = QToolButton()
-                    btn_del.setText("✕")
-                    btn_del.setToolTip("Remove batch_size parameter")
+                    btn_del = _make_subtle_tool_button("close", "Remove batch_size parameter", size=20, icon_size=12)
                     btn_del.clicked.connect(lambda _, mn=m_name: self._remove_method_param(mn, "batch_size"))
                     row_bs.addWidget(btn_del)
                     sc_layout.addRow("Batch Size", row_bs)
@@ -1010,9 +1401,7 @@ class ConfigViewer(QWidget):
                     spin_g.setValue(float(m_spec["gamma"]))
                     spin_g.valueChanged.connect(lambda v, mn=m_name: self._on_method_param_edited(mn, "gamma", v))
                     row_g.addWidget(spin_g, 1)
-                    btn_del = QToolButton()
-                    btn_del.setText("✕")
-                    btn_del.setToolTip("Remove gamma parameter")
+                    btn_del = _make_subtle_tool_button("close", "Remove gamma parameter", size=20, icon_size=12)
                     btn_del.clicked.connect(lambda _, mn=m_name: self._remove_method_param(mn, "gamma"))
                     row_g.addWidget(btn_del)
                     sc_layout.addRow("Discount Factor (γ)", row_g)
@@ -1028,36 +1417,44 @@ class ConfigViewer(QWidget):
                             lambda v, mn=m_name, ek=extra_k: self._on_method_param_edited(mn, ek, v)
                         )
                         row_extra.addWidget(line_extra, 1)
-                        btn_del = QToolButton()
-                        btn_del.setText("✕")
-                        btn_del.setToolTip(f"Remove hyperparameter '{extra_k}'")
+                        btn_del = _make_subtle_tool_button("close", f"Remove hyperparameter '{extra_k}'", size=20, icon_size=12)
                         btn_del.clicked.connect(lambda _, mn=m_name, ek=extra_k: self._remove_method_param(mn, ek))
                         row_extra.addWidget(btn_del)
                         sc_layout.addRow(str(extra_k), row_extra)
 
                 # Row to add a new hyperparameter to this method
                 add_h_row = QHBoxLayout()
-                add_h_row.setSpacing(8)
+                add_h_row.setSpacing(6)
                 combo_add_hk = ComboBox()
                 combo_add_hk.setEditable(True)
-                combo_add_hk.setPlaceholderText("Hyperparameter name (e.g. ent_coef)...")
+                combo_add_hk.setPlaceholderText("Add hyperparameter (e.g. ent_coef)...")
                 common_hyper = ["ent_coef", "blend_ent_coef", "logic_lr", "blender_lr", "target_entropy", "cql_alpha", "tau", "clip_range"]
                 combo_add_hk.addItems(common_hyper)
                 combo_add_hk.setEditText("")
                 add_h_row.addWidget(combo_add_hk, 1)
 
-                txt_add_hv = QLineEdit()
-                txt_add_hv.setPlaceholderText("Value...")
-                add_h_row.addWidget(txt_add_hv, 1)
-
-                btn_do_add_h = QPushButton("Add")
+                btn_do_add_h = _make_subtle_tool_button("plus", "Add hyperparameter with default value", size=26, icon_size=14)
+                btn_do_add_h.setStyleSheet("""
+                    QToolButton {
+                        background: #32302f;
+                        border: 1px solid #504945;
+                        border-radius: 4px;
+                        padding: 0;
+                    }
+                    QToolButton:hover {
+                        background: #3c3836;
+                        border-color: #a89984;
+                    }
+                """)
                 btn_do_add_h.clicked.connect(
-                    lambda _, mn=m_name, ck=combo_add_hk, tv=txt_add_hv: self._add_method_param(mn, ck.currentText().strip(), tv.text().strip())
+                    lambda _, mn=m_name, ck=combo_add_hk: self._add_method_param(mn, ck.currentText().strip())
                 )
                 add_h_row.addWidget(btn_do_add_h)
                 sc_layout.addRow(add_h_row)
 
-                m_layout.addWidget(sub_card)
+                method_container.add_method_card(m_name, sub_card)
+
+            m_layout.addWidget(method_container)
 
         # Method adder row
         add_row = QHBoxLayout()
@@ -1097,8 +1494,7 @@ class ConfigViewer(QWidget):
             box_env_header.addWidget(label("3. Environment Settings", "eyebrow"))
             box_env_header.addStretch()
             if has_env_dict:
-                btn_rm_env = QToolButton()
-                btn_rm_env.setText("Remove Block")
+                btn_rm_env = _make_subtle_tool_button("trash", "Remove environment overrides", size=24, icon_size=14)
                 btn_rm_env.clicked.connect(lambda: self.remove_block("env"))
                 box_env_header.addWidget(btn_rm_env)
             else:
@@ -1137,8 +1533,7 @@ class ConfigViewer(QWidget):
             tr_header.addWidget(label("Trainer Settings", "eyebrow"))
             tr_header.addStretch()
             if has_trainer:
-                btn_rm_tr = QToolButton()
-                btn_rm_tr.setText("Remove Block")
+                btn_rm_tr = _make_subtle_tool_button("trash", "Remove trainer overrides", size=24, icon_size=14)
                 btn_rm_tr.clicked.connect(lambda: self.remove_block("trainer"))
                 tr_header.addWidget(btn_rm_tr)
             else:
@@ -1178,8 +1573,7 @@ class ConfigViewer(QWidget):
             ds_header.addWidget(label("Dataset Configuration", "eyebrow"))
             ds_header.addStretch()
             if has_dataset and not is_offline_req:
-                btn_rm_ds = QToolButton()
-                btn_rm_ds.setText("Remove Block")
+                btn_rm_ds = _make_subtle_tool_button("trash", "Remove dataset configuration", size=24, icon_size=14)
                 btn_rm_ds.clicked.connect(lambda: self.remove_block("dataset"))
                 ds_header.addWidget(btn_rm_ds)
             elif is_offline_req:
@@ -1254,8 +1648,7 @@ class ConfigViewer(QWidget):
             res_header.addWidget(label("Compute & Slurm Resources", "eyebrow"))
             res_header.addStretch()
             if has_res:
-                btn_rm_res = QToolButton()
-                btn_rm_res.setText("Remove Block")
+                btn_rm_res = _make_subtle_tool_button("trash", "Remove compute resources overrides", size=24, icon_size=14)
                 btn_rm_res.clicked.connect(lambda: self.remove_block("resources"))
                 res_header.addWidget(btn_rm_res)
             else:
@@ -1304,8 +1697,7 @@ class ConfigViewer(QWidget):
             sw_header.addWidget(label("Hyperparameter Sweeper (Optuna)", "eyebrow"))
             sw_header.addStretch()
             if has_sweeper:
-                btn_rm_sw = QToolButton()
-                btn_rm_sw.setText("Remove Block")
+                btn_rm_sw = _make_subtle_tool_button("trash", "Remove hyperparameter sweeper overrides", size=24, icon_size=14)
                 btn_rm_sw.clicked.connect(lambda: self.remove_block("sweeper"))
                 sw_header.addWidget(btn_rm_sw)
             else:
@@ -1352,7 +1744,7 @@ class ConfigViewer(QWidget):
 
         # --- ADD CONFIGURATION BLOCK DROPDOWN BUTTON ---
         btn_add_block_row = QHBoxLayout()
-        self.btn_add_block = QPushButton("+ Add Configuration Block ▾")
+        self.btn_add_block = QPushButton("+ Add Overrides ▾")
         self.btn_add_block.setObjectName("addBlockButton")
         self.btn_add_block.setStyleSheet("padding: 6px 14px; font-weight: 500;")
         add_menu = QMenu(self)
@@ -1471,6 +1863,50 @@ class ConfigViewer(QWidget):
         """Remove a method from the open experiment. Returns True if it went."""
         if not remove_method_from(self.raw_data, name):
             return False
+        self._mark_dirty()
+        self._render_boxes()
+        return True
+
+    def rename_method(self, old_name: str, new_name: str) -> bool:
+        """Rename a method in the open experiment while preserving dict ordering."""
+        if not old_name or not new_name or old_name == new_name:
+            return False
+        methods = self.raw_data.get("methods")
+        if not isinstance(methods, dict) or old_name not in methods:
+            return False
+        new_methods = {}
+        for k, v in methods.items():
+            if k == old_name:
+                new_methods[new_name] = v
+            else:
+                new_methods[k] = v
+        self.raw_data["methods"] = new_methods
+        self._mark_dirty()
+        self._render_boxes()
+        return True
+
+    def reorder_method(self, method_name: str, target_index: int) -> bool:
+        """Reorder method cards by moving method_name to target_index."""
+        methods = self.raw_data.get("methods")
+        if not isinstance(methods, dict) or method_name not in methods:
+            return False
+        has_params = "params" in methods
+        params_val = methods.get("params")
+
+        method_keys = [k for k in methods.keys() if k != "params"]
+        if method_name not in method_keys:
+            return False
+        method_keys.remove(method_name)
+        target_index = max(0, min(target_index, len(method_keys)))
+        method_keys.insert(target_index, method_name)
+
+        new_methods = {}
+        if has_params:
+            new_methods["params"] = params_val
+        for k in method_keys:
+            new_methods[k] = methods[k]
+
+        self.raw_data["methods"] = new_methods
         self._mark_dirty()
         self._render_boxes()
         return True
@@ -1610,9 +2046,107 @@ class ConfigViewer(QWidget):
             self._mark_dirty()
             self._render_boxes()
 
-    def _add_universal_param(self, key, value):
+    def _resolve_default_param_value(self, method_name: str, param_key: str):
+        """Look up hierarchical default for param_key:
+        1. methods.params in current file
+        2. Group _base.yaml (methods.params or methods[method_name])
+        3. in/config/agent/<agent>.yaml
+        4. in/config/model/<model>.yaml
+        5. Known defaults fallback
+        """
+        methods = self.raw_data.get("methods")
+        if isinstance(methods, dict):
+            univ_params = methods.get("params")
+            if isinstance(univ_params, dict) and param_key in univ_params:
+                return univ_params[param_key]
+
+        m_spec = (
+            methods.get(method_name)
+            if isinstance(methods, dict) and isinstance(methods.get(method_name), dict)
+            else {}
+        )
+        agent_name = m_spec.get("agent")
+        model_name = m_spec.get("model")
+        if isinstance(model_name, dict):
+            model_name = None
+
+        tree = config_tree()
+        group = self._group_name()
+
+        # 2. Group _base.yaml
+        if tree and group:
+            base_data = _read_group_base(tree, group)
+            base_methods = base_data.get("methods")
+            if isinstance(base_methods, dict):
+                base_params = base_methods.get("params")
+                if isinstance(base_params, dict) and param_key in base_params:
+                    return base_params[param_key]
+                if method_name in base_methods and isinstance(base_methods[method_name], dict):
+                    if param_key in base_methods[method_name]:
+                        return base_methods[method_name][param_key]
+
+        # 3. Agent YAML: in/config/agent/<agent>.yaml
+        if tree and agent_name:
+            agent_file = tree.config_root / "agent" / f"{agent_name}.yaml"
+            if agent_file.is_file():
+                try:
+                    adata = yaml.safe_load(agent_file.read_text(encoding="utf-8")) or {}
+                    if param_key in adata:
+                        return adata[param_key]
+                    if "agent" in adata and isinstance(adata["agent"], dict) and param_key in adata["agent"]:
+                        return adata["agent"][param_key]
+                except Exception:
+                    pass
+
+        # 4. Model YAML: in/config/model/<model>.yaml
+        if tree and model_name:
+            model_file = tree.config_root / "model" / f"{model_name}.yaml"
+            if model_file.is_file():
+                try:
+                    mdata = yaml.safe_load(model_file.read_text(encoding="utf-8")) or {}
+                    if param_key in mdata:
+                        return mdata[param_key]
+                    if "model" in mdata and isinstance(mdata["model"], dict) and param_key in mdata["model"]:
+                        return mdata["model"][param_key]
+                except Exception:
+                    pass
+
+        # 5. Known fallback
+        known = {
+            "lr": 0.0003,
+            "learning_rate": 0.0003,
+            "batch_size": 64,
+            "gamma": 0.99,
+            "ent_coef": 0.01,
+            "blend_ent_coef": 0.05,
+            "logic_lr": 0.001,
+            "blender_lr": 0.0005,
+            "target_entropy": -1.0,
+            "cql_alpha": 1.0,
+            "tau": 0.005,
+            "clip_range": 0.2,
+            "n_epochs": 10,
+            "epochs_per_interval": 25,
+            "eval_interval_epochs": 5,
+            "num_steps": 128,
+            "max_epochs": 25,
+            "accelerator": "cpu",
+            "weight_decay": 0.0001,
+        }
+        if param_key in known:
+            return known[param_key]
+
+        if "lr" in param_key:
+            return 0.0003
+        if "coef" in param_key or "alpha" in param_key:
+            return 0.01
+        return 0.0
+
+    def _add_universal_param(self, key, value=None):
         if not key:
             return
+        if value is None or value == "":
+            value = self._resolve_default_param_value("", key)
         methods = self.raw_data.setdefault("methods", {})
         params = methods.setdefault("params", {})
         params[key] = _parse_yaml_value(value)
@@ -1625,9 +2159,11 @@ class ConfigViewer(QWidget):
             self._mark_dirty()
             self._render_boxes()
 
-    def _add_method_param(self, method_name, param_key, value):
+    def _add_method_param(self, method_name, param_key, value=None):
         if not param_key:
             return
+        if value is None or value == "":
+            value = self._resolve_default_param_value(method_name, param_key)
         methods = self.raw_data.setdefault("methods", {})
         m_spec = methods.setdefault(method_name, {})
         m_spec[param_key] = _parse_yaml_value(value)

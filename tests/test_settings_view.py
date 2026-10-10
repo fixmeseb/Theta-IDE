@@ -459,4 +459,23 @@ class TestHotkeysSettingsPage(unittest.TestCase):
         self.assertAlmostEqual(self.window.zoom_factor, 1.2)
         self.assertEqual(self.window.zoom_percent_label.text(), "120%")
 
+    def test_show_resolved_defaults_appearance_setting(self):
+        """Appearance tab contains Show Resolved Defaults toggle and syncs with settings_manager."""
+        self.settings.show_tab("appearance")
+        self.assertIsNotNone(self.window.toggle_resolved_defaults)
+        self.assertFalse(self.window.settings_manager.show_resolved_defaults)
+
+        # Toggle on
+        self.window.toggle_resolved_defaults.setChecked(True)
+        self.assertTrue(self.window.settings_manager.show_resolved_defaults)
+
+        # Verify viewer view_mode updates
+        viewer = self.window.config_tab_manager.current_viewer()
+        self.assertEqual(viewer.view_mode, "resolved")
+
+        # Toggle off
+        self.window.toggle_resolved_defaults.setChecked(False)
+        self.assertFalse(self.window.settings_manager.show_resolved_defaults)
+        self.assertEqual(viewer.view_mode, "overrides")
+
 

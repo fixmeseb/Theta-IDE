@@ -590,6 +590,58 @@ class TestConfigViewer(unittest.TestCase):
         self.viewer._on_field_edited("dataset_path", "in/datasets/mimic/train.pkl")
         self.assertIn("dataset_path='in/datasets/mimic/train.pkl'", self.viewer.get_overrides())
 
+    def test_method_inline_rename(self):
+        self.viewer.auto_save = False
+        self.viewer.raw_data["methods"] = {"ppo": {"agent": "ppo"}, "cql": {"agent": "cql"}}
+        self.viewer.rename_method("ppo", "ppo_renamed")
+        self.assertIn("ppo_renamed", self.viewer.raw_data["methods"])
+        self.assertNotIn("ppo", self.viewer.raw_data["methods"])
+        self.assertEqual(list(self.viewer.raw_data["methods"].keys()), ["ppo_renamed", "cql"])
+        self.assertTrue(self.viewer.is_dirty)
+
+    def test_method_reordering(self):
+        self.viewer.auto_save = False
+        self.viewer.raw_data["methods"] = {
+            "params": {"lr": 0.001},
+            "m1": {"agent": "ppo"},
+            "m2": {"agent": "cql"},
+            "m3": {"agent": "cew"},
+        }
+        self.viewer.reorder_method("m3", 0)
+        self.assertEqual(list(self.viewer.raw_data["methods"].keys()), ["params", "m3", "m1", "m2"])
+        self.viewer.reorder_method("m1", 2)
+        self.assertEqual(list(self.viewer.raw_data["methods"].keys()), ["params", "m3", "m2", "m1"])
+        self.assertTrue(self.viewer.is_dirty)
+
+    def test_method_param_auto_populates_default(self):
+        self.viewer.raw_data["methods"] = {"ppo": {"agent": "ppo"}}
+        self.viewer._add_method_param("ppo", "ent_coef")
+        self.assertEqual(self.viewer.raw_data["methods"]["ppo"]["ent_coef"], 0.01)
+
+        self.viewer._add_universal_param("lr")
+        self.assertEqual(self.viewer.raw_data["methods"]["params"]["lr"], 0.0003)
+
+    def test_add_overrides_button_and_labels(self):
+        self.assertEqual(self.viewer.btn_add_block.text(), "+ Add Overrides ▾")
+
+    def test_group_double_click_rename(self):
+        root = Path(self.temp_dir.name)
+        group_dir = root / "experiment" / "cartpole"
+        group_dir.mkdir(parents=True, exist_ok=True)
+        exp_file = group_dir / "exp1.yaml"
+        exp_file.write_text("paradigm: online_rl\n", encoding="utf-8")
+
+        self.viewer.load_file(exp_file, "experiment/cartpole/exp1.yaml")
+        self.viewer._start_group_edit()
+        self.viewer.group_editor.setText("cartpole_renamed")
+        renamed_signals = []
+        self.viewer.group_renamed.connect(lambda o, n: renamed_signals.append((o, n)))
+        self.viewer._commit_group_edit()
+
+        self.assertEqual(self.viewer.current_rel_path, "experiment/cartpole_renamed/exp1.yaml")
+        self.assertTrue((root / "experiment" / "cartpole_renamed" / "exp1.yaml").exists())
+        self.assertEqual(renamed_signals, [("cartpole", "cartpole_renamed")])
+
 
 @unittest.skipIf(not HAS_PYQT6, "PyQt6 not installed in current environment")
 class TestComponentsPanel(unittest.TestCase):
