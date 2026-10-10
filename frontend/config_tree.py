@@ -4,7 +4,7 @@ from pathlib import Path
 
 import yaml
 from PyQt6.QtCore import QSize, Qt, pyqtSignal
-from PyQt6.QtGui import QBrush, QColor, QIcon
+from PyQt6.QtGui import QBrush, QColor, QFont, QIcon, QPainter, QPen
 from PyQt6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -18,6 +18,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QStyle,
+    QStyledItemDelegate,
     QToolButton,
     QTreeWidget,
     QTreeWidgetItem,
@@ -227,6 +228,27 @@ def find_config_root():
     return (Path(__file__).resolve().parent.parent / "in" / "config").resolve()
 
 
+class GroupItemDelegate(QStyledItemDelegate):
+    """Delegate rendering subtle underline and extra vertical breathing room for group nodes."""
+
+    def paint(self, painter, option, index):
+        super().paint(painter, option, index)
+        data = index.data(Qt.ItemDataRole.UserRole)
+        if isinstance(data, dict) and data.get("is_group"):
+            painter.save()
+            painter.setPen(QPen(QColor("#3c3836"), 1))
+            y = option.rect.bottom()
+            painter.drawLine(option.rect.left() + 4, y, option.rect.right() - 4, y)
+            painter.restore()
+
+    def sizeHint(self, option, index):
+        hint = super().sizeHint(option, index)
+        data = index.data(Qt.ItemDataRole.UserRole)
+        if isinstance(data, dict) and data.get("is_group"):
+            return QSize(hint.width(), hint.height() + 8)
+        return hint
+
+
 class ConfigTreeWidget(QWidget):
     """File tree that mirrors in/config/ and allows selecting, duplicating,
 
@@ -372,6 +394,7 @@ class ConfigTreeWidget(QWidget):
 
         # Tree widget
         self.tree = QTreeWidget()
+        self.tree.setItemDelegate(GroupItemDelegate(self.tree))
         self.tree.setHeaderHidden(True)
         self.tree.setIndentation(14)
         self.tree.itemClicked.connect(self._on_item_clicked)
@@ -501,13 +524,14 @@ class ConfigTreeWidget(QWidget):
                     elif data.get("is_global_config"):
                         child.setIcon(0, svg_icon("config", TOOL_ICON_COLORS))
                     elif data.get("type") == "dir":
+                        if data.get("is_group"):
+                            child.setIcon(0, QIcon())
+                            continue
                         rel = data.get("rel_path", "")
                         dname = Path(data.get("path", "")).name
                         c_icon = CATEGORY_ICONS.get(dname) or CATEGORY_ICONS.get(rel)
                         if c_icon:
                             child.setIcon(0, svg_icon(c_icon, TOOL_ICON_COLORS))
-                        elif self.mode in ("experiments", "experiment") and ("/" not in rel or (rel.startswith("experiment/") and rel.count("/") == 1)):
-                            child.setIcon(0, svg_icon("workflows", TOOL_ICON_COLORS))
                         elif dname == "methods":
                             child.setIcon(0, svg_icon("components", TOOL_ICON_COLORS))
                         else:
@@ -526,13 +550,18 @@ class ConfigTreeWidget(QWidget):
 
         node = QTreeWidgetItem(parent_widget, [display_name])
 
+        is_group = bool(self.mode in ("experiments", "experiment") and (dir_path.parent == self.root_dir or dir_path.parent.name in ("experiment", "experiments")))
+
         # Semantic icon based on directory category / purpose
         icon_name = CATEGORY_ICONS.get(name) or CATEGORY_ICONS.get(rel_path)
-        if icon_name:
+        if is_group:
+            # Top-level experiment group (e.g. cartpole, mimic): no icon, larger text, subtle line
+            f = node.font(0)
+            f.setPointSize(f.pointSize() + 2)
+            f.setBold(True)
+            node.setFont(0, f)
+        elif icon_name:
             node.setIcon(0, svg_icon(icon_name, TOOL_ICON_COLORS))
-        elif self.mode in ("experiments", "experiment") and (dir_path.parent == self.root_dir or dir_path.parent.name in ("experiment", "experiments")):
-            # Top-level experiment group (e.g. cartpole, mimic)
-            node.setIcon(0, svg_icon("workflows", TOOL_ICON_COLORS))
         elif name == "methods":
             node.setIcon(0, svg_icon("components", TOOL_ICON_COLORS))
         else:
@@ -542,6 +571,7 @@ class ConfigTreeWidget(QWidget):
             "type": "dir",
             "path": str(dir_path),
             "rel_path": rel_path,
+            "is_group": is_group,
         })
         node.setToolTip(0, rel_path)
 

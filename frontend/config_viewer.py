@@ -23,6 +23,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSpinBox,
     QToolButton,
     QVBoxLayout,
@@ -38,9 +39,9 @@ from .widgets import ComboBox, DoubleSpinBox, SpinBox, label, SmoothScrollArea
 
 # Forms stay readable on wide windows: the column of boxes stops growing past CONTENT_WIDTH,
 # and fields in label/field rows are capped by kind so a number doesn't get a 1,000px box.
-CONTENT_WIDTH = 860
-NUMBER_FIELD_WIDTH = 200
-TEXT_FIELD_WIDTH = 380
+CONTENT_WIDTH = 960
+NUMBER_FIELD_WIDTH = 140
+TEXT_FIELD_WIDTH = 220
 
 SUBTLE_ICON_COLORS = {
     (QIcon.Mode.Normal, QIcon.State.Off): "muted",
@@ -290,21 +291,28 @@ class MethodDragHandle(QToolButton):
 
 
 class MethodCardsContainer(QWidget):
-    """Container holding method cards that accepts drops and displays drop indicator line."""
+    """Container holding method cards arranged in 2 columns that accepts drops and displays drop indicator line."""
 
     def __init__(self, viewer, parent=None):
         super().__init__(parent)
         self.viewer = viewer
-        self.layout = QVBoxLayout(self)
-        self.layout.setContentsMargins(0, 0, 0, 0)
-        self.layout.setSpacing(10)
+        self.grid = QGridLayout(self)
+        self.grid.setContentsMargins(0, 0, 0, 0)
+        self.grid.setHorizontalSpacing(14)
+        self.grid.setVerticalSpacing(14)
+        self.grid.setColumnStretch(0, 1)
+        self.grid.setColumnStretch(1, 1)
         self.setAcceptDrops(True)
         self._drop_index = None
         self._cards: list[tuple[str, QWidget]] = []
 
     def add_method_card(self, method_name: str, card: QWidget):
+        card.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        idx = len(self._cards)
+        row = idx // 2
+        col = idx % 2
         self._cards.append((method_name, card))
-        self.layout.addWidget(card)
+        self.grid.addWidget(card, row, col)
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasFormat("application/x-theta-method"):
@@ -314,7 +322,8 @@ class MethodCardsContainer(QWidget):
 
     def dragMoveEvent(self, event):
         if event.mimeData().hasFormat("application/x-theta-method"):
-            idx = self._calculate_drop_index(event.position().y())
+            pos = event.position().toPoint()
+            idx = self._calculate_drop_index(pos)
             if idx != self._drop_index:
                 self._drop_index = idx
                 self.update()
@@ -339,13 +348,20 @@ class MethodCardsContainer(QWidget):
         else:
             event.ignore()
 
-    def _calculate_drop_index(self, y: float) -> int:
+    def _calculate_drop_index(self, pos: QPoint) -> int:
         if not self._cards:
             return 0
         for i, (_, card) in enumerate(self._cards):
             geom = card.geometry()
-            if y < geom.center().y():
+            if pos.y() < geom.top():
                 return i
+            if geom.top() <= pos.y() <= geom.bottom():
+                if pos.x() < geom.center().x():
+                    return i
+                col = i % 2
+                if col == 1 or i == len(self._cards) - 1:
+                    if pos.x() >= geom.center().x():
+                        return i + 1
         return len(self._cards)
 
     def paintEvent(self, event):
@@ -356,18 +372,16 @@ class MethodCardsContainer(QWidget):
                 acc_color = QColor(theme_color("accent"))
             except Exception:
                 acc_color = QColor("#fabd2f")
-            pen = QPen(acc_color, 2)
+            pen = QPen(acc_color, 3)
             painter.setPen(pen)
-            w = self.width()
-            if self._drop_index == 0:
-                y = self._cards[0][1].geometry().top() - 2
-            elif self._drop_index >= len(self._cards):
-                y = self._cards[-1][1].geometry().bottom() + 4
+            if self._drop_index < len(self._cards):
+                card = self._cards[self._drop_index][1]
+                g = card.geometry()
+                painter.drawLine(g.left() - 4, g.top() + 4, g.left() - 4, g.bottom() - 4)
             else:
-                top_bottom = self._cards[self._drop_index - 1][1].geometry().bottom()
-                next_top = self._cards[self._drop_index][1].geometry().top()
-                y = (top_bottom + next_top) // 2
-            painter.drawLine(8, y, w - 8, y)
+                card = self._cards[-1][1]
+                g = card.geometry()
+                painter.drawLine(g.right() + 4, g.top() + 4, g.right() + 4, g.bottom() - 4)
             painter.end()
 
 
@@ -968,6 +982,8 @@ class ConfigViewer(QWidget):
     def _cap_form_fields(self):
         """Limit field widths in every label/field form and two-column grid."""
         for grid in self.container.findChildren(QGridLayout):
+            if isinstance(grid.parentWidget(), MethodCardsContainer):
+                continue
             for index in range(grid.count()):
                 widget = grid.itemAt(index).widget()
                 if isinstance(widget, QAbstractSpinBox):
@@ -1052,12 +1068,14 @@ class ConfigViewer(QWidget):
         desc_row.setSpacing(10)
         desc_row.addWidget(label("Description"))
         self.txt_description = QLineEdit()
+        self.txt_description.setMaximumWidth(520)
         self.txt_description.setPlaceholderText("Optional commit-style notes or hypothesis for this experiment...")
         self.txt_description.setText(str(data.get("description") or ""))
         self.txt_description.textChanged.connect(
             lambda v: self._on_field_edited("description", v.strip()) if v.strip() else self.raw_data.pop("description", None)
         )
-        desc_row.addWidget(self.txt_description, 1)
+        desc_row.addWidget(self.txt_description)
+        desc_row.addStretch()
         self.field_widgets["description"] = self.txt_description
         box_budget.add_layout(desc_row)
 
@@ -1068,6 +1086,7 @@ class ConfigViewer(QWidget):
         # Total timesteps
         form_budget.addWidget(label("Total Timesteps"), 0, 0)
         self.spin_timesteps = SpinBox()
+        self.spin_timesteps.setMaximumWidth(NUMBER_FIELD_WIDTH)
         self.spin_timesteps.setRange(100, 100_000_000)
         self.spin_timesteps.setSingleStep(1_000)
         self.spin_timesteps.setValue(int(data.get("total_timesteps") or resolved.get("total_timesteps") or 10000))
@@ -1080,11 +1099,11 @@ class ConfigViewer(QWidget):
         seed_row = QHBoxLayout()
         seed_row.setSpacing(6)
         self.spin_seed = SpinBox()
+        self.spin_seed.setMaximumWidth(NUMBER_FIELD_WIDTH)
         self.spin_seed.setRange(0, 2147483647)
         self.spin_seed.setValue(int(data.get("seed") if data.get("seed") is not None else resolved.get("seed", 42)))
         self.spin_seed.valueChanged.connect(lambda v: self._on_field_edited("seed", v))
-        seed_row.addWidget(self.spin_seed, 1)
-        self.field_widgets["seed"] = self.spin_seed
+        seed_row.addWidget(self.spin_seed)
 
         btn_rand_seed = QToolButton()
         btn_rand_seed.setText("Random")
@@ -1097,6 +1116,7 @@ class ConfigViewer(QWidget):
         # Intervals count
         form_budget.addWidget(label("Intervals Count"), 1, 0)
         self.spin_intervals = SpinBox()
+        self.spin_intervals.setMaximumWidth(NUMBER_FIELD_WIDTH)
         self.spin_intervals.setRange(1, 100)
         self.spin_intervals.setValue(int(data.get("intervals_count") or resolved.get("intervals_count") or 4))
         self.spin_intervals.valueChanged.connect(lambda v: self._on_field_edited("intervals_count", v))
@@ -1106,6 +1126,7 @@ class ConfigViewer(QWidget):
         # Eval episodes
         form_budget.addWidget(label("Eval Episodes"), 1, 2)
         self.spin_eval_ep = SpinBox()
+        self.spin_eval_ep.setMaximumWidth(NUMBER_FIELD_WIDTH)
         self.spin_eval_ep.setRange(0, 1000)
         self.spin_eval_ep.setValue(int(data.get("eval_episodes") if data.get("eval_episodes") is not None else resolved.get("eval_episodes", 100)))
         self.spin_eval_ep.valueChanged.connect(lambda v: self._on_field_edited("eval_episodes", v))
@@ -1176,34 +1197,33 @@ class ConfigViewer(QWidget):
             p_layout.setSpacing(8)
 
             p_header = QHBoxLayout()
-            p_header.addWidget(label("Universal Parameters (methods.params)", "cardTitle"))
+            if not has_params:
+                p_header.addWidget(label("(inherited from base)", "muted"))
             p_header.addStretch()
             if has_params:
-                btn_rm_params = QToolButton()
-                btn_rm_params.setText("Remove Block")
-                btn_rm_params.setToolTip("Remove all universal parameters")
+                btn_rm_params = _make_subtle_tool_button("trash", "Remove universal parameters block", size=24, icon_size=14)
                 btn_rm_params.clicked.connect(lambda: self.remove_block("params"))
                 p_header.addWidget(btn_rm_params)
-            else:
-                p_header.addWidget(label("(inherited from base)", "muted"))
             p_layout.addLayout(p_header)
 
             curr_params = methods_dict.get("params", {}) if has_params else resolved_params
             for pk, pv in list(curr_params.items()):
                 p_row = QHBoxLayout()
                 p_row.setSpacing(8)
-                lbl_k = label(str(pk), "eyebrow")
+                lbl_k = label(str(pk))
                 lbl_k.setMinimumWidth(140)
                 p_row.addWidget(lbl_k)
 
                 line_v = QLineEdit(str(pv if pv is not None else ""))
+                line_v.setMaximumWidth(TEXT_FIELD_WIDTH)
                 line_v.textChanged.connect(lambda val, k=pk: self._on_universal_param_edited(k, val))
-                p_row.addWidget(line_v, 1)
+                p_row.addWidget(line_v)
 
                 if has_params and pk in methods_dict.get("params", {}):
                     btn_del_p = _make_subtle_tool_button("close", f"Remove universal parameter '{pk}'", size=20, icon_size=12)
                     btn_del_p.clicked.connect(lambda _, k=pk: self._remove_universal_param(k))
                     p_row.addWidget(btn_del_p)
+                p_row.addStretch()
                 p_layout.addLayout(p_row)
 
             # Row to add a new universal parameter
@@ -1211,11 +1231,12 @@ class ConfigViewer(QWidget):
             add_p_row.setSpacing(6)
             combo_add_pk = ComboBox()
             combo_add_pk.setEditable(True)
+            combo_add_pk.setMaximumWidth(220)
             combo_add_pk.setPlaceholderText("Add universal parameter (e.g. lr, gamma)...")
             common_universal = ["lr", "gamma", "epochs_per_interval", "eval_interval_epochs", "cql_alpha", "weight_decay", "batch_size", "ent_coef"]
             combo_add_pk.addItems(common_universal)
             combo_add_pk.setEditText("")
-            add_p_row.addWidget(combo_add_pk, 1)
+            add_p_row.addWidget(combo_add_pk)
 
             btn_do_add_p = _make_subtle_tool_button("plus", "Add universal parameter with default value", size=26, icon_size=14)
             btn_do_add_p.setStyleSheet("""
@@ -1234,6 +1255,7 @@ class ConfigViewer(QWidget):
                 lambda: self._add_universal_param(combo_add_pk.currentText().strip())
             )
             add_p_row.addWidget(btn_do_add_p)
+            add_p_row.addStretch()
             p_layout.addLayout(add_p_row)
 
             m_layout.addWidget(p_card)
@@ -1319,6 +1341,7 @@ class ConfigViewer(QWidget):
                 elif tree and tree.paradigms.get(paradigm):
                     permitted = [a.name for a in tree.agents_for(paradigm)]
                     txt_agent = ComboBox()
+                    txt_agent.setMaximumWidth(TEXT_FIELD_WIDTH)
                     txt_agent.addItems(permitted)
                     if agent_val and agent_val not in permitted:
                         txt_agent.insertItem(0, agent_val)
@@ -1334,6 +1357,7 @@ class ConfigViewer(QWidget):
                     )
                 else:
                     txt_agent = QLineEdit(agent_val)
+                    txt_agent.setMaximumWidth(TEXT_FIELD_WIDTH)
                     txt_agent.textChanged.connect(
                         lambda v, mn=m_name: self._on_method_param_edited(mn, "agent", v)
                     )
@@ -1348,6 +1372,7 @@ class ConfigViewer(QWidget):
                     model_str = str(model_val)
                 if tree and tree.models and not isinstance(model_val, dict):
                     txt_model = ComboBox()
+                    txt_model.setMaximumWidth(TEXT_FIELD_WIDTH)
                     known = sorted(tree.models)
                     txt_model.addItems(known)
                     if model_str and model_str not in known:
@@ -1359,6 +1384,7 @@ class ConfigViewer(QWidget):
                     )
                 else:
                     txt_model = QLineEdit(model_str)
+                    txt_model.setMaximumWidth(TEXT_FIELD_WIDTH)
                     txt_model.textChanged.connect(
                         lambda v, mn=m_name: self._on_method_param_edited(mn, "model", v)
                     )
@@ -1368,42 +1394,48 @@ class ConfigViewer(QWidget):
                 if "lr" in m_spec:
                     row_lr = QHBoxLayout()
                     spin_lr = CompactDoubleSpinBox()
+                    spin_lr.setMaximumWidth(NUMBER_FIELD_WIDTH)
                     spin_lr.setDecimals(6)
                     spin_lr.setRange(0.000001, 1.0)
                     spin_lr.setSingleStep(0.0001)
                     spin_lr.setValue(float(m_spec["lr"]))
                     spin_lr.valueChanged.connect(lambda v, mn=m_name: self._on_method_param_edited(mn, "lr", v))
-                    row_lr.addWidget(spin_lr, 1)
+                    row_lr.addWidget(spin_lr)
                     btn_del = _make_subtle_tool_button("close", "Remove lr parameter", size=20, icon_size=12)
                     btn_del.clicked.connect(lambda _, mn=m_name: self._remove_method_param(mn, "lr"))
                     row_lr.addWidget(btn_del)
+                    row_lr.addStretch()
                     sc_layout.addRow("Learning Rate (lr)", row_lr)
 
                 # Batch size
                 if "batch_size" in m_spec:
                     row_bs = QHBoxLayout()
                     spin_bs = SpinBox()
+                    spin_bs.setMaximumWidth(NUMBER_FIELD_WIDTH)
                     spin_bs.setRange(1, 131072)
                     spin_bs.setValue(int(m_spec["batch_size"]))
                     spin_bs.valueChanged.connect(lambda v, mn=m_name: self._on_method_param_edited(mn, "batch_size", v))
-                    row_bs.addWidget(spin_bs, 1)
+                    row_bs.addWidget(spin_bs)
                     btn_del = _make_subtle_tool_button("close", "Remove batch_size parameter", size=20, icon_size=12)
                     btn_del.clicked.connect(lambda _, mn=m_name: self._remove_method_param(mn, "batch_size"))
                     row_bs.addWidget(btn_del)
+                    row_bs.addStretch()
                     sc_layout.addRow("Batch Size", row_bs)
 
                 # Gamma
                 if "gamma" in m_spec:
                     row_g = QHBoxLayout()
                     spin_g = DoubleSpinBox()
+                    spin_g.setMaximumWidth(NUMBER_FIELD_WIDTH)
                     spin_g.setDecimals(4)
                     spin_g.setRange(0.0, 1.0)
                     spin_g.setValue(float(m_spec["gamma"]))
                     spin_g.valueChanged.connect(lambda v, mn=m_name: self._on_method_param_edited(mn, "gamma", v))
-                    row_g.addWidget(spin_g, 1)
+                    row_g.addWidget(spin_g)
                     btn_del = _make_subtle_tool_button("close", "Remove gamma parameter", size=20, icon_size=12)
                     btn_del.clicked.connect(lambda _, mn=m_name: self._remove_method_param(mn, "gamma"))
                     row_g.addWidget(btn_del)
+                    row_g.addStretch()
                     sc_layout.addRow("Discount Factor (γ)", row_g)
 
                 # Extra hyperparameters (logic_lr, blender_lr, etc.)
@@ -1413,13 +1445,15 @@ class ConfigViewer(QWidget):
                     if isinstance(extra_v, (int, float, str, bool)):
                         row_extra = QHBoxLayout()
                         line_extra = QLineEdit(str(extra_v))
+                        line_extra.setMaximumWidth(NUMBER_FIELD_WIDTH)
                         line_extra.textChanged.connect(
                             lambda v, mn=m_name, ek=extra_k: self._on_method_param_edited(mn, ek, v)
                         )
-                        row_extra.addWidget(line_extra, 1)
+                        row_extra.addWidget(line_extra)
                         btn_del = _make_subtle_tool_button("close", f"Remove hyperparameter '{extra_k}'", size=20, icon_size=12)
                         btn_del.clicked.connect(lambda _, mn=m_name, ek=extra_k: self._remove_method_param(mn, ek))
                         row_extra.addWidget(btn_del)
+                        row_extra.addStretch()
                         sc_layout.addRow(str(extra_k), row_extra)
 
                 # Row to add a new hyperparameter to this method
@@ -1427,11 +1461,12 @@ class ConfigViewer(QWidget):
                 add_h_row.setSpacing(6)
                 combo_add_hk = ComboBox()
                 combo_add_hk.setEditable(True)
+                combo_add_hk.setMaximumWidth(200)
                 combo_add_hk.setPlaceholderText("Add hyperparameter (e.g. ent_coef)...")
                 common_hyper = ["ent_coef", "blend_ent_coef", "logic_lr", "blender_lr", "target_entropy", "cql_alpha", "tau", "clip_range"]
                 combo_add_hk.addItems(common_hyper)
                 combo_add_hk.setEditText("")
-                add_h_row.addWidget(combo_add_hk, 1)
+                add_h_row.addWidget(combo_add_hk)
 
                 btn_do_add_h = _make_subtle_tool_button("plus", "Add hyperparameter with default value", size=26, icon_size=14)
                 btn_do_add_h.setStyleSheet("""
@@ -1450,6 +1485,7 @@ class ConfigViewer(QWidget):
                     lambda _, mn=m_name, ck=combo_add_hk: self._add_method_param(mn, ck.currentText().strip())
                 )
                 add_h_row.addWidget(btn_do_add_h)
+                add_h_row.addStretch()
                 sc_layout.addRow(add_h_row)
 
                 method_container.add_method_card(m_name, sub_card)
@@ -1463,6 +1499,7 @@ class ConfigViewer(QWidget):
         choices = permitted_agents or (sorted(tree.models) if tree else [])
         add_row.addWidget(label("Add method:" if permitted_agents else "Add model:", "muted"))
         self.combo_new_method = ComboBox()
+        self.combo_new_method.setMaximumWidth(200)
         self.combo_new_method.addItems(choices)
         self.combo_new_method.setToolTip(
             f"Agents permitted by {paradigm}" if permitted_agents
@@ -1491,7 +1528,6 @@ class ConfigViewer(QWidget):
         if show_env:
             box_env = ConfigBox("Environment Settings", "Simulation rollouts and vectorized environment settings")
             box_env_header = QHBoxLayout()
-            box_env_header.addWidget(label("3. Environment Settings", "eyebrow"))
             box_env_header.addStretch()
             if has_env_dict:
                 btn_rm_env = _make_subtle_tool_button("trash", "Remove environment overrides", size=24, icon_size=14)
@@ -1508,6 +1544,7 @@ class ConfigViewer(QWidget):
 
             grid_e.addWidget(label("Parallel Envs (num_envs)"), 0, 0)
             spin_num_envs = SpinBox()
+            spin_num_envs.setMaximumWidth(NUMBER_FIELD_WIDTH)
             spin_num_envs.setRange(1, 1024)
             spin_num_envs.setValue(int(env_source.get("num_envs") or 4))
             spin_num_envs.valueChanged.connect(lambda v: self._on_nested_edited("env", "num_envs", v))
@@ -1515,6 +1552,7 @@ class ConfigViewer(QWidget):
 
             grid_e.addWidget(label("Steps per Env (num_steps)"), 0, 2)
             spin_num_steps = SpinBox()
+            spin_num_steps.setMaximumWidth(NUMBER_FIELD_WIDTH)
             spin_num_steps.setRange(1, 100000)
             spin_num_steps.setValue(int(env_source.get("num_steps") or 128))
             spin_num_steps.valueChanged.connect(lambda v: self._on_nested_edited("env", "num_steps", v))
@@ -1530,7 +1568,6 @@ class ConfigViewer(QWidget):
         if show_trainer:
             box_tr = ConfigBox("Trainer Settings", "Training accelerator and epoch constraints")
             tr_header = QHBoxLayout()
-            tr_header.addWidget(label("Trainer Settings", "eyebrow"))
             tr_header.addStretch()
             if has_trainer:
                 btn_rm_tr = _make_subtle_tool_button("trash", "Remove trainer overrides", size=24, icon_size=14)
@@ -1547,6 +1584,7 @@ class ConfigViewer(QWidget):
 
             grid_t.addWidget(label("Accelerator"), 0, 0)
             combo_accel = ComboBox()
+            combo_accel.setMaximumWidth(NUMBER_FIELD_WIDTH)
             combo_accel.addItems(["cpu", "gpu", "mps", "auto"])
             combo_accel.setCurrentText(str(tr_source.get("accelerator") or "cpu"))
             combo_accel.currentTextChanged.connect(lambda v: self._on_nested_edited("trainer", "accelerator", v))
@@ -1554,6 +1592,7 @@ class ConfigViewer(QWidget):
 
             grid_t.addWidget(label("Max Epochs"), 0, 2)
             spin_epochs = SpinBox()
+            spin_epochs.setMaximumWidth(NUMBER_FIELD_WIDTH)
             spin_epochs.setRange(1, 1000)
             spin_epochs.setValue(int(tr_source.get("max_epochs") or 1))
             spin_epochs.valueChanged.connect(lambda v: self._on_nested_edited("trainer", "max_epochs", v))
@@ -1570,7 +1609,6 @@ class ConfigViewer(QWidget):
         if show_dataset:
             box_ds = ConfigBox("Dataset Specification", "Offline transition datasets and replay buffer paths")
             ds_header = QHBoxLayout()
-            ds_header.addWidget(label("Dataset Configuration", "eyebrow"))
             ds_header.addStretch()
             if has_dataset and not is_offline_req:
                 btn_rm_ds = _make_subtle_tool_button("trash", "Remove dataset configuration", size=24, icon_size=14)
@@ -1587,6 +1625,7 @@ class ConfigViewer(QWidget):
             ds_path_row = QHBoxLayout()
             ds_path_row.setSpacing(6)
             self.combo_dataset_path = ComboBox()
+            self.combo_dataset_path.setMaximumWidth(320)
             self.combo_dataset_path.setEditable(True)
             for dp in discover_datasets():
                 self.combo_dataset_path.addItem(dp)
@@ -1614,17 +1653,19 @@ class ConfigViewer(QWidget):
             self.combo_dataset_path.currentTextChanged.connect(
                 lambda v: (self._on_field_edited("dataset_path", v.strip()), _update_ds_status(v))
             )
-            ds_path_row.addWidget(self.combo_dataset_path, 1)
+            ds_path_row.addWidget(self.combo_dataset_path)
 
             btn_browse_ds = QToolButton()
             btn_browse_ds.setText("Browse…")
             btn_browse_ds.clicked.connect(lambda: self._browse_dataset_path())
             ds_path_row.addWidget(btn_browse_ds)
             ds_path_row.addWidget(lbl_status)
+            ds_path_row.addStretch()
             ds_form.addRow("Dataset Path", ds_path_row)
 
             # offline_datasets text line
             self.txt_offline_ds = QLineEdit()
+            self.txt_offline_ds.setMaximumWidth(320)
             off_val = data.get("offline_datasets") or resolved.get("offline_datasets") or ""
             if isinstance(off_val, list):
                 off_val = ", ".join(str(x) for x in off_val)
@@ -1633,7 +1674,10 @@ class ConfigViewer(QWidget):
             self.txt_offline_ds.textChanged.connect(
                 lambda v: self._on_field_edited("offline_datasets", [x.strip() for x in v.split(",") if x.strip()] if "," in v else v.strip())
             )
-            ds_form.addRow("Offline Datasets", self.txt_offline_ds)
+            off_row = QHBoxLayout()
+            off_row.addWidget(self.txt_offline_ds)
+            off_row.addStretch()
+            ds_form.addRow("Offline Datasets", off_row)
 
             box_ds.add_layout(ds_form)
             self.boxes_layout.addWidget(box_ds)
@@ -1645,7 +1689,6 @@ class ConfigViewer(QWidget):
         if show_res:
             box_res = ConfigBox("Compute & Slurm Resources", "Resource allocation for cluster runs (time, gpus, cores, memory)")
             res_header = QHBoxLayout()
-            res_header.addWidget(label("Compute & Slurm Resources", "eyebrow"))
             res_header.addStretch()
             if has_res:
                 btn_rm_res = _make_subtle_tool_button("trash", "Remove compute resources overrides", size=24, icon_size=14)
@@ -1662,21 +1705,25 @@ class ConfigViewer(QWidget):
 
             grid_res.addWidget(label("Time Limit"), 0, 0)
             txt_time = QLineEdit(str(res_dict.get("time") or "02:00:00"))
+            txt_time.setMaximumWidth(NUMBER_FIELD_WIDTH)
             txt_time.textChanged.connect(lambda v: self._on_nested_edited("resources", "time", v))
             grid_res.addWidget(txt_time, 0, 1)
 
             grid_res.addWidget(label("GPUs"), 0, 2)
             txt_gpus = QLineEdit(str(res_dict.get("gpus") if res_dict.get("gpus") is not None else 0))
+            txt_gpus.setMaximumWidth(NUMBER_FIELD_WIDTH)
             txt_gpus.textChanged.connect(lambda v: self._on_nested_edited("resources", "gpus", v))
             grid_res.addWidget(txt_gpus, 0, 3)
 
             grid_res.addWidget(label("CPU Cores"), 1, 0)
             txt_cores = QLineEdit(str(res_dict.get("cores") if res_dict.get("cores") is not None else 4))
+            txt_cores.setMaximumWidth(NUMBER_FIELD_WIDTH)
             txt_cores.textChanged.connect(lambda v: self._on_nested_edited("resources", "cores", v))
             grid_res.addWidget(txt_cores, 1, 1)
 
             grid_res.addWidget(label("Memory"), 1, 2)
             txt_mem = QLineEdit(str(res_dict.get("memory") or "16G"))
+            txt_mem.setMaximumWidth(NUMBER_FIELD_WIDTH)
             txt_mem.textChanged.connect(lambda v: self._on_nested_edited("resources", "memory", v))
             grid_res.addWidget(txt_mem, 1, 3)
 
@@ -1694,7 +1741,6 @@ class ConfigViewer(QWidget):
         if show_sweeper:
             box_sw = ConfigBox("Hyperparameter Sweeper (Optuna)", "Automated parameter sweeps via Hydra & Optuna")
             sw_header = QHBoxLayout()
-            sw_header.addWidget(label("Hyperparameter Sweeper (Optuna)", "eyebrow"))
             sw_header.addStretch()
             if has_sweeper:
                 btn_rm_sw = _make_subtle_tool_button("trash", "Remove hyperparameter sweeper overrides", size=24, icon_size=14)
@@ -1715,11 +1761,13 @@ class ConfigViewer(QWidget):
 
             sw_form.addWidget(label("Study Name"), 0, 0)
             txt_sw_name = QLineEdit(str(sw_dict.get("study_name") or self.current_path.stem if self.current_path else "sweep"))
+            txt_sw_name.setMaximumWidth(200)
             txt_sw_name.textChanged.connect(lambda v: self._on_sweeper_edited("study_name", v))
             sw_form.addWidget(txt_sw_name, 0, 1)
 
             sw_form.addWidget(label("Trials"), 0, 2)
             spin_trials = SpinBox()
+            spin_trials.setMaximumWidth(NUMBER_FIELD_WIDTH)
             spin_trials.setRange(1, 10000)
             spin_trials.setValue(int(sw_dict.get("n_trials") or 50))
             spin_trials.valueChanged.connect(lambda v: self._on_sweeper_edited("n_trials", v))
@@ -1727,6 +1775,7 @@ class ConfigViewer(QWidget):
 
             sw_form.addWidget(label("Direction"), 1, 0)
             combo_dir = ComboBox()
+            combo_dir.setMaximumWidth(NUMBER_FIELD_WIDTH)
             combo_dir.addItems(["maximize", "minimize"])
             combo_dir.setCurrentText(str(sw_dict.get("direction") or "maximize"))
             combo_dir.currentTextChanged.connect(lambda v: self._on_sweeper_edited("direction", v))
@@ -1734,6 +1783,7 @@ class ConfigViewer(QWidget):
 
             sw_form.addWidget(label("Parallel Jobs"), 1, 2)
             spin_jobs = SpinBox()
+            spin_jobs.setMaximumWidth(NUMBER_FIELD_WIDTH)
             spin_jobs.setRange(1, 64)
             spin_jobs.setValue(int(sw_dict.get("n_jobs") or 1))
             spin_jobs.valueChanged.connect(lambda v: self._on_sweeper_edited("n_jobs", v))
