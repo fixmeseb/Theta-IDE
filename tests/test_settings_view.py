@@ -305,7 +305,10 @@ class TestHotkeysSettingsPage(unittest.TestCase):
             self.assertIn(pid, self.settings.pane_conflict_labels)
 
         # Card 3 Menu shortcuts
-        self.assertEqual(len(self.settings.menu_shortcut_edits), 9)
+        self.assertEqual(len(self.settings.menu_shortcut_edits), 12)
+        self.assertIn("zoom_in", self.settings.menu_shortcut_edits)
+        self.assertIn("zoom_out", self.settings.menu_shortcut_edits)
+        self.assertIn("reset_zoom", self.settings.menu_shortcut_edits)
 
     def test_customize_pane_hotkey_and_persistence(self):
         """User can change hotkey combo for any pane and it persists across sessions."""
@@ -396,4 +399,83 @@ class TestHotkeysSettingsPage(unittest.TestCase):
         self.assertEqual(self.window.settings_manager.get("shortcuts", "launch_training"), "F5")
         if "launch_training" in self.window.menu_actions:
             self.assertEqual(self.window.menu_actions["launch_training"].shortcut().toString(), "F5")
+
+    def test_customize_zoom_shortcuts(self):
+        """User can bind custom hotkeys for zoom in and zoom out and reset them."""
+        from PyQt6.QtGui import QKeySequence
+
+        self.assertIn("zoom_in", self.settings.menu_shortcut_edits)
+        self.assertIn("zoom_out", self.settings.menu_shortcut_edits)
+        self.assertIn("reset_zoom", self.settings.menu_shortcut_edits)
+
+        # Default shortcuts
+        self.assertEqual(self.settings.menu_shortcut_edits["zoom_in"].keySequence().toString(), "Ctrl++")
+        self.assertEqual(self.settings.menu_shortcut_edits["zoom_out"].keySequence().toString(), "Ctrl+-")
+        self.assertEqual(self.settings.menu_shortcut_edits["reset_zoom"].keySequence().toString(), "Ctrl+0")
+
+        # Customize zoom_in to Ctrl+= and zoom_out to Ctrl+Shift+-
+        edit_in = self.settings.menu_shortcut_edits["zoom_in"]
+        edit_in.setKeySequence(QKeySequence("Ctrl+="))
+        self.assertEqual(self.window.settings_manager.get("shortcuts", "zoom_in"), "Ctrl+=")
+        if "zoom_in" in self.window.menu_actions:
+            self.assertIn("Ctrl+=", [s.toString() for s in self.window.menu_actions["zoom_in"].shortcuts()])
+
+        # Reset menu shortcuts
+        self.settings._reset_menu_shortcuts_to_default()
+        self.assertEqual(self.window.settings_manager.get("shortcuts", "zoom_in"), "Ctrl++")
+        self.assertEqual(self.settings.menu_shortcut_edits["zoom_in"].keySequence().toString(), "Ctrl++")
+
+    def test_zoom_actions_and_scaling(self):
+        """Window zoom_in, zoom_out, and reset_zoom update zoom factor and persist."""
+        self.assertEqual(self.window.zoom_factor, 1.0)
+        self.assertEqual(self.window.settings_manager.zoom, 1.0)
+
+        # Zoom in
+        self.window.zoom_in()
+        self.assertAlmostEqual(self.window.zoom_factor, 1.1)
+        self.assertAlmostEqual(self.window.settings_manager.zoom, 1.1)
+        self.assertAlmostEqual(self.window.theme_manager.zoom, 1.1)
+
+        # Zoom out twice
+        self.window.zoom_out()
+        self.window.zoom_out()
+        self.assertAlmostEqual(self.window.zoom_factor, 0.9)
+        self.assertAlmostEqual(self.window.settings_manager.zoom, 0.9)
+
+        # Reset zoom
+        self.window.reset_zoom()
+        self.assertAlmostEqual(self.window.zoom_factor, 1.0)
+        self.assertAlmostEqual(self.window.settings_manager.zoom, 1.0)
+
+    def test_display_scaling_appearance_card(self):
+        """Appearance tab contains interactive zoom slider and controls."""
+        self.settings.show_tab("appearance")
+        self.assertIsNotNone(self.window.zoom_slider)
+        self.assertIsNotNone(self.window.zoom_percent_label)
+        self.assertEqual(self.window.zoom_percent_label.text(), "100%")
+
+        # Changing zoom via slider
+        self.window.zoom_slider.setValue(120)
+        self.assertAlmostEqual(self.window.zoom_factor, 1.2)
+        self.assertEqual(self.window.zoom_percent_label.text(), "120%")
+
+    def test_show_resolved_defaults_appearance_setting(self):
+        """Appearance tab contains Show Resolved Defaults toggle and syncs with settings_manager."""
+        self.settings.show_tab("appearance")
+        self.assertIsNotNone(self.window.toggle_resolved_defaults)
+        self.assertFalse(self.window.settings_manager.show_resolved_defaults)
+
+        # Toggle on
+        self.window.toggle_resolved_defaults.setChecked(True)
+        self.assertTrue(self.window.settings_manager.show_resolved_defaults)
+
+        # Verify viewer view_mode updates
+        viewer = self.window.config_tab_manager.current_viewer()
+        self.assertEqual(viewer.view_mode, "resolved")
+
+        # Toggle off
+        self.window.toggle_resolved_defaults.setChecked(False)
+        self.assertFalse(self.window.settings_manager.show_resolved_defaults)
+        self.assertEqual(viewer.view_mode, "overrides")
+
 

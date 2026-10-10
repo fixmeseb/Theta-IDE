@@ -1,5 +1,6 @@
 """About dialog with a shaded, software-rendered ASCII theta sculpture and animation settings."""
 import math
+import sys
 import time
 
 from PyQt6.QtCore import Qt, QTimer, QRectF
@@ -181,7 +182,8 @@ class AsciiTheta(QWidget):
         height = cell * 1.8
         left = (self.width() - cell * self.columns) / 2
         top = (self.height() - height * self.rows) / 2
-        font = QFont("Consolas")
+        mono_family = "Menlo" if sys.platform == "darwin" else "Consolas"
+        font = QFont(mono_family)
         font.setStyleHint(QFont.StyleHint.Monospace)
         font.setPixelSize(max(8, int(height)))
         painter.setFont(font)
@@ -349,7 +351,7 @@ class AnimationSettingsDialog(QDialog):
         name_lbl = QLabel(title)
         name_lbl.setStyleSheet("font-weight: 600; font-size: 12px;")
         val_lbl = QLabel(fmt_fn(init_val))
-        val_lbl.setStyleSheet(f"font-family: monospace; font-size: 12px; font-weight: 600; color: {theme_color('primary')};")
+        val_lbl.setStyleSheet(f"font-family: Menlo, Monaco, 'Consolas', monospace; font-size: 12px; font-weight: 600; color: {theme_color('primary')};")
         hdr.addWidget(name_lbl)
         hdr.addStretch()
         hdr.addWidget(val_lbl)

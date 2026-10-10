@@ -5,35 +5,36 @@ Pure-Python, zero-dependency logger conforming to Theta-IDE's execution contract
   2. Emits standard columns (`step`, `transitions`, `eval/reward`, `val/loss`, etc.)
   3. Writes standard `runtime.json` metadata for reproducibility.
 """
+
 from __future__ import annotations
 
 import csv
 import json
 import os
-from pathlib import Path
 import time
-from typing import Any, Dict, List, Optional, Union
+from pathlib import Path
+from typing import Any, Dict, List
 
 
 class ContractLogger:
     """Manages telemetry output adhering to Theta-IDE's universal metrics contract.
-    
+
     Can be used by any framework (Stable-Baselines3, CleanRL, TensorFlow, JAX, Scikit-Learn)
     without requiring PyTorch or PyTorch Lightning.
     """
 
     def __init__(
         self,
-        log_dir: Optional[Union[str, Path]] = None,
-        group: Optional[str] = None,
-        experiment_id: Optional[str] = None,
-        method_name: Optional[str] = None,
-        base_dir: Union[str, Path] = "results/logs",
-        version: Optional[str] = None,
+        log_dir: str | Path | None = None,
+        group: str | None = None,
+        experiment_id: str | None = None,
+        method_name: str | None = None,
+        base_dir: str | Path = "results/logs",
+        version: str | None = None,
         flush_interval: int = 1,
     ):
         """Initialize logger.
-        
+
         Args:
             log_dir: Direct path to log directory. If provided, overrides group/exp/method.
             group: Experiment group name (e.g. 'csc510', 'mimic').
@@ -68,7 +69,7 @@ class ContractLogger:
         self._init_csv()
 
     @staticmethod
-    def _resolve_version_dir(target_dir: Path, explicit_version: Optional[str] = None) -> Path:
+    def _resolve_version_dir(target_dir: Path, explicit_version: str | None = None) -> Path:
         """Find or create appropriate version_X directory."""
         if explicit_version:
             return target_dir / explicit_version
@@ -95,7 +96,7 @@ class ContractLogger:
         """Read existing CSV header if resuming, else initialize empty fieldnames."""
         if self.metrics_csv_path.exists() and self.metrics_csv_path.stat().st_size > 0:
             try:
-                with open(self.metrics_csv_path, "r", encoding="utf-8") as f:
+                with open(self.metrics_csv_path, encoding="utf-8") as f:
                     reader = csv.reader(f)
                     header = next(reader, None)
                     if header:
@@ -113,7 +114,7 @@ class ContractLogger:
         existing_rows: List[Dict[str, Any]] = []
         if self.metrics_csv_path.exists():
             try:
-                with open(self.metrics_csv_path, "r", encoding="utf-8") as f:
+                with open(self.metrics_csv_path, encoding="utf-8") as f:
                     reader = csv.DictReader(f)
                     existing_rows = list(reader)
             except Exception:
@@ -129,12 +130,12 @@ class ContractLogger:
     def log(
         self,
         metrics: Dict[str, Any],
-        step: Optional[int] = None,
-        transitions: Optional[Union[int, float]] = None,
-        epoch: Optional[int] = None,
+        step: int | None = None,
+        transitions: int | float | None = None,
+        epoch: int | None = None,
     ) -> None:
         """Log a dictionary of metrics adhering to standard Theta-IDE columns.
-        
+
         Args:
             metrics: Key-value metric pairs (e.g. {'eval/reward': 150.0, 'val/loss': 0.05}).
             step: Global optimizer step. If None, auto-increments.
@@ -180,9 +181,7 @@ class ContractLogger:
                 if k not in all_keys:
                     all_keys.append(k)
             # Sort prioritized fields first
-            sorted_fields = [k for k in base_order if k in all_keys] + [
-                k for k in all_keys if k not in base_order
-            ]
+            sorted_fields = [k for k in base_order if k in all_keys] + [k for k in all_keys if k not in base_order]
             self._rewrite_csv_with_new_fields(sorted_fields)
 
         # Append row to CSV
@@ -202,10 +201,10 @@ class ContractLogger:
         self,
         reward_mean: float,
         reward_std: float = 0.0,
-        step: Optional[int] = None,
-        transitions: Optional[Union[int, float]] = None,
-        epoch: Optional[int] = None,
-        extra: Optional[Dict[str, Any]] = None,
+        step: int | None = None,
+        transitions: int | float | None = None,
+        epoch: int | None = None,
+        extra: Dict[str, Any] | None = None,
     ) -> None:
         """Convenience method for logging evaluation rollout performance."""
         payload: Dict[str, Any] = {
@@ -232,9 +231,9 @@ class ContractLogger:
 
     def save_runtime_metadata(
         self,
-        config: Optional[Dict[str, Any]] = None,
-        training_time_seconds: Optional[float] = None,
-        extra: Optional[Dict[str, Any]] = None,
+        config: Dict[str, Any] | None = None,
+        training_time_seconds: float | None = None,
+        extra: Dict[str, Any] | None = None,
     ) -> Path:
         """Save runtime.json metadata compliant with NeSyRL/Theta-IDE conventions."""
         end_time = time.time()

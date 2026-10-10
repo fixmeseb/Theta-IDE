@@ -377,10 +377,12 @@ class TerminalWidget(QWidget):
     session_started = pyqtSignal()
     session_exited = pyqtSignal(int)
 
-    def __init__(self, cwd: Optional[str] = None, parent: Optional[QWidget] = None):
+    def __init__(self, cwd: Optional[str] = None, parent: Optional[QWidget] = None,
+                 command: Optional[list[str]] = None, env: Optional[dict[str, str]] = None):
         super().__init__(parent)
         self.cwd = cwd or str(Path.cwd())
-        self.pty = PtySession(cwd=self.cwd, parent=self)
+        self.pty = PtySession(cwd=self.cwd, command=command, parent=self)
+        self.pty.extra_env = dict(env or {})
         self.bridge = TerminalBridge(self)
         self._is_ready = False
         self._pending_theme: Optional[dict] = None
@@ -426,6 +428,9 @@ class TerminalWidget(QWidget):
             self.apply_theme(self._pending_theme)
             self._pending_theme = None
 
+        if hasattr(self, "_font_size") and self._font_size:
+            self.bridge.font_size_received.emit(self._font_size)
+
         # Only claim focus if the terminal is currently visible to the user
         if self.isVisible():
             self.focus_terminal()
@@ -456,6 +461,16 @@ class TerminalWidget(QWidget):
         self.fit_terminal()
         self.focus_terminal()
 
+    def configure(self, command: Optional[list[str]] = None, cwd: Optional[str] = None,
+                  env: Optional[dict[str, str]] = None):
+        """Set the shell, start folder and extra environment. Applies from the next shell
+        started (New Shell / restart); the running one is left alone."""
+        self.pty.command = command
+        if cwd:
+            self.cwd = cwd
+            self.pty.cwd = cwd
+        self.pty.extra_env = dict(env or {})
+
     def clear(self):
         """Clear and reset xterm terminal viewport."""
         self.bridge.clear_requested.emit()
@@ -464,6 +479,12 @@ class TerminalWidget(QWidget):
         """Trigger fitAddon.fit() in xterm.js."""
         if self._is_ready:
             self.web_view.page().runJavaScript("if (typeof fitTerminal === 'function') fitTerminal();")
+
+    def set_font_size(self, size: int):
+        """Update terminal font size and refit."""
+        self._font_size = size
+        if self._is_ready:
+            self.bridge.font_size_received.emit(size)
 
     def focus_terminal(self):
         """Focus keyboard events on the terminal."""
@@ -646,7 +667,8 @@ class TerminalWidget(QWidget):
 class TerminalPanel(QWidget):
     """Pure, modern interactive terminal pane with compact toolbar controls."""
 
-    def __init__(self, cwd: Optional[str] = None, parent: Optional[QWidget] = None):
+    def __init__(self, cwd: Optional[str] = None, parent: Optional[QWidget] = None,
+                 command: Optional[list[str]] = None, env: Optional[dict[str, str]] = None):
         super().__init__(parent)
         self.cwd = cwd or str(Path.cwd())
 
@@ -687,7 +709,7 @@ class TerminalPanel(QWidget):
         root_layout.addWidget(self.toolbar)
 
         # Full-bleed, edge-to-edge interactive terminal
-        self.terminal = TerminalWidget(cwd=self.cwd, parent=self)
+        self.terminal = TerminalWidget(cwd=self.cwd, parent=self, command=command, env=env)
         root_layout.addWidget(self.terminal, 1)
 
         self.terminal.session_started.connect(self._on_session_started)
@@ -722,6 +744,10 @@ class TerminalPanel(QWidget):
 
     def _clear_terminal(self):
         self.terminal.clear()
+
+    def set_font_size(self, size: int):
+        """Update font size of underlying terminal."""
+        self.terminal.set_font_size(size)
 
     def apply_theme(self, theme_dict: dict):
         """Apply active theme palette to terminal and toolbar."""

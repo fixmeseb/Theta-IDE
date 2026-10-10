@@ -3,11 +3,12 @@
 Dispatches training to the appropriate script (defaults to src/app/train.py)
 and handles framework engines (pytorch/lightning, sb3, cleanrl, custom scripts).
 """
+
 from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Tuple
 
 DEFAULT_ENGINE_SCRIPT = "src/app/train.py"
 
@@ -21,9 +22,9 @@ ENGINE_SCRIPT_MAP = {
 
 
 def resolve_engine(
-    method_cfg: Optional[Dict[str, Any]] = None,
-    cfg: Optional[Any] = None,
-) -> Tuple[str, Optional[str]]:
+    method_cfg: Dict[str, Any] | None = None,
+    cfg: Any | None = None,
+) -> Tuple[str, str | None]:
     """Resolve the target script entrypoint and optional custom Python interpreter.
 
     Resolution order for script:
@@ -63,9 +64,7 @@ def resolve_engine(
         engine_name = m_cfg.get("engine")
         if not engine_name and cfg is not None and hasattr(cfg, "agent") and cfg.agent is not None:
             engine_name = (
-                getattr(cfg.agent, "engine", None)
-                if not hasattr(cfg.agent, "get")
-                else cfg.agent.get("engine")
+                getattr(cfg.agent, "engine", None) if not hasattr(cfg.agent, "get") else cfg.agent.get("engine")
             )
 
         if engine_name:

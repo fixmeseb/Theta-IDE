@@ -35,6 +35,14 @@ if PROJECT_ROOT not in sys.path:
 if os.path.join(PROJECT_ROOT, "src") not in sys.path:
     sys.path.insert(0, os.path.join(PROJECT_ROOT, "src"))
 
+# ---------------------------------------------------------------------------
+#  Helpers
+# ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+#  Method Styling — imported from plot.base
+# ---------------------------------------------------------------------------
+from plot.base import clean_label
+from plot.base import get_style as get_method_style
 from src.usr.eval.early_prediction.model import (
     SepsisLSTM,
     SepsisTransformer,
@@ -44,25 +52,17 @@ from src.usr.eval.early_prediction.model import (
     normalize_features,
 )
 
-# ---------------------------------------------------------------------------
-#  Helpers
-# ---------------------------------------------------------------------------
-# ---------------------------------------------------------------------------
-#  Method Style Registry — imported from the unified source of truth
-# ---------------------------------------------------------------------------
-from src.usr.methods.method_style_registry import get_style as get_method_style
-
 
 def pretty(name: str) -> str:
-    return get_method_style(name)["label"]
+    return clean_label(name)
 
 
 def color(name: str):
-    return get_method_style(name)["color"]
+    return get_method_style(name).get("color") or "#1f77b4"
 
 
 def marker(name: str) -> str:
-    return get_method_style(name)["marker"]
+    return get_method_style(name).get("marker") or "o"
 
 
 from src.app.pipeline.datasets import resolve_mimic_npz_path
@@ -484,15 +484,15 @@ def plot_ep_shock_over_tau(ep_shock_results, report_dir):
         ("Non-Shock Cohort (y=0)", "non_shock", "ep_shock_over_tau_non_shock.png"),
     ]
 
-    from src.usr.methods.method_style_registry import METHOD_STYLE
+    from plot.base import QUALITATIVE_PALETTE
 
-    all_colors = [v["color"] for v in METHOD_STYLE.values() if v.get("color")] + [
+    all_colors = list(QUALITATIVE_PALETTE) + [
         "tab:brown",
         "tab:pink",
         "tab:gray",
         "tab:olive",
     ]
-    all_markers = [v["marker"] for v in METHOD_STYLE.values() if v.get("marker")] + ["v", "<", ">", "p"]
+    all_markers = ["o", "s", "^", "D", "v", "<", ">", "p"]
 
     for cohort_title, cohort_key, fname in cohort_configs:
         fig, ax = plt.subplots(figsize=(12, 7))

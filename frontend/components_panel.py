@@ -50,37 +50,26 @@ class ComponentsPanel(QWidget):
 
         # 1. Components Tree (extends to top on the left)
         self.components_tree = ConfigTreeWidget(mode="components")
-        self.components_tree.setMinimumWidth(220)
+        self.components_tree.setMinimumWidth(320)
         self.components_tree.file_selected.connect(self.on_component_selected)
         self.splitter.addWidget(self.components_tree)
 
-        # 2. Right Side Section (contains actions bar and viewer / preview)
+        # Square buttons located at the top of the filetree next to 'create new component'
+        self.btn_save = self.components_tree.btn_save
+        self.btn_hub = self.components_tree.btn_hub
+        self.btn_toggle_raw = self.components_tree.btn_toggle_raw
+        if self.btn_save is not None:
+            self.btn_save.clicked.connect(self.save_current)
+        if self.btn_hub is not None:
+            self.btn_hub.clicked.connect(self.toggle_hub)
+        if self.btn_toggle_raw is not None:
+            self.btn_toggle_raw.clicked.connect(lambda: self.toggle_raw_preview())
+
+        # 2. Right Side Section (contains viewer / preview)
         right_panel = QWidget()
         right_layout = QVBoxLayout(right_panel)
         right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.setSpacing(10)
-
-        # ── Actions bar (lives in the right side section) ─────────────────────
-        actions_bar = QHBoxLayout()
-        actions_bar.setSpacing(8)
-
-        actions_bar.addStretch()
-
-        self.btn_toggle_raw = QPushButton("View Raw YAML")
-        self.btn_toggle_raw.setCheckable(True)
-        self.btn_toggle_raw.setChecked(False)
-        self.btn_toggle_raw.setToolTip("Toggle side-by-side view of the raw YAML file content")
-        self.btn_toggle_raw.clicked.connect(lambda: self.toggle_raw_preview())
-        actions_bar.addWidget(self.btn_toggle_raw)
-
-        self.btn_hub = QPushButton("Component Hub")
-        self.btn_hub.setCheckable(True)
-        self.btn_hub.setChecked(False)
-        self.btn_hub.setToolTip("Browse and install new RL methods, models, and environments from the Community Hub")
-        self.btn_hub.clicked.connect(self.toggle_hub)
-        actions_bar.addWidget(self.btn_hub)
-
-        right_layout.addLayout(actions_bar)
+        right_layout.setSpacing(0)
 
         # ── Content Stack (Switch between Parameters and Component Hub) ──────
         self.content_stack = QStackedWidget()
@@ -89,8 +78,14 @@ class ComponentsPanel(QWidget):
         self.content_splitter = QSplitter(Qt.Orientation.Horizontal)
 
         self.viewer = ConfigViewer()
+        self.viewer.auto_save = True
+        self.viewer.btn_save = self.btn_save
         self.viewer.config_changed.connect(self._on_viewer_changed)
         self.viewer.save_requested.connect(self._on_viewer_saved)
+        self.viewer.dirty_state_changed.connect(self.components_tree.set_file_dirty)
+        self.viewer.file_renamed.connect(self._on_component_file_renamed)
+        if self.btn_save is not None:
+            self.viewer.dirty_changed.connect(self.btn_save.setEnabled)
         self.content_splitter.addWidget(self.viewer)
 
         # 3. Raw YAML Preview Panel (hidden by default)
@@ -129,7 +124,7 @@ class ComponentsPanel(QWidget):
         right_layout.addWidget(self.content_stack, 1)
 
         self.splitter.addWidget(right_panel)
-        self.splitter.setSizes([260, 1000])
+        self.splitter.setSizes([320, 1000])
         root_layout.addWidget(self.splitter, 1)
 
     def init_default_component(self):
@@ -152,6 +147,13 @@ class ComponentsPanel(QWidget):
         self.active_path = Path(file_path)
         self.active_rel_path = rel_path
         self.viewer.load_file(self.active_path, rel_path)
+        self._update_raw_yaml_view()
+
+    def _on_component_file_renamed(self, old_rel, new_rel):
+        self.active_path = self.viewer.current_path
+        self.active_rel_path = new_rel
+        self.components_tree.current_rel_path = new_rel
+        self.components_tree.populate()
         self._update_raw_yaml_view()
 
     def get_hub_client(self):

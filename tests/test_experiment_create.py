@@ -15,6 +15,7 @@ from frontend.config_model import (
     ConfigTree,
     ExperimentGroup,
     add_method,
+    default_method_model,
     experiment_yaml,
     group_base_yaml,
     remove_method,
@@ -239,6 +240,180 @@ class TestMethodEditing(unittest.TestCase):
         data = {"methods": {"params": {"lr": 1}, "a": {"agent": "ppo"}}}
         remove_method(data, "a")
         self.assertNotIn("methods", data)
+
+
+class TestAgentlessParadigms(unittest.TestCase):
+    """supervised declares `allowed_agents: []` and still requires methods to be
+    non-empty, which it satisfies with model-only methods (ep_lstm, ep_transformer).
+    Nothing in the panel may assume a method has an agent."""
+
+    def setUp(self):
+        self.tree = ConfigTree.discover()
+        self.supervised = self.tree.paradigms["supervised"]
+
+    def test_supervised_declares_no_agents(self):
+        self.assertEqual(self.tree.agents_for("supervised"), [])
+
+    def test_the_shipped_supervised_methods_have_no_agent(self):
+        base = self.tree.group("early_prediction")
+        self.assertTrue(base.base_methods, "early_prediction/_base.yaml should declare methods")
+        for name, spec in base.base_methods.items():
+            self.assertNotIn("agent", spec, f"{name} unexpectedly names an agent")
+
+    def test_a_model_alone_writes_a_methods_block(self):
+        data = parse(experiment_yaml("early_prediction", "demo", self.supervised, model="lstm"))
+        self.assertEqual(data["methods"], {"lstm": {"model": "lstm"}})
+
+    def test_a_model_only_method_omits_the_agent_key(self):
+        """A null agent would fail the registry lookup rather than be ignored."""
+        data = parse(experiment_yaml("early_prediction", "demo", self.supervised, model="lstm"))
+        self.assertNotIn("agent", data["methods"]["lstm"])
+
+    def test_add_method_without_an_agent_is_named_for_the_model(self):
+        data = {}
+        self.assertEqual(add_method(data, None, "transformer"), "transformer")
+
+    def test_add_method_without_an_agent_writes_the_model_only(self):
+        data = {}
+        name = add_method(data, None, "lstm")
+        self.assertEqual(data["methods"][name], {"model": "lstm"})
+
+    def test_repeated_model_only_methods_still_get_suffixes(self):
+        data = {}
+        add_method(data, None, "lstm")
+        self.assertEqual(add_method(data, None, "lstm"), "lstm_2")
+
+    def test_unique_name_handles_a_missing_agent(self):
+        self.assertEqual(unique_method_name({"lstm"}, None, "lstm"), "lstm_2")
+
+    def test_removing_a_model_only_method_works(self):
+        data = {}
+        name = add_method(data, None, "lstm")
+        self.assertTrue(remove_method(data, name))
+
+    def test_default_model_follows_the_group_base(self):
+        group = self.tree.group("early_prediction")
+        self.assertIn(default_method_model(group, self.tree.models), {"lstm", "transformer"})
+
+    def test_default_model_falls_back_for_a_group_with_no_methods(self):
+        self.assertEqual(default_method_model(self.tree.group("cartpole"), self.tree.models), "dnn")
+
+    def test_default_model_tolerates_an_unknown_group(self):
+        self.assertEqual(default_method_model(None, self.tree.models), "dnn")
+
+    def test_default_model_picks_a_known_model_when_the_fallback_is_absent(self):
+        self.assertEqual(default_method_model(None, {"transformer"}), "transformer")
+
+    def test_a_generated_supervised_experiment_satisfies_non_empty_methods(self):
+        """The constraint the paradigm declares is the one this must not break."""
+        self.assertEqual(self.supervised.requires.get("methods"), "non_empty")
+        data = parse(experiment_yaml("early_prediction", "demo", self.supervised, model="lstm"))
+        self.assertTrue(data["methods"])
+
+
+class TestEveryAgentlessParadigm(unittest.TestCase):
+    """Whatever agent-less paradigms the config declares, the panel must generate
+    valid experiments for all of them. Discovering them from the tree rather than
+    naming them means a paradigm added later is covered without editing this."""
+
+    def setUp(self):
+        self.tree = ConfigTree.discover()
+        self.agentless = {
+            name: paradigm
+            for name, paradigm in self.tree.paradigms.items()
+            if not self.tree.agents_for(name)
+        }
+
+    def test_there_is_more_than_one(self):
+        """supervised and unsupervised both forgo agents; neither is a special case."""
+        self.assertGreaterEqual(len(self.agentless), 2, f"found only {sorted(self.agentless)}")
+
+    def test_each_generates_a_methods_block_from_a_model_alone(self):
+        for name, paradigm in self.agentless.items():
+            with self.subTest(paradigm=name):
+                data = parse(experiment_yaml("grp", "demo", paradigm, None, "lstm"))
+                self.assertEqual(data["methods"], {"lstm": {"model": "lstm"}})
+
+    def test_none_of_them_writes_an_agent_key(self):
+        for name, paradigm in self.agentless.items():
+            with self.subTest(paradigm=name):
+                data = parse(experiment_yaml("grp", "demo", paradigm, None, "lstm"))
+                for spec in data["methods"].values():
+                    self.assertNotIn("agent", spec)
+
+    def test_each_omits_the_fields_it_forbids(self):
+        for name, paradigm in self.agentless.items():
+            with self.subTest(paradigm=name):
+                data = parse(experiment_yaml("grp", "demo", paradigm, None, "lstm"))
+                for field_name in ("intervals_count", "eval_episodes"):
+                    if not paradigm.field_enabled(field_name):
+                        self.assertNotIn(field_name, data)
+
+    def test_each_requires_non_empty_methods(self):
+        """Which is why a model-only method had to become possible at all."""
+        for name, paradigm in self.agentless.items():
+            with self.subTest(paradigm=name):
+                self.assertEqual(paradigm.requires.get("methods"), "non_empty")
+
+    def test_a_generated_base_pins_what_the_root_defaults_would_break(self):
+        for name, paradigm in self.agentless.items():
+            with self.subTest(paradigm=name):
+                base = parse(group_base_yaml("mimic", name, paradigm))
+                self.assertEqual(base["intervals_count"], 1)
+                self.assertEqual(base["eval_episodes"], 0)
+
+    def test_every_group_on_such_a_paradigm_declares_model_only_methods(self):
+        checked = 0
+        for group_name, group in self.tree.experiment_groups.items():
+            if group.paradigm not in self.agentless or not group.base_methods:
+                continue
+            for method_name, spec in group.base_methods.items():
+                if method_name == "params" or not isinstance(spec, dict):
+                    continue
+                with self.subTest(group=group_name, method=method_name):
+                    self.assertNotIn("agent", spec)
+                    self.assertIn("model", spec)
+                checked += 1
+        self.assertGreater(checked, 0, "expected at least one agent-less group with methods")
+
+
+class TestUnsupervisedParadigmInThePanel(unittest.TestCase):
+    """The panel reads in/config/paradigms/, so a new paradigm needs no UI change —
+    this is the test that would fail if that stopped being true."""
+
+    def setUp(self):
+        self.tree = ConfigTree.discover()
+
+    def test_the_panel_offers_the_paradigm(self):
+        self.assertIn("unsupervised", self.tree.paradigms)
+
+    def test_it_permits_no_agents(self):
+        self.assertEqual(self.tree.agents_for("unsupervised"), [])
+
+    def test_it_permits_only_offline_environments(self):
+        envs = self.tree.environments_for("unsupervised")
+        self.assertTrue(envs, "expected at least one permitted environment")
+        for env in envs:
+            self.assertTrue(env.offline_only, f"{env.name} is not offline-only")
+
+    def test_it_disables_the_rollout_fields_with_a_reason(self):
+        paradigm = self.tree.paradigms["unsupervised"]
+        for field_name in ("intervals_count", "eval_episodes"):
+            self.assertFalse(paradigm.field_enabled(field_name))
+            self.assertIn("unsupervised", paradigm.disabled_reason(field_name))
+
+    def test_the_shipped_group_is_bound_to_it(self):
+        group = self.tree.group("representation")
+        self.assertEqual(group.paradigm, "unsupervised")
+        self.assertEqual(group.env, "mimic")
+
+    def test_a_new_method_defaults_to_the_architecture_the_group_uses(self):
+        group = self.tree.group("representation")
+        self.assertEqual(default_method_model(group, self.tree.models), "autoencoder")
+
+    def test_the_autoencoder_models_are_visible_to_the_panel(self):
+        self.assertIn("autoencoder", self.tree.models)
+        self.assertIn("dense_autoencoder", self.tree.models)
 
 
 class TestParadigmInheritance(unittest.TestCase):

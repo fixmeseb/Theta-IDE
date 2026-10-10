@@ -4,6 +4,7 @@ Builds Hydra override lists from structured method config dicts.
 """
 
 from src.app.pipeline.config import normalize_agent_name
+from src.app.pipeline.validation import paradigm_uses_agents, paradigm_uses_static_dataset
 
 
 def _format_hydra_val(x):
@@ -41,6 +42,8 @@ def build_method_overrides(
         list[str]: Hydra override arguments ready to pass to train.py.
     """
     paradigm = cfg.get("paradigm", "offline_rl") if cfg is not None else "offline_rl"
+    # Asked once: a paradigm with no allowed agents drives its methods by model.
+    uses_agents = paradigm_uses_agents(paradigm)
     agent_val = method_cfg.get("agent")
     if isinstance(agent_val, dict):
         agent_algo = (
@@ -99,7 +102,7 @@ def build_method_overrides(
     _flatten_overrides("model", merged_model_params)
     _flatten_overrides("agent", merged_agent_params)
 
-    if paradigm == "supervised":
+    if not uses_agents:
         overrides.append(f"++model.name={agent_name}")
         overrides.append(f"++agent.name={agent_name}")
     else:
@@ -112,7 +115,7 @@ def build_method_overrides(
             ]
         )
 
-    if (paradigm in ("offline_rl", "supervised")) and dataset_path is not None:
+    if paradigm_uses_static_dataset(paradigm) and dataset_path is not None:
         safe_ds_path = str(dataset_path)
         if any(c in safe_ds_path for c in "(), "):
             safe_ds_path = f'"{safe_ds_path}"'
@@ -127,6 +130,14 @@ def build_method_overrides(
         "model_params",
         "explicit_modules",
         "style",
+        "label",
+        "color",
+        "marker",
+        "linestyle",
+        "display_name",
+        "base",
+        "template",
+        "from_method",
         "tune",
         "search_space",
         "from_study",
@@ -163,7 +174,7 @@ def build_method_overrides(
         if k in merged_agent_params or k in merged_model_params:
             continue
 
-        if paradigm == "supervised":
+        if not uses_agents:
             _flatten_overrides(f"model.{k}", v)
             if k in ("lr", "batch_size", "epochs", "epochs_per_interval", "eval_interval_epochs", "weight_decay"):
                 overrides.append(f"++{k}={_format_hydra_val(v)}")
@@ -211,7 +222,7 @@ def build_method_overrides(
         for k, v in tune_dict.items():
             if "." in k:
                 full_k = k
-            elif paradigm == "supervised":
+            elif not uses_agents:
                 full_k = f"model.{k}"
             elif k in _MODEL_KEYS:
                 full_k = f"model.{k}"

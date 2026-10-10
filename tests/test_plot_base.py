@@ -71,3 +71,104 @@ def test_get_active_aliases_and_is_method_active():
     assert has_filter_none is False
     assert BasePlotter.is_method_active("any_method", aliases_none, has_filter_none)
 
+
+def test_styling_helpers():
+    from plot.base import clean_label, get_style, get_style_info
+
+    # Default without overrides returns method name
+    assert clean_label("my_algo") == "my_algo"
+
+    # Style override for label
+    assert clean_label("my_algo", style_override={"label": "Clean Label"}) == "Clean Label"
+
+    # get_style incorporates overrides
+    style = get_style("my_algo", style_override={"color": "#123456", "linestyle": "--"})
+    assert style["label"] == "my_algo"
+    assert style["color"] == "#123456"
+    assert style["linestyle"] == "--"
+
+    # get_style_info returns tuple
+    c, ls, mk = get_style_info("my_algo", style_override={"color": "#123456", "marker": "s"})
+    assert c == "#123456"
+    assert ls == "-"
+    assert mk == "s"
+
+
+def test_distinct_colors_and_plot_overrides(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    plotter = DummyPlotter("convergence")
+
+    group = "test_grp"
+    exp_id = "test_exp"
+
+    # Create dummy log dirs for two methods: method_one and method_two
+    log_dir_1 = tmp_path / "results" / "logs" / group / exp_id / "method_one" / "version_0"
+    log_dir_2 = tmp_path / "results" / "logs" / group / exp_id / "method_two" / "version_0"
+    log_dir_1.mkdir(parents=True)
+    log_dir_2.mkdir(parents=True)
+
+    df_1 = pd.DataFrame({"transitions": [0, 10, 20], "eval/reward": [1.0, 2.0, 3.0]})
+    df_2 = pd.DataFrame({"transitions": [0, 10, 20], "eval/reward": [0.5, 1.5, 2.5]})
+    df_1.to_csv(log_dir_1 / "metrics.csv", index=False)
+    df_2.to_csv(log_dir_2 / "metrics.csv", index=False)
+
+    out_dir = tmp_path / "results" / "plots" / group / exp_id
+    cfg = {
+        "title": "Custom Benchmark Title",
+        "xlabel": "Custom Env Steps",
+        "ylabel": "Custom Return",
+        "smoothing_window": 1,
+        "x_axis": "transitions",
+        "methods": {
+            "method_one": {"label": "Method 1 Custom", "color": "#ff0000"},
+            # method_two has zero style info: will use method name and auto-assigned distinct color
+            "method_two": {},
+        },
+    }
+
+    # Run plot_metric_series
+    plotter.plot_metric_series(exp_id, group, out_dir, ["eval/reward"], cfg)
+
+    # Verify plot was generated
+    saved_plot = out_dir / "convergence" / "eval_reward.png"
+    assert saved_plot.exists()
+    assert saved_plot.stat().st_size > 0
+
+
+def test_get_effective_config_general_and_plotter_overrides():
+    plotter = DummyPlotter("convergence")
+    plotter.default_cfg = {"smoothing_window": 10, "xlabel": "Default Steps", "dpi": 300}
+
+    # Mock experiment config with general plot options and plotter-specific options
+    exp_cfg = {
+        "group": "cartpole",
+        "plots": {
+            "title": "Global Experiment Title",
+            "xlabel": "Global Steps",
+            "convergence": {
+                "smoothing_window": 3,
+            },
+        },
+        "methods": {
+            "ppo_test": {"agent": "ppo", "model": "dnn"},
+        },
+    }
+    plotter.get_experiment_config = lambda exp_id, exp_config_name=None: exp_cfg
+
+    effective_cfg, group, output_dir = plotter.get_effective_config("cartpole/test_exp")
+
+    # Global plot parameters should be merged
+    assert effective_cfg["title"] == "Global Experiment Title"
+    assert effective_cfg["xlabel"] == "Global Steps"
+
+    # Plotter-specific parameters should override defaults
+    assert effective_cfg["smoothing_window"] == 3
+
+    # Unmodified defaults should persist
+    assert effective_cfg["dpi"] == 300
+
+    # Methods should be passed down
+    assert "methods" in effective_cfg
+    assert "ppo_test" in effective_cfg["methods"]
+
+

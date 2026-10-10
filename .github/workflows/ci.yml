@@ -67,4 +67,4 @@ jobs:
           pip install --upgrade pip
           pip install -e ".[dev,api]"
       - name: Type check
-        run: mypy src/app/pipeline/ src/usr/methods/agent_registry.py src/usr/methods/method_style_registry.py --ignore-missing-imports --follow-imports=silent
+        run: mypy src/app/pipeline/ src/usr/methods/agent_registry.py --ignore-missing-imports --follow-imports=silent

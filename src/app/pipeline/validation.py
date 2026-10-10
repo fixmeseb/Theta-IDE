@@ -18,7 +18,6 @@ import yaml
 from src.app.pipeline.config import normalize_agent_name, parse_methods_dict, resolve_experiment_config_name
 from src.app.pipeline.datasets import resolve_dataset_path
 from src.app.pipeline.exceptions import ConfigurationError
-from src.usr.methods.method_style_registry import METHOD_STYLE
 
 # ---------------------------------------------------------------------------
 # Paradigm registry loading
@@ -59,6 +58,49 @@ def load_paradigm(paradigm_name: str) -> dict:
             f"To add a new paradigm create in/config/paradigms/<name>.yaml."
         )
     return paradigms[paradigm_name]
+
+
+# ---------------------------------------------------------------------------
+# Paradigm capability queries
+# ---------------------------------------------------------------------------
+#
+# The pipeline used to branch on paradigm names - `paradigm == "supervised"`,
+# `paradigm in ("offline_rl", "supervised")` - which meant every new paradigm
+# had to be threaded through a dozen tuples before it could run. These two
+# questions are what those branches were really asking, and both are already
+# answered by the paradigm YAML, so a new file is enough to answer them.
+
+
+def paradigm_uses_agents(paradigm_name: str | None) -> bool:
+    """Whether methods in this paradigm name an RL agent harness.
+
+    An `allowed_agents: []` declaration means no agent is permitted at all, so
+    methods name a model only - supervised and unsupervised both work that way,
+    having no policy that chooses actions. A paradigm that omits the key places
+    no restriction, which is treated as the RL default.
+    """
+    try:
+        defn = load_paradigm(paradigm_name or "")
+    except ConfigurationError:
+        return True  # Unknown paradigm: leave the RL assumption in place.
+    allowed = defn.get("allowed_agents", None)
+    if allowed is None:
+        return True
+    return bool(allowed)
+
+
+def paradigm_uses_static_dataset(paradigm_name: str | None) -> bool:
+    """Whether this paradigm trains from a dataset file rather than a live simulator.
+
+    Declared as `requires: {env.offline_only: true}`, which is the same fact the
+    validator already enforces, so the two cannot drift apart.
+    """
+    try:
+        defn = load_paradigm(paradigm_name or "")
+    except ConfigurationError:
+        return False
+    requires = (defn.get("constraints") or {}).get("requires") or {}
+    return requires.get("env.offline_only") is True
 
 
 # ---------------------------------------------------------------------------
@@ -220,9 +262,6 @@ def validate_experiment_config(cfg: Any, experiment_name: str, is_sweep: bool = 
         except Exception:
             pass
 
-    # --- Method registry checks (non-fatal) ---
-    _validate_method_registrations(cfg, notices)
-
     # --- Offline dataset path checks (non-fatal) ---
     _validate_offline_dataset_paths(cfg, notices)
 
@@ -303,23 +342,6 @@ def _validate_methods_for_paradigm(cfg: Any, paradigm_name: str, paradigm_def: d
                     f"[ConfigurationError] Method '{method_name}' uses agent '{agent_algo}', "
                     f"which is not allowed in paradigm '{paradigm_name}'. Allowed agents: {allowed_agents}."
                 )
-
-
-def _validate_method_registrations(cfg: Any, notices: list[str]) -> None:
-    """Append non-fatal notices for methods not found in METHOD_STYLE registry."""
-    registered = set(METHOD_STYLE.keys())
-
-    methods = parse_methods_dict(cfg)
-
-    for method_name, method_cfg in methods.items():
-        if "style" in method_cfg and isinstance(method_cfg["style"], dict) and method_cfg["style"].get("label"):
-            continue
-        ag = method_cfg.get("agent")
-        base_algo = ag.get("name") if isinstance(ag, dict) else (ag or "")
-        if base_algo and base_algo not in registered and method_name not in registered:
-            notices.append(
-                f"Notice: Method '{method_name}' uses agent '{base_algo}' which might not match a registered agent style."
-            )
 
 
 def _validate_offline_dataset_paths(cfg: Any, notices: list[str]) -> None:

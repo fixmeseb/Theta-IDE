@@ -129,9 +129,20 @@ class Experiment:
     @classmethod
     def from_file(cls, path: Path, root: Path) -> Experiment:
         relative = path.relative_to(root)
+        if relative.parts[0] == "experiment" and len(relative.parts) > 2:
+            group = relative.parts[1]
+        elif len(relative.parts) > 1:
+            group = relative.parts[0]
+        else:
+            group = relative.parent.name or "ungrouped"
+
+        exp_name = relative.with_suffix("").as_posix()
+        if exp_name.startswith("experiment/"):
+            exp_name = exp_name[len("experiment/"):]
+
         return cls(
-            name=relative.with_suffix("").as_posix(),
-            group=relative.parent.name or "ungrouped",
+            name=exp_name,
+            group=group,
             path=path,
             raw=_read_yaml(path),
         )
@@ -165,8 +176,8 @@ class Paradigm:
         name = agent.algorithm if isinstance(agent, Agent) else agent
         if name in self.forbidden_agents:
             return False
-        # An empty allow-list means nothing has been declared valid yet, which is
-        # the current state of the supervised paradigm.
+        # An empty allow-list permits no agent at all. supervised declares one
+        # deliberately: it has no policy, so its methods name a model only.
         return name in self.allowed_agents
 
     def permits_environment(self, environment: Environment) -> bool:
@@ -232,10 +243,34 @@ class ConfigTree:
         self.experiments: dict[str, Experiment] = {}
         if experiment_root.is_dir():
             for path in sorted(experiment_root.glob("**/*.yaml")):
-                if path.name.startswith("_"):
+                if path.name.startswith("_") or path.parent.name == "methods" or "/methods/" in path.as_posix():
                     continue
                 experiment = Experiment.from_file(path, experiment_root)
                 self.experiments[experiment.name] = experiment
+
+    def create_folder(self, group: str, subpath: str) -> Path:
+        """Create a new organizational folder under an experiment group."""
+        folder = self.config_root / "experiment" / group / subpath
+        folder.mkdir(parents=True, exist_ok=True)
+        return folder
+
+    def rename_folder(self, old_path: Path | str, new_name: str) -> Path:
+        """Rename an organizational folder under an experiment group."""
+        old_p = Path(old_path)
+        new_p = old_p.with_name(new_name)
+        if new_p.exists() and not old_p.samefile(new_p):
+            raise FileExistsError(f"A folder named '{new_name}' already exists.")
+        old_p.rename(new_p)
+        return new_p
+
+    def delete_folder(self, folder_path: Path | str) -> bool:
+        """Delete an organizational folder under an experiment group."""
+        import shutil
+        folder_p = Path(folder_path)
+        if folder_p.is_dir():
+            shutil.rmtree(folder_p)
+            return True
+        return False
 
     @classmethod
     def discover(cls, start: Path | None = None) -> ConfigTree:
@@ -248,6 +283,8 @@ class ConfigTree:
         raise FileNotFoundError(f"No in/config directory found above {current}")
 
     def agents_for(self, paradigm: str) -> list[Agent]:
+        if paradigm not in self.paradigms:
+            return []
         rules = self.paradigms[paradigm]
         seen: set[int] = set()
         result: list[Agent] = []
@@ -259,6 +296,8 @@ class ConfigTree:
         return result
 
     def environments_for(self, paradigm: str) -> list[Environment]:
+        if paradigm not in self.paradigms:
+            return []
         rules = self.paradigms[paradigm]
         seen: set[int] = set()
         result: list[Environment] = []
@@ -270,6 +309,8 @@ class ConfigTree:
         return result
 
     def field_enabled(self, paradigm: str, name: str) -> bool:
+        if paradigm not in self.paradigms:
+            return True
         return self.paradigms[paradigm].field_enabled(name)
 
     def experiments_in(self, group: str) -> list[Experiment]:
@@ -303,6 +344,7 @@ class ExperimentGroup:
     paradigm: str | None = None
     env: str | None = None
     has_base: bool = False
+    base_methods: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_dir(cls, directory: Path) -> ExperimentGroup:
@@ -314,7 +356,30 @@ class ExperimentGroup:
         for entry in raw.get("defaults") or []:
             if isinstance(entry, dict):
                 env = entry.get("override /env", env)
-        return cls(name=directory.name, paradigm=raw.get("paradigm"), env=env, has_base=True)
+        methods = raw.get("methods")
+        return cls(
+            name=directory.name,
+            paradigm=raw.get("paradigm"),
+            env=env,
+            has_base=True,
+            base_methods=methods if isinstance(methods, dict) else {},
+        )
+
+
+def default_method_model(group: ExperimentGroup | None, known: Any = (), fallback: str = "dnn") -> str:
+    """The architecture a new agent-less method should name.
+
+    A group whose base already declares methods has settled on an architecture
+    (early_prediction uses lstm and transformer), so follow that rather than
+    impose a default on a group that has already chosen.
+    """
+    for spec in (group.base_methods if group else {}).values():
+        if isinstance(spec, dict) and isinstance(spec.get("model"), str):
+            return spec["model"]
+    names = set(known or ())
+    if not names or fallback in names:
+        return fallback
+    return sorted(names)[0]
 
 
 def group_base_yaml(env: str, paradigm: str, rules: Paradigm | None = None, seed: int = 1) -> str:
@@ -371,9 +436,14 @@ def experiment_yaml(
         lines.append("eval_episodes: 100")
     lines += ["", "tensorboard: true"]
 
-    if agent:
+    # A paradigm with no agents still needs a method, so a model on its own is
+    # enough to write one: supervised groups name methods for the architecture.
+    if agent or model:
         model = model or "dnn"
-        lines += ["", "methods:", f"  {agent}_{model}:", f"    agent: {agent}", f"    model: {model}"]
+        lines += ["", "methods:", f"  {unique_method_name((), agent, model)}:"]
+        if agent:
+            lines.append(f"    agent: {agent}")
+        lines.append(f"    model: {model}")
     return "\n".join(lines) + "\n"
 
 
@@ -446,14 +516,15 @@ class Selection:
         return " ".join(self.command(**kwargs))
 
 
-def unique_method_name(existing: Any, agent: str, model: str) -> str:
+def unique_method_name(existing: Any, agent: str | None, model: str) -> str:
     """A method name free in `existing`, following the <agent>_<model> convention.
 
-    The configs name methods after the agent they run, sometimes with a suffix
-    (ppo_dnn, ppo_blendrl, iql_blendrl_arch1), so a collision gets a numeric
-    suffix rather than a new scheme.
+    The RL configs name methods after the agent they run, sometimes with a
+    suffix (ppo_dnn, ppo_blendrl, iql_blendrl_arch1), so a collision gets a
+    numeric suffix rather than a new scheme. Supervised methods have no agent
+    at all (ep_lstm, ep_transformer), so they are named for the model.
     """
-    base = f"{agent}_{model}" if model else str(agent)
+    base = f"{agent}_{model}" if agent and model else (agent or model or "method")
     taken = set(existing or ())
     if base not in taken:
         return base
@@ -463,11 +534,15 @@ def unique_method_name(existing: Any, agent: str, model: str) -> str:
     return f"{base}_{n}"
 
 
-def add_method(data: dict[str, Any], agent: str, model: str = "dnn") -> str:
-    """Add a method to an experiment's `methods` block. Returns its name."""
+def add_method(data: dict[str, Any], agent: str | None = None, model: str = "dnn") -> str:
+    """Add a method to an experiment's `methods` block. Returns its name.
+
+    `agent` is omitted for paradigms that declare none: supervised learning has
+    no policy to choose actions with, so its methods name an architecture only.
+    """
     methods = data.setdefault("methods", {})
     name = unique_method_name(methods, agent, model)
-    methods[name] = {"agent": agent, "model": model}
+    methods[name] = {"agent": agent, "model": model} if agent else {"model": model}
     return name
 
 

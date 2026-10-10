@@ -1,0 +1,17 @@
+# @package _global_
+defaults:
+  - representation/_base
+
+seed: 42
+total_timesteps: 10000
+
+no_plot: true
+tensorboard: true
+
+methods:
+  ae_sequence:
+    model: autoencoder
+    hidden_dim: 32
+    latent_dim: 8
+    epochs: 1
+    batch_size: 128

@@ -86,7 +86,11 @@ def main(cfg: DictConfig):
     datamodule = DataModuleCls(cfg)
 
     # 2. Build Model / Agent based on paradigm
-    if paradigm_name == "supervised":
+    # Driven by whether the paradigm declares agents, not by its name, so an
+    # agent-less paradigm such as unsupervised builds a model the same way.
+    from src.app.pipeline.validation import paradigm_uses_agents
+
+    if not paradigm_uses_agents(paradigm_name):
         input_dim = getattr(datamodule, "input_dim", 64)
 
         model_cfg = cfg.get("model", {}) if hasattr(cfg, "get") else getattr(cfg, "model", {})

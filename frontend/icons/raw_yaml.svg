@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+  <!-- View Raw YAML: document with code brackets -->
+  <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/>
+  <polyline points="14 3 14 8 19 8"/>
+  <polyline points="10 12 8 14.5 10 17"/>
+  <polyline points="14 12 16 14.5 14 17"/>
+</svg>

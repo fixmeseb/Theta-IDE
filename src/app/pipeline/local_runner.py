@@ -17,6 +17,7 @@ from src.app.pipeline.optuna_utils import (
     get_next_study_name,
     promote_best_trial_checkpoint,
 )
+from src.app.pipeline.validation import paradigm_uses_static_dataset
 
 # ---------------------------------------------------------------------------
 # Shared setup
@@ -72,9 +73,9 @@ def run_methods(cfg, context) -> None:
         if method_is_sweep:
             study_name = get_next_study_name(cfg.group, cfg.experiment_id, agent_name)
 
-        # Resolve dataset for offline paradigms
+        # Resolve dataset for paradigms that train from a file rather than a simulator
         dataset_path = None
-        if paradigm in ("offline_rl", "supervised"):
+        if paradigm_uses_static_dataset(paradigm):
             try:
                 dataset_path = resolve_dataset_for_method(method_name, method_cfg, cfg)
             except FileNotFoundError as e:

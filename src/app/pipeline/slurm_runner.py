@@ -14,6 +14,7 @@ from src.app.pipeline.engine import resolve_engine
 from src.app.pipeline.optuna_utils import create_optuna_study, delete_optuna_study, get_next_study_name
 from src.app.pipeline.runtime import get_shell_env_block, get_shell_python_cmd
 from src.app.pipeline.slurm import generate_sbatch_header, generate_sbatch_script, submit_sbatch
+from src.app.pipeline.validation import paradigm_uses_static_dataset
 
 
 def run_slurm_training(cfg, context):
@@ -57,7 +58,7 @@ def run_slurm_training(cfg, context):
             agent_name = normalize_agent_name(method_name)
             dataset_path = None
 
-            if paradigm in ("offline_rl", "supervised"):
+            if paradigm_uses_static_dataset(paradigm):
                 try:
                     dataset_path = resolve_dataset_for_method(method_name, method_cfg, cfg)
                 except FileNotFoundError as e:
@@ -119,7 +120,7 @@ def run_slurm_training(cfg, context):
         agent_name = normalize_agent_name(method_name)
         dataset_path = None
 
-        if paradigm in ("offline_rl", "supervised"):
+        if paradigm_uses_static_dataset(paradigm):
             try:
                 dataset_path = resolve_dataset_for_method(method_name, method_cfg, cfg)
             except FileNotFoundError as e:

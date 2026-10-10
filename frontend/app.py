@@ -11,8 +11,8 @@ import yaml
 if sys.platform == "darwin" and "QTWEBENGINE_CHROMIUM_FLAGS" not in os.environ:
     os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = "--disable-gpu"
 
-from PyQt6.QtCore import Qt, QTimer, QUrl
-from PyQt6.QtGui import QAction, QDesktopServices, QFont, QIcon
+from PyQt6.QtCore import QRegularExpression, Qt, QTimer, QUrl
+from PyQt6.QtGui import QAction, QDesktopServices, QFont, QIcon, QKeySequence, QRegularExpressionValidator
 from PyQt6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -52,6 +52,7 @@ from .app_icon import DESKTOP_FILE_NAME, ICON_PATH, app_icon, install_desktop_en
 from .components_panel import ComponentsPanel
 from .config_tree import ConfigTreeWidget
 from .config_viewer import ConfigViewer
+from .config_tab_manager import ConfigTabManager
 from .hub import HubClient, HubDialog
 from .monitor import ENV_MAX_REWARD, MonitorPanel
 from .results.panel import ResultsPanel
@@ -64,7 +65,21 @@ from .terminal import TerminalPanel
 from .titlebar import apply_title_bar
 from .workflows import WorkflowsPanel
 
+REPO_ROOT = Path(__file__).resolve().parent.parent  # holds venv/, in/, results/
+
 # Metrics the monitor's second chart can show: key -> (card title, chart title, subtitle, value format)
+
+
+def normalize_menu_shortcut(shortcut_str: str) -> str:
+    """Normalize user-entered shortcut string for Qt QKeySequence.
+
+    Replaces 'cmd' and 'command' with 'Ctrl' so that macOS command shortcuts
+    are properly parsed by QKeySequence on all platforms.
+    """
+    if not shortcut_str:
+        return ""
+    import re
+    return re.sub(r"(?i)\b(cmd|command)\b", "Ctrl", str(shortcut_str).strip())
 
 
 class Window(QMainWindow):
@@ -79,11 +94,15 @@ class Window(QMainWindow):
         # --- Unified settings (must be first; everything else reads from it) ---
         self.settings_manager = SettingsManager(Path(data_dir))
         self.settings_manager.changed.connect(self._on_settings_changed)
+        self.zoom_factor = self.settings_manager.zoom
+        self.zoom_slider = None
+        self.zoom_percent_label = None
 
         self.theme_manager = ThemeManager(
             Path(data_dir) / ".appearance.json",
             self,
             initial_theme=self.settings_manager.theme,
+            initial_zoom=self.zoom_factor,
         )
         self.pane_sliders = {}
         self.plugin_sliders = {}
@@ -175,6 +194,7 @@ class Window(QMainWindow):
             self.log(error)
         if self.theme_manager.error:
             self.log(self.theme_manager.error)
+        self.set_zoom(self.zoom_factor, persist=False)
         self.default_layout = self.saveState()
 
         # --- Hotkey and Action-key Navigation Manager ---
@@ -208,50 +228,52 @@ class Window(QMainWindow):
 
         # 1. Config Tree (mirrors in/config/experiment/) - extends to top!
         self.config_tree = ConfigTreeWidget(mode="experiments")
-        self.config_tree.setMinimumWidth(220)
+        self.config_tree.setMinimumWidth(350)
         self.tree = self.config_tree.tree  # backwards compatibility alias
         self.config_tree.file_selected.connect(self.on_config_file_selected)
+        self.config_tree.file_opened.connect(self.on_config_file_opened)
+        self.config_tree.file_deleted.connect(self.on_config_file_deleted)
+        self.config_tree.dir_deleted.connect(self.on_config_dir_deleted)
         splitter.addWidget(self.config_tree)
 
-        # 2. Right Side Section (contains actions bar and viewer / preview)
+        # Square buttons located at the top of the filetree next to 'New' and 'Copy'
+        self.btn_save = self.config_tree.btn_save
+        self.start_button = self.config_tree.btn_launch
+        self.btn_launch = self.config_tree.btn_launch
+        self.btn_export = self.config_tree.btn_export
+        self.btn_toggle_yaml = self.config_tree.btn_toggle_yaml
+        self.queue_button = None
+        self.stop_button = None
+
+        if self.start_button is not None:
+            self.start_button.clicked.connect(self.launch_training)
+        if self.btn_save is not None:
+            self.btn_save.clicked.connect(self.save_current_config)
+        if self.btn_export is not None:
+            self.btn_export.clicked.connect(self.export_config)
+        if self.btn_toggle_yaml is not None:
+            self.btn_toggle_yaml.clicked.connect(lambda: self.toggle_yaml_preview())
+
+        # 2. Right Side Section (contains viewer / preview)
         right_panel = QWidget()
         right_layout = QVBoxLayout(right_panel)
         right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.setSpacing(10)
-
-        actions_bar = QHBoxLayout()
-        actions_bar.setSpacing(8)
-        self.start_button = self.button("Launch training", self.launch_training, True)
-        self.start_button.setToolTip("Train the loaded experiment config through the backend (F5)")
-        self.start_button.setEnabled(False)
-        actions_bar.addWidget(self.start_button)
-        self.queue_button = self.button("Add to queue", self.add_to_queue)
-        self.queue_button.setToolTip("Queue the loaded config; queued jobs train one at a time, in order (Ctrl+Shift+Q)")
-        self.queue_button.setEnabled(False)
-        actions_bar.addWidget(self.queue_button)
-        self.stop_button = self.button("Stop", self.stop_run)
-        self.stop_button.setEnabled(False)
-        actions_bar.addWidget(self.stop_button)
-        actions_bar.addWidget(self.button("Export recipe YAML…", self.export_config))
-        actions_bar.addStretch()
-
-        self.btn_toggle_yaml = QPushButton("View Hydra YAML")
-        self.btn_toggle_yaml.setCheckable(True)
-        self.btn_toggle_yaml.setChecked(False)
-        self.btn_toggle_yaml.setToolTip("Toggle preview of the resolved Hydra YAML configuration")
-        self.btn_toggle_yaml.clicked.connect(lambda: self.toggle_yaml_preview())
-        actions_bar.addWidget(self.btn_toggle_yaml)
-
-        right_layout.addLayout(actions_bar)
+        right_layout.setSpacing(0)
 
         preview_splitter = QSplitter(Qt.Orientation.Horizontal)
         self.preview_splitter = preview_splitter
 
-        # Boxed Config Viewer (takes up the main area of the screen)
-        self.config_viewer = ConfigViewer()
-        self.config_viewer.config_changed.connect(self.update_config)
-        self.config_viewer.save_requested.connect(self.on_config_saved)
-        preview_splitter.addWidget(self.config_viewer)
+        # Multi-tabbed Config Tab Manager (replaces single ConfigViewer)
+        self.config_tab_manager = ConfigTabManager(self.settings_manager, self)
+        self.config_tab_manager.auto_save = True
+        self.config_tab_manager.btn_save = self.btn_save
+        self.config_tab_manager.config_changed.connect(self.update_config)
+        self.config_tab_manager.save_requested.connect(self.on_config_saved)
+        self.config_tab_manager.dirty_state_changed.connect(self.config_tree.set_file_dirty)
+        self.config_tab_manager.file_renamed.connect(self.on_config_file_renamed)
+        self.config_tab_manager.current_tab_changed.connect(self.on_config_tab_switched)
+        self.config_tree.dir_renamed.connect(self.config_tab_manager.on_dir_renamed)
+        preview_splitter.addWidget(self.config_tab_manager)
 
         # Preview Panel (Hydra YAML - hidden by default!)
         preview_panel = QWidget()
@@ -294,7 +316,7 @@ class Window(QMainWindow):
         right_layout.addWidget(preview_splitter, 1)
 
         splitter.addWidget(right_panel)
-        splitter.setSizes([260, 1000])
+        splitter.setSizes([350, 1000])
         config_layout.addWidget(splitter, 1)
         self.config_panel = config_panel
         self.tabs.addTab(self.config_panel, "Experiment", "config", "Experiment", tab_id="config")
@@ -384,7 +406,8 @@ class Window(QMainWindow):
         self.tabs.addTab(self.queue_panel, "Job queue", "queue", "Queue", tab_id="queue")
 
         # 8. Terminal Panel
-        self.terminal_panel = TerminalPanel(cwd=str(Path.cwd()), parent=self)
+        command, cwd, env = self.terminal_config()
+        self.terminal_panel = TerminalPanel(cwd=cwd, parent=self, command=command, env=env)
         self.tabs.addTab(self.terminal_panel, "Terminal", "terminal", "Terminal", tab_id="terminal")
 
         # 9. Console Panel
@@ -422,23 +445,74 @@ class Window(QMainWindow):
             else:
                 self.preview_splitter.setSizes([1000, 0])
 
-    def on_config_file_selected(self, file_path, rel_path):
-        self.active_config_path = file_path
+    @property
+    def config_viewer(self) -> ConfigViewer:
+        """Backwards-compatibility proxy returning the active ConfigViewer."""
+        if hasattr(self, "config_tab_manager") and self.config_tab_manager is not None:
+            return self.config_tab_manager.current_viewer()
+        return None
+
+    def on_config_file_selected(self, file_path, rel_path, pinned=False):
+        if hasattr(self, "config_tab_manager"):
+            self.config_tab_manager.open_file(file_path, rel_path, pinned=pinned)
+
+    def on_config_file_opened(self, file_path, rel_path):
+        if hasattr(self, "config_tab_manager"):
+            self.config_tab_manager.open_file(file_path, rel_path, pinned=True)
+
+    def on_config_file_deleted(self, rel_path):
+        norm = Path(rel_path).as_posix()
+        if hasattr(self, "config_tab_manager"):
+            self.config_tab_manager.close_tabs_matching(lambda p: Path(p).as_posix() == norm)
+
+    def on_config_dir_deleted(self, rel_path):
+        norm = Path(rel_path).as_posix()
+        if hasattr(self, "config_tab_manager"):
+            self.config_tab_manager.close_tabs_matching(
+                lambda p: Path(p).as_posix() == norm or Path(p).as_posix().startswith(norm + "/")
+            )
+
+    def close_active_tab(self):
+        if hasattr(self, "config_tab_manager") and self.config_tab_manager is not None:
+            self.config_tab_manager.close_current_tab()
+
+    def on_config_tab_switched(self, rel_path, viewer):
+        if not viewer or not rel_path:
+            self.active_config_path = None
+            self.active_config_rel_path = None
+            self.current_experiment = None
+            if self.start_button is not None:
+                self.start_button.setEnabled(False)
+            if self.queue_button is not None:
+                self.queue_button.setEnabled(False)
+            return
+
+        self.active_config_path = viewer.current_path
         self.active_config_rel_path = rel_path
-        self.config_viewer.load_file(file_path, rel_path)
+        if self.btn_save is not None:
+            self.btn_save.setEnabled(viewer.is_dirty)
 
         norm_rel = Path(rel_path).as_posix()
         if norm_rel.startswith("experiment/") and not Path(rel_path).name.startswith("_"):
             exp_name = Path(norm_rel).relative_to("experiment").with_suffix("").as_posix()
             self.current_experiment = exp_name
-            self.start_button.setEnabled(self.compose_valid)
-            self.queue_button.setEnabled(self.compose_valid)
-            self.start_button.setToolTip(f"Train {exp_name} through the backend (F5)")
+            if self.start_button is not None:
+                self.start_button.setEnabled(self.compose_valid)
+            if self.queue_button is not None:
+                self.queue_button.setEnabled(self.compose_valid)
+            if self.start_button is not None:
+                self.start_button.setToolTip(f"Train {exp_name} through the backend (F5)")
         else:
             self.current_experiment = None
-            self.start_button.setEnabled(False)
-            self.queue_button.setEnabled(False)
-            self.start_button.setToolTip("Select an experiment from experiment/ to launch training")
+            if self.start_button is not None:
+                self.start_button.setEnabled(False)
+            if self.queue_button is not None:
+                self.queue_button.setEnabled(False)
+            if self.start_button is not None:
+                self.start_button.setToolTip("Select an experiment from experiment/ to launch training")
+
+        if hasattr(self, "config_tree") and self.config_tree is not None:
+            self.config_tree.select_file(rel_path, emit_signal=False)
 
         self.request_compose()
         if hasattr(self, "plugin_manager"):
@@ -448,14 +522,39 @@ class Window(QMainWindow):
         self.config_tree.prompt_duplicate()
 
     def save_current_config(self):
-        if hasattr(self, "config_viewer"):
-            ok = self.config_viewer.save_to_disk()
-            if ok:
-                self.statusBar().showMessage(f"Saved {self.config_viewer.current_rel_path}", 4000)
+        viewer = self.config_viewer
+        if viewer:
+            ok = viewer.save_to_disk()
+            if ok and viewer.current_rel_path:
+                self.statusBar().showMessage(f"Saved {viewer.current_rel_path}", 4000)
 
     def on_config_saved(self):
-        self.statusBar().showMessage(f"Saved {self.config_viewer.current_rel_path}", 4000)
+        viewer = self.config_viewer
+        if viewer and viewer.current_rel_path:
+            self.statusBar().showMessage(f"Saved {viewer.current_rel_path}", 4000)
         self.request_compose()
+
+    def on_config_file_renamed(self, old_rel, new_rel):
+        viewer = self.config_viewer
+        if viewer:
+            self.active_config_path = viewer.current_path
+        self.active_config_rel_path = new_rel
+
+        norm_rel = Path(new_rel).as_posix()
+        if norm_rel.startswith("experiment/") and not Path(new_rel).name.startswith("_"):
+            exp_name = Path(norm_rel).relative_to("experiment").with_suffix("").as_posix()
+            self.current_experiment = exp_name
+            if self.start_button is not None:
+                self.start_button.setToolTip(f"Train {exp_name} through the backend (F5)")
+        else:
+            self.current_experiment = None
+
+        self.config_tree.current_rel_path = new_rel
+        self.config_tree.populate()
+        self.statusBar().showMessage(f"Renamed to {new_rel}", 4000)
+        self.request_compose()
+        if hasattr(self, "plugin_manager"):
+            self.plugin_manager.notify_experiment_changed(self.current_experiment, self.active_config_path)
 
     def make_console(self):
         panel = QWidget()
@@ -506,6 +605,22 @@ class Window(QMainWindow):
             if theme:
                 self.select_theme(theme)
 
+    def terminal_config(self):
+        """(argv or None for auto-detect, start folder, extra env) from the [terminal] settings."""
+        from .terminal.pty_session import parse_shell_command, venv_environment
+
+        sm = getattr(self, "settings_manager", None)
+        if sm is None:
+            return None, str(Path.cwd()), {}
+        command = parse_shell_command(sm.terminal_shell)
+        if sm.terminal_shell and command is None:
+            self.log(f"[terminal] Shell '{sm.terminal_shell}' not found; using the default shell.")
+        cwd = sm.terminal_cwd
+        if not cwd or not Path(cwd).expanduser().is_dir():
+            cwd = str(Path.cwd())
+        env = venv_environment(REPO_ROOT / "venv") if sm.terminal_activate_venv else {}
+        return command, str(Path(cwd).expanduser()), env
+
     def _on_settings_changed(self):
         """Called when settings.toml changes on disk (or when the app mutates it).
 
@@ -514,6 +629,11 @@ class Window(QMainWindow):
         """
         if not hasattr(self, "settings_manager"):
             return
+
+        # --- Terminal: shell, folder and venv apply from the next new shell ---
+        if hasattr(self, "terminal_panel"):
+            command, cwd, env = self.terminal_config()
+            self.terminal_panel.terminal.configure(command=command, cwd=cwd, env=env)
 
         # --- Theme hot-reload ---
         new_theme = self.settings_manager.theme
@@ -560,12 +680,30 @@ class Window(QMainWindow):
                 self.settings_action_key_combo.setCurrentIndex(self.settings_action_key_combo.count() - 1)
                 self.settings_action_key_combo.blockSignals(False)
 
+        # --- Zoom factor hot-reload ---
+        new_zoom = self.settings_manager.zoom
+        if abs(new_zoom - getattr(self, "zoom_factor", 1.0)) > 1e-4:
+            self.set_zoom(new_zoom, persist=False)
+
         # --- Menu Shortcuts hot-reload ---
         if hasattr(self, "menu_actions"):
             for aid, action in self.menu_actions.items():
-                sc = self.settings_manager.get("shortcuts", aid)
-                if sc is not None:
-                    action.setShortcut(sc)
+                default_sc = action.property("_default_sc") or ""
+                sc = self.settings_manager.get("shortcuts", aid, default=default_sc) or default_sc
+                norm = normalize_menu_shortcut(sc)
+                if norm:
+                    seq = QKeySequence(norm)
+                    if aid == "zoom_in":
+                        shortcuts = [seq]
+                        if norm.endswith("+"):
+                            shortcuts.append(QKeySequence(norm[:-1] + "="))
+                        elif norm.endswith("="):
+                            shortcuts.append(QKeySequence(norm[:-1] + "+"))
+                        action.setShortcuts(shortcuts)
+                    else:
+                        action.setShortcut(seq)
+                else:
+                    action.setShortcut(QKeySequence())
 
         # --- Settings view sync ---
         if hasattr(self, "settings_view") and hasattr(self.settings_view, "sync_from_settings"):
@@ -984,14 +1122,19 @@ class Window(QMainWindow):
             ("new_experiment", "New experiment", "Ctrl+N", self.new_experiment),
             ("export_config", "Export draft YAML…", "Ctrl+Shift+S", self.export_config),
             ("save_config", "Save configuration", "Ctrl+S", self.save_current_config),
+            ("close_tab", "Close tab", "Ctrl+W", self.close_active_tab),
             ("quit", "Quit", "Ctrl+Q", self.close),
         ):
             action = QAction(title, self)
+            action.setProperty("_default_sc", default_sc)
             sc = self.settings_manager.get("shortcuts", aid, default=default_sc) if hasattr(self, "settings_manager") else default_sc
-            if sc:
-                action.setShortcut(sc)
+            sc_norm = normalize_menu_shortcut(sc)
+            if sc_norm:
+                action.setShortcut(QKeySequence(sc_norm))
+            action.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
             action.triggered.connect(callback)
             file_menu.addAction(action)
+            self.addAction(action)
             self.menu_actions[aid] = action
 
         run_menu = self.menuBar().addMenu("Run")
@@ -1004,16 +1147,49 @@ class Window(QMainWindow):
             ("start_demo", "Start simulated demo", "Ctrl+F5", self.start_demo),
         ):
             action = QAction(title, self)
+            action.setProperty("_default_sc", default_sc)
             sc = self.settings_manager.get("shortcuts", aid, default=default_sc) if hasattr(self, "settings_manager") else default_sc
-            if sc:
-                action.setShortcut(sc)
+            sc_norm = normalize_menu_shortcut(sc)
+            if sc_norm:
+                action.setShortcut(QKeySequence(sc_norm))
+            action.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
             action.triggered.connect(callback)
             run_menu.addAction(action)
+            self.addAction(action)
             self.menu_actions[aid] = action
         view_menu = self.menuBar().addMenu("View")
         self.themes_menu = view_menu.addMenu("Themes")
         self.themes_menu.aboutToShow.connect(self.populate_themes_menu)
         view_menu.addAction("Theme builder…", self.show_theme_builder)
+        view_menu.addSeparator()
+
+        for aid, title, default_sc, callback in (
+            ("zoom_in", "Zoom In", "Ctrl++", self.zoom_in),
+            ("zoom_out", "Zoom Out", "Ctrl+-", self.zoom_out),
+            ("reset_zoom", "Reset Zoom", "Ctrl+0", self.reset_zoom),
+        ):
+            action = QAction(title, self)
+            action.setProperty("_default_sc", default_sc)
+            sc = self.settings_manager.get("shortcuts", aid, default=default_sc) if hasattr(self, "settings_manager") else default_sc
+            sc_norm = normalize_menu_shortcut(sc)
+            if sc_norm:
+                seq = QKeySequence(sc_norm)
+                if aid == "zoom_in":
+                    shortcuts = [seq]
+                    if sc_norm.endswith("+"):
+                        shortcuts.append(QKeySequence(sc_norm[:-1] + "="))
+                    elif sc_norm.endswith("="):
+                        shortcuts.append(QKeySequence(sc_norm[:-1] + "+"))
+                    action.setShortcuts(shortcuts)
+                else:
+                    action.setShortcut(seq)
+            action.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
+            action.triggered.connect(callback)
+            view_menu.addAction(action)
+            self.addAction(action)
+            self.menu_actions[aid] = action
+
+        view_menu.addSeparator()
         view_menu.addAction("Components", lambda: self.tabs.setCurrentWidget(self.components_panel))
         view_menu.addAction("Experiment config", lambda: self.tabs.setCurrentWidget(self.config_panel))
         view_menu.addAction("Workflows", lambda: self.tabs.setCurrentWidget(self.workflows_panel))
@@ -1041,6 +1217,81 @@ class Window(QMainWindow):
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
         self.statusBar().showMessage(f"Opened {path.name} — changes apply automatically on save.", 6000)
 
+    def zoom_in(self):
+        """Zoom in (increase interface and text size by 10%)."""
+        self.set_zoom(self.zoom_factor + 0.1)
+
+    def zoom_out(self):
+        """Zoom out (decrease interface and text size by 10%)."""
+        self.set_zoom(self.zoom_factor - 0.1)
+
+    def reset_zoom(self):
+        """Reset interface and text zoom to 100% (default size)."""
+        self.set_zoom(1.0)
+
+    def set_zoom(self, factor: float, persist: bool = True):
+        """Set zoom scale factor between 0.6 (60%) and 2.4 (240%)."""
+        factor = round(max(0.6, min(2.4, float(factor))), 2)
+        if abs(getattr(self, "zoom_factor", 1.0) - factor) < 1e-4 and hasattr(self, "_zoom_initialized"):
+            return
+        self._zoom_initialized = True
+        self.zoom_factor = factor
+
+        # 1. Update in-memory setting immediately so getter returns current zoom
+        if hasattr(self, "settings_manager"):
+            self.settings_manager._data.setdefault("appearance", {})["zoom"] = factor
+            if persist:
+                if not hasattr(self, "_zoom_persist_timer"):
+                    self._zoom_persist_timer = QTimer(self)
+                    self._zoom_persist_timer.setSingleShot(True)
+                    self._zoom_persist_timer.setInterval(250)
+                    self._zoom_persist_timer.timeout.connect(self._persist_zoom)
+                self._zoom_persist_timer.start()
+
+        # 2. Update stylesheet via theme manager (instant CSS update without theme reload cascade)
+        if hasattr(self, "theme_manager"):
+            self.theme_manager.set_zoom(factor, target_widget=self)
+
+        # 3. Update global application font (with base size caching)
+        app = QApplication.instance()
+        if app:
+            font = app.font()
+            base_pt = getattr(app, "_base_font_point_size", None)
+            if base_pt is None:
+                base_pt = font.pointSizeF() if font.pointSizeF() > 0 else 10.0
+                app._base_font_point_size = base_pt
+            new_pt = max(6.0, base_pt * factor)
+            if abs(font.pointSizeF() - new_pt) > 0.05:
+                font.setPointSizeF(new_pt)
+                app.setFont(font)
+
+        # 4. Update terminal font size (default 13px)
+        if hasattr(self, "terminal_panel"):
+            term_size = max(8, round(13 * factor))
+            self.terminal_panel.set_font_size(term_size)
+
+        # 5. Refresh Settings view styles if present and visible
+        if hasattr(self, "settings_view") and hasattr(self.settings_view, "refresh_styles"):
+            if self.settings_view.isVisible():
+                self.settings_view.refresh_styles()
+
+        # 6. Update appearance UI zoom controls if built
+        if hasattr(self, "zoom_slider") and self.zoom_slider:
+            self.zoom_slider.blockSignals(True)
+            self.zoom_slider.setValue(int(round(factor * 100)))
+            self.zoom_slider.blockSignals(False)
+        if hasattr(self, "zoom_percent_label") and self.zoom_percent_label:
+            self.zoom_percent_label.setText(f"{int(round(factor * 100))}%")
+
+        # 7. Status bar confirmation
+        if hasattr(self, "statusBar") and self.statusBar():
+            self.statusBar().showMessage(f"Zoom: {int(round(factor * 100))}%", 1500)
+
+    def _persist_zoom(self):
+        """Save debounced zoom factor to settings.toml without triggering redundant reload cascade."""
+        if hasattr(self, "settings_manager") and hasattr(self.settings_manager, "persist_key"):
+            self.settings_manager.persist_key("appearance", "zoom", self.zoom_factor)
+
     def show_tensorboard(self):
         self.tabs.setCurrentWidget(self.tensorboard_panel)
 
@@ -1059,6 +1310,7 @@ class Window(QMainWindow):
             self.test_backend_connection()
             if hasattr(self, "settings_view"):
                 self.settings_view.reset_to_ascii()
+                self.settings_view.refresh_styles()
 
     def show_about(self):
         if hasattr(self, "settings_panel"):
@@ -1299,16 +1551,20 @@ class Window(QMainWindow):
     def update_launch_state(self):
         idle = self.active is None
         ready = idle and self.compose_valid
-        self.start_button.setEnabled(ready)
-        self.queue_button.setEnabled(self.compose_valid)
-        self.stop_button.setEnabled(not idle)
+        if self.start_button is not None:
+            self.start_button.setEnabled(ready)
+        if self.queue_button is not None:
+            self.queue_button.setEnabled(self.compose_valid)
+        if self.stop_button is not None:
+            self.stop_button.setEnabled(not idle)
         if not idle:
             tip = "A run is active. Stop it before launching another."
         elif not self.compose_valid:
             tip = "Launch needs the backend running and a config it has validated."
         else:
             tip = "Train the builder's config on this machine through the backend (F5)"
-        self.start_button.setToolTip(tip)
+        if self.start_button is not None:
+            self.start_button.setToolTip(tip)
         run = self.active
         if run is None:
             self.state_label.setText("TRAINING   •   idle  ")
@@ -1343,7 +1599,8 @@ class Window(QMainWindow):
         experiment_id = self.unique_experiment_id(config.name)
         overrides = self.config_viewer.get_overrides() if hasattr(self, "config_viewer") else config.overrides()
         overrides = [o for o in overrides if not o.startswith("++experiment_id=")] + [f"++experiment_id='{experiment_id}'"]
-        self.start_button.setEnabled(False)
+        if self.start_button is not None:
+            self.start_button.setEnabled(False)
         self.log(f"Launching {experiment_id}:\n  python run_pipeline.py {exp_target} {' '.join(overrides)}")
         self.backend.post("/api/experiments/launch", {"experiment": exp_target, "overrides": overrides},
                           lambda data, error: self.launch_finished(config, data, error))
@@ -1465,7 +1722,8 @@ class Window(QMainWindow):
         experiment_id = self.unique_experiment_id(config.name)
         overrides = self.config_viewer.get_overrides() if hasattr(self, "config_viewer") else config.overrides()
         overrides = [o for o in overrides if not o.startswith("++experiment_id=")] + [f"++experiment_id='{experiment_id}'"]
-        self.queue_button.setEnabled(False)
+        if self.queue_button is not None:
+            self.queue_button.setEnabled(False)
         self.log(f"Queuing {experiment_id}:\n  python run_pipeline.py {exp_target} {' '.join(overrides)}")
         self.backend.post("/api/experiments/launch",
                           {"experiment": exp_target, "overrides": overrides, "queue": True},
@@ -1623,7 +1881,8 @@ class Window(QMainWindow):
         if run["simulated"]:
             self.finish("stopped")
             return
-        self.stop_button.setEnabled(False)
+        if self.stop_button is not None:
+            self.stop_button.setEnabled(False)
         self.log(f"Stopping {run['backend']['experiment_id']}: terminating the pipeline and its training processes…")
         self.backend.post(f"/api/experiments/{run['backend']['job_id']}/cancel", {},
                           lambda data, error: self.log(f"Stop failed: {error}") if error else None)
@@ -1963,6 +2222,9 @@ class Window(QMainWindow):
             self.terminal_panel.terminal.close()
         if hasattr(self, "hotkey_manager"):
             self.hotkey_manager.cleanup()
+        if hasattr(self, "_zoom_persist_timer") and self._zoom_persist_timer.isActive():
+            self._zoom_persist_timer.stop()
+            self._persist_zoom()
         event.accept()
 
     def reload_frontend(self):
@@ -2004,7 +2266,10 @@ def main():
     app.setApplicationName("ThetaIDE")
     app.setApplicationDisplayName("ThetaIDE")
     app.setStyle("Fusion")
-    app.setFont(QFont("Segoe UI", 10))
+    if sys.platform == "darwin":
+        app.setFont(QFont(".AppleSystemUIFont", 10))
+    else:
+        app.setFont(QFont("Segoe UI", 10))
     app.setStyleSheet(STYLE)
     app.wheel_guard = wheel_guard.install(app)
 
