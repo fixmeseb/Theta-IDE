@@ -144,7 +144,8 @@ class TestConfigTree(unittest.TestCase):
             top_texts = [comp_tree.tree.topLevelItem(i).text(0) for i in range(top_count)]
             self.assertTrue(any("agent" in t for t in top_texts))
             self.assertTrue(any("env" in t for t in top_texts))
-            self.assertTrue(any(t == "config" for t in top_texts))
+            self.assertTrue(any("config" in t.lower() for t in top_texts))
+            self.assertTrue("config" in top_texts[0].lower(), "Global defaults config must be pinned at the top")
             self.assertFalse(any("experiment" in t for t in top_texts))
         finally:
             comp_tree.close()
@@ -276,6 +277,25 @@ class TestConfigTree(unittest.TestCase):
         finally:
             exp_tree.close()
 
+    def test_hyperparameter_sweepers_folder_renamed(self):
+        from PyQt6.QtWidgets import QTreeWidgetItem
+        (self.root / "hydra" / "sweeper").mkdir(parents=True)
+        (self.root / "hydra" / "sweeper" / "optuna.yaml").write_text("n_trials: 10\n", encoding="utf-8")
+        tree = ConfigTreeWidget(root_dir=self.root, mode="components")
+        try:
+            sweeper_items = []
+            def find_sweepers(parent):
+                count = parent.childCount() if isinstance(parent, QTreeWidgetItem) else parent.topLevelItemCount()
+                for i in range(count):
+                    child = parent.child(i) if isinstance(parent, QTreeWidgetItem) else parent.topLevelItem(i)
+                    if child.text(0) == "Hyperparameter Sweepers":
+                        sweeper_items.append(child)
+                    find_sweepers(child)
+            find_sweepers(tree.tree)
+            self.assertEqual(len(sweeper_items), 1)
+        finally:
+            tree.close()
+
 
 
 @unittest.skipIf(not HAS_PYQT6, "PyQt6 not installed in current environment")
@@ -311,7 +331,7 @@ class TestConfigViewer(unittest.TestCase):
 
         # Boxes should be created as styled cards
         cards = self.viewer.findChildren(ConfigBox)
-        self.assertGreaterEqual(len(cards), 3)
+        self.assertGreaterEqual(len(cards), 2)
 
     def test_edits_mark_dirty_and_remember_values(self):
         events = []
@@ -350,7 +370,7 @@ class TestConfigViewer(unittest.TestCase):
 
     def test_boxes_do_not_have_titles_or_subtitles(self):
         cards = self.viewer.findChildren(ConfigBox)
-        self.assertGreaterEqual(len(cards), 3)
+        self.assertGreaterEqual(len(cards), 2)
         for card in cards:
             self.assertIsNone(card.title_label)
             self.assertIsNone(card.subtitle_label)
@@ -382,7 +402,12 @@ class TestConfigViewer(unittest.TestCase):
 
     def test_experiment_identity_box_removed_and_first_box_is_budget(self):
         cards = self.viewer.findChildren(ConfigBox)
-        self.assertEqual(len(cards), 4)
+        self.assertEqual(len(cards), 2)  # Overrides mode: Budget & Methods
+
+        # Toggling to Show Resolved Defaults resolves and renders inherited blocks
+        self.viewer.chk_view_mode.setChecked(True)
+        resolved_cards = self.viewer.findChildren(ConfigBox)
+        self.assertGreaterEqual(len(resolved_cards), 3)
 
         all_labels = [lbl.text() for lbl in self.viewer.findChildren(QLabel)]
         self.assertNotIn("Group", all_labels)
@@ -481,6 +506,89 @@ class TestConfigViewer(unittest.TestCase):
         self.assertNotIn("experiment_id", self.viewer.raw_data)
         self.assertEqual(self.viewer.current_path.name, "Test_Exp.yaml")
         self.assertTrue(self.viewer.current_path.exists())
+
+    def test_breadcrumb_and_group_defaults_header(self):
+        exp_path = Path(self.temp_dir.name) / "exp1.yaml"
+        exp_path.write_text("total_timesteps: 5000\n", encoding="utf-8")
+        self.viewer.load_file(exp_path, "experiment/cartpole/exp1.yaml")
+        self.assertEqual(self.viewer.file_title.text(), "exp1")
+        self.assertFalse(self.viewer.group_badge.isHidden())
+        self.assertFalse(self.viewer.breadcrumb_sep.isHidden())
+
+        base_path = Path(self.temp_dir.name) / "_base.yaml"
+        base_path.write_text("paradigm: online_rl\n", encoding="utf-8")
+        self.viewer.load_file(base_path, "experiment/cartpole/_base.yaml")
+        self.assertEqual(self.viewer.file_title.text(), "Group Defaults")
+        self.assertEqual(self.viewer.group_badge.text(), "[cartpole]")
+        self.assertFalse(self.viewer.group_badge.isHidden())
+        self.assertTrue(self.viewer.breadcrumb_sep.isHidden())
+
+    def test_description_field_persistence_and_overrides(self):
+        self.assertIsNotNone(self.viewer.txt_description)
+        self.viewer.auto_save = False
+        self.viewer.txt_description.setText("My test hypothesis")
+        self.assertEqual(self.viewer.raw_data.get("description"), "My test hypothesis")
+        self.assertTrue(self.viewer.is_dirty)
+
+        overrides = self.viewer.get_overrides()
+        self.assertIn("++description='My test hypothesis'", overrides)
+
+        self.viewer.save_to_disk()
+        saved = yaml.safe_load(self.viewer.current_path.read_text(encoding="utf-8"))
+        self.assertEqual(saved.get("description"), "My test hypothesis")
+
+        # Empty description is cleaned
+        self.viewer.txt_description.setText("")
+        self.assertNotIn("description", self.viewer.raw_data)
+        self.viewer.save_to_disk()
+        saved_empty = yaml.safe_load(self.viewer.current_path.read_text(encoding="utf-8"))
+        self.assertNotIn("description", saved_empty)
+
+    def test_universal_params_crud(self):
+        # Adding universal parameter
+        self.viewer._add_universal_param("cql_alpha", 5.0)
+        self.assertEqual(self.viewer.raw_data["methods"]["params"]["cql_alpha"], 5.0)
+        self.assertIn("++methods.params.cql_alpha=5.0", self.viewer.get_overrides())
+
+        # Modifying universal parameter
+        self.viewer._on_universal_param_edited("cql_alpha", "10.0")
+        self.assertEqual(self.viewer.raw_data["methods"]["params"]["cql_alpha"], 10.0)
+
+        # Removing universal parameter
+        self.viewer._remove_universal_param("cql_alpha")
+        self.assertNotIn("cql_alpha", self.viewer.raw_data.get("methods", {}).get("params", {}))
+
+    def test_method_hyperparameter_crud(self):
+        # Adding hyperparameter to method
+        self.viewer._add_method_param("ppo", "ent_coef", 0.05)
+        self.assertEqual(self.viewer.raw_data["methods"]["ppo"]["ent_coef"], 0.05)
+        self.assertIn("++methods.ppo.ent_coef=0.05", self.viewer.get_overrides())
+
+        # Removing hyperparameter from method
+        self.viewer._remove_method_param("ppo", "ent_coef")
+        self.assertNotIn("ent_coef", self.viewer.raw_data["methods"]["ppo"])
+
+    def test_modular_block_crud(self):
+        # Add resources block
+        self.assertNotIn("resources", self.viewer.raw_data)
+        self.viewer.add_block("resources")
+        self.assertIn("resources", self.viewer.raw_data)
+        self.assertEqual(self.viewer.raw_data["resources"]["gpus"], 1)
+
+        # Add trainer block
+        self.assertNotIn("trainer", self.viewer.raw_data)
+        self.viewer.add_block("trainer")
+        self.assertIn("trainer", self.viewer.raw_data)
+
+        # Remove resources block
+        self.viewer.remove_block("resources")
+        self.assertNotIn("resources", self.viewer.raw_data)
+
+    def test_dataset_card_specification(self):
+        self.viewer.add_block("dataset")
+        self.assertIn("dataset_path", self.viewer.raw_data)
+        self.viewer._on_field_edited("dataset_path", "in/datasets/mimic/train.pkl")
+        self.assertIn("dataset_path='in/datasets/mimic/train.pkl'", self.viewer.get_overrides())
 
 
 @unittest.skipIf(not HAS_PYQT6, "PyQt6 not installed in current environment")

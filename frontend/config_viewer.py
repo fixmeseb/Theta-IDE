@@ -10,12 +10,14 @@ from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
+    QFileDialog,
     QFormLayout,
     QFrame,
     QGridLayout,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMenu,
     QMessageBox,
     QPushButton,
     QScrollArea,
@@ -35,6 +37,41 @@ from .widgets import ComboBox, DoubleSpinBox, SpinBox, label, SmoothScrollArea
 CONTENT_WIDTH = 860
 NUMBER_FIELD_WIDTH = 200
 TEXT_FIELD_WIDTH = 380
+
+
+def _parse_yaml_value(text: str):
+    """Convert text representation to typed YAML scalar."""
+    if not isinstance(text, str):
+        return text
+    stripped = text.strip()
+    if stripped.lower() == "true":
+        return True
+    if stripped.lower() == "false":
+        return False
+    if stripped.lower() in ("null", "none", "~", ""):
+        return None
+    try:
+        if "." in stripped or "e" in stripped.lower():
+            return float(stripped)
+        return int(stripped)
+    except ValueError:
+        return stripped
+
+
+def discover_datasets(env_name: str | None = None) -> list[str]:
+    """Discover available dataset files and folders in in/datasets and results/datasets."""
+    found = []
+    base_dirs = [Path("in/datasets"), Path("results/datasets")]
+    for b in base_dirs:
+        if b.is_dir():
+            for p in b.glob("**/*"):
+                if p.name.startswith(".") or p.name.startswith("__"):
+                    continue
+                if p.is_file() and p.suffix in (".pkl", ".csv", ".parquet", ".h5", ".pt"):
+                    found.append(p.as_posix())
+                elif p.is_dir() and any(p.iterdir()):
+                    found.append(p.as_posix())
+    return sorted(list(set(found)))
 
 
 class CompactDoubleSpinBox(DoubleSpinBox):
@@ -168,6 +205,7 @@ class ConfigViewer(QWidget):
         self.field_widgets = {}
         self._preamble = ""
         self.auto_save = False
+        self.view_mode = "overrides"
 
         self._init_ui()
 
@@ -181,6 +219,22 @@ class ConfigViewer(QWidget):
         hb_layout = QHBoxLayout(self.header_bar)
         hb_layout.setContentsMargins(12, 6, 12, 6)
         hb_layout.setSpacing(10)
+
+        self.group_badge = QLabel("")
+        self.group_badge.setObjectName("breadcrumbGroup")
+        self.group_badge.setStyleSheet(
+            "font-size: 16px; font-weight: 600; color: #888888; padding: 2px 2px;"
+        )
+        self.group_badge.hide()
+        hb_layout.addWidget(self.group_badge)
+
+        self.breadcrumb_sep = QLabel("/")
+        self.breadcrumb_sep.setObjectName("breadcrumbSep")
+        self.breadcrumb_sep.setStyleSheet(
+            "font-size: 16px; font-weight: 500; color: #666666; padding: 0 4px;"
+        )
+        self.breadcrumb_sep.hide()
+        hb_layout.addWidget(self.breadcrumb_sep)
 
         self.file_title = TitleLabel("No config loaded")
         self.file_title.double_clicked.connect(self._start_title_edit)
@@ -205,6 +259,15 @@ class ConfigViewer(QWidget):
         self.dirty_status.hide()
 
         hb_layout.addStretch()
+
+        self.chk_view_mode = QCheckBox("Show Resolved Defaults")
+        self.chk_view_mode.setObjectName("chkViewMode")
+        self.chk_view_mode.setStyleSheet("font-size: 12px; color: #a89984;")
+        self.chk_view_mode.setToolTip("Toggle between showing only explicit overrides vs. all resolved group defaults")
+        self.chk_view_mode.setChecked(False)
+        self.chk_view_mode.toggled.connect(self._on_view_mode_toggled)
+        self.chk_view_mode.hide()
+        hb_layout.addWidget(self.chk_view_mode)
 
         self.btn_save = None
 
@@ -438,23 +501,69 @@ class ConfigViewer(QWidget):
                         sub.widget().deleteLater()
 
         # Update header
-        self.file_title.setText(self.current_path.stem)
-        self.file_title.setToolTip(f"{self.current_rel_path}\n(Double-click to rename)")
+        group = self._group_name()
+        is_base = (self.current_path.stem == "_base") if self.current_path else False
+
+        if is_base:
+            self.group_badge.setText(f"[{group}]" if group else "[group]")
+            self.group_badge.show()
+            self.breadcrumb_sep.hide()
+            self.file_title.setText("Group Defaults")
+            self.file_title.setToolTip(f"{self.current_rel_path}\n(Base configuration for {group})")
+        elif group:
+            rel_parts = Path(str(self.current_rel_path or "")).parts
+            if len(rel_parts) > 3:
+                sub_crumbs = " / ".join(rel_parts[2:-1])
+                self.group_badge.setText(f"[{group}] / {sub_crumbs}")
+            else:
+                self.group_badge.setText(f"[{group}]")
+            self.group_badge.show()
+            self.breadcrumb_sep.show()
+            self.file_title.setText(self.current_path.stem)
+            self.file_title.setToolTip(f"{self.current_rel_path}\n(Double-click to rename)")
+        else:
+            self.group_badge.hide()
+            self.breadcrumb_sep.hide()
+            self.file_title.setText(self.current_path.stem if self.current_path else "")
+            self.file_title.setToolTip(f"{self.current_rel_path}\n(Double-click to rename)")
 
         is_experiment = (
-            self.current_rel_path.startswith("experiment/") or
+            (self.current_rel_path and self.current_rel_path.startswith("experiment/") and "/methods/" not in self.current_rel_path) or
             "methods" in self.raw_data or
             any("_base" in str(d) for d in self.raw_data.get("defaults", []))
         )
 
         if is_experiment:
+            self.chk_view_mode.show()
             self._render_experiment_boxes()
         else:
+            self.chk_view_mode.hide()
             self._render_generic_boxes()
 
         self._cap_form_fields()
         self.boxes_layout.addStretch()
         self._block_updates = False
+
+    def _on_view_mode_toggled(self, checked: bool):
+        self.view_mode = "resolved" if checked else "overrides"
+        self._render_boxes()
+
+    def _get_resolved_defaults(self) -> dict:
+        tree = config_tree()
+        group = self._group_name()
+        resolved = {}
+        if tree:
+            root_cfg = getattr(tree, "config_root", None)
+            if root_cfg and (root_cfg / "config.yaml").is_file():
+                try:
+                    resolved.update(yaml.safe_load((root_cfg / "config.yaml").read_text(encoding="utf-8")) or {})
+                except Exception:
+                    pass
+            if group:
+                base_data = _read_group_base(tree, group)
+                if base_data:
+                    resolved.update(base_data)
+        return resolved
 
     def _group_name(self):
         """The experiment group this file sits in, from experiment/<group>/<file>."""
@@ -503,6 +612,15 @@ class ConfigViewer(QWidget):
                 self.raw_data["env"] == inh_env or self.raw_data["env"] == self.INHERIT
             ):
                 self.raw_data.pop("env", None)
+            if "description" in self.raw_data and not self.raw_data["description"]:
+                self.raw_data.pop("description", None)
+            if "resources" in self.raw_data and not self.raw_data["resources"]:
+                self.raw_data.pop("resources", None)
+            if "trainer" in self.raw_data and not self.raw_data["trainer"]:
+                self.raw_data.pop("trainer", None)
+            if "methods" in self.raw_data and isinstance(self.raw_data["methods"], dict):
+                if "params" in self.raw_data["methods"] and not self.raw_data["methods"]["params"]:
+                    self.raw_data["methods"].pop("params", None)
 
     def _cap_form_fields(self):
         """Limit field widths in every label/field form and two-column grid."""
@@ -537,6 +655,7 @@ class ConfigViewer(QWidget):
     def _render_experiment_boxes(self):
         """Render standard boxes for an Experiment configuration."""
         data = self.raw_data
+        resolved = self._get_resolved_defaults()
 
         # Paradigm is inherited from group base by default.
         paradigm = data.get("paradigm") or self._inherited_paradigm() or "online_rl"
@@ -584,6 +703,21 @@ class ConfigViewer(QWidget):
 
         # --- BOX 1: TRAINING BUDGET & ROLLOUT SCHEDULE ---
         box_budget = ConfigBox("1. Training Budget & Schedule", "Timesteps, evaluation frequency, and random seeds")
+
+        # Experiment Description / Commit Note
+        desc_row = QHBoxLayout()
+        desc_row.setSpacing(10)
+        desc_row.addWidget(label("Description", "eyebrow"))
+        self.txt_description = QLineEdit()
+        self.txt_description.setPlaceholderText("Optional commit-style notes or hypothesis for this experiment...")
+        self.txt_description.setText(str(data.get("description") or ""))
+        self.txt_description.textChanged.connect(
+            lambda v: self._on_field_edited("description", v.strip()) if v.strip() else self.raw_data.pop("description", None)
+        )
+        desc_row.addWidget(self.txt_description, 1)
+        self.field_widgets["description"] = self.txt_description
+        box_budget.add_layout(desc_row)
+
         form_budget = QGridLayout()
         form_budget.setVerticalSpacing(10)
         form_budget.setHorizontalSpacing(16)
@@ -593,7 +727,7 @@ class ConfigViewer(QWidget):
         self.spin_timesteps = SpinBox()
         self.spin_timesteps.setRange(100, 100_000_000)
         self.spin_timesteps.setSingleStep(1_000)
-        self.spin_timesteps.setValue(int(data.get("total_timesteps") or 10000))
+        self.spin_timesteps.setValue(int(data.get("total_timesteps") or resolved.get("total_timesteps") or 10000))
         self.spin_timesteps.valueChanged.connect(lambda v: self._on_field_edited("total_timesteps", v))
         form_budget.addWidget(self.spin_timesteps, 0, 1)
         self.field_widgets["total_timesteps"] = self.spin_timesteps
@@ -604,7 +738,7 @@ class ConfigViewer(QWidget):
         seed_row.setSpacing(6)
         self.spin_seed = SpinBox()
         self.spin_seed.setRange(0, 2147483647)
-        self.spin_seed.setValue(int(data.get("seed") if data.get("seed") is not None else 42))
+        self.spin_seed.setValue(int(data.get("seed") if data.get("seed") is not None else resolved.get("seed", 42)))
         self.spin_seed.valueChanged.connect(lambda v: self._on_field_edited("seed", v))
         seed_row.addWidget(self.spin_seed, 1)
         self.field_widgets["seed"] = self.spin_seed
@@ -621,7 +755,7 @@ class ConfigViewer(QWidget):
         form_budget.addWidget(label("Intervals Count"), 1, 0)
         self.spin_intervals = SpinBox()
         self.spin_intervals.setRange(1, 100)
-        self.spin_intervals.setValue(int(data.get("intervals_count") or 4))
+        self.spin_intervals.setValue(int(data.get("intervals_count") or resolved.get("intervals_count") or 4))
         self.spin_intervals.valueChanged.connect(lambda v: self._on_field_edited("intervals_count", v))
         form_budget.addWidget(self.spin_intervals, 1, 1)
         self.field_widgets["intervals_count"] = self.spin_intervals
@@ -630,16 +764,12 @@ class ConfigViewer(QWidget):
         form_budget.addWidget(label("Eval Episodes"), 1, 2)
         self.spin_eval_ep = SpinBox()
         self.spin_eval_ep.setRange(0, 1000)
-        self.spin_eval_ep.setValue(int(data.get("eval_episodes") if data.get("eval_episodes") is not None else 100))
+        self.spin_eval_ep.setValue(int(data.get("eval_episodes") if data.get("eval_episodes") is not None else resolved.get("eval_episodes", 100)))
         self.spin_eval_ep.valueChanged.connect(lambda v: self._on_field_edited("eval_episodes", v))
         form_budget.addWidget(self.spin_eval_ep, 1, 3)
         self.field_widgets["eval_episodes"] = self.spin_eval_ep
 
-        # Disable fields the paradigm forbids rather than letting the pipeline
-        # reject them at launch. A greyed spin box is hard to tell from an
-        # editable one in a dark theme, and leaving the widget default showing
-        # would advertise a value the run will not use, so show what the group
-        # base actually pins and say where it came from.
+        # Disable fields the paradigm forbids rather than letting the pipeline reject them
         if tree and paradigm in tree.paradigms:
             rules = tree.paradigms[paradigm]
             base = _read_group_base(tree, self._group_name())
@@ -655,26 +785,26 @@ class ConfigViewer(QWidget):
                     widget.setSuffix(f"   (not used by {paradigm})")
                 widget.setToolTip(rules.disabled_reason(key))
 
-        # Checkboxes: Tensorboard, Save Dataset, Recover
+        # Checkboxes: Tensorboard, Save Dataset, Recover, No Plots
         chk_row = QHBoxLayout()
         chk_row.setSpacing(18)
         self.chk_tb = QCheckBox("Log to TensorBoard")
-        self.chk_tb.setChecked(bool(data.get("tensorboard", True)))
+        self.chk_tb.setChecked(bool(data.get("tensorboard", resolved.get("tensorboard", True))))
         self.chk_tb.toggled.connect(lambda v: self._on_field_edited("tensorboard", v))
         chk_row.addWidget(self.chk_tb)
 
         self.chk_save_ds = QCheckBox("Save Dataset")
-        self.chk_save_ds.setChecked(bool(data.get("save_dataset", False)))
+        self.chk_save_ds.setChecked(bool(data.get("save_dataset", resolved.get("save_dataset", False))))
         self.chk_save_ds.toggled.connect(lambda v: self._on_field_edited("save_dataset", v))
         chk_row.addWidget(self.chk_save_ds)
 
         self.chk_recover = QCheckBox("Recover Checkpoint")
-        self.chk_recover.setChecked(bool(data.get("recover", False)))
+        self.chk_recover.setChecked(bool(data.get("recover", resolved.get("recover", False))))
         self.chk_recover.toggled.connect(lambda v: self._on_field_edited("recover", v))
         chk_row.addWidget(self.chk_recover)
 
         self.chk_no_plot = QCheckBox("No Plots")
-        self.chk_no_plot.setChecked(bool(data.get("no_plot", False)))
+        self.chk_no_plot.setChecked(bool(data.get("no_plot", resolved.get("no_plot", False))))
         self.chk_no_plot.toggled.connect(lambda v: self._on_field_edited("no_plot", v))
         chk_row.addWidget(self.chk_no_plot)
 
@@ -690,20 +820,82 @@ class ConfigViewer(QWidget):
         m_layout = QVBoxLayout()
         m_layout.setSpacing(10)
 
+        # Universal Parameters (methods.params)
+        has_params = "params" in methods_dict and isinstance(methods_dict["params"], dict)
+        resolved_params = resolved.get("methods", {}).get("params", {}) if isinstance(resolved.get("methods"), dict) else {}
+        show_params = has_params or (self.view_mode == "resolved" and bool(resolved_params))
+
+        if show_params:
+            p_card = QFrame()
+            p_card.setObjectName("card")
+            p_layout = QVBoxLayout(p_card)
+            p_layout.setContentsMargins(14, 12, 14, 12)
+            p_layout.setSpacing(8)
+
+            p_header = QHBoxLayout()
+            p_header.addWidget(label("Universal Parameters (methods.params)", "cardTitle"))
+            p_header.addStretch()
+            if has_params:
+                btn_rm_params = QToolButton()
+                btn_rm_params.setText("Remove Block")
+                btn_rm_params.setToolTip("Remove all universal parameters")
+                btn_rm_params.clicked.connect(lambda: self.remove_block("params"))
+                p_header.addWidget(btn_rm_params)
+            else:
+                p_header.addWidget(label("(inherited from base)", "muted"))
+            p_layout.addLayout(p_header)
+
+            curr_params = methods_dict.get("params", {}) if has_params else resolved_params
+            for pk, pv in list(curr_params.items()):
+                p_row = QHBoxLayout()
+                p_row.setSpacing(8)
+                lbl_k = label(str(pk), "eyebrow")
+                lbl_k.setMinimumWidth(140)
+                p_row.addWidget(lbl_k)
+
+                line_v = QLineEdit(str(pv if pv is not None else ""))
+                line_v.textChanged.connect(lambda val, k=pk: self._on_universal_param_edited(k, val))
+                p_row.addWidget(line_v, 1)
+
+                if has_params and pk in methods_dict.get("params", {}):
+                    btn_del_p = QToolButton()
+                    btn_del_p.setText("✕")
+                    btn_del_p.setToolTip(f"Remove universal parameter '{pk}'")
+                    btn_del_p.clicked.connect(lambda _, k=pk: self._remove_universal_param(k))
+                    p_row.addWidget(btn_del_p)
+                p_layout.addLayout(p_row)
+
+            # Row to add a new universal parameter
+            add_p_row = QHBoxLayout()
+            add_p_row.setSpacing(8)
+            combo_add_pk = ComboBox()
+            combo_add_pk.setEditable(True)
+            combo_add_pk.setPlaceholderText("Param name (e.g. lr, gamma)...")
+            common_universal = ["lr", "gamma", "epochs_per_interval", "eval_interval_epochs", "cql_alpha", "weight_decay", "batch_size", "ent_coef"]
+            combo_add_pk.addItems(common_universal)
+            combo_add_pk.setEditText("")
+            add_p_row.addWidget(combo_add_pk, 1)
+
+            txt_add_pv = QLineEdit()
+            txt_add_pv.setPlaceholderText("Value...")
+            add_p_row.addWidget(txt_add_pv, 1)
+
+            btn_do_add_p = QPushButton("Add")
+            btn_do_add_p.clicked.connect(
+                lambda: self._add_universal_param(combo_add_pk.currentText().strip(), txt_add_pv.text().strip())
+            )
+            add_p_row.addWidget(btn_do_add_p)
+            p_layout.addLayout(add_p_row)
+
+            m_layout.addWidget(p_card)
+        else:
+            btn_create_params = QPushButton("+ Add Universal Parameters (params)")
+            btn_create_params.clicked.connect(lambda: self.add_block("params"))
+            m_layout.addWidget(btn_create_params)
+
         if not methods_dict:
             m_layout.addWidget(label("Inherits default method from base template.", "muted"))
         else:
-            # If universal params exist
-            if "params" in methods_dict:
-                p_card = QFrame()
-                p_card.setObjectName("card")
-                p_layout = QFormLayout(p_card)
-                p_layout.addRow(label("Universal Parameters (params:)", "eyebrow"))
-                for k, v in methods_dict["params"].items():
-                    if isinstance(v, (int, float, str, bool)):
-                        p_layout.addRow(k, label(str(v), "muted"))
-                m_layout.addWidget(p_card)
-
             # Sub-cards for each method
             for m_name, m_spec in methods_dict.items():
                 if m_name == "params" or not isinstance(m_spec, dict):
@@ -723,10 +915,7 @@ class ConfigViewer(QWidget):
                 title_row.addWidget(btn_remove)
                 sc_layout.addRow(title_row)
 
-                # Agent — restricted to what this paradigm permits, and omitted
-                # entirely where it permits none: a supervised method names an
-                # architecture and has no policy to choose actions with, so an
-                # empty agent picker would only invite an invalid edit.
+                # Agent picker
                 agent_val = str(m_spec.get("agent", ""))
                 paradigm_has_agents = bool(tree and paradigm in tree.paradigms and tree.agents_for(paradigm))
                 txt_agent = None
@@ -737,7 +926,6 @@ class ConfigViewer(QWidget):
                     txt_agent = ComboBox()
                     txt_agent.addItems(permitted)
                     if agent_val and agent_val not in permitted:
-                        # Never silently rewrite what is already on disk.
                         txt_agent.insertItem(0, agent_val)
                         txt_agent.setToolTip(
                             f"'{agent_val}' is not permitted by {paradigm} "
@@ -757,7 +945,7 @@ class ConfigViewer(QWidget):
                 if txt_agent is not None:
                     sc_layout.addRow("Agent Algorithm", txt_agent)
 
-                # Model — a dict value is a nested override, so keep it as text
+                # Model picker
                 model_val = m_spec.get("model", "")
                 if isinstance(model_val, dict):
                     model_str = yaml.safe_dump(model_val, default_flow_style=True).strip()
@@ -783,50 +971,96 @@ class ConfigViewer(QWidget):
 
                 # Learning rate
                 if "lr" in m_spec:
+                    row_lr = QHBoxLayout()
                     spin_lr = CompactDoubleSpinBox()
                     spin_lr.setDecimals(6)
                     spin_lr.setRange(0.000001, 1.0)
                     spin_lr.setSingleStep(0.0001)
                     spin_lr.setValue(float(m_spec["lr"]))
                     spin_lr.valueChanged.connect(lambda v, mn=m_name: self._on_method_param_edited(mn, "lr", v))
-                    sc_layout.addRow("Learning Rate (lr)", spin_lr)
+                    row_lr.addWidget(spin_lr, 1)
+                    btn_del = QToolButton()
+                    btn_del.setText("✕")
+                    btn_del.setToolTip("Remove lr parameter")
+                    btn_del.clicked.connect(lambda _, mn=m_name: self._remove_method_param(mn, "lr"))
+                    row_lr.addWidget(btn_del)
+                    sc_layout.addRow("Learning Rate (lr)", row_lr)
 
                 # Batch size
                 if "batch_size" in m_spec:
+                    row_bs = QHBoxLayout()
                     spin_bs = SpinBox()
                     spin_bs.setRange(1, 131072)
                     spin_bs.setValue(int(m_spec["batch_size"]))
                     spin_bs.valueChanged.connect(lambda v, mn=m_name: self._on_method_param_edited(mn, "batch_size", v))
-                    sc_layout.addRow("Batch Size", spin_bs)
+                    row_bs.addWidget(spin_bs, 1)
+                    btn_del = QToolButton()
+                    btn_del.setText("✕")
+                    btn_del.setToolTip("Remove batch_size parameter")
+                    btn_del.clicked.connect(lambda _, mn=m_name: self._remove_method_param(mn, "batch_size"))
+                    row_bs.addWidget(btn_del)
+                    sc_layout.addRow("Batch Size", row_bs)
 
                 # Gamma
                 if "gamma" in m_spec:
+                    row_g = QHBoxLayout()
                     spin_g = DoubleSpinBox()
                     spin_g.setDecimals(4)
                     spin_g.setRange(0.0, 1.0)
                     spin_g.setValue(float(m_spec["gamma"]))
                     spin_g.valueChanged.connect(lambda v, mn=m_name: self._on_method_param_edited(mn, "gamma", v))
-                    sc_layout.addRow("Discount Factor (γ)", spin_g)
+                    row_g.addWidget(spin_g, 1)
+                    btn_del = QToolButton()
+                    btn_del.setText("✕")
+                    btn_del.setToolTip("Remove gamma parameter")
+                    btn_del.clicked.connect(lambda _, mn=m_name: self._remove_method_param(mn, "gamma"))
+                    row_g.addWidget(btn_del)
+                    sc_layout.addRow("Discount Factor (γ)", row_g)
 
                 # Extra hyperparameters (logic_lr, blender_lr, etc.)
-                for extra_k, extra_v in m_spec.items():
+                for extra_k, extra_v in list(m_spec.items()):
                     if extra_k in ("agent", "model", "lr", "batch_size", "gamma"):
                         continue
                     if isinstance(extra_v, (int, float, str, bool)):
+                        row_extra = QHBoxLayout()
                         line_extra = QLineEdit(str(extra_v))
                         line_extra.textChanged.connect(
                             lambda v, mn=m_name, ek=extra_k: self._on_method_param_edited(mn, ek, v)
                         )
-                        sc_layout.addRow(extra_k, line_extra)
+                        row_extra.addWidget(line_extra, 1)
+                        btn_del = QToolButton()
+                        btn_del.setText("✕")
+                        btn_del.setToolTip(f"Remove hyperparameter '{extra_k}'")
+                        btn_del.clicked.connect(lambda _, mn=m_name, ek=extra_k: self._remove_method_param(mn, ek))
+                        row_extra.addWidget(btn_del)
+                        sc_layout.addRow(str(extra_k), row_extra)
+
+                # Row to add a new hyperparameter to this method
+                add_h_row = QHBoxLayout()
+                add_h_row.setSpacing(8)
+                combo_add_hk = ComboBox()
+                combo_add_hk.setEditable(True)
+                combo_add_hk.setPlaceholderText("Hyperparameter name (e.g. ent_coef)...")
+                common_hyper = ["ent_coef", "blend_ent_coef", "logic_lr", "blender_lr", "target_entropy", "cql_alpha", "tau", "clip_range"]
+                combo_add_hk.addItems(common_hyper)
+                combo_add_hk.setEditText("")
+                add_h_row.addWidget(combo_add_hk, 1)
+
+                txt_add_hv = QLineEdit()
+                txt_add_hv.setPlaceholderText("Value...")
+                add_h_row.addWidget(txt_add_hv, 1)
+
+                btn_do_add_h = QPushButton("Add")
+                btn_do_add_h.clicked.connect(
+                    lambda _, mn=m_name, ck=combo_add_hk, tv=txt_add_hv: self._add_method_param(mn, ck.currentText().strip(), tv.text().strip())
+                )
+                add_h_row.addWidget(btn_do_add_h)
+                sc_layout.addRow(add_h_row)
 
                 m_layout.addWidget(sub_card)
 
-        # Adding a method is how an experiment becomes a comparison, and 17 of
-        # the 46 experiments configure more than one.
+        # Method adder row
         add_row = QHBoxLayout()
-        # A paradigm that declares no agents picks a method by architecture
-        # instead: supervised learning has no policy, so its methods are
-        # model-only (ep_lstm, ep_transformer).
         permitted_agents = [a.name for a in tree.agents_for(paradigm)] if tree and paradigm in tree.paradigms else []
         self.new_method_is_agent = bool(permitted_agents)
         choices = permitted_agents or (sorted(tree.models) if tree else [])
@@ -838,15 +1072,12 @@ class ConfigViewer(QWidget):
             else f"{paradigm} has no agents; methods name an architecture"
         )
         if not permitted_agents and choices:
-            # Alphabetically first across every model is blendrl, a neuro-symbolic
-            # RL architecture; follow what the group already uses instead.
             self.combo_new_method.setCurrentText(
                 default_method_model(tree.group(self._group_name() or "") if tree else None, choices)
             )
         add_row.addWidget(self.combo_new_method)
         self.btn_add_method = QPushButton("Add")
         self.btn_add_method.setEnabled(bool(choices))
-        # Swallow clicked(bool): a stray False would read as the agent name.
         self.btn_add_method.clicked.connect(lambda: self.add_method())
         add_row.addWidget(self.btn_add_method)
         add_row.addStretch()
@@ -855,76 +1086,300 @@ class ConfigViewer(QWidget):
         box_methods.add_layout(m_layout)
         self.boxes_layout.addWidget(box_methods)
 
-        # --- BOX 3: ENVIRONMENT & TRAINER SETTINGS ---
-        box_env_trainer = ConfigBox("3. Environment & Trainer", "Simulation rollouts and training accelerator options")
-        grid_et = QGridLayout()
-        grid_et.setVerticalSpacing(10)
-        grid_et.setHorizontalSpacing(16)
+        # --- MODULAR BOX: ENVIRONMENT OVERRIDES ---
+        has_env_dict = isinstance(data.get("env"), dict)
+        resolved_env = resolved.get("env")
+        show_env = has_env_dict or (self.view_mode == "resolved" and isinstance(resolved_env, dict))
 
-        env_cfg = data.get("env", {})
-        if isinstance(env_cfg, dict):
-            grid_et.addWidget(label("Parallel Envs (num_envs)"), 0, 0)
+        if show_env:
+            box_env = ConfigBox("Environment Settings", "Simulation rollouts and vectorized environment settings")
+            box_env_header = QHBoxLayout()
+            box_env_header.addWidget(label("3. Environment Settings", "eyebrow"))
+            box_env_header.addStretch()
+            if has_env_dict:
+                btn_rm_env = QToolButton()
+                btn_rm_env.setText("Remove Block")
+                btn_rm_env.clicked.connect(lambda: self.remove_block("env"))
+                box_env_header.addWidget(btn_rm_env)
+            else:
+                box_env_header.addWidget(label("(inherited defaults)", "muted"))
+            box_env.add_layout(box_env_header)
+
+            grid_e = QGridLayout()
+            grid_e.setVerticalSpacing(10)
+            grid_e.setHorizontalSpacing(16)
+            env_source = data.get("env") if has_env_dict else (resolved_env if isinstance(resolved_env, dict) else {})
+
+            grid_e.addWidget(label("Parallel Envs (num_envs)"), 0, 0)
             spin_num_envs = SpinBox()
             spin_num_envs.setRange(1, 1024)
-            spin_num_envs.setValue(int(env_cfg.get("num_envs") or 4))
+            spin_num_envs.setValue(int(env_source.get("num_envs") or 4))
             spin_num_envs.valueChanged.connect(lambda v: self._on_nested_edited("env", "num_envs", v))
-            grid_et.addWidget(spin_num_envs, 0, 1)
+            grid_e.addWidget(spin_num_envs, 0, 1)
 
-            grid_et.addWidget(label("Steps per Env (num_steps)"), 0, 2)
+            grid_e.addWidget(label("Steps per Env (num_steps)"), 0, 2)
             spin_num_steps = SpinBox()
             spin_num_steps.setRange(1, 100000)
-            spin_num_steps.setValue(int(env_cfg.get("num_steps") or 128))
+            spin_num_steps.setValue(int(env_source.get("num_steps") or 128))
             spin_num_steps.valueChanged.connect(lambda v: self._on_nested_edited("env", "num_steps", v))
-            grid_et.addWidget(spin_num_steps, 0, 3)
+            grid_e.addWidget(spin_num_steps, 0, 3)
 
-        trainer_cfg = data.get("trainer", {})
-        if isinstance(trainer_cfg, dict):
-            grid_et.addWidget(label("Accelerator"), 1, 0)
+            box_env.add_layout(grid_e)
+            self.boxes_layout.addWidget(box_env)
+
+        # --- MODULAR BOX: TRAINER SETTINGS ---
+        has_trainer = "trainer" in data and isinstance(data["trainer"], dict)
+        show_trainer = has_trainer or (self.view_mode == "resolved" and "trainer" in resolved)
+
+        if show_trainer:
+            box_tr = ConfigBox("Trainer Settings", "Training accelerator and epoch constraints")
+            tr_header = QHBoxLayout()
+            tr_header.addWidget(label("Trainer Settings", "eyebrow"))
+            tr_header.addStretch()
+            if has_trainer:
+                btn_rm_tr = QToolButton()
+                btn_rm_tr.setText("Remove Block")
+                btn_rm_tr.clicked.connect(lambda: self.remove_block("trainer"))
+                tr_header.addWidget(btn_rm_tr)
+            else:
+                tr_header.addWidget(label("(inherited defaults)", "muted"))
+            box_tr.add_layout(tr_header)
+
+            grid_t = QGridLayout()
+            grid_t.setVerticalSpacing(10)
+            grid_t.setHorizontalSpacing(16)
+            tr_source = data.get("trainer", {}) if has_trainer else resolved.get("trainer", {})
+
+            grid_t.addWidget(label("Accelerator"), 0, 0)
             combo_accel = ComboBox()
             combo_accel.addItems(["cpu", "gpu", "mps", "auto"])
-            combo_accel.setCurrentText(str(trainer_cfg.get("accelerator") or "cpu"))
+            combo_accel.setCurrentText(str(tr_source.get("accelerator") or "cpu"))
             combo_accel.currentTextChanged.connect(lambda v: self._on_nested_edited("trainer", "accelerator", v))
-            grid_et.addWidget(combo_accel, 1, 1)
+            grid_t.addWidget(combo_accel, 0, 1)
 
-            grid_et.addWidget(label("Max Epochs"), 1, 2)
+            grid_t.addWidget(label("Max Epochs"), 0, 2)
             spin_epochs = SpinBox()
             spin_epochs.setRange(1, 1000)
-            spin_epochs.setValue(int(trainer_cfg.get("max_epochs") or 1))
+            spin_epochs.setValue(int(tr_source.get("max_epochs") or 1))
             spin_epochs.valueChanged.connect(lambda v: self._on_nested_edited("trainer", "max_epochs", v))
-            grid_et.addWidget(spin_epochs, 1, 3)
+            grid_t.addWidget(spin_epochs, 0, 3)
 
-        box_env_trainer.add_layout(grid_et)
-        self.boxes_layout.addWidget(box_env_trainer)
+            box_tr.add_layout(grid_t)
+            self.boxes_layout.addWidget(box_tr)
 
-        # --- BOX 4: CLUSTER & HARDWARE RESOURCES ---
-        box_res = ConfigBox("4. Compute & Slurm Resources", "Resource allocation for cluster runs (time, gpus, cores)")
-        grid_res = QGridLayout()
-        grid_res.setHorizontalSpacing(16)
-        grid_res.setVerticalSpacing(8)
+        # --- MODULAR BOX: DATASET SPECIFICATION ---
+        has_dataset = "dataset_path" in data or "offline_datasets" in data
+        is_offline_req = paradigm in ("offline_rl", "supervised")
+        show_dataset = has_dataset or is_offline_req or (self.view_mode == "resolved" and "dataset_path" in resolved)
 
-        res_dict = data.get("resources", {}) or {}
-        grid_res.addWidget(label("Time Limit"), 0, 0)
-        txt_time = QLineEdit(str(res_dict.get("time") or "02:00:00"))
-        txt_time.textChanged.connect(lambda v: self._on_nested_edited("resources", "time", v))
-        grid_res.addWidget(txt_time, 0, 1)
+        if show_dataset:
+            box_ds = ConfigBox("Dataset Specification", "Offline transition datasets and replay buffer paths")
+            ds_header = QHBoxLayout()
+            ds_header.addWidget(label("Dataset Configuration", "eyebrow"))
+            ds_header.addStretch()
+            if has_dataset and not is_offline_req:
+                btn_rm_ds = QToolButton()
+                btn_rm_ds.setText("Remove Block")
+                btn_rm_ds.clicked.connect(lambda: self.remove_block("dataset"))
+                ds_header.addWidget(btn_rm_ds)
+            elif is_offline_req:
+                ds_header.addWidget(label(f"(required by {paradigm})", "badge"))
+            box_ds.add_layout(ds_header)
 
-        grid_res.addWidget(label("GPUs"), 0, 2)
-        txt_gpus = QLineEdit(str(res_dict.get("gpus") if res_dict.get("gpus") is not None else 0))
-        txt_gpus.textChanged.connect(lambda v: self._on_nested_edited("resources", "gpus", v))
-        grid_res.addWidget(txt_gpus, 0, 3)
+            ds_form = QFormLayout()
+            ds_form.setVerticalSpacing(10)
 
-        grid_res.addWidget(label("CPU Cores"), 1, 0)
-        txt_cores = QLineEdit(str(res_dict.get("cores") if res_dict.get("cores") is not None else 4))
-        txt_cores.textChanged.connect(lambda v: self._on_nested_edited("resources", "cores", v))
-        grid_res.addWidget(txt_cores, 1, 1)
+            # dataset_path with dropdown, browse button, and existence indicator
+            ds_path_row = QHBoxLayout()
+            ds_path_row.setSpacing(6)
+            self.combo_dataset_path = ComboBox()
+            self.combo_dataset_path.setEditable(True)
+            for dp in discover_datasets():
+                self.combo_dataset_path.addItem(dp)
+            current_dp = str(data.get("dataset_path") or resolved.get("dataset_path") or "")
+            self.combo_dataset_path.setEditText(current_dp)
 
-        grid_res.addWidget(label("Memory"), 1, 2)
-        txt_mem = QLineEdit(str(res_dict.get("memory") or "16G"))
-        txt_mem.textChanged.connect(lambda v: self._on_nested_edited("resources", "memory", v))
-        grid_res.addWidget(txt_mem, 1, 3)
+            lbl_status = QLabel("")
+            def _update_ds_status(p_str):
+                p_obj = Path(p_str.strip())
+                if p_str.strip() and p_obj.exists():
+                    try:
+                        sz_mb = p_obj.stat().st_size / (1024 * 1024)
+                        lbl_status.setText(f"✓ Exists ({sz_mb:.1f} MB)")
+                        lbl_status.setStyleSheet("color: #b8bb26; font-size: 11px; font-weight: bold;")
+                    except Exception:
+                        lbl_status.setText("✓ Exists")
+                        lbl_status.setStyleSheet("color: #b8bb26; font-size: 11px;")
+                elif p_str.strip():
+                    lbl_status.setText("⚠ Not Found")
+                    lbl_status.setStyleSheet("color: #fabd2f; font-size: 11px;")
+                else:
+                    lbl_status.setText("")
 
-        box_res.add_layout(grid_res)
-        self.boxes_layout.addWidget(box_res)
+            _update_ds_status(current_dp)
+            self.combo_dataset_path.currentTextChanged.connect(
+                lambda v: (self._on_field_edited("dataset_path", v.strip()), _update_ds_status(v))
+            )
+            ds_path_row.addWidget(self.combo_dataset_path, 1)
+
+            btn_browse_ds = QToolButton()
+            btn_browse_ds.setText("Browse…")
+            btn_browse_ds.clicked.connect(lambda: self._browse_dataset_path())
+            ds_path_row.addWidget(btn_browse_ds)
+            ds_path_row.addWidget(lbl_status)
+            ds_form.addRow("Dataset Path", ds_path_row)
+
+            # offline_datasets text line
+            self.txt_offline_ds = QLineEdit()
+            off_val = data.get("offline_datasets") or resolved.get("offline_datasets") or ""
+            if isinstance(off_val, list):
+                off_val = ", ".join(str(x) for x in off_val)
+            self.txt_offline_ds.setText(str(off_val))
+            self.txt_offline_ds.setPlaceholderText("Comma-separated list of dataset names (optional)...")
+            self.txt_offline_ds.textChanged.connect(
+                lambda v: self._on_field_edited("offline_datasets", [x.strip() for x in v.split(",") if x.strip()] if "," in v else v.strip())
+            )
+            ds_form.addRow("Offline Datasets", self.txt_offline_ds)
+
+            box_ds.add_layout(ds_form)
+            self.boxes_layout.addWidget(box_ds)
+
+        # --- MODULAR BOX: COMPUTE & SLURM RESOURCES ---
+        has_res = "resources" in data and isinstance(data["resources"], dict)
+        show_res = has_res or (self.view_mode == "resolved" and "resources" in resolved)
+
+        if show_res:
+            box_res = ConfigBox("Compute & Slurm Resources", "Resource allocation for cluster runs (time, gpus, cores, memory)")
+            res_header = QHBoxLayout()
+            res_header.addWidget(label("Compute & Slurm Resources", "eyebrow"))
+            res_header.addStretch()
+            if has_res:
+                btn_rm_res = QToolButton()
+                btn_rm_res.setText("Remove Block")
+                btn_rm_res.clicked.connect(lambda: self.remove_block("resources"))
+                res_header.addWidget(btn_rm_res)
+            else:
+                res_header.addWidget(label("(inherited defaults)", "muted"))
+            box_res.add_layout(res_header)
+
+            grid_res = QGridLayout()
+            grid_res.setHorizontalSpacing(16)
+            grid_res.setVerticalSpacing(8)
+            res_dict = data.get("resources", {}) if has_res else resolved.get("resources", {})
+
+            grid_res.addWidget(label("Time Limit"), 0, 0)
+            txt_time = QLineEdit(str(res_dict.get("time") or "02:00:00"))
+            txt_time.textChanged.connect(lambda v: self._on_nested_edited("resources", "time", v))
+            grid_res.addWidget(txt_time, 0, 1)
+
+            grid_res.addWidget(label("GPUs"), 0, 2)
+            txt_gpus = QLineEdit(str(res_dict.get("gpus") if res_dict.get("gpus") is not None else 0))
+            txt_gpus.textChanged.connect(lambda v: self._on_nested_edited("resources", "gpus", v))
+            grid_res.addWidget(txt_gpus, 0, 3)
+
+            grid_res.addWidget(label("CPU Cores"), 1, 0)
+            txt_cores = QLineEdit(str(res_dict.get("cores") if res_dict.get("cores") is not None else 4))
+            txt_cores.textChanged.connect(lambda v: self._on_nested_edited("resources", "cores", v))
+            grid_res.addWidget(txt_cores, 1, 1)
+
+            grid_res.addWidget(label("Memory"), 1, 2)
+            txt_mem = QLineEdit(str(res_dict.get("memory") or "16G"))
+            txt_mem.textChanged.connect(lambda v: self._on_nested_edited("resources", "memory", v))
+            grid_res.addWidget(txt_mem, 1, 3)
+
+            box_res.add_layout(grid_res)
+            self.boxes_layout.addWidget(box_res)
+
+        # --- MODULAR BOX: HYPERPARAMETER SWEEPER (OPTUNA) ---
+        has_sweeper = (
+            ("hydra" in data and isinstance(data["hydra"], dict) and "sweeper" in data["hydra"])
+            or "sweeper" in data
+        )
+        resolved_hydra = resolved.get("hydra", {}) if isinstance(resolved.get("hydra"), dict) else {}
+        show_sweeper = has_sweeper or (self.view_mode == "resolved" and "sweeper" in resolved_hydra)
+
+        if show_sweeper:
+            box_sw = ConfigBox("Hyperparameter Sweeper (Optuna)", "Automated parameter sweeps via Hydra & Optuna")
+            sw_header = QHBoxLayout()
+            sw_header.addWidget(label("Hyperparameter Sweeper (Optuna)", "eyebrow"))
+            sw_header.addStretch()
+            if has_sweeper:
+                btn_rm_sw = QToolButton()
+                btn_rm_sw.setText("Remove Block")
+                btn_rm_sw.clicked.connect(lambda: self.remove_block("sweeper"))
+                sw_header.addWidget(btn_rm_sw)
+            else:
+                sw_header.addWidget(label("(inherited defaults)", "muted"))
+            box_sw.add_layout(sw_header)
+
+            sw_dict = (
+                data.get("hydra", {}).get("sweeper", {})
+                if "hydra" in data and isinstance(data["hydra"], dict) and "sweeper" in data["hydra"]
+                else data.get("sweeper", {})
+            )
+            sw_form = QGridLayout()
+            sw_form.setVerticalSpacing(8)
+            sw_form.setHorizontalSpacing(16)
+
+            sw_form.addWidget(label("Study Name"), 0, 0)
+            txt_sw_name = QLineEdit(str(sw_dict.get("study_name") or self.current_path.stem if self.current_path else "sweep"))
+            txt_sw_name.textChanged.connect(lambda v: self._on_sweeper_edited("study_name", v))
+            sw_form.addWidget(txt_sw_name, 0, 1)
+
+            sw_form.addWidget(label("Trials"), 0, 2)
+            spin_trials = SpinBox()
+            spin_trials.setRange(1, 10000)
+            spin_trials.setValue(int(sw_dict.get("n_trials") or 50))
+            spin_trials.valueChanged.connect(lambda v: self._on_sweeper_edited("n_trials", v))
+            sw_form.addWidget(spin_trials, 0, 3)
+
+            sw_form.addWidget(label("Direction"), 1, 0)
+            combo_dir = ComboBox()
+            combo_dir.addItems(["maximize", "minimize"])
+            combo_dir.setCurrentText(str(sw_dict.get("direction") or "maximize"))
+            combo_dir.currentTextChanged.connect(lambda v: self._on_sweeper_edited("direction", v))
+            sw_form.addWidget(combo_dir, 1, 1)
+
+            sw_form.addWidget(label("Parallel Jobs"), 1, 2)
+            spin_jobs = SpinBox()
+            spin_jobs.setRange(1, 64)
+            spin_jobs.setValue(int(sw_dict.get("n_jobs") or 1))
+            spin_jobs.valueChanged.connect(lambda v: self._on_sweeper_edited("n_jobs", v))
+            sw_form.addWidget(spin_jobs, 1, 3)
+
+            box_sw.add_layout(sw_form)
+            self.boxes_layout.addWidget(box_sw)
+
+        # --- ADD CONFIGURATION BLOCK DROPDOWN BUTTON ---
+        btn_add_block_row = QHBoxLayout()
+        self.btn_add_block = QPushButton("+ Add Configuration Block ▾")
+        self.btn_add_block.setObjectName("addBlockButton")
+        self.btn_add_block.setStyleSheet("padding: 6px 14px; font-weight: 500;")
+        add_menu = QMenu(self)
+        act_res = add_menu.addAction("Compute & Slurm Resources")
+        act_res.triggered.connect(lambda: self.add_block("resources"))
+        act_res.setEnabled("resources" not in data)
+
+        act_tr = add_menu.addAction("Trainer Overrides")
+        act_tr.triggered.connect(lambda: self.add_block("trainer"))
+        act_tr.setEnabled("trainer" not in data)
+
+        act_env = add_menu.addAction("Environment Overrides")
+        act_env.triggered.connect(lambda: self.add_block("env"))
+        act_env.setEnabled(not isinstance(data.get("env"), dict))
+
+        act_ds = add_menu.addAction("Dataset Configuration")
+        act_ds.triggered.connect(lambda: self.add_block("dataset"))
+        act_ds.setEnabled("dataset_path" not in data)
+
+        act_sw = add_menu.addAction("Hyperparameter Sweeper (Optuna)")
+        act_sw.triggered.connect(lambda: self.add_block("sweeper"))
+        act_sw.setEnabled(not has_sweeper)
+
+        self.btn_add_block.setMenu(add_menu)
+        btn_add_block_row.addWidget(self.btn_add_block)
+        btn_add_block_row.addStretch()
+        self.boxes_layout.addLayout(btn_add_block_row)
 
     def _render_generic_boxes(self):
         """Render clean boxes for modular YAML configs (agent/*.yaml, env/*.yaml, etc.)."""
@@ -1061,6 +1516,124 @@ class ConfigViewer(QWidget):
         m_spec[param_key] = value
         self._mark_dirty()
 
+    def _browse_dataset_path(self):
+        """Open file dialog to select a dataset file or directory."""
+        initial_dir = str(Path.cwd() / "in" / "datasets")
+        if not Path(initial_dir).is_dir():
+            initial_dir = str(Path.cwd())
+        selected, _ = QFileDialog.getOpenFileName(
+            self,
+            "Select Dataset",
+            initial_dir,
+            "Dataset Files (*.pkl *.csv *.parquet *.h5 *.pt);;All Files (*)",
+        )
+        if selected:
+            try:
+                rel = Path(selected).relative_to(Path.cwd()).as_posix()
+            except ValueError:
+                rel = selected
+            if hasattr(self, "combo_dataset_path"):
+                self.combo_dataset_path.setEditText(rel)
+            self._on_field_edited("dataset_path", rel)
+
+    def _on_sweeper_edited(self, key, value):
+        if self._block_updates:
+            return
+        if "hydra" in self.raw_data and isinstance(self.raw_data["hydra"], dict) and "sweeper" in self.raw_data["hydra"]:
+            self.raw_data["hydra"]["sweeper"][key] = _parse_yaml_value(value)
+        else:
+            self.raw_data.setdefault("sweeper", {})[key] = _parse_yaml_value(value)
+        self._mark_dirty()
+
+    def remove_block(self, block_name: str):
+        """Remove a configuration block from the open experiment."""
+        if block_name == "resources":
+            self.raw_data.pop("resources", None)
+        elif block_name == "trainer":
+            self.raw_data.pop("trainer", None)
+        elif block_name == "env":
+            if isinstance(self.raw_data.get("env"), dict):
+                self.raw_data.pop("env", None)
+        elif block_name == "dataset":
+            self.raw_data.pop("dataset_path", None)
+            self.raw_data.pop("offline_datasets", None)
+        elif block_name == "sweeper":
+            self.raw_data.pop("sweeper", None)
+            if "hydra" in self.raw_data and isinstance(self.raw_data["hydra"], dict):
+                self.raw_data["hydra"].pop("sweeper", None)
+                if not self.raw_data["hydra"]:
+                    self.raw_data.pop("hydra", None)
+        elif block_name == "params":
+            if "methods" in self.raw_data and isinstance(self.raw_data["methods"], dict):
+                self.raw_data["methods"].pop("params", None)
+        self._mark_dirty()
+        self._render_boxes()
+
+    def add_block(self, block_name: str):
+        """Add an optional configuration block to the open experiment."""
+        if block_name == "resources":
+            self.raw_data["resources"] = {"time": "02:00:00", "gpus": 1, "cores": 8, "memory": "16G"}
+        elif block_name == "trainer":
+            self.raw_data["trainer"] = {"accelerator": "cpu", "max_epochs": 25}
+        elif block_name == "env":
+            self.raw_data["env"] = {"num_envs": 4, "num_steps": 128}
+        elif block_name == "dataset":
+            self.raw_data["dataset_path"] = "in/datasets/mimic"
+        elif block_name == "sweeper":
+            exp_stem = self.current_path.stem if self.current_path else "sweep"
+            self.raw_data.setdefault("hydra", {})["sweeper"] = {
+                "sampler": {"_target_": "optuna.samplers.TPESampler", "seed": 42},
+                "direction": "maximize",
+                "storage": "sqlite:///results/optuna/optuna.db",
+                "study_name": exp_stem,
+                "n_trials": 50,
+                "n_jobs": 1,
+            }
+        elif block_name == "params":
+            self.raw_data.setdefault("methods", {})["params"] = {"lr": 0.0003}
+        self._mark_dirty()
+        self._render_boxes()
+
+    def _on_universal_param_edited(self, key, value):
+        if self._block_updates:
+            return
+        methods = self.raw_data.setdefault("methods", {})
+        params = methods.setdefault("params", {})
+        params[key] = _parse_yaml_value(value)
+        self._mark_dirty()
+
+    def _remove_universal_param(self, key):
+        if "methods" in self.raw_data and "params" in self.raw_data["methods"]:
+            self.raw_data["methods"]["params"].pop(key, None)
+            if not self.raw_data["methods"]["params"]:
+                self.raw_data["methods"].pop("params", None)
+            self._mark_dirty()
+            self._render_boxes()
+
+    def _add_universal_param(self, key, value):
+        if not key:
+            return
+        methods = self.raw_data.setdefault("methods", {})
+        params = methods.setdefault("params", {})
+        params[key] = _parse_yaml_value(value)
+        self._mark_dirty()
+        self._render_boxes()
+
+    def _remove_method_param(self, method_name, param_key):
+        if "methods" in self.raw_data and method_name in self.raw_data["methods"]:
+            self.raw_data["methods"][method_name].pop(param_key, None)
+            self._mark_dirty()
+            self._render_boxes()
+
+    def _add_method_param(self, method_name, param_key, value):
+        if not param_key:
+            return
+        methods = self.raw_data.setdefault("methods", {})
+        m_spec = methods.setdefault(method_name, {})
+        m_spec[param_key] = _parse_yaml_value(value)
+        self._mark_dirty()
+        self._render_boxes()
+
     def _mark_dirty(self):
         self.is_dirty = True
         if getattr(self, "auto_save", False):
@@ -1108,6 +1681,9 @@ class ConfigViewer(QWidget):
         if exp_id:
             overrides.append(f"++experiment_id='{exp_id}'")
 
+        if "description" in data and data["description"]:
+            overrides.append(f"++description='{data['description']}'")
+
         # Hydra config-group selections (defaults in in/config/config.yaml)
         for group in ("paradigm", "env"):
             value = data.get(group)
@@ -1126,6 +1702,21 @@ class ConfigViewer(QWidget):
             overrides.append(f"recover={str(data['recover']).lower()}")
         if "no_plot" in data and data["no_plot"]:
             overrides.append(f"no_plot={str(data['no_plot']).lower()}")
+
+        if "dataset_path" in data and data["dataset_path"]:
+            overrides.append(f"dataset_path='{data['dataset_path']}'")
+
+        # Slurm resources overrides
+        if "resources" in data and isinstance(data["resources"], dict):
+            for k, v in data["resources"].items():
+                if isinstance(v, (int, float, str, bool)):
+                    overrides.append(f"++resources.{k}='{v}'" if isinstance(v, str) else f"++resources.{k}={v}")
+
+        # Universal params overrides
+        if "methods" in data and isinstance(data["methods"], dict) and "params" in data["methods"]:
+            for k, v in data["methods"]["params"].items():
+                if isinstance(v, (int, float, str, bool)):
+                    overrides.append(f"++methods.params.{k}={v}")
 
         # Methods overrides
         for m_name, m_spec in data.get("methods", {}).items():

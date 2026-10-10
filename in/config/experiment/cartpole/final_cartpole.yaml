@@ -27,3 +27,5 @@ methods:
   ppo_blendrl_final_cp:
     agent: ppo
     model: blendrl
+  params:
+    lr: 0.0003

@@ -129,9 +129,20 @@ class Experiment:
     @classmethod
     def from_file(cls, path: Path, root: Path) -> Experiment:
         relative = path.relative_to(root)
+        if relative.parts[0] == "experiment" and len(relative.parts) > 2:
+            group = relative.parts[1]
+        elif len(relative.parts) > 1:
+            group = relative.parts[0]
+        else:
+            group = relative.parent.name or "ungrouped"
+
+        exp_name = relative.with_suffix("").as_posix()
+        if exp_name.startswith("experiment/"):
+            exp_name = exp_name[len("experiment/"):]
+
         return cls(
-            name=relative.with_suffix("").as_posix(),
-            group=relative.parent.name or "ungrouped",
+            name=exp_name,
+            group=group,
             path=path,
             raw=_read_yaml(path),
         )
@@ -232,10 +243,34 @@ class ConfigTree:
         self.experiments: dict[str, Experiment] = {}
         if experiment_root.is_dir():
             for path in sorted(experiment_root.glob("**/*.yaml")):
-                if path.name.startswith("_"):
+                if path.name.startswith("_") or path.parent.name == "methods" or "/methods/" in path.as_posix():
                     continue
                 experiment = Experiment.from_file(path, experiment_root)
                 self.experiments[experiment.name] = experiment
+
+    def create_folder(self, group: str, subpath: str) -> Path:
+        """Create a new organizational folder under an experiment group."""
+        folder = self.config_root / "experiment" / group / subpath
+        folder.mkdir(parents=True, exist_ok=True)
+        return folder
+
+    def rename_folder(self, old_path: Path | str, new_name: str) -> Path:
+        """Rename an organizational folder under an experiment group."""
+        old_p = Path(old_path)
+        new_p = old_p.with_name(new_name)
+        if new_p.exists() and not old_p.samefile(new_p):
+            raise FileExistsError(f"A folder named '{new_name}' already exists.")
+        old_p.rename(new_p)
+        return new_p
+
+    def delete_folder(self, folder_path: Path | str) -> bool:
+        """Delete an organizational folder under an experiment group."""
+        import shutil
+        folder_p = Path(folder_path)
+        if folder_p.is_dir():
+            shutil.rmtree(folder_p)
+            return True
+        return False
 
     @classmethod
     def discover(cls, start: Path | None = None) -> ConfigTree:
@@ -248,6 +283,8 @@ class ConfigTree:
         raise FileNotFoundError(f"No in/config directory found above {current}")
 
     def agents_for(self, paradigm: str) -> list[Agent]:
+        if paradigm not in self.paradigms:
+            return []
         rules = self.paradigms[paradigm]
         seen: set[int] = set()
         result: list[Agent] = []
@@ -259,6 +296,8 @@ class ConfigTree:
         return result
 
     def environments_for(self, paradigm: str) -> list[Environment]:
+        if paradigm not in self.paradigms:
+            return []
         rules = self.paradigms[paradigm]
         seen: set[int] = set()
         result: list[Environment] = []
@@ -270,6 +309,8 @@ class ConfigTree:
         return result
 
     def field_enabled(self, paradigm: str, name: str) -> bool:
+        if paradigm not in self.paradigms:
+            return True
         return self.paradigms[paradigm].field_enabled(name)
 
     def experiments_in(self, group: str) -> list[Experiment]:

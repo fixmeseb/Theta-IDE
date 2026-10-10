@@ -66,6 +66,7 @@ from .app_icon import DESKTOP_FILE_NAME, ICON_PATH, app_icon, install_desktop_en
 from .components_panel import ComponentsPanel
 from .config_tree import ConfigTreeWidget
 from .config_viewer import ConfigViewer
+from .config_tab_manager import ConfigTabManager
 from .hub import HubClient, HubDialog
 from .model import (
     BASE_EXPERIMENT,
@@ -268,6 +269,9 @@ class Window(QMainWindow):
         self.config_tree.setMinimumWidth(350)
         self.tree = self.config_tree.tree  # backwards compatibility alias
         self.config_tree.file_selected.connect(self.on_config_file_selected)
+        self.config_tree.file_opened.connect(self.on_config_file_opened)
+        self.config_tree.file_deleted.connect(self.on_config_file_deleted)
+        self.config_tree.dir_deleted.connect(self.on_config_dir_deleted)
         splitter.addWidget(self.config_tree)
 
         # Square buttons located at the top of the filetree next to 'New' and 'Copy'
@@ -297,17 +301,16 @@ class Window(QMainWindow):
         preview_splitter = QSplitter(Qt.Orientation.Horizontal)
         self.preview_splitter = preview_splitter
 
-        # Boxed Config Viewer (takes up the main area of the screen)
-        self.config_viewer = ConfigViewer()
-        self.config_viewer.auto_save = True
-        self.config_viewer.btn_save = self.btn_save
-        self.config_viewer.config_changed.connect(self.update_config)
-        self.config_viewer.save_requested.connect(self.on_config_saved)
-        self.config_viewer.dirty_state_changed.connect(self.config_tree.set_file_dirty)
-        self.config_viewer.file_renamed.connect(self.on_config_file_renamed)
-        if self.btn_save is not None:
-            self.config_viewer.dirty_changed.connect(self.btn_save.setEnabled)
-        preview_splitter.addWidget(self.config_viewer)
+        # Multi-tabbed Config Tab Manager (replaces single ConfigViewer)
+        self.config_tab_manager = ConfigTabManager(self)
+        self.config_tab_manager.auto_save = True
+        self.config_tab_manager.btn_save = self.btn_save
+        self.config_tab_manager.config_changed.connect(self.update_config)
+        self.config_tab_manager.save_requested.connect(self.on_config_saved)
+        self.config_tab_manager.dirty_state_changed.connect(self.config_tree.set_file_dirty)
+        self.config_tab_manager.file_renamed.connect(self.on_config_file_renamed)
+        self.config_tab_manager.current_tab_changed.connect(self.on_config_tab_switched)
+        preview_splitter.addWidget(self.config_tab_manager)
 
         # Preview Panel (Hydra YAML - hidden by default!)
         preview_panel = QWidget()
@@ -557,10 +560,52 @@ class Window(QMainWindow):
             else:
                 self.preview_splitter.setSizes([1000, 0])
 
-    def on_config_file_selected(self, file_path, rel_path):
-        self.active_config_path = file_path
+    @property
+    def config_viewer(self) -> ConfigViewer:
+        """Backwards-compatibility proxy returning the active ConfigViewer."""
+        if hasattr(self, "config_tab_manager") and self.config_tab_manager is not None:
+            return self.config_tab_manager.current_viewer()
+        return None
+
+    def on_config_file_selected(self, file_path, rel_path, pinned=False):
+        if hasattr(self, "config_tab_manager"):
+            self.config_tab_manager.open_file(file_path, rel_path, pinned=pinned)
+
+    def on_config_file_opened(self, file_path, rel_path):
+        if hasattr(self, "config_tab_manager"):
+            self.config_tab_manager.open_file(file_path, rel_path, pinned=True)
+
+    def on_config_file_deleted(self, rel_path):
+        norm = Path(rel_path).as_posix()
+        if hasattr(self, "config_tab_manager"):
+            self.config_tab_manager.close_tabs_matching(lambda p: Path(p).as_posix() == norm)
+
+    def on_config_dir_deleted(self, rel_path):
+        norm = Path(rel_path).as_posix()
+        if hasattr(self, "config_tab_manager"):
+            self.config_tab_manager.close_tabs_matching(
+                lambda p: Path(p).as_posix() == norm or Path(p).as_posix().startswith(norm + "/")
+            )
+
+    def close_active_tab(self):
+        if hasattr(self, "config_tab_manager") and self.config_tab_manager is not None:
+            self.config_tab_manager.close_current_tab()
+
+    def on_config_tab_switched(self, rel_path, viewer):
+        if not viewer or not rel_path:
+            self.active_config_path = None
+            self.active_config_rel_path = None
+            self.current_experiment = None
+            if self.start_button is not None:
+                self.start_button.setEnabled(False)
+            if self.queue_button is not None:
+                self.queue_button.setEnabled(False)
+            return
+
+        self.active_config_path = viewer.current_path
         self.active_config_rel_path = rel_path
-        self.config_viewer.load_file(file_path, rel_path)
+        if self.btn_save is not None:
+            self.btn_save.setEnabled(viewer.is_dirty)
 
         norm_rel = Path(rel_path).as_posix()
         if norm_rel.startswith("experiment/") and not Path(rel_path).name.startswith("_"):
@@ -581,6 +626,9 @@ class Window(QMainWindow):
             if self.start_button is not None:
                 self.start_button.setToolTip("Select an experiment from experiment/ to launch training")
 
+        if hasattr(self, "config_tree") and self.config_tree is not None:
+            self.config_tree.select_file(rel_path, emit_signal=False)
+
         self.request_compose()
         if hasattr(self, "plugin_manager"):
             self.plugin_manager.notify_experiment_changed(self.current_experiment, self.active_config_path)
@@ -589,17 +637,22 @@ class Window(QMainWindow):
         self.config_tree.prompt_duplicate()
 
     def save_current_config(self):
-        if hasattr(self, "config_viewer"):
-            ok = self.config_viewer.save_to_disk()
-            if ok:
-                self.statusBar().showMessage(f"Saved {self.config_viewer.current_rel_path}", 4000)
+        viewer = self.config_viewer
+        if viewer:
+            ok = viewer.save_to_disk()
+            if ok and viewer.current_rel_path:
+                self.statusBar().showMessage(f"Saved {viewer.current_rel_path}", 4000)
 
     def on_config_saved(self):
-        self.statusBar().showMessage(f"Saved {self.config_viewer.current_rel_path}", 4000)
+        viewer = self.config_viewer
+        if viewer and viewer.current_rel_path:
+            self.statusBar().showMessage(f"Saved {viewer.current_rel_path}", 4000)
         self.request_compose()
 
     def on_config_file_renamed(self, old_rel, new_rel):
-        self.active_config_path = self.config_viewer.current_path
+        viewer = self.config_viewer
+        if viewer:
+            self.active_config_path = viewer.current_path
         self.active_config_rel_path = new_rel
 
         norm_rel = Path(new_rel).as_posix()
@@ -1184,6 +1237,7 @@ class Window(QMainWindow):
             ("new_experiment", "New experiment", "Ctrl+N", self.new_experiment),
             ("export_config", "Export draft YAML…", "Ctrl+Shift+S", self.export_config),
             ("save_config", "Save configuration", "Ctrl+S", self.save_current_config),
+            ("close_tab", "Close tab", "Ctrl+W", self.close_active_tab),
             ("quit", "Quit", "Ctrl+Q", self.close),
         ):
             action = QAction(title, self)

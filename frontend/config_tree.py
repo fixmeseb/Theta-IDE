@@ -57,6 +57,18 @@ TREE_GEAR_COLORS = {
     (QIcon.Mode.Selected, QIcon.State.On): "accent",
 }
 
+CATEGORY_ICONS = {
+    "agent": "backend",
+    "model": "components",
+    "env": "monitor",
+    "paradigms": "hotkeys",
+    "site": "storage",
+    "hydra": "gear",
+    "sweeper": "gear",
+    "hydra/sweeper": "gear",
+    "methods": "components",
+}
+
 
 class NewExperimentDialog(QDialog):
     """Group, name, and - only for a group that does not exist yet - the paradigm
@@ -220,7 +232,11 @@ class ConfigTreeWidget(QWidget):
 
     and creating experiments in groups.
     """
-    file_selected = pyqtSignal(object, str)  # (Path, rel_path)
+    file_selected = pyqtSignal(object, str)  # (Path, rel_path) - preview
+    file_opened = pyqtSignal(object, str)    # (Path, rel_path) - pinned / double-click
+    file_deleted = pyqtSignal(str)           # (rel_path)
+    dir_deleted = pyqtSignal(str)            # (rel_path)
+    dir_renamed = pyqtSignal(str, str)       # (old_rel, new_rel)
     duplicate_requested = pyqtSignal(str)     # (rel_path)
     new_in_group_requested = pyqtSignal()
     save_requested = pyqtSignal()
@@ -359,6 +375,7 @@ class ConfigTreeWidget(QWidget):
         self.tree.setHeaderHidden(True)
         self.tree.setIndentation(14)
         self.tree.itemClicked.connect(self._on_item_clicked)
+        self.tree.itemDoubleClicked.connect(self._on_item_double_clicked)
         self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self._show_context_menu)
         layout.addWidget(self.tree, 1)
@@ -423,6 +440,11 @@ class ConfigTreeWidget(QWidget):
                     self._add_file_node(self.tree, f)
         elif self.mode == "components":
             # Display all modular configuration directories and files OUTSIDE experiment
+            # Pinned Global Pipeline Defaults at top
+            global_config = self.root_dir / "config.yaml"
+            if global_config.is_file():
+                self._add_file_node(self.tree, global_config, custom_display_name="Global Defaults (config)", is_global_config=True)
+
             preferred_comp_order = ["agent", "env", "model", "paradigms", "site", "hydra"]
             for cat in preferred_comp_order:
                 if cat in existing_dirs:
@@ -431,7 +453,8 @@ class ConfigTreeWidget(QWidget):
                 if name not in preferred_comp_order and name not in ("experiment", "experiments"):
                     self._add_dir_node(self.tree, dir_path, expand=False, expanded_set=expanded_paths, has_previous_state=has_previous_state)
             for f in top_files:
-                self._add_file_node(self.tree, f)
+                if f.name != "config.yaml":
+                    self._add_file_node(self.tree, f)
         else:
             # "all": Top-level directory ordering with experiment first
             preferred_order = ["experiment", "agent", "env", "model", "paradigms", "site", "hydra"]
@@ -472,17 +495,49 @@ class ConfigTreeWidget(QWidget):
             for i in range(count):
                 child = parent.topLevelItem(i) if isinstance(parent, QTreeWidget) else parent.child(i)
                 data = child.data(0, Qt.ItemDataRole.UserRole)
-                if data and data.get("is_base"):
-                    child.setIcon(0, svg_icon("gear", TREE_GEAR_COLORS))
+                if data:
+                    if data.get("is_base"):
+                        child.setIcon(0, svg_icon("gear", TREE_GEAR_COLORS))
+                    elif data.get("is_global_config"):
+                        child.setIcon(0, svg_icon("config", TOOL_ICON_COLORS))
+                    elif data.get("type") == "dir":
+                        rel = data.get("rel_path", "")
+                        dname = Path(data.get("path", "")).name
+                        c_icon = CATEGORY_ICONS.get(dname) or CATEGORY_ICONS.get(rel)
+                        if c_icon:
+                            child.setIcon(0, svg_icon(c_icon, TOOL_ICON_COLORS))
+                        elif self.mode in ("experiments", "experiment") and ("/" not in rel or (rel.startswith("experiment/") and rel.count("/") == 1)):
+                            child.setIcon(0, svg_icon("workflows", TOOL_ICON_COLORS))
+                        elif dname == "methods":
+                            child.setIcon(0, svg_icon("components", TOOL_ICON_COLORS))
+                        else:
+                            child.setIcon(0, svg_icon("storage", TOOL_ICON_COLORS))
                 _update_tree(child)
 
         _update_tree(self.tree)
 
     def _add_dir_node(self, parent_widget, dir_path: Path, expand=False, expanded_set=None, has_previous_state=False):
         name = dir_path.name
-        node = QTreeWidgetItem(parent_widget, [name])
-        node.setIcon(0, self.style().standardIcon(QStyle.StandardPixmap.SP_DirIcon))
         rel_path = str(dir_path.relative_to(self.root_dir)).replace("\\", "/").strip("/")
+
+        display_name = name
+        if rel_path == "hydra/sweeper" or (name == "sweeper" and "hydra" in rel_path):
+            display_name = "Hyperparameter Sweepers"
+
+        node = QTreeWidgetItem(parent_widget, [display_name])
+
+        # Semantic icon based on directory category / purpose
+        icon_name = CATEGORY_ICONS.get(name) or CATEGORY_ICONS.get(rel_path)
+        if icon_name:
+            node.setIcon(0, svg_icon(icon_name, TOOL_ICON_COLORS))
+        elif self.mode in ("experiments", "experiment") and (dir_path.parent == self.root_dir or dir_path.parent.name in ("experiment", "experiments")):
+            # Top-level experiment group (e.g. cartpole, mimic)
+            node.setIcon(0, svg_icon("workflows", TOOL_ICON_COLORS))
+        elif name == "methods":
+            node.setIcon(0, svg_icon("components", TOOL_ICON_COLORS))
+        else:
+            node.setIcon(0, svg_icon("storage", TOOL_ICON_COLORS))
+
         node.setData(0, Qt.ItemDataRole.UserRole, {
             "type": "dir",
             "path": str(dir_path),
@@ -512,24 +567,27 @@ class ConfigTreeWidget(QWidget):
 
         return node
 
-    def _add_file_node(self, parent_node, file_path: Path):
+    def _add_file_node(self, parent_node, file_path: Path, custom_display_name: str | None = None, is_global_config: bool = False):
         name = file_path.name
         rel_path = file_path.relative_to(self.root_dir).as_posix()
         is_exp = rel_path.startswith("experiment/") and not name.startswith("_")
         is_base = file_path.stem == "_base"
 
-        display_name = name
-        if display_name.endswith(".yaml"):
-            display_name = display_name[:-5]
-        elif display_name.endswith(".yml"):
-            display_name = display_name[:-4]
+        display_name = custom_display_name or name
+        if not custom_display_name:
+            if display_name.endswith(".yaml"):
+                display_name = display_name[:-5]
+            elif display_name.endswith(".yml"):
+                display_name = display_name[:-4]
 
-        if is_base:
-            display_name = "group defaults"
+            if is_base:
+                display_name = "group defaults"
 
         node = QTreeWidgetItem(parent_node, [display_name])
         if is_base:
             node.setIcon(0, svg_icon("gear", TREE_GEAR_COLORS))
+        elif is_global_config:
+            node.setIcon(0, svg_icon("config", TOOL_ICON_COLORS))
         elif file_path.suffix not in (".yaml", ".yml"):
             node.setIcon(0, self.style().standardIcon(QStyle.StandardPixmap.SP_FileIcon))
         node.setData(0, Qt.ItemDataRole.UserRole, {
@@ -538,6 +596,7 @@ class ConfigTreeWidget(QWidget):
             "rel_path": rel_path,
             "is_experiment": is_exp,
             "is_base": is_base,
+            "is_global_config": is_global_config,
             "base_name": display_name,
         })
         node.setData(0, Qt.ItemDataRole.ForegroundRole, None)
@@ -551,6 +610,14 @@ class ConfigTreeWidget(QWidget):
         if data["type"] == "file":
             self.current_rel_path = data["rel_path"]
             self.file_selected.emit(Path(data["path"]), data["rel_path"])
+
+    def _on_item_double_clicked(self, item, column):
+        data = item.data(0, Qt.ItemDataRole.UserRole)
+        if not data:
+            return
+        if data["type"] == "file":
+            self.current_rel_path = data["rel_path"]
+            self.file_opened.emit(Path(data["path"]), data["rel_path"])
 
     def filter_tree(self, text):
         query = text.strip().lower()
@@ -674,7 +741,17 @@ class ConfigTreeWidget(QWidget):
         (base_dir / "_base.yaml").write_text(base_yaml, encoding="utf-8")
         return paradigm
 
-    def _write_experiment(self, group_name, filename, exp_id, paradigm=None, env=None):
+    def _split_group_and_subpath(self, rel_path: str) -> tuple[str, str]:
+        """Split a relative path under experiment into (group_name, subpath)."""
+        clean = rel_path
+        if clean.startswith("experiment/"):
+            clean = clean[len("experiment/"):]
+        parts = clean.strip("/").split("/")
+        group = parts[0]
+        subpath = "/".join(parts[1:]) if len(parts) > 1 else ""
+        return group, subpath
+
+    def _write_experiment(self, group_name, filename, exp_id, paradigm=None, env=None, subpath=""):
         """Create an experiment valid for its group's paradigm. Returns rel path or None."""
         tree = self._model()
         paradigm_obj, agent, model = None, None, None
@@ -689,7 +766,10 @@ class ConfigTreeWidget(QWidget):
                 # methods, so seed one instead of writing an invalid file.
                 model = default_method_model(tree.group(group_name), tree.models)
 
-        target_dir = self.root_dir / "experiment" / group_name
+        if subpath:
+            target_dir = (self.root_dir / "experiment" / group_name / subpath) if self.root_dir.name not in ("experiment", "experiments") else (self.root_dir / group_name / subpath)
+        else:
+            target_dir = (self.root_dir / "experiment" / group_name) if self.root_dir.name not in ("experiment", "experiments") else (self.root_dir / group_name)
         target_dir.mkdir(parents=True, exist_ok=True)
         target_file = target_dir / filename
         if target_file.exists():
@@ -702,7 +782,26 @@ class ConfigTreeWidget(QWidget):
         except OSError as exc:
             QMessageBox.critical(self, "Error Creating Experiment", f"Could not create file:\n{exc}")
             return None
+        if subpath:
+            return f"experiment/{group_name}/{subpath}/{filename}"
         return f"experiment/{group_name}/{filename}"
+
+    def prompt_new_in_folder(self, folder_rel_path: str):
+        """Create a new experiment inside a specific subfolder."""
+        group_name, subpath = self._split_group_and_subpath(folder_rel_path)
+        groups = self.get_available_groups() or [group_name]
+        dialog = NewExperimentDialog(self._model(), groups, group=group_name, parent=self)
+        if dialog.exec() != QDialog.DialogCode.Accepted:
+            return
+        group_name, name, paradigm, env = dialog.values()
+        if not group_name or not name:
+            return
+
+        filename = name if name.endswith(".yaml") else f"{name}.yaml"
+        rel_path = self._write_experiment(group_name, filename, filename[:-5], paradigm, env, subpath=subpath)
+        if rel_path:
+            self.populate()
+            self.select_file(rel_path)
 
     def get_available_groups(self):
         """Return sorted list of experiment groups in in/config/experiment/."""
@@ -792,6 +891,7 @@ class ConfigTreeWidget(QWidget):
             return False, str(exc)
         if self.current_rel_path == rel_path:
             self.current_rel_path = None
+        self.file_deleted.emit(rel_path)
         self.populate()
         return True, None
 
@@ -818,6 +918,91 @@ class ConfigTreeWidget(QWidget):
         self.populate()
         self.select_file(new_rel)
         return new_rel, None
+
+    def create_dir(self, parent_rel: str, dir_name: str) -> tuple[str | None, str | None]:
+        """Create a new subdirectory inside parent_rel. Returns (new_rel, error)."""
+        dir_name = (dir_name or "").strip()
+        if not dir_name:
+            return None, "Folder name cannot be empty."
+        if "/" in dir_name or "\\" in dir_name:
+            return None, "Folder name cannot contain slashes."
+        parent_dir = self.root_dir / parent_rel
+        target_dir = parent_dir / dir_name
+        if target_dir.exists():
+            return None, f"A folder named '{dir_name}' already exists."
+        try:
+            target_dir.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            return None, str(exc)
+        new_rel = str(target_dir.relative_to(self.root_dir)).replace("\\", "/")
+        self.populate(ensure_expanded=new_rel)
+        return new_rel, None
+
+    def rename_dir(self, rel_path: str, new_name: str) -> tuple[str | None, str | None]:
+        """Rename a directory. Returns (new_rel, error)."""
+        new_name = (new_name or "").strip()
+        if not new_name:
+            return None, "Folder name cannot be empty."
+        if "/" in new_name or "\\" in new_name:
+            return None, "Folder name cannot contain slashes."
+        old_dir = self.root_dir / rel_path
+        if not old_dir.exists() or not old_dir.is_dir():
+            return None, f"Folder '{rel_path}' does not exist."
+        if old_dir.name == new_name:
+            return rel_path, None
+        new_dir = old_dir.with_name(new_name)
+        if new_dir.exists():
+            return None, f"A folder named '{new_name}' already exists."
+        try:
+            old_dir.rename(new_dir)
+        except OSError as exc:
+            return None, str(exc)
+        new_rel = str(new_dir.relative_to(self.root_dir)).replace("\\", "/")
+        self.dir_renamed.emit(rel_path, new_rel)
+        self.populate(ensure_expanded=new_rel)
+        return new_rel, None
+
+    def delete_dir(self, rel_path: str) -> tuple[bool, str | None]:
+        """Delete a directory and all contents. Returns (removed, error)."""
+        target = self.root_dir / rel_path
+        if not target.exists() or not target.is_dir():
+            return False, f"Folder '{rel_path}' does not exist."
+        blocked = deletion_blocked_reason(target)
+        if blocked:
+            return False, blocked
+        try:
+            shutil.rmtree(target)
+        except OSError as exc:
+            return False, str(exc)
+        if self.current_rel_path and (self.current_rel_path == rel_path or self.current_rel_path.startswith(rel_path + "/")):
+            self.current_rel_path = None
+        self.dir_deleted.emit(rel_path)
+        self.populate()
+        return True, None
+
+    def prompt_new_folder(self, parent_rel_path: str):
+        """Prompt to create a new subfolder inside parent_rel_path."""
+        folder_name, ok = QInputDialog.getText(
+            self, "New Subfolder", f"Folder name in '{parent_rel_path}':",
+            QLineEdit.EchoMode.Normal, "new_folder"
+        )
+        if ok and folder_name.strip():
+            _, err = self.create_dir(parent_rel_path, folder_name.strip())
+            if err:
+                QMessageBox.warning(self, "Error Creating Folder", err)
+
+    def prompt_rename_dir(self, rel_path: str):
+        """Prompt to rename a directory."""
+        old_dir = self.root_dir / rel_path
+        current_name = old_dir.name
+        new_name, ok = QInputDialog.getText(
+            self, "Rename Folder", f"New name for folder '{current_name}':",
+            QLineEdit.EchoMode.Normal, current_name
+        )
+        if ok and new_name.strip():
+            _, err = self.rename_dir(rel_path, new_name.strip())
+            if err:
+                QMessageBox.warning(self, "Rename Failed", err)
 
     def prompt_delete(self, rel_path):
         blocked = deletion_blocked_reason(self.root_dir / rel_path)
@@ -862,14 +1047,13 @@ class ConfigTreeWidget(QWidget):
                 return
             if dlg.choice == "uninstall":
                 installer.uninstall_by_metadata(comp_meta, remove_configs=True)
+                self.dir_deleted.emit(rel_path)
                 self.populate()
                 return
             elif dlg.choice == "delete_only":
-                try:
-                    shutil.rmtree(full_path)
-                except OSError as exc:
-                    QMessageBox.critical(self, "Delete failed", str(exc))
-                self.populate()
+                removed, err = self.delete_dir(rel_path)
+                if not removed:
+                    QMessageBox.critical(self, "Delete failed", err)
                 return
 
         blocked = deletion_blocked_reason(full_path)
@@ -888,11 +1072,9 @@ class ConfigTreeWidget(QWidget):
         )
         if answer != QMessageBox.StandardButton.Yes:
             return
-        try:
-            shutil.rmtree(full_path)
-        except OSError as exc:
-            QMessageBox.critical(self, "Delete failed", str(exc))
-        self.populate()
+        removed, err = self.delete_dir(rel_path)
+        if not removed:
+            QMessageBox.critical(self, "Delete failed", err)
 
     def prompt_rename(self, rel_path):
         current = Path(rel_path).stem
@@ -916,6 +1098,8 @@ class ConfigTreeWidget(QWidget):
         if data["type"] == "file":
             action_select = menu.addAction("Load in Config Viewer")
             action_select.triggered.connect(lambda: self._on_item_clicked(item, 0))
+            action_new_tab = menu.addAction("Open in New Tab")
+            action_new_tab.triggered.connect(lambda: self._on_item_double_clicked(item, 0))
             label_dup = "Duplicate Experiment…" if self.mode in ("experiments", "experiment") else "Duplicate Config…"
             action_dup = menu.addAction(label_dup)
             action_dup.triggered.connect(self.prompt_duplicate)
@@ -926,17 +1110,38 @@ class ConfigTreeWidget(QWidget):
             action_delete.triggered.connect(lambda: self.prompt_delete(rel))
         elif data["type"] == "dir":
             rel = data["rel_path"]
-            if rel.startswith("experiment") or self.mode in ("experiments", "experiment"):
+            dir_path = Path(data["path"])
+            is_exp = self.mode in ("experiments", "experiment") or rel.startswith("experiment")
+            is_top_group = is_exp and (dir_path.parent == self.root_dir or dir_path.parent.name in ("experiment", "experiments"))
+            if is_top_group:
+                group_name = dir_path.name
                 action_new = menu.addAction("New Experiment in this group…")
-                group_name = Path(data["rel_path"]).name
                 action_new.triggered.connect(lambda: self._create_in_specific_group(group_name))
+                action_new_folder = menu.addAction("New Subfolder…")
+                action_new_folder.triggered.connect(lambda: self.prompt_new_folder(rel))
+                action_refresh = menu.addAction("Refresh Group")
+                action_refresh.triggered.connect(self.populate)
+                action_delete_dir = menu.addAction("Delete Group…")
+                action_delete_dir.triggered.connect(lambda: self.prompt_delete_dir(rel))
+            elif is_exp:
+                action_new = menu.addAction("New Experiment…")
+                action_new.triggered.connect(lambda: self.prompt_new_in_folder(rel))
+                action_new_folder = menu.addAction("New Subfolder…")
+                action_new_folder.triggered.connect(lambda: self.prompt_new_folder(rel))
+                action_rename_dir = menu.addAction("Rename Folder…")
+                action_rename_dir.triggered.connect(lambda: self.prompt_rename_dir(rel))
+                action_delete_dir = menu.addAction("Delete Folder…")
+                action_delete_dir.triggered.connect(lambda: self.prompt_delete_dir(rel))
             else:
                 action_new = menu.addAction("New Component in this category…")
                 cat_name = Path(data["rel_path"]).name
                 action_new.triggered.connect(lambda: self._create_in_specific_component_category(cat_name))
-
-            action_delete_dir = menu.addAction("Delete Folder…")
-            action_delete_dir.triggered.connect(lambda: self.prompt_delete_dir(rel))
+                action_new_folder = menu.addAction("New Subfolder…")
+                action_new_folder.triggered.connect(lambda: self.prompt_new_folder(rel))
+                action_rename_dir = menu.addAction("Rename Folder…")
+                action_rename_dir.triggered.connect(lambda: self.prompt_rename_dir(rel))
+                action_delete_dir = menu.addAction("Delete Folder…")
+                action_delete_dir.triggered.connect(lambda: self.prompt_delete_dir(rel))
 
         menu.addSeparator()
         action_collapse = menu.addAction("Collapse All")
