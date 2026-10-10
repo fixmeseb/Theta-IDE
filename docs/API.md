@@ -86,15 +86,12 @@ Once running:
     ```
 
 * **`GET /api/methods`**
-  * **Description:** Lists all registered agent architectures (`AGENT_REGISTRY`) and visualization style mappings (`METHOD_STYLE`).
+  * **Description:** Lists all registered agent architectures (`AGENT_REGISTRY`). Method visualization styles are configured directly in experiment YAMLs.
   * **Response:**
     ```json
     {
       "registered_agents": ["blendrl_iql", "cql", "iql", "ppo"],
-      "method_styles": {
-        "ppo": {"label": "PPO (Neural)", "color": "#1f77b4", "linestyle": "-", "marker": "o"},
-        "iql": {"label": "IQL (Neural)", "color": "#2ca02c", "linestyle": "-", "marker": "s"}
-      }
+      "method_styles": {}
     }
     ```
 

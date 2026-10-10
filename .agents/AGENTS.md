@@ -187,10 +187,11 @@ See `pipeline-crud` skill for step-by-step instructions on adding new agents.
 
 ---
 
-## 11. Method Style Registry
-- **Source of Truth:** `src/usr/methods/method_style_registry.py` — display names, colors, linestyles, markers.
-- **One entry per architecture.** Both `plot/base.py` and `src/usr/eval/early_prediction/eval_logic.py` import from here.
-- **Prefix Matching:** `get_style("ppo_cp_tuned")` resolves to `"ppo"`. Longest prefix wins.
+## 11. Config-First Method Styling & Plot Overrides
+- **Config-First:** Method visual styles are specified directly in experiment YAMLs (e.g. `label`, `color`, `linestyle`, `marker`, or `style: { ... }`) under `methods.<name>`.
+- **Zero-Boilerplate Default:** When nothing is specified, the plotter uses the method name in the legend and automatically assigns distinct colors from a high-contrast palette (`QUALITATIVE_PALETTE`) to all methods on the same plot.
+- **Plot Overrides:** Group defaults (`_base.yaml`) or experiment YAMLs can declare plot overrides (e.g. `plots.title`, `plots.xlabel`, `plots.smoothing_window`) at the top level or per-plotter (`plots.convergence`).
+- **Template Inheritance:** Methods can declare `base: <template>` to inherit from `in/config/experiment/<group>/methods/<template>.yaml` under any custom method key.
 
 ---
 

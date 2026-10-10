@@ -25,10 +25,6 @@ from src.app.pipeline.compose import compose_experiment, effective_config, metho
 from src.app.pipeline.config import normalize_agent_name
 
 try:
-    from src.usr.methods.method_style_registry import METHOD_STYLE
-except ImportError:
-    METHOD_STYLE = {}
-try:
     from src.usr.methods.agent_registry import list_registered_agents
 except ImportError:
 
@@ -84,7 +80,7 @@ def list_environments():
 def list_methods():
     return {
         "registered_agents": list_registered_agents(),
-        "method_styles": METHOD_STYLE,
+        "method_styles": {},
     }
 
 
