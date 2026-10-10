@@ -18,6 +18,7 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QStyle,
+    QStyleOptionViewItem,
     QStyledItemDelegate,
     QToolButton,
     QTreeWidget,
@@ -229,23 +230,36 @@ def find_config_root():
 
 
 class GroupItemDelegate(QStyledItemDelegate):
-    """Delegate rendering subtle underline and extra vertical breathing room for group nodes."""
+    """Delegate rendering larger text, subtle underline, and extra vertical breathing room for group nodes."""
+
+    def initStyleOption(self, option, index):
+        super().initStyleOption(option, index)
+        data = index.data(Qt.ItemDataRole.UserRole)
+        if isinstance(data, dict) and data.get("is_group"):
+            f = QFont(option.font)
+            base_pt = option.font.pointSize()
+            target_pt = max(base_pt + 4, 16) if base_pt > 0 else 16
+            f.setPointSize(target_pt)
+            f.setBold(True)
+            option.font = f
 
     def paint(self, painter, option, index):
         super().paint(painter, option, index)
         data = index.data(Qt.ItemDataRole.UserRole)
         if isinstance(data, dict) and data.get("is_group"):
             painter.save()
-            painter.setPen(QPen(QColor("#3c3836"), 1))
-            y = option.rect.bottom()
+            painter.setPen(QPen(QColor("#504945"), 1))
+            y = option.rect.bottom() - 1
             painter.drawLine(option.rect.left() + 4, y, option.rect.right() - 4, y)
             painter.restore()
 
     def sizeHint(self, option, index):
-        hint = super().sizeHint(option, index)
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        hint = super().sizeHint(opt, index)
         data = index.data(Qt.ItemDataRole.UserRole)
         if isinstance(data, dict) and data.get("is_group"):
-            return QSize(hint.width(), hint.height() + 8)
+            return QSize(hint.width(), hint.height() + 10)
         return hint
 
 
@@ -556,10 +570,14 @@ class ConfigTreeWidget(QWidget):
         icon_name = CATEGORY_ICONS.get(name) or CATEGORY_ICONS.get(rel_path)
         if is_group:
             # Top-level experiment group (e.g. cartpole, mimic): no icon, larger text, subtle line
-            f = node.font(0)
-            f.setPointSize(f.pointSize() + 2)
+            base_f = self.tree.font()
+            f = QFont(base_f)
+            base_pt = base_f.pointSize()
+            target_pt = max(base_pt + 4, 16) if base_pt > 0 else 16
+            f.setPointSize(target_pt)
             f.setBold(True)
             node.setFont(0, f)
+            node.setData(0, Qt.ItemDataRole.FontRole, f)
         elif icon_name:
             node.setIcon(0, svg_icon(icon_name, TOOL_ICON_COLORS))
         elif name == "methods":

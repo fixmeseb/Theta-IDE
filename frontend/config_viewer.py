@@ -643,7 +643,7 @@ class ConfigViewer(QWidget):
 
             self._is_editing_group = False
             self.group_editor.hide()
-            self.group_badge.setText(f"[{new_grp}]")
+            self.group_badge.setText(str(new_grp))
             self.group_badge.show()
 
             self.file_renamed.emit(old_rel, new_rel)
@@ -856,7 +856,7 @@ class ConfigViewer(QWidget):
         is_base = (self.current_path.stem == "_base") if self.current_path else False
 
         if is_base:
-            self.group_badge.setText(f"[{group}]" if group else "[group]")
+            self.group_badge.setText(str(group) if group else "group")
             self.group_badge.setToolTip(f"{self.current_rel_path}\n(Base configuration for {group})")
             self.group_badge.show()
             self.breadcrumb_sep.hide()
@@ -866,9 +866,9 @@ class ConfigViewer(QWidget):
             rel_parts = Path(str(self.current_rel_path or "")).parts
             if len(rel_parts) > 3:
                 sub_crumbs = " / ".join(rel_parts[2:-1])
-                self.group_badge.setText(f"[{group}] / {sub_crumbs}")
+                self.group_badge.setText(f"{group} / {sub_crumbs}")
             else:
-                self.group_badge.setText(f"[{group}]")
+                self.group_badge.setText(str(group))
             self.group_badge.setToolTip(f"Group: {group}\n(Double-click to rename group)")
             self.group_badge.show()
             self.breadcrumb_sep.show()

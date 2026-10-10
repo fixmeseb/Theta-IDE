@@ -519,7 +519,7 @@ class TestConfigViewer(unittest.TestCase):
         base_path.write_text("paradigm: online_rl\n", encoding="utf-8")
         self.viewer.load_file(base_path, "experiment/cartpole/_base.yaml")
         self.assertEqual(self.viewer.file_title.text(), "Group Defaults")
-        self.assertEqual(self.viewer.group_badge.text(), "[cartpole]")
+        self.assertEqual(self.viewer.group_badge.text(), "cartpole")
         self.assertFalse(self.viewer.group_badge.isHidden())
         self.assertTrue(self.viewer.breadcrumb_sep.isHidden())
 
