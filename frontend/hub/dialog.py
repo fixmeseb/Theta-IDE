@@ -21,8 +21,20 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from ..theme import theme_color
 from .client import HubClient
 from .models import HubComponent
+
+
+def _disabled_button_css():
+    """Disabled look for the action buttons, in the current theme's muted colors."""
+    return (
+        "QPushButton:disabled {"
+        f"  background-color: {theme_color('surface')};"
+        f"  color: {theme_color('disabled')};"
+        f"  border-color: {theme_color('raised')};"
+        "}"
+    )
 
 
 class HubComponentCard(QFrame):
@@ -67,13 +79,13 @@ class HubComponentCard(QFrame):
 
         # Version
         version_label = QLabel(f"v{self.component.version}")
-        version_label.setStyleSheet("color: #928374; font-size: 12px;")
+        version_label.setStyleSheet(f"color: {theme_color('comment')}; font-size: 12px;")
         top_row.addWidget(version_label)
 
         # Author
         author_text = f"by {self.component.author.name}"
         author_label = QLabel(author_text)
-        author_label.setStyleSheet("color: #a89984; font-size: 11px;")
+        author_label.setStyleSheet(f"color: {theme_color('muted')}; font-size: 11px;")
         top_row.addWidget(author_label)
 
         top_row.addStretch()
@@ -90,7 +102,7 @@ class HubComponentCard(QFrame):
         # ── Description ──────────────────────────────────────────────────────
         desc_label = QLabel(self.component.description)
         desc_label.setWordWrap(True)
-        desc_label.setStyleSheet("color: #ebdbb2; font-size: 12px; line-height: 1.4;")
+        desc_label.setStyleSheet(f"color: {theme_color('text')}; font-size: 12px; line-height: 1.4;")
         layout.addWidget(desc_label)
 
         # ── Bottom Row: Tags & Links ─────────────────────────────────────────
@@ -99,7 +111,7 @@ class HubComponentCard(QFrame):
 
         for tag in self.component.tags[:5]:
             tag_label = QLabel(f"#{tag}")
-            tag_label.setStyleSheet("color: #83a598; font-size: 11px;")
+            tag_label.setStyleSheet(f"color: {theme_color('secondary')}; font-size: 11px;")
             bottom_row.addWidget(tag_label)
 
         bottom_row.addStretch()
@@ -107,7 +119,7 @@ class HubComponentCard(QFrame):
         if self.component.repository:
             btn_repo = QToolButton()
             btn_repo.setText("GitHub")
-            btn_repo.setStyleSheet("color: #8ec07c; font-size: 11px; border: none; background: transparent;")
+            btn_repo.setStyleSheet(f"color: {theme_color('secondary')}; font-size: 11px; border: none; background: transparent;")
             btn_repo.setCursor(Qt.CursorShape.PointingHandCursor)
             btn_repo.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(self.component.repository)))
             bottom_row.addWidget(btn_repo)
@@ -143,11 +155,7 @@ class HubComponentCard(QFrame):
                     "  color: #1d2021;"
                     "  border-color: #83a598;"
                     "}"
-                    "QPushButton:disabled {"
-                    "  background-color: #32302f;"
-                    "  color: #665c54;"
-                    "  border-color: #3c3836;"
-                    "}"
+                    + _disabled_button_css()
                 )
                 self.btn_action.setEnabled(True)
             else:
@@ -167,11 +175,7 @@ class HubComponentCard(QFrame):
                     "  color: #1d2021;"
                     "  border-color: #fb4934;"
                     "}"
-                    "QPushButton:disabled {"
-                    "  background-color: #32302f;"
-                    "  color: #665c54;"
-                    "  border-color: #3c3836;"
-                    "}"
+                    + _disabled_button_css()
                 )
                 self.btn_action.setEnabled(True)
         else:
@@ -179,22 +183,18 @@ class HubComponentCard(QFrame):
             self.btn_action.setObjectName("actionInstall")
             self.btn_action.setStyleSheet(
                 "QPushButton {"
-                "  background-color: #b8bb26;"
-                "  color: #1d2021;"
-                "  border: 1px solid #b8bb26;"
+                f"  background-color: {theme_color('primary')};"
+                f"  color: {theme_color('base')};"
+                f"  border: 1px solid {theme_color('primary')};"
                 "  border-radius: 4px;"
                 "  font-weight: 700;"
                 "  padding: 4px 14px;"
                 "}"
                 "QPushButton:hover {"
-                "  background-color: #c7c94b;"
-                "  border-color: #c7c94b;"
+                f"  background-color: {theme_color('primary_hover')};"
+                f"  border-color: {theme_color('primary_hover')};"
                 "}"
-                "QPushButton:disabled {"
-                "  background-color: #32302f;"
-                "  color: #665c54;"
-                "  border-color: #3c3836;"
-                "}"
+                + _disabled_button_css()
             )
             self.btn_action.setEnabled(True)
         self.btn_action.style().unpolish(self.btn_action)
@@ -259,7 +259,7 @@ class UninstallComponentDialog(QDialog):
         layout.setContentsMargins(20, 20, 20, 20)
 
         title = QLabel(f"Uninstall {component_name}?")
-        title.setStyleSheet("font-size: 15px; font-weight: bold; color: #ebdbb2;")
+        title.setStyleSheet(f"font-size: 15px; font-weight: bold; color: {theme_color('text')};")
         layout.addWidget(title)
 
         desc = QLabel(
@@ -267,11 +267,11 @@ class UninstallComponentDialog(QDialog):
             "Would you like to keep your configuration files or delete them as well?"
         )
         desc.setWordWrap(True)
-        desc.setStyleSheet("color: #a89984; font-size: 12px; line-height: 1.4;")
+        desc.setStyleSheet(f"color: {theme_color('muted')}; font-size: 12px; line-height: 1.4;")
         layout.addWidget(desc)
 
         self.chk_remember = QCheckBox("Don't ask again (remember my choice)")
-        self.chk_remember.setStyleSheet("color: #ebdbb2; font-size: 12px; margin-top: 4px;")
+        self.chk_remember.setStyleSheet(f"color: {theme_color('text')}; font-size: 12px; margin-top: 4px;")
         layout.addWidget(self.chk_remember)
 
         btn_row = QHBoxLayout()
@@ -345,7 +345,7 @@ class HubView(QWidget):
 
         eyebrow = QLabel("THETA COMMUNITY HUB")
         eyebrow.setObjectName("eyebrow")
-        eyebrow.setStyleSheet("font-size: 11px; font-weight: 700; letter-spacing: 1px; color: #83a598;")
+        eyebrow.setStyleSheet(f"font-size: 11px; font-weight: 700; letter-spacing: 1px; color: {theme_color('secondary')};")
         header.addWidget(eyebrow)
 
         title = QLabel("Explore & Install Components")
@@ -356,7 +356,7 @@ class HubView(QWidget):
             "Discover community plugins, reinforcement learning algorithms, "
             "symbolic models, and benchmark environments."
         )
-        desc.setStyleSheet("color: #a89984; font-size: 12px;")
+        desc.setStyleSheet(f"color: {theme_color('muted')}; font-size: 12px;")
         header.addWidget(desc)
         main_layout.addLayout(header)
 
@@ -370,7 +370,7 @@ class HubView(QWidget):
         search_row.addWidget(self.search_input, 1)
 
         sort_lbl = QLabel("Sort:")
-        sort_lbl.setStyleSheet("color: #a89984; font-size: 11px;")
+        sort_lbl.setStyleSheet(f"color: {theme_color('muted')}; font-size: 11px;")
         search_row.addWidget(sort_lbl)
 
         self.sort_combo = QComboBox()
@@ -431,7 +431,7 @@ class HubView(QWidget):
         # ── Footer / Status ──────────────────────────────────────────────────
         footer = QHBoxLayout()
         self.status_label = QLabel("Loading community registry…")
-        self.status_label.setStyleSheet("color: #928374; font-size: 11px;")
+        self.status_label.setStyleSheet(f"color: {theme_color('comment')}; font-size: 11px;")
         footer.addWidget(self.status_label, 1)
 
         self.btn_close = QPushButton(self.close_button_text)
