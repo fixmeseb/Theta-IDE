@@ -253,6 +253,9 @@ class ThemeManager(QObject):
         self.active = copy.deepcopy(DEFAULT)
         self.error = None
         self.zoom = round(float(initial_zoom), 2)
+        # Widget that set_zoom() styled directly. A widget's own stylesheet overrides the
+        # application's, so apply() must restyle it too or theme changes never reach it.
+        self._style_target = None
         # Migrate existing .appearance.json on first load (for backward compat)
         if self.path.exists():
             try:
@@ -302,7 +305,9 @@ class ThemeManager(QObject):
         for role in (QPalette.ColorRole.Text, QPalette.ColorRole.WindowText, QPalette.ColorRole.ButtonText):
             palette.setColor(QPalette.ColorGroup.Disabled, role, QColor(colors["disabled"]))
         app.setPalette(palette)
-        app.setStyleSheet(stylesheet(theme, zoom=self.zoom))
+        sheet = stylesheet(theme, zoom=self.zoom)
+        app.setStyleSheet(sheet)  # top-level dialogs and anything outside the styled target
+        self._restyle_target(sheet)
         self.changed.emit()
         for widget in app.allWidgets():
             widget.update()
@@ -313,11 +318,22 @@ class ThemeManager(QObject):
         ss = stylesheet(self.active, zoom=self.zoom)
         target = target_widget or self.parent()
         if target is not None and hasattr(target, "setStyleSheet"):
+            self._style_target = target
             target.setStyleSheet(ss)
         else:
             app = QApplication.instance()
             if app:
                 app.setStyleSheet(ss)
+
+    def _restyle_target(self, sheet):
+        """Give the zoom target the new stylesheet; forget it if Qt has already deleted it."""
+        target = self._style_target
+        if target is None:
+            return
+        try:
+            target.setStyleSheet(sheet)
+        except RuntimeError:  # wrapped C++ widget was deleted
+            self._style_target = None
 
     def select_by_name(self, name: str, _emit: bool = True) -> bool:
         """Switch the active theme to *name* without writing to .appearance.json.
