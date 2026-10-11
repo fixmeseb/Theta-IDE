@@ -749,7 +749,7 @@ class Window(QMainWindow):
         # --- Terminal: shell, folder and venv apply from the next new shell ---
         if hasattr(self, "terminal_panel"):
             command, cwd, env = self.terminal_config()
-            self.terminal_panel.terminal.configure(command=command, cwd=cwd, env=env)
+            self.terminal_panel.configure(command=command, cwd=cwd, env=env)
 
         # --- Theme hot-reload ---
         new_theme = self.settings_manager.theme
@@ -2517,7 +2517,8 @@ class Window(QMainWindow):
         if hasattr(self, "reloader") and self.reloader is not None:
             self.reloader.stop()
         if hasattr(self, "terminal_panel"):
-            self.terminal_panel.terminal.close()
+            for term in self.terminal_panel.terminals:
+                term.close()
         if hasattr(self, "hotkey_manager"):
             self.hotkey_manager.cleanup()
         if hasattr(self, "_zoom_persist_timer") and self._zoom_persist_timer.isActive():

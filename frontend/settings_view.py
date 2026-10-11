@@ -1863,8 +1863,8 @@ class SettingsView(QWidget):
         if panel is None:
             return
         command, cwd, env = self.window.terminal_config()
-        panel.terminal.configure(command=command, cwd=cwd, env=env)
-        panel.terminal.restart_session()
+        panel.configure(command=command, cwd=cwd, env=env)
+        panel.terminal.restart_session()  # the active shell; other open shells pick it up on restart
         self.window.statusBar().showMessage("Terminal restarted with the new settings.", 4000)
 
     def _build_backend_page(self) -> QWidget:
