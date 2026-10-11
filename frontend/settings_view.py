@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Dict, List, Optional
 
-from PyQt6.QtCore import QByteArray, QRectF, QSize, Qt, pyqtSignal
+from PyQt6.QtCore import QByteArray, QEvent, QRectF, QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QIcon, QKeySequence, QPainter, QPixmap
 from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtWidgets import (
@@ -270,12 +270,55 @@ TAB_SIZES = {
 
 
 class DynamicStackedWidget(QStackedWidget):
-    """QStackedWidget that constrains horizontal minimumSizeHint to 0 to prevent child sizeHint blowup in QScrollArea."""
+    """QStackedWidget sized by its current page only.
+
+    A plain QStackedWidget's layout takes its minimum height from the tallest page, so inside a
+    scroll area every short page gained the Hotkeys page's height of empty space to scroll into.
+    Hidden pages get the Ignored size policy, which the stacked layout skips. Width is
+    unconstrained to prevent child sizeHint blowup in the QScrollArea.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.currentChanged.connect(self._fit_current_page)
+
+    def addWidget(self, widget):
+        index = super().addWidget(widget)
+        self._fit_current_page()
+        return index
+
+    def _fit_current_page(self, _index=None):
+        current = self.currentWidget()
+        for i in range(self.count()):
+            page = self.widget(i)
+            if page is current:
+                page.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+            else:
+                page.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
+        self.updateGeometry()
+        # The stack sits in the scroll area's viewport, which has no layout, so the new size hint
+        # never reaches the scroll area on its own; ask it to re-fit the page now.
+        area = self.parentWidget().parentWidget() if self.parentWidget() else None
+        if isinstance(area, QScrollArea):
+            QApplication.sendEvent(area, QEvent(QEvent.Type.LayoutRequest))
 
     def minimumSizeHint(self) -> QSize:
         curr = self.currentWidget()
         h = curr.minimumSizeHint().height() if curr is not None else 0
         return QSize(0, h)
+
+    def hasHeightForWidth(self) -> bool:
+        return True
+
+    def heightForWidth(self, width: int) -> int:
+        # QStackedLayout.heightForWidth returns the tallest of *all* pages, and the scroll area
+        # sizes its content from it whenever pages hold word-wrapped labels. Answer for the
+        # current page only.
+        curr = self.currentWidget()
+        if curr is None:
+            return 0
+        hfw = curr.heightForWidth(width) if curr.hasHeightForWidth() else -1
+        return max(hfw, curr.minimumSizeHint().height())
 
     def sizeHint(self) -> QSize:
         curr = self.currentWidget()
@@ -2261,6 +2304,7 @@ class SettingsView(QWidget):
         # Switch stacked widget to target page
         target_page = self.page_widgets[tab_id]
         self.settings_window.pages_stack.setCurrentWidget(target_page)
+        self.settings_window.scroll_area.verticalScrollBar().setValue(0)  # every page opens at its top
 
         # Switch main content stack to settings window (Page 1) so it is overlayed on top
         self.settings_window.setVisible(True)
