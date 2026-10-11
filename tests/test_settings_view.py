@@ -131,9 +131,10 @@ class TestSettingsViewStructureAndNavigation(unittest.TestCase):
         self.assertIsNone(self.settings.active_tab_id)
 
     def test_overlay_sizing_per_tab(self):
-        """Settings detail card is appropriately sized per tab and has drop shadow."""
+        """Settings detail card is appropriately sized per tab, and its shadow is painted
+        rather than a QGraphicsEffect (which re-renders the whole card on every scroll step)."""
         from frontend.settings_view import TAB_SIZES
-        self.assertIsNotNone(self.settings.settings_window.shadow)
+        self.assertIsNone(self.settings.settings_window.card.graphicsEffect())
 
         # Backend panel sizing
         self.settings.tab_buttons["backend"].click()

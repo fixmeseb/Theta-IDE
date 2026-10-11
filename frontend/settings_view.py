@@ -4,7 +4,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Dict, List, Optional
 
-from PyQt6.QtCore import QByteArray, QRectF, QSize, Qt, pyqtSignal
+from PyQt6.QtCore import QByteArray, QEvent, QRectF, QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QIcon, QKeySequence, QPainter, QPixmap
 from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtWidgets import (
@@ -13,7 +13,6 @@ from PyQt6.QtWidgets import (
     QDoubleSpinBox,
     QFileDialog,
     QFrame,
-    QGraphicsDropShadowEffect,
     QGridLayout,
     QHBoxLayout,
     QKeySequenceEdit,
@@ -188,6 +187,10 @@ DEFAULT_MENU_SHORTCUTS = [
 ]
 
 
+SIDE_TAB_ICON = 20      # px
+SIDE_TAB_ICON_GAP = 8   # px of space between a settings tab's icon and its label
+
+
 class SettingsSideTabButton(QToolButton):
     """Button in the left settings navigation bar."""
 
@@ -200,18 +203,36 @@ class SettingsSideTabButton(QToolButton):
         self.setCheckable(True)
         self.setAutoRaise(True)
         self.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-        self.setText(title)
+        self.setText(title.replace("&", "&&"))  # a lone & is a mnemonic marker: "Workspace _Storage"
         self.setToolTip(f"Configure {title}")
-        self.setIconSize(QSize(20, 20))
+        self.setIconSize(QSize(SIDE_TAB_ICON + SIDE_TAB_ICON_GAP, SIDE_TAB_ICON))
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setFixedHeight(38)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.refresh_icon()
 
     def refresh_icon(self):
-        icon = get_settings_icon(self.icon_name, 20)
+        icon = get_settings_icon(self.icon_name, SIDE_TAB_ICON)
         if not icon.isNull():
-            self.setIcon(icon)
+            self.setIcon(_with_trailing_gap(icon))
+
+
+def _with_trailing_gap(icon: QIcon) -> QIcon:
+    """The icon on a canvas SIDE_TAB_ICON_GAP px wider, transparent on the right, so the
+    tab's text sits a little further from it (QToolButton has no icon-text spacing setting)."""
+    ratio = QApplication.instance().devicePixelRatio() if QApplication.instance() else 1.0
+    padded = QIcon()
+    for mode in (QIcon.Mode.Normal, QIcon.Mode.Active, QIcon.Mode.Selected, QIcon.Mode.Disabled):
+        for state in (QIcon.State.Off, QIcon.State.On):
+            glyph = icon.pixmap(QSize(SIDE_TAB_ICON, SIDE_TAB_ICON), ratio, mode, state)
+            canvas = QPixmap(round((SIDE_TAB_ICON + SIDE_TAB_ICON_GAP) * ratio), round(SIDE_TAB_ICON * ratio))
+            canvas.setDevicePixelRatio(ratio)
+            canvas.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(canvas)
+            painter.drawPixmap(0, 0, glyph)
+            painter.end()
+            padded.addPixmap(canvas, mode, state)
+    return padded
 
 
 class AsciiThetaSplash(QWidget):
@@ -249,12 +270,55 @@ TAB_SIZES = {
 
 
 class DynamicStackedWidget(QStackedWidget):
-    """QStackedWidget that constrains horizontal minimumSizeHint to 0 to prevent child sizeHint blowup in QScrollArea."""
+    """QStackedWidget sized by its current page only.
+
+    A plain QStackedWidget's layout takes its minimum height from the tallest page, so inside a
+    scroll area every short page gained the Hotkeys page's height of empty space to scroll into.
+    Hidden pages get the Ignored size policy, which the stacked layout skips. Width is
+    unconstrained to prevent child sizeHint blowup in the QScrollArea.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.currentChanged.connect(self._fit_current_page)
+
+    def addWidget(self, widget):
+        index = super().addWidget(widget)
+        self._fit_current_page()
+        return index
+
+    def _fit_current_page(self, _index=None):
+        current = self.currentWidget()
+        for i in range(self.count()):
+            page = self.widget(i)
+            if page is current:
+                page.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+            else:
+                page.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
+        self.updateGeometry()
+        # The stack sits in the scroll area's viewport, which has no layout, so the new size hint
+        # never reaches the scroll area on its own; ask it to re-fit the page now.
+        area = self.parentWidget().parentWidget() if self.parentWidget() else None
+        if isinstance(area, QScrollArea):
+            QApplication.sendEvent(area, QEvent(QEvent.Type.LayoutRequest))
 
     def minimumSizeHint(self) -> QSize:
         curr = self.currentWidget()
         h = curr.minimumSizeHint().height() if curr is not None else 0
         return QSize(0, h)
+
+    def hasHeightForWidth(self) -> bool:
+        return True
+
+    def heightForWidth(self, width: int) -> int:
+        # QStackedLayout.heightForWidth returns the tallest of *all* pages, and the scroll area
+        # sizes its content from it whenever pages hold word-wrapped labels. Answer for the
+        # current page only.
+        curr = self.currentWidget()
+        if curr is None:
+            return 0
+        hfw = curr.heightForWidth(width) if curr.hasHeightForWidth() else -1
+        return max(hfw, curr.minimumSizeHint().height())
 
     def sizeHint(self) -> QSize:
         curr = self.currentWidget()
@@ -287,11 +351,9 @@ class SettingsDetailWindow(QFrame):
         self.card.setObjectName("settingsDetailCard")
         self.card.setProperty("dock", "top-left")
 
-        self.shadow = QGraphicsDropShadowEffect(self.card)
-        self.shadow.setBlurRadius(8)
-        self.shadow.setColor(QColor(0, 0, 0, 140))
-        self.shadow.setOffset(4, 4)
-        self.card.setGraphicsEffect(self.shadow)
+        # No QGraphicsDropShadowEffect: it re-renders and blurs the whole card off-screen on
+        # every repaint (each scroll step). paintEvent draws a cheap shadow instead.
+        self.shadow = None
 
         card_layout = QVBoxLayout(self.card)
         card_layout.setContentsMargins(24, 20, 24, 20)
@@ -371,17 +433,14 @@ class SettingsDetailWindow(QFrame):
         if is_bottom:
             self.outer_layout.setAlignment(Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignLeft)
             self.card.setProperty("dock", "bottom-left")
-            if hasattr(self, "shadow") and self.shadow:
-                self.shadow.setOffset(4, -4)
         else:
             self.outer_layout.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
             self.card.setProperty("dock", "top-left")
-            if hasattr(self, "shadow") and self.shadow:
-                self.shadow.setOffset(4, 4)
         self.card.style().unpolish(self.card)
         self.card.style().polish(self.card)
         self.card.update()
         self._update_card_geometry()
+        self.update()  # repaint the shadow around the card's new position
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -409,6 +468,19 @@ class SettingsDetailWindow(QFrame):
     def paintEvent(self, event):
         # Translucent overlay layer leaves right and bottom margins clear so ASCII art is visible
         super().paintEvent(event)
+        if not self.card.isVisible():
+            return
+        # Soft shadow: a few translucent rounded rects stepping out from the card, offset
+        # toward the open side (down-right, or up-right when docked at the bottom).
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        dy = -4 if self.dock_position == "bottom_left" else 4
+        rect = QRectF(self.card.geometry()).translated(4, dy)
+        for spread, alpha in ((1, 40), (3, 26), (5, 14)):
+            painter.setBrush(QColor(0, 0, 0, alpha))
+            painter.drawRoundedRect(rect.adjusted(-spread, -spread, spread, spread), 8 + spread, 8 + spread)
+        painter.end()
 
 
 def normalize_hotkey_combo(text: str) -> str:
@@ -540,11 +612,6 @@ class SettingsView(QWidget):
         sb_layout = QVBoxLayout(self.sidebar_frame)
         sb_layout.setContentsMargins(10, 16, 10, 14)
         sb_layout.setSpacing(6)
-
-        # Sidebar title
-        sb_title = label("Settings", "heading")
-        sb_title.setStyleSheet("font-size: 16px; font-weight: 700; padding-left: 6px; margin-bottom: 6px;")
-        sb_layout.addWidget(sb_title)
 
         # Navigation tabs list
         for spec in TAB_SPECS:
@@ -2237,11 +2304,15 @@ class SettingsView(QWidget):
         # Switch stacked widget to target page
         target_page = self.page_widgets[tab_id]
         self.settings_window.pages_stack.setCurrentWidget(target_page)
+        self.settings_window.scroll_area.verticalScrollBar().setValue(0)  # every page opens at its top
 
         # Switch main content stack to settings window (Page 1) so it is overlayed on top
         self.settings_window.setVisible(True)
         self.content_stack.setCurrentIndex(1)
         self.settings_window.raise_()
+        # The sculpture behind the card would redraw ~30x a second and compete with scrolling.
+        # Keep it moving only on Animation Settings, where it is the live preview.
+        self.ascii_splash.ascii_sculpture.set_hold(tab_id != "animation")
 
     def hide_overlay(self):
         """Hide settings and return to full ASCII Theta view."""
@@ -2251,6 +2322,7 @@ class SettingsView(QWidget):
         self.settings_window.setVisible(False)
         self.content_stack.setCurrentIndex(0)
         self.ascii_splash.raise_()
+        self.ascii_splash.ascii_sculpture.set_hold(False)
 
     def reset_to_ascii(self):
         """Explicitly reset settings view to the clean ASCII Theta."""
@@ -2395,11 +2467,6 @@ class SettingsView(QWidget):
                 border: 1px solid {accent_col};
             }}
         """)
-
-        if hasattr(self.settings_window, "shadow") and self.settings_window.shadow:
-            is_bottom = getattr(self.settings_window, "dock_position", "top_left") == "bottom_left"
-            self.settings_window.shadow.setColor(QColor(0, 0, 0, 160))
-            self.settings_window.shadow.setOffset(4, -4 if is_bottom else 4)
 
         # Refresh icons on buttons
         for btn in self.tab_buttons.values():

@@ -3,8 +3,8 @@ import math
 import sys
 import time
 
-from PyQt6.QtCore import Qt, QTimer, QRectF
-from PyQt6.QtGui import QColor, QFont, QPainter
+from PyQt6.QtCore import QPointF, QRectF, Qt, QTimer
+from PyQt6.QtGui import QColor, QFont, QFontMetricsF, QPainter, QPixmap
 from PyQt6.QtWidgets import (
     QDialog, QHBoxLayout, QPushButton, QVBoxLayout, QWidget,
     QLabel, QSlider, QFrame, QComboBox
@@ -20,6 +20,12 @@ class AsciiTheta(QWidget):
 
     def __init__(self, parent=None, settings_manager=None):
         super().__init__(parent)
+        # The frame is cached: projecting several thousand points costs ~35 ms, and widgets
+        # drawn on top (the Settings card) force repaints of the area beneath them on every
+        # scroll step. Those repaints now copy pixels; the projection runs only on update().
+        self._frame_cache = None
+        self._frame_cache_key = None
+        self._held = False  # temporarily stopped by the host view; doesn't change the saved setting
         self.setMinimumSize(460, 280)
         self.setAccessibleName("Rotating three-dimensional ASCII theta logo")
         self.settings_manager = settings_manager
@@ -76,7 +82,7 @@ class AsciiTheta(QWidget):
     def showEvent(self, event):
         super().showEvent(event)
         self.last_time = time.monotonic()
-        if not self.paused:
+        if not self.paused and not self._held:
             self.timer.start()
 
     def hideEvent(self, event):
@@ -88,11 +94,21 @@ class AsciiTheta(QWidget):
         self.last_time = time.monotonic()
         if self.paused:
             self.timer.stop()
-        elif self.isVisible():
+        elif self.isVisible() and not self._held:
             self.timer.start()
         if self.settings_manager is not None:
             self.settings_manager.set("appearance", "ascii_animation", not self.paused)
         self.update()
+
+    def set_hold(self, held: bool):
+        """Stop the animation while something covers it, without touching the user's
+        animation setting; releasing the hold resumes it if the setting allows."""
+        self._held = bool(held)
+        if self._held:
+            self.timer.stop()
+        elif not self.paused and self.isVisible():
+            self.last_time = time.monotonic()
+            self.timer.start()
 
     def set_speed(self, speed: float):
         self.speed = max(0.0, float(speed))
@@ -174,8 +190,31 @@ class AsciiTheta(QWidget):
             cells[key] = (z, self.ramp[index], brightness)
         return cells
 
+    def update(self, *args):
+        """Every state change goes through update(): drop the cached frame, then schedule a paint."""
+        self._frame_cache = None
+        super().update(*args)
+
     def paintEvent(self, event):
+        ratio = self.devicePixelRatioF()
+        key = (self.width(), self.height(), ratio, theme_color("base"), theme_color("text"))
+        if self._frame_cache is None or self._frame_cache_key != key:
+            self._frame_cache = QPixmap(max(1, round(self.width() * ratio)), max(1, round(self.height() * ratio)))
+            self._frame_cache.setDevicePixelRatio(ratio)
+            cache_painter = QPainter(self._frame_cache)
+            self._render_frame(cache_painter)
+            cache_painter.end()
+            self._frame_cache_key = key
         painter = QPainter(self)
+        target = QRectF(event.rect())
+        painter.drawPixmap(target, self._frame_cache, self._source_rect(target, ratio))
+        painter.end()
+
+    @staticmethod
+    def _source_rect(rect, ratio):
+        return QRectF(rect.x() * ratio, rect.y() * ratio, rect.width() * ratio, rect.height() * ratio)
+
+    def _render_frame(self, painter):
         painter.fillRect(self.rect(), QColor(theme_color("base")))
         painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
         cell = min(self.width() / self.columns, self.height() / (self.rows * 1.8))
@@ -187,11 +226,22 @@ class AsciiTheta(QWidget):
         font.setStyleHint(QFont.StyleHint.Monospace)
         font.setPixelSize(max(8, int(height)))
         painter.setFont(font)
+        # Group cells by color so the pen changes four times per frame instead of once per
+        # character, and draw at a computed baseline: the font is monospaced, so one offset
+        # centers every glyph (much cheaper than a centered text box per character).
+        metrics = QFontMetricsF(font)
+        dx = (cell - metrics.horizontalAdvance("M")) / 2
+        dy = (height + metrics.ascent() - metrics.descent()) / 2
+        buckets = {"#ebdbb2": [], "#fabd2f": [], "#d79921": [], "#665c54": []}
         for (col, row), (_, char, brightness) in self.frame().items():
             color = "#ebdbb2" if brightness > .83 else "#fabd2f" if brightness > .48 else "#d79921" if brightness > .30 else "#665c54"
+            buckets[color].append((left + col * cell + dx, top + row * height + dy, char))
+        for color, glyphs in buckets.items():
+            if not glyphs:
+                continue
             painter.setPen(QColor(theme_color(color)))
-            painter.drawText(QRectF(left + col * cell, top + row * height, cell, height),
-                             Qt.AlignmentFlag.AlignCenter, char)
+            for x, y, char in glyphs:
+                painter.drawText(QPointF(x, y), char)
 
 
 class AnimationSettingsDialog(QDialog):
