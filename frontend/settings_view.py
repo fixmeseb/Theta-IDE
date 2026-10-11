@@ -188,6 +188,10 @@ DEFAULT_MENU_SHORTCUTS = [
 ]
 
 
+SIDE_TAB_ICON = 20      # px
+SIDE_TAB_ICON_GAP = 8   # px of space between a settings tab's icon and its label
+
+
 class SettingsSideTabButton(QToolButton):
     """Button in the left settings navigation bar."""
 
@@ -200,18 +204,36 @@ class SettingsSideTabButton(QToolButton):
         self.setCheckable(True)
         self.setAutoRaise(True)
         self.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-        self.setText(title)
+        self.setText(title.replace("&", "&&"))  # a lone & is a mnemonic marker: "Workspace _Storage"
         self.setToolTip(f"Configure {title}")
-        self.setIconSize(QSize(20, 20))
+        self.setIconSize(QSize(SIDE_TAB_ICON + SIDE_TAB_ICON_GAP, SIDE_TAB_ICON))
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setFixedHeight(38)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.refresh_icon()
 
     def refresh_icon(self):
-        icon = get_settings_icon(self.icon_name, 20)
+        icon = get_settings_icon(self.icon_name, SIDE_TAB_ICON)
         if not icon.isNull():
-            self.setIcon(icon)
+            self.setIcon(_with_trailing_gap(icon))
+
+
+def _with_trailing_gap(icon: QIcon) -> QIcon:
+    """The icon on a canvas SIDE_TAB_ICON_GAP px wider, transparent on the right, so the
+    tab's text sits a little further from it (QToolButton has no icon-text spacing setting)."""
+    ratio = QApplication.instance().devicePixelRatio() if QApplication.instance() else 1.0
+    padded = QIcon()
+    for mode in (QIcon.Mode.Normal, QIcon.Mode.Active, QIcon.Mode.Selected, QIcon.Mode.Disabled):
+        for state in (QIcon.State.Off, QIcon.State.On):
+            glyph = icon.pixmap(QSize(SIDE_TAB_ICON, SIDE_TAB_ICON), ratio, mode, state)
+            canvas = QPixmap(round((SIDE_TAB_ICON + SIDE_TAB_ICON_GAP) * ratio), round(SIDE_TAB_ICON * ratio))
+            canvas.setDevicePixelRatio(ratio)
+            canvas.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(canvas)
+            painter.drawPixmap(0, 0, glyph)
+            painter.end()
+            padded.addPixmap(canvas, mode, state)
+    return padded
 
 
 class AsciiThetaSplash(QWidget):
@@ -540,11 +562,6 @@ class SettingsView(QWidget):
         sb_layout = QVBoxLayout(self.sidebar_frame)
         sb_layout.setContentsMargins(10, 16, 10, 14)
         sb_layout.setSpacing(6)
-
-        # Sidebar title
-        sb_title = label("Settings", "heading")
-        sb_title.setStyleSheet("font-size: 16px; font-weight: 700; padding-left: 6px; margin-bottom: 6px;")
-        sb_layout.addWidget(sb_title)
 
         # Navigation tabs list
         for spec in TAB_SPECS:
