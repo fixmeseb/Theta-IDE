@@ -13,7 +13,6 @@ from PyQt6.QtWidgets import (
     QDoubleSpinBox,
     QFileDialog,
     QFrame,
-    QGraphicsDropShadowEffect,
     QGridLayout,
     QHBoxLayout,
     QKeySequenceEdit,
@@ -309,11 +308,9 @@ class SettingsDetailWindow(QFrame):
         self.card.setObjectName("settingsDetailCard")
         self.card.setProperty("dock", "top-left")
 
-        self.shadow = QGraphicsDropShadowEffect(self.card)
-        self.shadow.setBlurRadius(8)
-        self.shadow.setColor(QColor(0, 0, 0, 140))
-        self.shadow.setOffset(4, 4)
-        self.card.setGraphicsEffect(self.shadow)
+        # No QGraphicsDropShadowEffect: it re-renders and blurs the whole card off-screen on
+        # every repaint (each scroll step). paintEvent draws a cheap shadow instead.
+        self.shadow = None
 
         card_layout = QVBoxLayout(self.card)
         card_layout.setContentsMargins(24, 20, 24, 20)
@@ -393,17 +390,14 @@ class SettingsDetailWindow(QFrame):
         if is_bottom:
             self.outer_layout.setAlignment(Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignLeft)
             self.card.setProperty("dock", "bottom-left")
-            if hasattr(self, "shadow") and self.shadow:
-                self.shadow.setOffset(4, -4)
         else:
             self.outer_layout.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
             self.card.setProperty("dock", "top-left")
-            if hasattr(self, "shadow") and self.shadow:
-                self.shadow.setOffset(4, 4)
         self.card.style().unpolish(self.card)
         self.card.style().polish(self.card)
         self.card.update()
         self._update_card_geometry()
+        self.update()  # repaint the shadow around the card's new position
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -431,6 +425,19 @@ class SettingsDetailWindow(QFrame):
     def paintEvent(self, event):
         # Translucent overlay layer leaves right and bottom margins clear so ASCII art is visible
         super().paintEvent(event)
+        if not self.card.isVisible():
+            return
+        # Soft shadow: a few translucent rounded rects stepping out from the card, offset
+        # toward the open side (down-right, or up-right when docked at the bottom).
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        dy = -4 if self.dock_position == "bottom_left" else 4
+        rect = QRectF(self.card.geometry()).translated(4, dy)
+        for spread, alpha in ((1, 40), (3, 26), (5, 14)):
+            painter.setBrush(QColor(0, 0, 0, alpha))
+            painter.drawRoundedRect(rect.adjusted(-spread, -spread, spread, spread), 8 + spread, 8 + spread)
+        painter.end()
 
 
 def normalize_hotkey_combo(text: str) -> str:
@@ -2259,6 +2266,9 @@ class SettingsView(QWidget):
         self.settings_window.setVisible(True)
         self.content_stack.setCurrentIndex(1)
         self.settings_window.raise_()
+        # The sculpture behind the card would redraw ~30x a second and compete with scrolling.
+        # Keep it moving only on Animation Settings, where it is the live preview.
+        self.ascii_splash.ascii_sculpture.set_hold(tab_id != "animation")
 
     def hide_overlay(self):
         """Hide settings and return to full ASCII Theta view."""
@@ -2268,6 +2278,7 @@ class SettingsView(QWidget):
         self.settings_window.setVisible(False)
         self.content_stack.setCurrentIndex(0)
         self.ascii_splash.raise_()
+        self.ascii_splash.ascii_sculpture.set_hold(False)
 
     def reset_to_ascii(self):
         """Explicitly reset settings view to the clean ASCII Theta."""
@@ -2412,11 +2423,6 @@ class SettingsView(QWidget):
                 border: 1px solid {accent_col};
             }}
         """)
-
-        if hasattr(self.settings_window, "shadow") and self.settings_window.shadow:
-            is_bottom = getattr(self.settings_window, "dock_position", "top_left") == "bottom_left"
-            self.settings_window.shadow.setColor(QColor(0, 0, 0, 160))
-            self.settings_window.shadow.setOffset(4, -4 if is_bottom else 4)
 
         # Refresh icons on buttons
         for btn in self.tab_buttons.values():
