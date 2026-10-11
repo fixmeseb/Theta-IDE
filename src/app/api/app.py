@@ -126,10 +126,39 @@ def _float(value) -> float | None:
         return None
 
 
+# _agent_summary results by agent folder, valid while the files they were read from are unchanged.
+# GET /api/runs summarizes every run, and the Results panel re-lists runs while training is followed.
+_SUMMARY_CACHE: dict[Path, tuple[tuple, dict[str, Any] | None]] = {}
+
+
+def _file_stamp(path: Path | None) -> tuple:
+    if path is None:
+        return (None,)
+    try:
+        stat = path.stat()
+    except OSError:
+        return (str(path), None)
+    return (str(path), stat.st_mtime_ns, stat.st_size)
+
+
 def _agent_summary(agent_dir: Path) -> dict[str, Any] | None:
-    """Timing and reward summary for one agent of a run, or None if it never logged anything."""
+    """Timing and reward summary for one agent of a run, or None if it never logged anything.
+
+    Cached until the newest runtime.json or metrics.csv changes, so listing many runs stays cheap.
+    """
     runtime_file = _latest_version_file(agent_dir, "runtime.json")
     metrics_file = _latest_version_file(agent_dir, "metrics.csv")
+    key = agent_dir.resolve()  # absolute: the same relative path can mean different folders over time
+    stamp = (_file_stamp(runtime_file and runtime_file.resolve()), _file_stamp(metrics_file and metrics_file.resolve()))
+    cached = _SUMMARY_CACHE.get(key)
+    if cached is not None and cached[0] == stamp:
+        return cached[1]
+    summary = _read_agent_summary(agent_dir, runtime_file, metrics_file)
+    _SUMMARY_CACHE[key] = (stamp, summary)
+    return summary
+
+
+def _read_agent_summary(agent_dir: Path, runtime_file: Path | None, metrics_file: Path | None) -> dict[str, Any] | None:
     if runtime_file is None and metrics_file is None:
         return None
     runtime: dict[str, Any] = {}

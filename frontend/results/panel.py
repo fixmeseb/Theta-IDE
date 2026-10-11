@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt
+import html
+
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtWidgets import (
     QComboBox,
     QFileDialog,
+    QGridLayout,
     QHBoxLayout,
     QMenu,
     QPushButton,
@@ -27,15 +30,27 @@ from .data import (
     aggregate,
     chart_points,
     combined_points,
+    first_reaching,
     series_groups,
     smooth,
+    summarize,
     summary_rows,
+    thin,
     to_csv,
 )
 from .explorer import RunExplorer
-from .inspector import PointInspector
+from .inspector import PointInspector, format_value
+from .layouts import (
+    DEFAULT_LAYOUT,
+    LAYOUTS,
+    Filmstrip,
+    KpiStrip,
+    PlotsList,
+    SeriesChips,
+    headline_metric,
+)
 from .loader import ResultsLoader
-from .metrics_catalog import AXIS_COLUMNS
+from .metrics_catalog import AXIS_COLUMNS, describe
 from .plot_grid import PlotGrid, chart_title
 from .summary import SummaryView
 
@@ -61,6 +76,8 @@ ARTIFACT_TABS = {
     "Config": (("config", "metadata"), "The ticked runs have no config files."),
     "Files": (None, "Tick runs to list every file they produced."),
 }
+POLL_MS = 2000  # how often ticked runs that are still training fetch their new rows
+RELIST_EVERY = 15  # polls between re-listing runs (~30 s): learns which runs finished or started
 AXIS_LABELS = {
     "transitions": "Environment steps",
     "step": "Logged step",
@@ -68,6 +85,15 @@ AXIS_LABELS = {
     "time/total": "Wall time (s)",
     "training_time_seconds": "Training time (s)",
 }
+TIME_COLUMNS = ("training_time_seconds", "time/total")  # a run's training time, for the Overview cards
+
+
+def duration(seconds: float) -> str:
+    if seconds >= 3600:
+        return f"{int(seconds // 3600)}h {int(seconds % 3600 // 60):02d}m"
+    if seconds >= 60:
+        return f"{int(seconds // 60)}m {int(seconds % 60):02d}s"
+    return f"{seconds:.1f}s"
 
 
 class ResultsPanel(QWidget):
@@ -81,7 +107,8 @@ class ResultsPanel(QWidget):
     manifests, previewed by kind.
 
     `backend` needs get(path, callback); `settings` (optional) needs get(*keys, default=) and
-    set(*keys, value), and keeps hidden plots across sessions under [results] hidden_plots.
+    set(*keys, value), and keeps hidden plots and the chosen layout (one of LAYOUTS) across sessions under
+    [results] hidden_plots and layout.
     `load_config(run_key)` (optional) puts a run's saved builder config into the experiment builder and
     returns None, or returns why it could not.
     """
@@ -97,13 +124,8 @@ class ResultsPanel(QWidget):
         self.hidden: set[str] = set(self._setting("hidden_plots", []))
         self.smoothing = 0.0
 
-        root = QVBoxLayout(self)
-        root.setContentsMargins(18, 14, 18, 12)
-        root.setSpacing(10)
-
-        toolbar = QHBoxLayout()
-        toolbar.addWidget(label("RESULTS / EVERY METRIC", "eyebrow"))
-        toolbar.addStretch()
+        # Controls, run tree, tabs, charts and inspector are built once; each layout (see layouts.py)
+        # only arranges them, so switching layouts keeps every tick, choice and loaded table.
         self.plots_button = QToolButton()
         self.plots_button.setText("Plots ▾")
         self.plots_button.setToolTip("Show or hide individual plots")
@@ -111,21 +133,15 @@ class ResultsPanel(QWidget):
         self.plots_menu = QMenu(self.plots_button)
         self.plots_menu.aboutToShow.connect(self._fill_plots_menu)
         self.plots_button.setMenu(self.plots_menu)
-        toolbar.addWidget(self.plots_button)
-        toolbar.addWidget(label("X-axis", "muted"))
         self.axis_select = QComboBox()
         self.axis_select.setToolTip("What the horizontal axis of every chart measures")
         self.axis_select.currentIndexChanged.connect(lambda _: self.redraw())
-        toolbar.addWidget(self.axis_select)
         self.smoothing_label = label("Smoothing: 0%", "muted")
-        toolbar.addWidget(self.smoothing_label)
         self.smoothing_slider = QSlider(Qt.Orientation.Horizontal)
         self.smoothing_slider.setRange(0, 95)
         self.smoothing_slider.setFixedWidth(110)
         self.smoothing_slider.setToolTip("Exponential moving average smoothing (0% = raw data)")
         self.smoothing_slider.valueChanged.connect(self._smoothing_changed)
-        toolbar.addWidget(self.smoothing_slider)
-        toolbar.addWidget(label("Versions", "muted"))
         self.combine_select = QComboBox()
         for mode, text in COMBINE_MODES.items():
             self.combine_select.addItem(text, mode)
@@ -133,7 +149,13 @@ class ResultsPanel(QWidget):
             "Combine the ticked versions (repeated runs, e.g. seeds) of each agent into one mean curve with a band"
         )
         self.combine_select.currentIndexChanged.connect(lambda _: self.redraw())
-        toolbar.addWidget(self.combine_select)
+        self.primary_select = QComboBox()
+        self.primary_select.addItem("Nearest", None)
+        self.primary_select.setToolTip(
+            "The series whose logged steps hovering snaps to (drawn on top, thicker, and listed first in the "
+            "inspector). Nearest snaps to whichever series is closest to the mouse."
+        )
+        self.primary_select.currentIndexChanged.connect(lambda _: self.redraw())
         self.export_button = QToolButton()
         self.export_button.setText("Export ▾")
         self.export_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
@@ -142,39 +164,44 @@ class ResultsPanel(QWidget):
         export_menu.addAction("Summary as CSV…", lambda: self._export("summary"))
         export_menu.addAction("Charts as PNG…", lambda: self._export("png"))
         self.export_button.setMenu(export_menu)
-        toolbar.addWidget(self.export_button)
-        refresh = QPushButton("↻  Refresh")
-        refresh.setToolTip("Re-read results/ through the backend")
-        refresh.clicked.connect(self.refresh)
-        toolbar.addWidget(refresh)
-        root.addLayout(toolbar)
+        self.refresh_button = QPushButton("↻  Refresh")
+        self.refresh_button.setToolTip("Re-read results/ through the backend")
+        self.refresh_button.clicked.connect(self.refresh)
 
-        splitter = QSplitter(Qt.Orientation.Horizontal)
         self.explorer = RunExplorer()
         self.explorer.setMinimumWidth(220)
         self.explorer.selection_changed.connect(self._selection_changed)
         self.explorer.manifest_wanted.connect(self.loader.load_manifest)
-        splitter.addWidget(self.explorer)
         self.tabs = QTabWidget()
         self.tabs.setDocumentMode(True)
-        curves = QWidget()
-        curves_layout = QVBoxLayout(curves)
-        curves_layout.setContentsMargins(8, 6, 0, 0)
-        curves_layout.setSpacing(8)
+        self.tab_corner = QWidget()  # buttons a layout puts beside the tabs (the Control rail's Export)
+        QHBoxLayout(self.tab_corner).setContentsMargins(0, 0, 4, 0)
+        self.tabs.setCornerWidget(self.tab_corner)
+        self.curves_page = QWidget()
+        QVBoxLayout(self.curves_page).setContentsMargins(8, 6, 0, 0)
+        self.curves_body: QWidget | None = None
         self.legend = label("", "muted")
         self.legend.setWordWrap(True)
         self.legend.setTextFormat(Qt.TextFormat.RichText)
-        curves_layout.addWidget(self.legend)
-        curves_split = QSplitter(Qt.Orientation.Vertical)
         self.grid = PlotGrid()
         self.grid.hide_requested.connect(lambda metric: self.set_hidden(metric, True))
         self.grid.point_hovered.connect(self._point_hovered)
-        curves_split.addWidget(self.grid)
         self.inspector = PointInspector()
-        curves_split.addWidget(self.inspector)
-        curves_split.setSizes([620, 200])
-        curves_layout.addWidget(curves_split, 1)
-        self.tabs.addTab(curves, "Curves")
+        self.kpis = KpiStrip()
+        self.kpis.clicked.connect(self.set_primary)
+        self.chips = SeriesChips()
+        self.chips.clicked.connect(self.set_primary)
+        self.filmstrip = Filmstrip()
+        self.filmstrip.chosen.connect(self.set_focus)
+        self.focus_metric: str | None = None
+        self.plots_list = PlotsList()
+        # Deferred: hiding a plot redraws, which rebuilds this list from inside its own signal.
+        self.plots_list.visibility_changed.connect(
+            lambda metric, on: QTimer.singleShot(0, lambda: self.set_hidden(metric, not on))
+        )
+        self._parking = QWidget(self)  # holds the widgets the current layout leaves out; never shown
+        self._parking.hide()
+        self.tabs.addTab(self.curves_page, "Curves")
         self.summary = SummaryView()
         self.summary.changed.connect(self.update_summary)
         self.tabs.addTab(self.summary, "Summary")
@@ -189,11 +216,16 @@ class ResultsPanel(QWidget):
             self._pages[name] = page
             self.tabs.addTab(page, name)
         self.tabs.currentChanged.connect(self._tab_opened)
-        splitter.addWidget(self.tabs)
-        splitter.setSizes([260, 900])
-        root.addWidget(splitter, 1)
+
+        self.root = QVBoxLayout(self)
+        self.root.setContentsMargins(18, 14, 18, 12)
+        self.root.setSpacing(10)
+        self.frame: QWidget | None = None
         self.status = label("", "muted")
-        root.addWidget(self.status)
+        self.root.addWidget(self.status)
+        layout_name = self._setting("layout", DEFAULT_LAYOUT)
+        self.layout_name = layout_name if layout_name in LAYOUTS else DEFAULT_LAYOUT
+        self._compose()
 
         self.loader.runs_listed.connect(self._runs_listed)
         self.loader.manifest_loaded.connect(self.explorer.add_manifest)
@@ -201,6 +233,17 @@ class ResultsPanel(QWidget):
         self.loader.file_loaded.connect(self._file_loaded)
         self.loader.table_loaded.connect(lambda _source: self.redraw())
         self.loader.failed.connect(lambda message: self.status.setText(f"Could not load: {message}"))
+
+        # Live updates: while the panel is on screen, ticked runs that are still training are
+        # polled for new rows, and the run list is refreshed now and then.
+        self.unfinished: set[str] = set()  # run keys without a recorded end time
+        self.run_count = 0
+        self._listing: tuple = ()
+        self._polls = 0
+        self.poll_timer = QTimer(self)
+        self.poll_timer.setInterval(POLL_MS)
+        self.poll_timer.timeout.connect(self.poll)
+        self.poll_timer.start()
         self.redraw()
 
     # ── Settings ─────────────────────────────────────────────────────────────
@@ -217,11 +260,182 @@ class ResultsPanel(QWidget):
             self.settings.set("results", "hidden_plots", sorted(self.hidden))
         self.redraw()
 
+    def set_layout(self, name: str):
+        """Switch to one of LAYOUTS and remember it under [results] layout."""
+        if name not in LAYOUTS or name == self.layout_name:
+            return
+        self.layout_name = name
+        if self.settings is not None:
+            self.settings.set("results", "layout", name)
+        self._compose()
+        self.redraw()
+
     def show_all(self):
         self.hidden.clear()
         if self.settings is not None:
             self.settings.set("results", "hidden_plots", [])
         self.redraw()
+
+    # ── Layouts ──────────────────────────────────────────────────────────────
+
+    def _shared_widgets(self) -> list[QWidget]:
+        return [
+            self.plots_button,
+            self.axis_select,
+            self.smoothing_label,
+            self.smoothing_slider,
+            self.combine_select,
+            self.primary_select,
+            self.export_button,
+            self.refresh_button,
+            self.explorer,
+            self.tabs,
+            self.legend,
+            self.grid,
+            self.inspector,
+            self.kpis,
+            self.chips,
+            self.filmstrip,
+            self.plots_list,
+        ]
+
+    def _compose(self):
+        """Arrange the shared widgets as `self.layout_name` says, dropping the previous arrangement."""
+        for widget in self._shared_widgets():
+            widget.setParent(self._parking)
+        for old in (self.frame, self.curves_body):
+            if old is not None:
+                old.setParent(None)
+                old.deleteLater()
+        self.frame = QWidget()
+        frame = QVBoxLayout(self.frame)
+        frame.setContentsMargins(0, 0, 0, 0)
+        frame.setSpacing(10)
+        self.curves_body = QWidget()
+        body = QVBoxLayout(self.curves_body)
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(8)
+        self.curves_page.layout().addWidget(self.curves_body)
+        self.root.insertWidget(0, self.frame, 1)
+        name = self.layout_name
+        self.inspector.set_transposed(name == "rail")
+        self.tab_corner.setVisible(name == "rail")
+
+        if name == "rail":
+            split = QSplitter(Qt.Orientation.Horizontal)
+            split.addWidget(self._rail())
+            split.addWidget(self.tabs)
+            split.setSizes([280, 900])
+            frame.addWidget(split, 1)
+            self.tab_corner.layout().addWidget(self.export_button)
+            body.addWidget(self.legend)
+            charts = QSplitter(Qt.Orientation.Vertical)
+            charts.addWidget(self.grid)
+            charts.addWidget(self.inspector)
+            charts.setSizes([620, 180])
+            body.addWidget(charts, 1)
+            return
+
+        frame.addLayout(self._toolbar())
+        split = QSplitter(Qt.Orientation.Horizontal)
+        split.addWidget(self.explorer)
+        split.addWidget(self.tabs)
+        split.setSizes([260, 900])
+        frame.addWidget(split, 1)
+        if name == "quiet":
+            body.addWidget(self.legend)
+            charts = QSplitter(Qt.Orientation.Horizontal)
+            charts.addWidget(self.grid)
+            charts.addWidget(self.inspector)
+            charts.setSizes([760, 300])
+            body.addWidget(charts, 1)
+        elif name == "focus":
+            body.addWidget(self.chips)
+            main = QWidget()
+            main_layout = QVBoxLayout(main)
+            main_layout.setContentsMargins(0, 0, 0, 0)
+            main_layout.setSpacing(8)
+            main_layout.addWidget(self.grid, 1)
+            main_layout.addWidget(self.filmstrip)
+            charts = QSplitter(Qt.Orientation.Horizontal)
+            charts.addWidget(main)
+            charts.addWidget(self.inspector)
+            charts.setSizes([760, 300])
+            body.addWidget(charts, 1)
+        else:  # overview: the series cards head the grid, above its large chart
+            charts = QSplitter(Qt.Orientation.Vertical)
+            charts.addWidget(self.grid)
+            charts.addWidget(self.inspector)
+            charts.setSizes([640, 180])
+            body.addWidget(charts, 1)
+
+    def _toolbar(self) -> QHBoxLayout:
+        """One row of controls: view settings on the left, actions on the right."""
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        row.addWidget(label("X-axis", "muted"))
+        row.addWidget(self.axis_select)
+        row.addSpacing(10)
+        row.addWidget(self.smoothing_label)
+        row.addWidget(self.smoothing_slider)
+        row.addSpacing(10)
+        row.addWidget(label("Versions", "muted"))
+        row.addWidget(self.combine_select)
+        row.addSpacing(10)
+        row.addWidget(label("Primary", "muted"))
+        row.addWidget(self.primary_select)
+        row.addStretch()
+        for widget in (self.plots_button, self.export_button, self.refresh_button):
+            row.addWidget(widget)
+        return row
+
+    def _rail(self) -> QWidget:
+        """The Control rail: runs, view settings and a checkbox per plot, top to bottom."""
+        rail = QWidget()
+        rail.setObjectName("resultsRail")
+        layout = QVBoxLayout(rail)
+        layout.setContentsMargins(0, 0, 8, 0)
+        layout.setSpacing(8)
+        layout.addWidget(label("RUNS", "eyebrow"))
+        layout.addWidget(self.explorer, 3)
+        layout.addWidget(label("VIEW", "eyebrow"))
+        form = QGridLayout()
+        form.setHorizontalSpacing(8)
+        form.setVerticalSpacing(6)
+        rows = (("X-axis", self.axis_select), ("Versions", self.combine_select), ("Primary", self.primary_select))
+        for i, (caption, widget) in enumerate(rows):
+            form.addWidget(label(caption, "muted"), i, 0)
+            form.addWidget(widget, i, 1)
+        form.addWidget(self.smoothing_label, len(rows), 0)
+        form.addWidget(self.smoothing_slider, len(rows), 1)
+        form.setColumnStretch(1, 1)
+        layout.addLayout(form)
+        layout.addWidget(label("PLOTS", "eyebrow"))
+        layout.addWidget(self.plots_list, 2)
+        layout.addWidget(self.refresh_button)
+        return rail
+
+    def _grid_options(self, visible: list[str]) -> dict:
+        name = self.layout_name
+        if name == "rail":
+            return {"columns": 3, "flat": True}
+        if name == "focus":
+            if self.focus_metric not in visible:
+                self.focus_metric = headline_metric(visible)
+            return {"columns": 1, "focus": self.focus_metric}
+        if name == "overview":
+            return {"collapsible": True, "hero": headline_metric(visible), "header": self.kpis}
+        return {"collapsible": True}
+
+    def set_focus(self, metric: str):
+        """Show `metric` as the Focus layout's large chart."""
+        self.focus_metric = metric
+        self.redraw()
+
+    def set_primary(self, name: str):
+        """Make series `name` primary, or go back to Nearest when it already is."""
+        index = self.primary_select.findData(name)
+        self.primary_select.setCurrentIndex(0 if name == self.primary_series() or index < 0 else index)
 
     # ── Data flow ────────────────────────────────────────────────────────────
 
@@ -230,6 +444,11 @@ class ResultsPanel(QWidget):
         self.loader.clear()
         self.status.setText("Listing runs…")
         self.loader.list_runs()
+        # The tree keeps its ticks when the run list is unchanged, so nothing else re-reads what is
+        # ticked: without this the next redraw (e.g. changing Versions) would find no data at all.
+        for source in self.sources:
+            self.loader.load_table(source)
+            self.loader.load_manifest(source.group, source.experiment_id)
 
     def set_offline(self):
         self.status.setText(
@@ -237,14 +456,45 @@ class ResultsPanel(QWidget):
         )
 
     def _runs_listed(self, entries):
-        self.explorer.set_runs(entries)
-        count = sum(1 for e in entries if e.get("agents"))
-        self.status.setText(
-            f"{count} run{'s' * (count != 1)} in results/logs. Tick runs to plot every metric they logged."
+        listing = tuple(
+            sorted(
+                (e["group"], e["experiment_id"], tuple(a.get("name") for a in e.get("agents") or [])) for e in entries
+            )
         )
+        if listing != self._listing:  # rebuild the tree only when runs or agents changed, not on every re-list
+            self._listing = listing
+            self.explorer.set_runs(entries)
+        self.unfinished = {
+            f"{e['group']}/{e['experiment_id']}" for e in entries if e.get("agents") and not e.get("finished")
+        }
+        self.run_count = sum(1 for e in entries if e.get("agents"))
+        self._show_status()
+
+    def live_sources(self) -> list[Source]:
+        """Ticked sources whose run is still training (no recorded end time)."""
+        return [s for s in self.sources if s.run_key in self.unfinished]
+
+    def _show_status(self):
+        live = len({s.run_key for s in self.live_sources()})
+        following = f" · following {live} run{'s' * (live != 1)} still training" if live else ""
+        self.status.setText(
+            f"{self.run_count} run{'s' * (self.run_count != 1)} in results/logs. "
+            f"Tick runs to plot every metric they logged.{following}"
+        )
+
+    def poll(self):
+        """One live-update tick: new rows for ticked runs still training; now and then, re-list runs."""
+        if not self.isVisible():
+            return
+        for source in self.live_sources():
+            self.loader.poll_table(source)
+        self._polls += 1
+        if self._polls % RELIST_EVERY == 0:
+            self.loader.list_runs()
 
     def _selection_changed(self, sources):
         self.sources = sources
+        self._show_status()
         for source in sources:
             self.loader.load_table(source)
             self.loader.load_manifest(source.group, source.experiment_id)
@@ -341,8 +591,30 @@ class ResultsPanel(QWidget):
 
     def _point_hovered(self, x):
         axis = self.axis_select.currentData()
-        if axis:
-            self.inspector.show_point(axis, x, self.loaded_tables())
+        if not axis:
+            return
+        tables = self.loaded_tables()
+        primary = self.primary_series()
+        if primary:  # the primary series' runs come first: the hovered x is one of their logged steps
+            members = next((m for name, m in self.plotted_groups() if name == primary), [])
+            tables = sorted(tables, key=lambda entry: entry[0] not in members)
+        self.inspector.show_point(axis, x, tables, primary)
+
+    def primary_series(self) -> str | None:
+        """The legend label of the series hovering snaps to, or None to snap to the nearest series."""
+        return self.primary_select.currentData()
+
+    def _sync_primary(self, names: list[str]) -> str | None:
+        """Offer every plotted series as the primary one, keeping the choice while it is still plotted."""
+        current = self.primary_series()
+        self.primary_select.blockSignals(True)
+        self.primary_select.clear()
+        self.primary_select.addItem("Nearest", None)
+        for name in names:
+            self.primary_select.addItem(name, name)
+        self.primary_select.setCurrentIndex(names.index(current) + 1 if current in names else 0)
+        self.primary_select.blockSignals(False)
+        return self.primary_series()
 
     def _smoothing_changed(self, value):
         self.smoothing = value / 100.0
@@ -416,22 +688,104 @@ class ResultsPanel(QWidget):
             empty = "The ticked runs have no numeric metrics."
         else:
             empty = f"All {len(metrics)} plots are hidden. Use Plots ▾ to show them."
+        self.grid.configure(**self._grid_options(visible))
         self.grid.set_metrics(visible, empty)
         self.curves = self.curve_series(axis)
+        groups = self.plotted_groups()
+        primary = self._sync_primary([name for name, _ in groups])
+        large = {self.grid.hero, self.grid.focus}
         for metric, chart in self.grid.charts().items():
             series = self.curves.get(metric, [])
             chart.band = SPREAD if any(combined for *_, combined in series) else None
+            chart.primary = primary
+            chart.hover_all = metric in large  # large charts list every series' value at the hovered step
             chart.set_metric(metric, chart_title(metric))
-            chart.set_series([(name, points, color) for name, points, color, _ in series])
-        groups = self.plotted_groups()
+            # Draw thinned copies; inspector, Summary and exports use the full data.
+            chart.set_series([(name, thin(points, metric), color) for name, points, color, _ in series])
         self.legend.setText(
             "   ".join(
-                f'<span style="color:{PALETTE[i % len(PALETTE)]}">■</span> {name}' for i, (name, _) in enumerate(groups)
+                f'<span style="color:{PALETTE[i % len(PALETTE)]}">■</span> {html.escape(name)}'
+                for i, (name, _) in enumerate(groups)
             )
         )
         hidden_note = f" · {len(metrics) - len(visible)} hidden" if len(visible) < len(metrics) else ""
         self.plots_button.setText(f"Plots ({len(visible)}/{len(metrics)}{hidden_note}) ▾" if metrics else "Plots ▾")
+        self._update_layout_widgets(axis, metrics, visible, groups, primary)
         self.update_summary()
+
+    def latest(self, metric: str, primary: str | None) -> tuple[str, str | None]:
+        """(value, color) of the last drawn point of the primary series, or of the first series."""
+        series = self.curves.get(metric, [])
+        chosen = next((entry for entry in series if entry[0] == primary), series[0] if series else None)
+        if chosen is None or not chosen[1]:
+            return "", None
+        return format_value(metric, chosen[1][-1][metric]), chosen[2]
+
+    def _update_layout_widgets(self, axis, metrics, visible, groups, primary):
+        """Fill what only some layouts show: card values, series cards, chips, filmstrip, plot checklist."""
+        name = self.layout_name
+        colors = {series: PALETTE[i % len(PALETTE)] for i, (series, _) in enumerate(groups)}
+        for metric, card in self.grid.cards.items():
+            card.set_value(*self.latest(metric, primary) if name in ("quiet", "overview") else ("",))
+        if name == "overview":
+            hero = self.grid.hero
+            self.kpis.set_cards(self.kpi_cards(axis, hero, groups, colors) if hero else [], primary)
+        elif name == "focus":
+            focus = self.grid.focus
+            chips = []
+            for series, _ in groups:
+                drawn = next((p for n, p, *_ in self.curves.get(focus, []) if n == series), None)
+                chips.append((series, colors[series], format_value(focus, drawn[-1][focus]) if drawn else ""))
+            self.chips.set_chips(chips, primary)
+            tiles = [
+                (
+                    metric,
+                    describe(metric).label,
+                    [(n, thin(p, metric, 120), color) for n, p, color, _ in self.curves.get(metric, [])],
+                    self.latest(metric, primary)[0],
+                )
+                for metric in visible
+            ]
+            self.filmstrip.set_tiles(tiles, focus, primary)
+        elif name == "rail":
+            self.plots_list.set_metrics(metrics, self.hidden)
+
+    def kpi_cards(self, axis, metric, groups, colors) -> list[tuple[str, str, list[tuple[str, str]]]]:
+        """The Overview's headline numbers per series: best, final, when it got there, training time.
+
+        "Reaches … at" replaces "Best at" while the Summary tab has a threshold for this metric.
+        """
+        tables = dict(self.loaded_tables())
+        higher = describe(metric).higher_is_better
+        threshold = self.summary.threshold_value() if self.summary.selected_metric() == metric else None
+        cards = []
+        for series, members in groups:
+            parts = [p for s in members if (p := tables[s].series(metric, axis))]
+            points = parts[0] if len(parts) == 1 else [(a.x, a.mean) for a in aggregate(parts)]
+            stats = []
+            summary = summarize(points, higher)
+            if summary is not None:
+                stats.append(("Best" if higher is not None else "Max", format_value(metric, summary.best)))
+                stats.append(("Final", format_value(metric, summary.final)))
+                if threshold is not None:
+                    at = first_reaching(points, threshold, higher)
+                    stats.append((f"Reaches {threshold:g} at", "not yet" if at is None else f"{at:,.0f}"))
+                else:
+                    stats.append(("Best at", f"{summary.best_x:,.0f}"))
+            seconds = [t for s in members if (t := self.training_time(tables[s])) is not None]
+            if seconds:
+                stats.append(("Training time", duration(max(seconds))))
+            cards.append((series, colors[series], stats))
+        return cards
+
+    @staticmethod
+    def training_time(table) -> float | None:
+        """The last training time a run logged, in seconds."""
+        for column in TIME_COLUMNS:
+            values = [v for v in table.columns.get(column, []) if v is not None]
+            if values:
+                return values[-1]
+        return None
 
     # ── Summary ──────────────────────────────────────────────────────────────
 

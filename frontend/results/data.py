@@ -60,6 +60,19 @@ class MetricTable:
             self.columns[name] = old_values + new.columns.get(name, [None] * new.row_count)
         self.row_count += new.row_count
 
+    def truncate(self, row_count: int) -> None:
+        """Keep only the first `row_count` rows (e.g. to re-read a row that may have been half-written)."""
+        row_count = max(0, min(row_count, self.row_count))
+        for name in list(self.columns):
+            self.columns[name] = self.columns[name][:row_count]
+            if all(v is None for v in self.columns[name]):
+                del self.columns[name]
+        self.row_count = row_count
+
+    def row(self, index: int) -> dict[str, float]:
+        """The values of one row, by column (missing values left out)."""
+        return {name: values[index] for name, values in self.columns.items() if values[index] is not None}
+
     def axes(self) -> list[str]:
         """Columns usable as an x-axis, most useful first."""
         return [name for name in AXIS_COLUMNS if name in self.columns]
@@ -258,6 +271,26 @@ class Source:
         """Legend text: experiment / agent, plus the version when one is pinned."""
         text = f"{self.experiment_id} / {self.agent}"
         return f"{text} ({self.version})" if self.version else text
+
+
+MAX_DRAWN_POINTS = 2000
+
+
+def thin(points: list[dict], metric: str, limit: int = MAX_DRAWN_POINTS) -> list[dict]:
+    """At most about `limit` chart points, for drawing only: each bucket keeps its lowest and highest
+    value (in x order), so spikes and dips survive. Shorter series come back unchanged."""
+    if len(points) <= limit:
+        return points
+    size = math.ceil(len(points) / (limit // 2))
+    kept = []
+    for start in range(0, len(points), size):
+        bucket = points[start : start + size]
+        low = min(range(len(bucket)), key=lambda i: bucket[i][metric])
+        high = max(range(len(bucket)), key=lambda i: bucket[i][metric])
+        kept.extend(bucket[i] for i in sorted({low, high}))
+    if kept[-1] is not points[-1]:
+        kept.append(points[-1])  # the latest value is always drawn
+    return kept
 
 
 def chart_points(points: list[Point], metric: str) -> list[dict]:

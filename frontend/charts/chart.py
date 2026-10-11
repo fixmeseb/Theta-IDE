@@ -36,6 +36,8 @@ class Chart(QWidget):
         self.custom_x_range = None
         self.baseline_series = []
         self.smoothing = 0.0
+        self.primary = None  # a series name: hovering snaps only to its points, and it is drawn on top
+        self.hover_all = False  # the hover card lists every series' value at the hovered step, not just one
 
     def set_series(self, series, xmax=None, reference=None):
         """xmax fixes the x-axis extent (e.g. a run's training budget) instead of fitting the data."""
@@ -128,7 +130,7 @@ class Chart(QWidget):
 
         closest = None
         min_dist = float("inf")
-        for name, metrics, color in self.series:
+        for name, metrics, color in self._snap_series():
             for m in metrics:
                 s = m["step"]
                 if s < xlo or s > xhi:
@@ -192,6 +194,15 @@ class Chart(QWidget):
             self.update()
         super().mouseDoubleClickEvent(event)
 
+    def _snap_series(self):
+        """The series hovering may snap to: only the primary one when it is plotted, else all."""
+        primary = [entry for entry in self.series if entry[0] == self.primary]
+        return primary or self.series
+
+    def _draw_order(self):
+        """Series in drawing order: the primary one last, so it stays on top."""
+        return sorted(self.series, key=lambda entry: entry[0] == self.primary)
+
     def y_range(self, points):
         values = [m[self.metric] for m in points]
         if self.band:
@@ -218,7 +229,9 @@ class Chart(QWidget):
         painter.fillRect(self.rect(), QColor(theme_color("panel")))
         painter.setFont(QFont("Segoe UI", 10))
         painter.setPen(QColor(theme_color("text")))
-        painter.drawText(16, 24, self.title)
+        # Stop short of the corner control (e.g. a Hide button) so a long title never runs under it.
+        room = self.width() - 32 - (self.corner.width() + 8 if self.corner is not None and self.corner.isVisible() else 0)
+        painter.drawText(16, 24, painter.fontMetrics().elidedText(self.title, Qt.TextElideMode.ElideMiddle, max(40, room)))
         area = QRectF(52, 45, self.width() - 74, self.height() - 80)
         points = [m for _, metrics, _ in self.series for m in metrics]
         xmax = self.xmax or max([m["step"] for m in points] or [10000])
@@ -279,7 +292,7 @@ class Chart(QWidget):
             painter.setPen(QPen(QColor(theme_color("comment")), 1.5, Qt.PenStyle.DashLine))
             painter.drawPath(b_path)
 
-        for _, raw_metrics, color in self.series:
+        for name, raw_metrics, color in self._draw_order():
             if not raw_metrics:
                 continue
             metrics = self._smooth_points(raw_metrics, self.smoothing) if self.smoothing > 0 else raw_metrics
@@ -363,7 +376,7 @@ class Chart(QWidget):
                     grad.setColorAt(1.0, bot_c)
                     painter.fillPath(area_path, grad)
 
-                painter.setPen(QPen(QColor(theme_color(color)), 2))
+                painter.setPen(QPen(QColor(theme_color(color)), 3.5 if name == self.primary else 2))
                 painter.drawPath(path)
 
         painter.restore()
@@ -393,8 +406,17 @@ class Chart(QWidget):
             painter.setBrush(QColor(theme_color(h_color)))
             painter.drawEllipse(QRectF(hx - 2.5, hy - 2.5, 5, 5))
 
-            # Floating tooltip card
-            card_w, card_h = 136, 46
+            # Floating tooltip card: the hovered value, or (hover_all) every series' nearest value
+            rows = [(h_name, h_val, h_color)]
+            if self.hover_all and len(self.series) > 1:
+                # Only series that span the hovered step: a run that stopped earlier has no value there,
+                # and its last point would read as if it did.
+                rows = [(name, min(metrics, key=lambda m: abs(m["step"] - h_step))[self.metric], color)
+                        for name, metrics, color in self.series
+                        if metrics and min(m["step"] for m in metrics) <= h_step <= max(m["step"] for m in metrics)]
+                rows = rows or [(h_name, h_val, h_color)]
+            card_w = 136 if len(rows) == 1 else 220
+            card_h = 46 if len(rows) == 1 else 26 + 17 * len(rows)
             cx = hx + 12 if hx + 12 + card_w <= area.right() else hx - 12 - card_w
             cy = max(area.top() + 4, min(hy - 23, area.bottom() - card_h - 4))
             card_rect = QRectF(cx, cy, card_w, card_h)
@@ -406,9 +428,20 @@ class Chart(QWidget):
             painter.setFont(QFont("Segoe UI", 8))
             painter.setPen(QColor(theme_color("muted")))
             painter.drawText(QRectF(cx + 8, cy + 5, card_w - 16, 16), Qt.AlignmentFlag.AlignLeft, f"Step: {int(h_step):,}")
-            painter.setPen(QColor(theme_color("text")))
-            painter.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
-            painter.drawText(QRectF(cx + 8, cy + 22, card_w - 16, 18), Qt.AlignmentFlag.AlignLeft, f"{self.title}: {h_val:.2f}")
+            if len(rows) == 1:
+                painter.setPen(QColor(theme_color("text")))
+                painter.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
+                painter.drawText(QRectF(cx + 8, cy + 22, card_w - 16, 18), Qt.AlignmentFlag.AlignLeft, f"{self.title}: {h_val:.2f}")
+            else:
+                for i, (name, value, color) in enumerate(rows):
+                    y = cy + 22 + 17 * i
+                    bold = name == (self.primary or h_name)
+                    painter.setFont(QFont("Segoe UI", 8, QFont.Weight.Bold if bold else QFont.Weight.Normal))
+                    painter.setPen(QColor(theme_color(color)))
+                    painter.drawText(QRectF(cx + 8, y, card_w - 70, 16), Qt.AlignmentFlag.AlignLeft,
+                                     painter.fontMetrics().elidedText(name, Qt.TextElideMode.ElideMiddle, int(card_w - 74)))
+                    painter.setPen(QColor(theme_color("text")))
+                    painter.drawText(QRectF(cx + card_w - 66, y, 58, 16), Qt.AlignmentFlag.AlignRight, f"{value:.4g}")
 
         if not points:
             painter.setPen(QColor(theme_color("muted")))

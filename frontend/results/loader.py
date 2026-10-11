@@ -32,6 +32,7 @@ class ResultsLoader(QObject):
         self.backend = backend
         self.manifests: dict[str, Manifest] = {}
         self.tables: dict[Source, MetricTable] = {}
+        self.table_versions: dict[Source, str | None] = {}  # version folder each table was read from
         self.files: dict[tuple[str, str], bytes] = {}
         self._pending: set = set()
 
@@ -69,9 +70,12 @@ class ResultsLoader(QObject):
         if source in self._pending:
             return
         self._pending.add(source)
-        query = f"?{urlencode({'version': source.version})}" if source.version else ""
-        path = f"/api/runs/{_seg(source.group)}/{_seg(source.experiment_id)}/{_seg(source.agent)}/metrics{query}"
-        self.backend.get(path, lambda data, error: self._table_received(source, data, error))
+        self.backend.get(self._metrics_path(source), lambda data, error: self._table_received(source, data, error))
+
+    def _metrics_path(self, source: Source, since: int = 0) -> str:
+        params = {k: v for k, v in (("version", source.version), ("since", since)) if v}
+        query = f"?{urlencode(params)}" if params else ""
+        return f"/api/runs/{_seg(source.group)}/{_seg(source.experiment_id)}/{_seg(source.agent)}/metrics{query}"
 
     def _table_received(self, source, data, error):
         self._pending.discard(source)
@@ -79,7 +83,43 @@ class ResultsLoader(QObject):
             self.failed.emit(f"{source.label}: {error}")
             return
         self.tables[source] = MetricTable.from_rows(data.get("metrics") or [], data.get("columns"))
+        self.table_versions[source] = data.get("version")
         self.table_loaded.emit(source)
+
+    def poll_table(self, source: Source):
+        """Fetch only the rows a still-training run logged since the last fetch (GET …/metrics?since=N).
+
+        The last row already held is fetched again and replaced: loggers rewrite metrics.csv while
+        training, so it may have been read half-written. If the newest version folder changed
+        meanwhile (a new version_N started), the table is refetched whole.
+        """
+        table = self.tables.get(source)
+        key = ("poll", source)
+        if table is None or key in self._pending or source in self._pending:
+            return
+        self._pending.add(key)
+        since = max(0, table.row_count - 1)
+        self.backend.get(
+            self._metrics_path(source, since=since), lambda data, error: self._poll_received(source, since, data, error)
+        )
+
+    def _poll_received(self, source, since, data, error):
+        self._pending.discard(("poll", source))
+        table = self.tables.get(source)
+        if error or table is None:
+            return  # a failed poll is retried on the next tick; the data shown stays valid
+        if data.get("version") != self.table_versions.get(source):
+            del self.tables[source]
+            self.load_table(source)
+            return
+        rows = data.get("metrics") or []
+        if not rows:
+            return
+        previous_last = table.row(since) if since < table.row_count else None
+        table.truncate(since)
+        table.extend(rows)
+        if len(rows) > 1 or table.row(since) != previous_last:
+            self.table_loaded.emit(source)  # redraw only when something actually changed
 
     def load_file(self, run_key: str, path: str):
         """Fetch one artifact's bytes (`path` as its manifest lists it); file_loaded fires when ready."""
@@ -108,4 +148,5 @@ class ResultsLoader(QObject):
         """Forget cached data, so the next requests re-read results/ (e.g. after Refresh)."""
         self.manifests.clear()
         self.tables.clear()
+        self.table_versions.clear()
         self.files.clear()

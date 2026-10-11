@@ -9,7 +9,7 @@ from .data import MetricTable, Source
 from .metrics_catalog import AXIS_COLUMNS, describe, group_sort_key, metric_group
 
 
-def _format(metric: str, value: float) -> str:
+def format_value(metric: str, value: float) -> str:
     fmt = describe(metric).fmt
     try:
         return format(value, fmt)
@@ -18,7 +18,10 @@ def _format(metric: str, value: float) -> str:
 
 
 class PointInspector(QWidget):
-    """Rows are metrics, columns are runs. Each run shows its logged point nearest the hovered x."""
+    """Rows are metrics, columns are runs (or the other way round when `transposed`).
+
+    Each run shows its logged point nearest the hovered x.
+    """
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -36,9 +39,20 @@ class PointInspector(QWidget):
         self.table.setAlternatingRowColors(True)
         layout.addWidget(self.table, 1)
         self.values: dict[Source, dict[str, float]] = {}
+        self.transposed = False  # runs as rows and metrics as columns (a wide strip under the charts)
+        self._last = None
 
-    def show_point(self, axis: str, x: float, tables: list[tuple[Source, MetricTable]]):
-        """Fill the table with every value each run logged at its point nearest `x` on `axis`."""
+    def set_transposed(self, transposed: bool):
+        self.transposed = transposed
+        if self._last is not None:
+            self.show_point(*self._last)
+
+    def show_point(self, axis: str, x: float, tables: list[tuple[Source, MetricTable]], primary: str | None = None):
+        """Fill the table with every value each run logged at its point nearest `x` on `axis`.
+
+        `primary` names the series whose logged step `x` is (its runs come first in `tables`).
+        """
+        self._last = (axis, x, tables, primary)
         self.values, notes = {}, []
         for source, table in tables:
             nearest = table.nearest_x(axis, x)
@@ -56,14 +70,21 @@ class PointInspector(QWidget):
         )
         sources = list(self.values)
         self.table.clear()
-        self.table.setRowCount(len(metrics))
-        self.table.setColumnCount(len(sources))
-        self.table.setHorizontalHeaderLabels([s.label for s in sources])
-        self.table.setVerticalHeaderLabels(metrics)
-        for row, metric in enumerate(metrics):
-            self.table.verticalHeaderItem(row).setToolTip(describe(metric).label)
-            for col, source in enumerate(sources):
+        rows, columns = (sources, metrics) if self.transposed else (metrics, sources)
+        self.table.setRowCount(len(rows))
+        self.table.setColumnCount(len(columns))
+        run_labels = [s.label for s in sources]
+        self.table.setHorizontalHeaderLabels(metrics if self.transposed else run_labels)
+        self.table.setVerticalHeaderLabels(run_labels if self.transposed else metrics)
+        for i, metric in enumerate(metrics):
+            header = self.table.horizontalHeaderItem(i) if self.transposed else self.table.verticalHeaderItem(i)
+            header.setToolTip(describe(metric).label)
+            for j, source in enumerate(sources):
                 value = self.values[source].get(metric)
-                self.table.setItem(row, col, QTableWidgetItem("—" if value is None else _format(metric, value)))
+                item = QTableWidgetItem("—" if value is None else format_value(metric, value))
+                self.table.setItem(*((j, i) if self.transposed else (i, j)), item)
         nearest_note = f"  ·  nearest logged point: {'; '.join(notes)}" if notes else ""
-        self.caption.setText(f"{axis} = {x:g}  ·  {len(metrics)} values across {len(sources)} run(s){nearest_note}")
+        primary_note = f" (a step of {primary})" if primary else ""
+        self.caption.setText(
+            f"{axis} = {x:g}{primary_note}  ·  {len(metrics)} values across {len(sources)} run(s){nearest_note}"
+        )
