@@ -3,8 +3,12 @@ defaults:
 - pyrenees/_base
 plots:
   losses:
-    metrics: ["losses/total_loss", "losses/bellman_loss", "losses/cql_loss", "losses/q_loss",
-      "losses/actor_loss"]
+    metrics:
+    - losses/total_loss
+    - losses/bellman_loss
+    - losses/cql_loss
+    - losses/q_loss
+    - losses/actor_loss
   reports: {}
 methods:
   cql_blendrl_human_dueling_resnet:
@@ -15,3 +19,19 @@ methods:
     batch_size: 512
     lr: 3e-4
     cql_alpha: 1.0
+  cql_dnn:
+    agent: cql
+    model: dnn
+    logic_lr: 0.001
+    target_entropy: -1.0
+    tau: 0.005
+    clip_range: 0.2
+  cql_dnn_2:
+    agent: cql
+    model: dnn
+  cql_dnn_3:
+    agent: cql
+    model: dnn
+  cql_dnn_4:
+    agent: cql
+    model: dnn

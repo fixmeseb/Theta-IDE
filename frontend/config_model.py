@@ -328,7 +328,14 @@ class ConfigTree:
         return {d.name: ExperimentGroup.from_dir(d) for d in sorted(root.iterdir()) if d.is_dir()}
 
     def group(self, name: str) -> ExperimentGroup:
-        return self.experiment_groups.get(name) or ExperimentGroup(name=name)
+        if not name:
+            return ExperimentGroup(name="")
+        if name in self.experiment_groups:
+            return self.experiment_groups[name]
+        for k, g in self.experiment_groups.items():
+            if k.lower() == name.lower():
+                return g
+        return ExperimentGroup(name=name)
 
 
 @dataclass(frozen=True)
@@ -352,7 +359,7 @@ class ExperimentGroup:
         if not base.is_file():
             return cls(name=directory.name)
         raw = _read_yaml(base)
-        env = None
+        env = raw.get("env")
         for entry in raw.get("defaults") or []:
             if isinstance(entry, dict):
                 env = entry.get("override /env", env)
