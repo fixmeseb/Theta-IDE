@@ -20,6 +20,8 @@ which writes the change back into the workspace ``settings.toml`` and emits
 from __future__ import annotations
 
 import copy
+import re
+import time
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -214,7 +216,16 @@ def _write_toml_file(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".toml.tmp")
     tmp.write_text(content, encoding="utf-8")
-    tmp.replace(path)
+    # On Windows, replacing a file another process briefly holds open (antivirus, the search indexer, a
+    # second ThetaIDE watching it) fails with "Access is denied"; it clears within moments, so retry.
+    for attempt in range(20):
+        try:
+            tmp.replace(path)
+            return
+        except PermissionError:
+            if attempt == 19:
+                raise
+            time.sleep(0.025 * (attempt + 1))
 
 
 def _toml_value(v: Any) -> str:
@@ -226,11 +237,23 @@ def _toml_value(v: Any) -> str:
     if isinstance(v, float):
         return repr(v)
     if isinstance(v, str):
-        return '"' + v.replace("\\", "\\\\").replace('"', '\\"') + '"'
+        escaped = v.replace("\\", "\\\\").replace('"', '\\"')
+        for char, code in (("\n", "\\n"), ("\r", "\\r"), ("\t", "\\t")):
+            escaped = escaped.replace(char, code)
+        return '"' + escaped + '"'
     if isinstance(v, list):
         items = ", ".join(_toml_value(i) for i in v)
         return f"[{items}]"
+    if isinstance(v, dict):
+        # Inline table, e.g. a sidebar bin: { name = "Training", members = ["monitor"], expanded = true }
+        items = ", ".join(f"{_toml_key(k)} = {_toml_value(val)}" for k, val in v.items())
+        return "{ " + items + " }" if items else "{}"
     return repr(v)  # fallback
+
+
+def _toml_key(key: Any) -> str:
+    key = str(key)
+    return key if re.fullmatch(r"[A-Za-z0-9_-]+", key) else _toml_value(key)
 
 
 # ---------------------------------------------------------------------------

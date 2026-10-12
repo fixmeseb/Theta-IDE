@@ -1165,6 +1165,7 @@ class Window(QMainWindow):
             "terminal",
             "console",
         ]
+        self.tabs.clear_bins(emit=False)
         self.tabs.apply_tab_order(default_order)
         for pid, slider in self.pane_sliders.items():
             slider.blockSignals(True)
@@ -1183,6 +1184,7 @@ class Window(QMainWindow):
             visible = [pid for pid in order if self.tabs.is_tab_visible(pid)]
             self.settings_manager.set("sidebar", "order", order)
             self.settings_manager.set("sidebar", "visible", visible)
+            self.settings_manager.set("sidebar", "bins", self.tabs.bins_state())
         except Exception as exc:
             self.log(f"Failed to save sidebar layout: {exc}")
 
@@ -1193,6 +1195,8 @@ class Window(QMainWindow):
             order = self.settings_manager.sidebar_order
             visible_set = set(self.settings_manager.sidebar_visible)
             known_set = set(order)  # tabs settings.toml explicitly knows about
+            bins = self.settings_manager.get("sidebar", "bins", default=[])
+            self.tabs.set_bins(bins if isinstance(bins, list) else [])
             if order:
                 self.tabs.apply_tab_order(order)
             for pid in self.tabs.tab_order:

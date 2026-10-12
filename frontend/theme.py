@@ -203,6 +203,10 @@ QToolButton#sideTab:checked { background: #3c3836; color: #fabd2f; }
 QToolButton#sideTabLogo { background: transparent; border: 0; border-radius: 6px; padding: 6px 0; margin-bottom: 2px; }
 QToolButton#sideTabLogo:hover { background: #32302f; }
 QToolButton#sideTabLogo:checked { background: #3c3836; border: 1px solid #504945; }
+QToolButton#sideTabBin { background: transparent; border: 0; border-radius: 5px; padding: 3px 2px 3px 3px; color: #a89984; font-size: 10px; font-weight: 600; text-align: left; }
+QToolButton#sideTabBin:hover { background: #32302f; color: #ebdbb2; }
+QToolButton#sideTabBin:checked { color: #fabd2f; }
+QLineEdit#sideTabBinEditor { font-size: 10px; padding: 1px 3px; border: 1px solid #fabd2f; border-radius: 4px; background: #1d2021; color: #ebdbb2; }
 QLabel#configOk { color: #b8bb26; }
 QLabel#configError { color: #d79921; }
 """

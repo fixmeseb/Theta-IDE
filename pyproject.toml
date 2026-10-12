@@ -62,6 +62,8 @@ gui = [
     "PyQt6-WebEngine>=6.7,<7",
     "psutil>=5.9",
     "pywinpty>=2.0; sys_platform == 'win32'",
+    "arxiv>=2.1",        # arXiv Papers panel
+    "truststore>=0.9",   # HTTPS through the OS certificate store (networks that inspect TLS)
 ]
 atari = [
     "ocatari",
