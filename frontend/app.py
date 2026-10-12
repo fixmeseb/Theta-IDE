@@ -52,7 +52,6 @@ from PyQt6.QtWidgets import (
 )
 
 from . import wheel_guard
-from .api import DEFAULT_URL, Backend
 from .model import (BASE_EXPERIMENT, FINAL_STATUSES, LIVE_STATUSES, RESULT_COLUMNS, SOURCE_FILTERS, STATUS_FILTERS,
                     Config, Store, available_metrics, disk_run, example_runs, latest, matches_filters, metric_points,
                     metric_points_from_api, new_run, result_row, run_source, sample)
@@ -61,13 +60,15 @@ from .theme import STYLE, ThemeManager, theme_color
 from .theme_builder import ThemeBuilder
 from .widgets import Chart, MetricCard, SortableItem, ToggleSlider, YamlHighlighter, label
 from .about import AboutDialog, AsciiTheta
-from .api import DEFAULT_URL, Backend
 from .app_icon import DESKTOP_FILE_NAME, ICON_PATH, app_icon, install_desktop_entry, set_windows_app_id
 from .components_panel import ComponentsPanel
 from .config_tree import ConfigTreeWidget
 from .config_viewer import ConfigViewer
 from .config_tab_manager import ConfigTabManager
 from .hub import HubClient, HubDialog
+from .job_manager import JobManager
+from src.app.services.config_service import LaunchError
+from .local_backend import LocalBackend
 from .model import (
     BASE_EXPERIMENT,
     FINAL_STATUSES,
@@ -86,7 +87,7 @@ from .plugins import PluginManager
 from .queue_panel import QueuePanel
 from .settings import SettingsManager
 from .sidetabs import SideTabs, svg_icon
-from .tensorboard import TensorBoardPanel
+from .tensorboard import TensorBoardPanel, TensorBoardServer
 from .terminal import TerminalPanel
 from .theme import STYLE, ThemeManager, theme_color
 from .theme_builder import ThemeBuilder
@@ -121,7 +122,7 @@ def normalize_menu_shortcut(shortcut_str: str) -> str:
 
 
 class Window(QMainWindow):
-    def __init__(self, data_dir, api_url=DEFAULT_URL):
+    def __init__(self, data_dir):
         super().__init__()
         self.setWindowTitle("ThetaIDE")
         self.resize(1480, 940)
@@ -169,16 +170,26 @@ class Window(QMainWindow):
         )
         saved, errors = self.store.load()
         self.runs = saved or example_runs()
-        # GET /api/runs entries by (group, experiment_id): every results/logs folder, however it was launched.
+        # catalog.list_runs() entries by (group, experiment_id): every results/logs folder, however it was launched.
         self.disk_entries = {}
-        self.backend_connected = False
+        self.backend_connected = False  # True once the training pipeline imports and composes in-process
         self.active = None
         self.selected = None
         self.pinned_baseline_run = None
         self.timer = QTimer(self)
         self.timer.setInterval(350)
         self.timer.timeout.connect(self.tick)
-        self.backend = Backend(api_url, self)
+        # Configs compose in-process and training runs as a QProcess: no server to start.
+        self.backend = LocalBackend(self)
+        self.jobs = JobManager(store_path=Path(data_dir) / "jobs" / "jobs.db", parent=self)
+        self.jobs.job_changed.connect(self.on_job_changed)
+        self.jobs.job_output.connect(self.on_job_output)
+        self.jobs.job_metrics.connect(self.on_job_metrics)
+        self.jobs.job_hardware.connect(self.on_job_hardware)
+        self.jobs.queue_changed.connect(self.on_queue_changed)
+        self.tensorboard_server = TensorBoardServer(parent=self)
+        self.tray = None  # TrayController, set up by main(): closing while training hides to the tray
+        self._quitting = False  # an explicit Quit (menu, tray, reload) closes for real
         self.schema = None
         self.schema_pending = False
         self.compose_serial = 0
@@ -187,14 +198,6 @@ class Window(QMainWindow):
         self.compose_timer.setInterval(250)
         self.compose_timer.timeout.connect(self.request_compose)
         self.compose_valid = False
-        self.poll_timer = QTimer(self)
-        self.poll_timer.setInterval(1000)
-        self.poll_timer.timeout.connect(self.poll_job)
-        self.poll_busy = False
-        self.queue_timer = QTimer(self)
-        self.queue_timer.setInterval(2000)
-        self.queue_timer.timeout.connect(self.poll_queue)
-        self.queue_busy = False
         self.issued_ids = set()
         self.queue_running = False
         self.active_config_path = None
@@ -218,14 +221,14 @@ class Window(QMainWindow):
         self.theme_changed()
         self.state_label = label("TRAINING   •   idle  ", "muted")
         self.statusBar().addPermanentWidget(self.state_label)
-        self.backend_label = label("BACKEND   ○   connecting…  ", "muted")
+        self.backend_label = label("PIPELINE   ○   loading…  ", "muted")
         self.statusBar().addPermanentWidget(self.backend_label)
         self.refresh_runs()
         self.update_config()
         if self.runs:
             self.select_run(self.runs[0])
-        self.log("ThetaIDE ready. Launch trains on this machine through the backend; "
-                 "Run → Start simulated demo needs no backend.")
+        self.log("ThetaIDE ready. Launch trains on this machine with run_pipeline.py; "
+                 "Run → Start simulated demo needs no training environment.")
         self.request_schema(apply_defaults=True)
         self.reconnect_live_run()
         for error in errors:
@@ -514,7 +517,7 @@ class Window(QMainWindow):
         self.tabs.addTab(self.plot_viewer, "Plot viewer", "plots", "Plots", tab_id="plots")
 
         # 6. TensorBoard Panel
-        self.tensorboard_panel = TensorBoardPanel(self.backend, self.log)
+        self.tensorboard_panel = TensorBoardPanel(self.tensorboard_server, self.log)
         self.tabs.addTab(self.tensorboard_panel, "TensorBoard", "tensorboard", "TensorBoard", tab_id="tensorboard")
 
         # 7. Job Queue Panel
@@ -1199,25 +1202,21 @@ class Window(QMainWindow):
             self.log(f"Failed to load sidebar layout: {exc}")
 
     def test_backend_connection(self):
+        """Settings → Training pipeline: check the pipeline composes in this Python environment."""
         if hasattr(self, "settings_backend_status"):
-            self.settings_backend_status.setText("Status: Testing connection…")
+            self.settings_backend_status.setText("Status: Checking the training pipeline…")
             self.settings_backend_status.setStyleSheet("")
-            self.backend.get("/api/health", self.backend_health_callback)
+            self.backend.config_schema(self.backend_health_callback)
 
     def backend_health_callback(self, data, error):
         if not hasattr(self, "settings_backend_status"):
             return
         if error:
-            self.settings_backend_status.setText(f"Status: Disconnected ({error})")
-            self.settings_backend_status.setStyleSheet("color: #fb4934;")
+            self.settings_backend_status.setText(f"Status: Unavailable ({error})")
+            self.settings_backend_status.setStyleSheet(f"color: {theme_color('number')};")
         else:
-            status_text = data.get("status", "ok") if isinstance(data, dict) else "ok"
-            self.settings_backend_status.setText(f"Status: Connected (Server status: {status_text})")
+            self.settings_backend_status.setText(f"Status: Ready · composes {data['base_experiment']} in-process")
             self.settings_backend_status.setStyleSheet(f"color: {theme_color('primary')};")
-
-    def open_swagger_docs(self):
-        docs_url = f"{self.backend.base_url.rstrip('/')}/docs"
-        QDesktopServices.openUrl(QUrl(docs_url))
 
     def run_quick_command(self, command):
         self.tabs.setCurrentWidget(self.console_panel)
@@ -1239,7 +1238,7 @@ class Window(QMainWindow):
             ("export_config", "Export draft YAML…", "Ctrl+Shift+S", self.export_config),
             ("save_config", "Save configuration", "Ctrl+S", self.save_current_config),
             ("close_tab", "Close tab", "Ctrl+W", self.close_active_tab),
-            ("quit", "Quit", "Ctrl+Q", self.close),
+            ("quit", "Quit", "Ctrl+Q", self.quit_app),
         ):
             action = QAction(title, self)
             action.setProperty("_default_sc", default_sc)
@@ -1415,8 +1414,7 @@ class Window(QMainWindow):
         if self.tabs.widget(index) is self.tensorboard_panel:
             self.tensorboard_panel.activate()
         if self.tabs.widget(index) is self.queue_panel:
-            self.poll_queue()
-            self.queue_timer.start()
+            self.on_queue_changed(self.jobs.queue_state())
         if hasattr(self, "terminal_panel") and self.tabs.widget(index) is self.terminal_panel:
             self.terminal_panel.terminal.focus_terminal()
             self.terminal_panel.terminal.fit_terminal()
@@ -1515,9 +1513,8 @@ class Window(QMainWindow):
         serial, config = self.compose_serial, self.config()
         exp_target = getattr(self, "current_experiment", None) or BASE_EXPERIMENT
         overrides = self.config_viewer.get_overrides() if hasattr(self, "config_viewer") else config.overrides()
-        payload = {"experiment": exp_target, "overrides": overrides}
-        self.backend.post("/api/config/compose", payload,
-                          lambda data, error: self.compose_finished(serial, config, data, error))
+        self.backend.compose(exp_target, overrides,
+                             lambda data, error: self.compose_finished(serial, config, data, error))
 
     def compose_finished(self, serial, config, data, error):
         if serial != self.compose_serial:
@@ -1525,18 +1522,18 @@ class Window(QMainWindow):
         self.compose_valid = bool(not error and isinstance(data, dict) and data.get("valid", False))
         self.update_launch_state()
         if error or not isinstance(data, dict):
-            self.set_backend_state(False, error or "Invalid backend response")
-            self.preview_status.setText("Backend offline • local recipe draft, not validated")
+            self.set_backend_state(False, error or "Invalid pipeline response")
+            self.preview_status.setText("Pipeline unavailable • local recipe draft, not validated")
             self.preview_errors.hide()
             self.builder_status.setObjectName("muted")
-            self.builder_status.setText("Backend offline: this config has not been validated.")
+            self.builder_status.setText("Training pipeline unavailable: this config has not been validated.")
             self.builder_status.setStyle(self.builder_status.style())
             self.preview.setPlainText(config.recipe_yaml())
             return
         self.set_backend_state(True)
         if self.schema is None and not self.schema_pending:
             self.request_schema(apply_defaults=False)
-        header = ["# Resolved by the backend exactly as the command line would:",
+        header = ["# Resolved exactly as the command line would:",
                   "#   " + " ".join(data.get("argv", []))]
         header += [f"# Notice: {notice}" for notice in data.get("notices", [])]
         sections = ["\n".join(header)]
@@ -1555,7 +1552,7 @@ class Window(QMainWindow):
             if rollouts and rollouts[0]["timesteps"] != config.total_timesteps:
                 r = rollouts[0]
                 detail = f" · trains {r['timesteps']:,} steps ({r['rollouts']} PPO rollouts × {r['size']})"
-            self.builder_status.setText("✓ Config validated by backend" + detail)
+            self.builder_status.setText("✓ Config validated by the training pipeline" + detail)
         else:
             messages = [f"[{e['stage']}] {e['message']}" for e in data["errors"]]
             self.preview_status.setText(f"Resolved config • ✗ {len(messages)} error(s)")
@@ -1572,23 +1569,23 @@ class Window(QMainWindow):
         elif was_connected != connected:
             self.update_disk_status()
         if connected:
-            self.backend_label.setText(f"BACKEND   ●   {self.backend.base_url}  ")
-            self.backend_label.setToolTip("Configs are composed and validated by the Theta-IDE backend API.")
+            self.backend_label.setText("PIPELINE   ●   local  ")
+            self.backend_label.setToolTip(f"Configs compose in-process and training runs with {sys.executable}.")
         else:
-            self.backend_label.setText("BACKEND   ○   offline  ")
-            self.backend_label.setToolTip(f"{self.backend.base_url}: {error}\nStart it from the repository root with:\n"
-                                          "uvicorn src.app.api.app:app --host 127.0.0.1 --port 8000")
+            self.backend_label.setText("PIPELINE   ○   unavailable  ")
+            self.backend_label.setToolTip(f"{error}\nRun ThetaIDE from the project venv: "
+                                          'pip install -e ".[gui]" then python -m frontend')
 
     def request_schema(self, apply_defaults):
         self.schema_pending = True
-        self.backend.get("/api/config/schema", lambda data, error: self.schema_loaded(data, error, apply_defaults))
+        self.backend.config_schema(lambda data, error: self.schema_loaded(data, error, apply_defaults))
 
     def schema_loaded(self, data, error, apply_defaults):
         self.schema_pending = False
         if error:
             self.set_backend_state(False, error)
-            self.log(f"Backend not reachable at {self.backend.base_url} ({error}). "
-                     "Start it with: uvicorn src.app.api.app:app --host 127.0.0.1 --port 8000")
+            self.log(f"Training pipeline unavailable ({error}). Run ThetaIDE from the project venv: "
+                     'pip install -e ".[gui]" then python -m frontend')
             return
         self.schema = data
         env = data["environment"]
@@ -1621,7 +1618,7 @@ class Window(QMainWindow):
                     widget.setChecked(bool(field["default"]))
                 else:
                     widget.setValue(field["default"])
-        self.log(f"Experiment builder loaded from backend: {env['name']} / {method['agent']} ({data['base_experiment']}).")
+        self.log(f"Experiment builder loaded: {env['name']} / {method['agent']} ({data['base_experiment']}).")
         self.update_config()
 
     def set_config(self, config):
@@ -1674,9 +1671,9 @@ class Window(QMainWindow):
         if not idle:
             tip = "A run is active. Stop it before launching another."
         elif not self.compose_valid:
-            tip = "Launch needs the backend running and a config it has validated."
+            tip = "Launch needs a config the training pipeline has validated."
         else:
-            tip = "Train the builder's config on this machine through the backend (F5)"
+            tip = "Train the builder's config on this machine (F5)"
         if self.start_button is not None:
             self.start_button.setToolTip(tip)
         run = self.active
@@ -1696,14 +1693,14 @@ class Window(QMainWindow):
         self.tabs.setCurrentWidget(self.monitor_panel)
         self.update_launch_state()
 
-    # ── Live training through the backend ────────────────────────────────────
+    # ── Live training (run_pipeline.py as a QProcess, reported through signals) ──
 
     def launch_training(self):
         if self.active:
             self.statusBar().showMessage("A run is already active. Stop it before launching another.", 4000)
             return
         if not self.compose_valid:
-            self.statusBar().showMessage("Start the backend and fix config errors before launching.", 5000)
+            self.statusBar().showMessage("Fix config errors before launching.", 5000)
             return
         if hasattr(self, "config_viewer") and self.config_viewer.is_dirty:
             self.config_viewer.save_to_disk()
@@ -1716,8 +1713,12 @@ class Window(QMainWindow):
         if self.start_button is not None:
             self.start_button.setEnabled(False)
         self.log(f"Launching {experiment_id}:\n  python run_pipeline.py {exp_target} {' '.join(overrides)}")
-        self.backend.post("/api/experiments/launch", {"experiment": exp_target, "overrides": overrides},
-                          lambda data, error: self.launch_finished(config, data, error))
+        try:
+            job = self.jobs.launch(exp_target, overrides)
+        except LaunchError as exc:
+            self.launch_finished(config, None, str(exc))
+            return
+        self.launch_finished(config, job, None)
 
     def launch_finished(self, config, job, error):
         if error:
@@ -1733,85 +1734,87 @@ class Window(QMainWindow):
             return
         self.activate(run)
         self.log(f"Job {job['job_id']} started. Metrics: results/logs/{job['group']}/{job['experiment_id']}/")
-        self.poll_timer.start()
-        self.poll_job()
+        self.on_job_changed(job)  # it may have started (or failed to start) before the run existed
+
+    def run_for_job(self, job_id):
+        return next((r for r in self.runs if not r["simulated"] and r["backend"].get("job_id") == job_id), None)
 
     def reconnect_live_run(self):
-        """Resume monitoring a run that was still training when the app last closed."""
-        run = next((r for r in self.runs if not r["simulated"] and r["status"] in LIVE_STATUSES), None)
-        if run:
-            self.log(f"Reconnecting to {run['backend']['experiment_id']} (job {run['backend']['job_id']})…")
-            self.activate(run)
-            self.poll_timer.start()
-        if any(r["status"] == "queued" for r in self.runs):
-            self.queue_timer.start()
+        """Runs left live or queued by the last session: training ended with that session (QProcess jobs
+        belong to the app), so mark them from the job record. Queued jobs are kept and wait for Start."""
+        changed = False
+        for run in self.runs:
+            if run["simulated"] or run["status"] not in (*LIVE_STATUSES, "queued"):
+                continue
+            job = self.jobs.job(run["backend"].get("job_id", ""))
+            status = job["status"] if job else "interrupted"
+            if status in ("pending", "running"):
+                status = "interrupted"
+            if run["status"] != status:
+                run["status"] = status
+                self.persist(run)
+                changed = True
+        if changed:
+            self.log("Runs that were training when ThetaIDE last closed are marked interrupted; "
+                     "their metrics on disk are kept.")
+            self.refresh_runs()
 
-    def poll_job(self):
-        run = self.active
-        if self.poll_busy or not run or run["simulated"]:
+    def on_job_output(self, job_id, lines):
+        run = self.run_for_job(job_id)
+        if run is None or run is not self.active:
             return
-        self.poll_busy = True
-        job_id = run["backend"]["job_id"]
-        log_since = run.get("log_since", 0)
-        byte_since = run.get("metrics_byte", 0)
-        self.backend.get(f"/api/experiments/{job_id}/telemetry?since_log={log_since}&since_byte={byte_since}",
-                         lambda data, error: self.telemetry_received(run, data, error))
-
-    def telemetry_received(self, run, data, error):
-        self.poll_busy = False
-        if run is not self.active:
-            return
-        if error:
-            if "404" in error:  # the backend restarted and no longer knows this job
-                self.log("The backend no longer tracks this job. Metrics on disk are kept.")
-                self.finish("interrupted")
-            else:
-                self.set_backend_state(False, error)
-            return
-        self.set_backend_state(True)
-        job = data.get("job", {})
-        for line in job.get("log", []):
+        for line in lines:
             self.log(f"│ {line}")
             if "Auto-Generating" in line:
                 run["phase"] = "plotting"
-        run["log_since"] = job.get("log_total", run.get("log_since", 0))
-        status = {"pending": "starting"}.get(job.get("status"), job.get("status"))
-        if run["status"] != status:
-            run["status"] = status
-            self.update_launch_state()
-            self.refresh_runs()
 
-        # Update metrics
-        agents = data.get("agents", {})
-        agent_names = run["backend"].get("agents", [])
-        if not agent_names and agents:
-            agent_names = list(agents.keys())
-            run["backend"]["agents"] = agent_names
-        if agent_names:
-            had_new = False
-            for ag_name in agent_names:
-                agent = agents.get(ag_name, {})
-                if agent.get("reset"):
-                    run["metrics"] = []
-                    run["metrics_byte"] = 0
-                new_rows = agent.get("rows", [])
-                if new_rows:
-                    run["metrics"].extend(metric_points(new_rows))
-                    run["metrics_byte"] = agent.get("next_byte", run.get("metrics_byte", 0))
-                    had_new = True
-            if had_new and self.selected is run:
-                self.render_run()
-
-        # Live hardware telemetry badge
-        hw = data.get("hardware", {})
-        if hw and hw.get("cpu_percent") is not None:
-            self.monitor_note.setText(f"System: CPU {hw['cpu_percent']:.1f}%  •  Process RAM {hw.get('memory_mb', 0):.0f} MB")
-
-        if job.get("status") in FINAL_STATUSES:
-            detail = f" (exit code {job.get('returncode')})" if job.get("returncode") not in (None, 0) else ""
-            self.finish(job.get("status", "completed"), detail)
-        elif len(run.get("metrics", [])) and run["status"] == "running":
+    def on_job_metrics(self, job_id, agent, rows, reset):
+        run = self.run_for_job(job_id)
+        if run is None:
+            return
+        if reset:
+            run["metrics"] = []
+        if rows:
+            run["metrics"].extend(metric_points(rows))
+        if self.selected is run:
+            self.render_run()
+        if rows and run["status"] == "running":
             self.persist(run)
+
+    def on_job_hardware(self, job_id, hardware):
+        run = self.run_for_job(job_id)
+        if run is not None and run is self.active and hardware.get("cpu_percent") is not None:
+            self.monitor_note.setText(f"System: CPU {hardware['cpu_percent']:.1f}%  •  "
+                                      f"Process RAM {hardware.get('memory_mb', 0):.0f} MB")
+
+    def on_job_changed(self, job):
+        run = self.run_for_job(job["job_id"])
+        if run is None:
+            return
+        status = {"pending": "starting"}.get(job.get("status"), job.get("status"))
+        if run["status"] == "queued" and status in ("starting", "running"):
+            if self.active is None:
+                self.log(f"Queue: {run['backend']['experiment_id']} started.")
+                run["status"] = status
+                self.persist(run)
+                self.activate(run)
+            return
+        if run is self.active:
+            if status in FINAL_STATUSES:
+                code = job.get("returncode")
+                detail = f" (exit code {code})" if code not in (None, 0) else ""
+                if job.get("error"):
+                    self.log(f"Job error: {job['error']}")
+                self.finish(status, detail)
+            elif run["status"] != status:
+                run["status"] = status
+                self.update_launch_state()
+                self.refresh_runs()
+        elif run["status"] != status and status in (*FINAL_STATUSES, "queued"):
+            run["status"] = status  # e.g. removed from the queue, or finished while another run was followed
+            self.persist(run)
+            self.refresh_runs()
+            self.render_run()
 
     # ── Job queue ────────────────────────────────────────────────────────────
 
@@ -1826,7 +1829,7 @@ class Window(QMainWindow):
 
     def add_to_queue(self):
         if not self.compose_valid:
-            self.statusBar().showMessage("Start the backend and fix config errors before queueing.", 5000)
+            self.statusBar().showMessage("Fix config errors before queueing.", 5000)
             return
         if hasattr(self, "config_viewer") and self.config_viewer.is_dirty:
             self.config_viewer.save_to_disk()
@@ -1839,9 +1842,12 @@ class Window(QMainWindow):
         if self.queue_button is not None:
             self.queue_button.setEnabled(False)
         self.log(f"Queuing {experiment_id}:\n  python run_pipeline.py {exp_target} {' '.join(overrides)}")
-        self.backend.post("/api/experiments/launch",
-                          {"experiment": exp_target, "overrides": overrides, "queue": True},
-                          lambda data, error: self.queued(config, data, error))
+        try:
+            job = self.jobs.launch(exp_target, overrides, queue=True)
+        except LaunchError as exc:
+            self.queued(config, None, str(exc))
+            return
+        self.queued(config, job, None)
 
     def queued(self, config, job, error):
         if error:
@@ -1862,73 +1868,30 @@ class Window(QMainWindow):
                 else "the queue is paused; press Start queue in the Queue tab to begin")
         self.log(f"Queued {job['experiment_id']} ({place}): {hint}.")
         self.statusBar().showMessage(f"Added {job['experiment_id']} to the queue ({place}); {hint}.", 8000)
-        self.queue_timer.start()
-        self.poll_queue()
+        if self.queue_button is not None:
+            self.queue_button.setEnabled(self.compose_valid)
+        self.on_queue_changed(self.jobs.queue_state())
 
-    def poll_queue(self):
-        if self.queue_busy:
-            return
-        self.queue_busy = True
-        self.backend.get("/api/queue", self.queue_received)
-
-    def queue_received(self, data, error):
-        self.queue_busy = False
-        if error:
-            self.queue_panel.set_offline(error)
-            return
+    def on_queue_changed(self, data):
         if self.queue_running != data["running"]:
             self.queue_running = data["running"]
             self.render_run()
         self.queue_panel.set_data(data)
-        where = {job["job_id"]: ("active", job) for job in data.get("active", []) if isinstance(job, dict) and "job_id" in job}
-        where.update({job["job_id"]: ("queued", job) for job in data.get("queued", []) if isinstance(job, dict) and "job_id" in job})
-        where.update({job["job_id"]: ("finished", job) for job in data.get("finished", []) if isinstance(job, dict) and "job_id" in job})
+        positions = {job["job_id"]: job["position"] for job in data.get("queued", [])}
         changed = False
         for run in [r for r in self.runs if r["status"] == "queued"]:
-            kind, job = where.get(run["backend"]["job_id"], (None, None))
-            if kind == "queued":
-                changed |= run.get("queue_position") != job["position"]
-                run["queue_position"] = job["position"]
-            elif kind == "active" and self.active is None:
-                run["status"] = "starting"
-                self.log(f"Queue: {run['backend']['experiment_id']} started.")
-                self.persist(run)
-                self.activate(run)
-                self.poll_timer.start()
-                self.poll_job()
-            elif kind == "finished":  # removed from the queue, or finished while another run was followed
-                run["status"] = job["status"]
-                self.persist(run)
+            position = positions.get(run["backend"]["job_id"])
+            if position is not None and run.get("queue_position") != position:
+                run["queue_position"] = position
                 changed = True
-            elif kind is None:  # not in the listing (it keeps only recent finished jobs): ask about this job
-                job_id = run["backend"]["job_id"]
-                self.backend.get(f"/api/experiments/{job_id}/status",
-                                 lambda status, err, run=run: self.queued_job_status(run, status, err))
         if changed:
             self.refresh_runs()
             self.render_run()
-        # Keep watching while jobs wait or the queue runs, so its self-pause after draining is seen too
-        waiting = any(r["status"] == "queued" for r in self.runs)
-        if not waiting and not self.queue_running and self.tabs.currentWidget() is not self.queue_panel:
-            self.queue_timer.stop()
-
-    def queued_job_status(self, run, status, error):
-        if run["status"] != "queued":
-            return
-        if error and "404" in error:
-            run["status"] = "interrupted"  # the backend restarted and lost its queue
-            self.log(f"The backend no longer has queued job {run['backend']['experiment_id']} (it was restarted).")
-        elif not error and status["status"] in FINAL_STATUSES:
-            run["status"] = status["status"]
-        else:
-            return
-        self.persist(run)
-        self.refresh_runs()
-        self.render_run()
 
     def set_queue_running(self, running):
         action = "start" if running else "pause"
-        self.backend.post(f"/api/queue/{action}", {}, lambda data, error: self.queue_toggled(action, data, error))
+        data = self.jobs.start_queue() if running else self.jobs.pause_queue()
+        self.queue_toggled(action, data, None)
 
     def queue_toggled(self, action, data, error):
         if error:
@@ -1939,26 +1902,28 @@ class Window(QMainWindow):
         else:
             self.log("Queue started: jobs will train one after another." if data["running"] else
                      "Queue paused: no new job will start; one already training keeps running.")
-        self.queue_timer.start()
-        self.poll_queue()
 
     def move_queued(self, job_id, position):
-        self.backend.post(f"/api/queue/{job_id}/move", {"position": position},
-                          lambda data, error: self.log(f"Move failed: {error}") if error else self.poll_queue())
+        try:
+            self.jobs.move(job_id, position)
+        except LaunchError as exc:
+            self.log(f"Move failed: {exc}")
 
     def remove_queued(self, job_id):
-        self.backend.post(f"/api/experiments/{job_id}/cancel", {},
-                          lambda data, error: self.log(f"Remove failed: {error}") if error else self.poll_queue())
+        try:
+            self.jobs.cancel(job_id)
+        except KeyError:
+            self.log("Remove failed: that job no longer exists.")
 
     def open_job(self, job_id):
         run = next((r for r in self.runs if not r["simulated"] and r["backend"].get("job_id") == job_id), None)
         if run is None:
-            self.statusBar().showMessage("That job was queued from another client; it has no record here.", 5000)
+            self.statusBar().showMessage("That job has no run record in this workspace.", 5000)
             return
         self.select_run(run)
         self.tabs.setCurrentWidget(self.monitor_panel)
 
-    # ── Simulated demo (no backend needed) ───────────────────────────────────
+    # ── Simulated demo (no training environment needed) ──────────────────────
 
     def start_demo(self):
         if self.active:
@@ -1998,13 +1963,13 @@ class Window(QMainWindow):
         if self.stop_button is not None:
             self.stop_button.setEnabled(False)
         self.log(f"Stopping {run['backend']['experiment_id']}: terminating the pipeline and its training processes…")
-        self.backend.post(f"/api/experiments/{run['backend']['job_id']}/cancel", {},
-                          lambda data, error: self.log(f"Stop failed: {error}") if error else None)
-        # The next status poll reports "cancelled" and finishes the run.
+        try:
+            self.jobs.cancel(run["backend"]["job_id"])  # job_changed reports "cancelled" and finishes the run
+        except KeyError:
+            self.finish("stopped")
 
     def finish(self, status, detail=""):
         self.timer.stop()
-        self.poll_timer.stop()
         run = self.active
         run["status"] = status
         self.persist(run)
@@ -2018,8 +1983,6 @@ class Window(QMainWindow):
         if not run["simulated"] and self.backend_connected:
             self.request_disk_runs()
         self.render_run()
-        if any(r["status"] == "queued" for r in self.runs):
-            self.poll_queue()  # follow the next queued job as soon as it starts
 
     def select_run(self, run):
         self.selected = run
@@ -2108,8 +2071,8 @@ class Window(QMainWindow):
             return
         backend = run["backend"]
         agent = (backend.get("agents") or ["ppo"])[0]
-        path = f"/api/runs/{backend['group']}/{backend['experiment_id']}/{agent}/metrics"
-        self.backend.get(path, lambda data, error: self.backfill_received(run, data, error))
+        self.backend.run_metrics(backend["group"], backend["experiment_id"], agent,
+                                 lambda data, error: self.backfill_received(run, data, error))
 
     def backfill_received(self, run, data, error):
         run["metrics_backfilled"] = True  # try once; the results folder may have been deleted
@@ -2317,8 +2280,8 @@ class Window(QMainWindow):
             self.btn_next_run.setEnabled(idx >= 0 and idx < self.run_combo.count() - 1)
 
     def request_disk_runs(self):
-        """Ask the backend for every results/logs folder (GET /api/runs)."""
-        self.backend.get("/api/runs", self.disk_runs_received)
+        """List every results/logs folder (catalog.list_runs on the background thread)."""
+        self.backend.list_runs(self.disk_runs_received)
 
     def disk_runs_received(self, data, error):
         if error:
@@ -2352,7 +2315,7 @@ class Window(QMainWindow):
             self.disk_status.setText(f"●  {len(self.disk_entries)} run folders in results/logs · "
                                      f"{found} started outside the app")
         else:
-            self.disk_status.setText("○  Backend offline: runs started from the command line appear once it connects.")
+            self.disk_status.setText("○  Training pipeline unavailable: runs in results/logs can't be listed yet.")
 
     def load_disk_metrics(self, run):
         """Fetch the metrics of a run found in results/logs (the app has none recorded for it)."""
@@ -2362,8 +2325,8 @@ class Window(QMainWindow):
         if not agents:
             return
         run["metrics_requested"] = True
-        path = f"/api/runs/{run['backend']['group']}/{run['backend']['experiment_id']}/{agents[0]}/metrics"
-        self.backend.get(path, lambda data, error: self.disk_metrics_received(run, data, error))
+        self.backend.run_metrics(run["backend"]["group"], run["backend"]["experiment_id"], agents[0],
+                                 lambda data, error: self.disk_metrics_received(run, data, error))
 
     def disk_metrics_received(self, run, data, error):
         if error:
@@ -2509,11 +2472,38 @@ class Window(QMainWindow):
         elif command:
             self.log(f"Unknown command '{command}'. Type help or switch to the Terminal tab.")
 
+    def quit_app(self):
+        """Quit ThetaIDE (File → Quit, the tray's Quit): stops training after confirming."""
+        self._quitting = True
+        if not self.close():
+            self._quitting = False  # the user chose to keep training
+            return
+        if self.tray is not None:
+            self.tray.remove()
+        QApplication.quit()
+
     def closeEvent(self, event):
+        if not self._quitting and self.tray is not None and self.tray.keeps_running():
+            # Training runs inside this app, so keep the app alive in the tray instead of stopping it
+            event.ignore()
+            self.tray.hide_to_tray()
+            return
+        if self.jobs.is_busy():
+            # Training runs as a child of this window (QProcess), so closing ends it.
+            running = ", ".join(job["experiment_id"] for job in self.jobs.active_jobs())
+            answer = QMessageBox.question(
+                self, "Training is running",
+                f"Closing ThetaIDE stops {running}. Metrics written so far stay in results/logs." + "\n\nClose anyway?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
+            if answer != QMessageBox.StandardButton.Yes:
+                event.ignore()
+                return
         if self.active and self.active["simulated"]:
             self.stop_run()
         elif self.active:
-            self.persist(self.active)  # training keeps running in the backend; reopening reconnects
+            self.persist(self.active)
+        self.jobs.shutdown()
+        self.tensorboard_server.stop()
         if hasattr(self, "reloader") and self.reloader is not None:
             self.reloader.stop()
         if hasattr(self, "terminal_panel"):
@@ -2525,6 +2515,10 @@ class Window(QMainWindow):
             self._zoom_persist_timer.stop()
             self._persist_zoom()
         event.accept()
+        if self.tray is not None:
+            # With a tray the app doesn't quit when its last window closes, so a real close ends it here
+            self.tray.remove()
+            QApplication.quit()
 
     def reload_frontend(self):
         """Reload the frontend process cleanly."""
@@ -2535,8 +2529,6 @@ class Window(QMainWindow):
 def main():
     parser = argparse.ArgumentParser(description="ThetaIDE PyQt frontend proof of concept")
     parser.add_argument("--data-dir", type=Path, default=Path(__file__).resolve().parent.parent / ".thetaide" / "runs")
-    parser.add_argument("--api-url", default=os.environ.get("THETAIDE_API_URL", DEFAULT_URL),
-                        help="Theta-IDE backend API (default: %(default)s)")
     parser.add_argument("--install-desktop-entry", action="store_true",
                         help="Linux: add ThetaIDE (with its icon) to the application menu and exit")
     args = parser.parse_args()
@@ -2576,11 +2568,19 @@ def main():
         app.setWindowIcon(app_icon())  # every window's title bar, the taskbar and (macOS) the Dock
 
     try:
-        window = Window(args.data_dir, args.api_url)
+        window = Window(args.data_dir)
     except OSError as exc:
         QMessageBox.critical(None, "Workspace unavailable", f"Could not open local run storage:\n{exc}")
         return 1
     window.show()
+
+    from .tray import TrayController
+
+    window.tray = TrayController(window)
+    if window.tray.available():
+        # The app outlives its window while training in the tray; quit_app() ends it.
+        app.setQuitOnLastWindowClosed(False)
+    app.aboutToQuit.connect(window.jobs.shutdown)  # any exit path (Ctrl+C included) stops training cleanly
 
     from .terminal_reloader import TerminalReloader
 

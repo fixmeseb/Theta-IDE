@@ -65,13 +65,6 @@ ascii_distance = 4.8
 # When disabled (false), only explicit overrides and configured methods are shown.
 show_resolved_defaults = false
 
-[backend]
-# FastAPI backend that manages training runs and pipelines.
-url = "http://127.0.0.1:8000"
-
-# Seconds before a connection-test attempt times out.
-timeout = 5
-
 [sidebar]
 # Canonical panel IDs, in left-to-right display order.
 order = [
@@ -431,10 +424,6 @@ class SettingsManager(QObject):
     @show_resolved_defaults.setter
     def show_resolved_defaults(self, val: bool) -> None:
         self.set("appearance", "show_resolved_defaults", bool(val))
-
-    @property
-    def backend_url(self) -> str:
-        return self.get("backend", "url", default="http://127.0.0.1:8000")
 
     @property
     def sidebar_order(self) -> list[str]:

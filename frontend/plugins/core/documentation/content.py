@@ -33,7 +33,7 @@ ARTICLES: List[DocArticle] = [
 <h3>Framework Architecture</h3>
 <ul>
   <li><b>Hydra Configuration Layer (<code>in/config/</code>):</b> Declarative, three-tier hierarchical configuration defining environments, agents, models, cluster resources, and experiment recipes.</li>
-  <li><b>FastAPI Backend Daemon (<code>src/app/api/</code>):</b> Decoupled API service managing local training subprocesses, Slurm cluster submissions, and job queue states.</li>
+  <li><b>In-process pipeline services (<code>src/app/services/</code>) &amp; job manager (<code>frontend/job_manager.py</code>):</b> The app composes and validates configs with the pipeline's own code and runs <code>run_pipeline.py</code> as a child process, streaming its output and metrics through Qt signals. There is no server to start.</li>
   <li><b>PyTorch Lightning Runtime (<code>src/app/train.py</code>):</b> Standardized training driver providing automated checkpointing, device acceleration (CUDA/MPS/CPU), and structured logging.</li>
   <li><b>Modular Model &amp; Method Architecture:</b> Pluggable registries for RL algorithms and model architectures. Theta-IDE ships with the <b>PPO</b>, <b>CQL</b> and <b>IQL</b> algorithms and with MLP, CNN, Dueling ResNet, Transformer, Cross-Attention and CEW models, plus the composite BlendRL model. Other algorithms and architectures can be added as plugins (see <a href="authoring_plugins">Authoring Guide</a>).</li>
   <li><b>Extensible Component Hub &amp; Plugin System:</b> Core plugins shipping natively with zero overhead when toggled off, plus community plugins (UI tabs, RL methods, models, environments, and experiment recipes) installable directly from the Community Hub.</li>
@@ -52,53 +52,29 @@ ARTICLES: List[DocArticle] = [
         id="launching",
         title="Installing & Launching",
         category="Getting Started",
-        summary="Set up the backend and frontend environments, then start Theta-IDE on macOS, Linux, or Windows.",
-        keywords=["install", "setup", "launch", "start", "run", "venv", "uvicorn", "backend", "windows", "powershell", "api url"],
+        summary="Set up the project environment, then start Theta-IDE on macOS, Linux, or Windows.",
+        keywords=["install", "setup", "launch", "start", "run", "venv", "pipeline", "windows", "powershell", "gui"],
         html_content=r"""
 <h2>Installing & Launching</h2>
-<p>Theta-IDE has two parts, each with its own virtual environment. Run every command from the <b>repository root</b>.</p>
-
-<table border="1" cellpadding="8" cellspacing="0" style="border-collapse: collapse; width: 100%; border-color: rgba(255,255,255,0.15);">
-  <tr style="background-color: rgba(255,255,255,0.05); font-weight: bold;">
-    <td>Part</td>
-    <td>What it does</td>
-    <td>Environment</td>
-  </tr>
-  <tr><td><b>Backend API</b></td><td>Validates configs, runs training, serves TensorBoard</td><td><code>venv/</code></td></tr>
-  <tr><td><b>Frontend</b></td><td>This desktop app</td><td><code>frontend/.venv/</code> (PyQt6 only)</td></tr>
-</table>
+<p>Theta-IDE runs from the same virtual environment as the training pipeline. Run every command from the <b>repository root</b>.</p>
 
 <h3>1. One-Time Setup</h3>
 <p><b>macOS / Linux:</b></p>
 <pre><code>python3 -m venv venv
 source venv/bin/activate
-pip install -e ".[api]"
-deactivate
-
-python3 -m venv frontend/.venv
-source frontend/.venv/bin/activate
-pip install -r frontend/requirements.txt</code></pre>
+pip install -e ".[gui]"</code></pre>
 
 <p><b>Windows (PowerShell):</b></p>
 <pre><code>Set-ExecutionPolicy -Scope CurrentUser RemoteSigned   # once, so venvs can activate
 
 py -m venv venv
 .\venv\Scripts\Activate.ps1
-pip install -e ".[api]"
-deactivate
+pip install -e ".[gui]"</code></pre>
 
-py -m venv frontend\.venv
-.\frontend\.venv\Scripts\Activate.ps1
-pip install -r frontend\requirements.txt</code></pre>
-
-<h3>2. Start the Backend (Terminal 1)</h3>
+<h3>2. Start Theta-IDE</h3>
 <pre><code>source venv/bin/activate          # Windows: .\venv\Scripts\Activate.ps1
-uvicorn src.app.api.app:app --host 127.0.0.1 --port 8000</code></pre>
-<p>Leave it running. Its interactive API docs are at <code>http://127.0.0.1:8000/docs</code>.</p>
-
-<h3>3. Start the Frontend (Terminal 2)</h3>
-<pre><code>source frontend/.venv/bin/activate   # Windows: .\frontend\.venv\Scripts\Activate.ps1
 python -m frontend</code></pre>
+<p>That is the only command. The app composes configs in-process and runs training itself; there is no server to start first. The status bar shows <code>PIPELINE ● local</code> once the pipeline has loaded.</p>
 
 <h3>Launch Options</h3>
 <table border="1" cellpadding="8" cellspacing="0" style="border-collapse: collapse; width: 100%; border-color: rgba(255,255,255,0.15);">
@@ -107,8 +83,7 @@ python -m frontend</code></pre>
     <td>Default</td>
     <td>Purpose</td>
   </tr>
-  <tr><td><code>--api-url &lt;url&gt;</code></td><td><code>http://127.0.0.1:8000</code></td><td>Backend address. The <code>THETAIDE_API_URL</code> environment variable sets it too.</td></tr>
-  <tr><td><code>--data-dir &lt;path&gt;</code></td><td><code>.thetaide/runs/</code></td><td>Where run records are stored.</td></tr>
+  <tr><td><code>--data-dir &lt;path&gt;</code></td><td><code>.thetaide/runs/</code></td><td>Where run records and the job database are stored.</td></tr>
   <tr><td><code>--install-desktop-entry</code></td><td></td><td><b>Linux only:</b> add Theta-IDE to the application menu, then exit.</td></tr>
 </table>
 
@@ -119,14 +94,11 @@ python -m frontend</code></pre>
   <li><b>Windows:</b> works once per launch. Windows can't replace a running program in place, so the reload starts a fresh copy and the terminal prompt returns; the new window no longer listens to the terminal. It also needs a real console (PowerShell, Windows Terminal, or Command Prompt), not Git Bash.</li>
 </ul>
 
-<h3>Without the Backend</h3>
-<p>The app still opens. You can browse and edit configs (the preview shows an unvalidated local draft) and run <i>Run &rarr; Start simulated demo</i>. Launching training, the job queue, and the TensorBoard tab need the backend.</p>
+<h3>If the Pipeline Is Unavailable</h3>
+<p>The status bar shows <code>PIPELINE ○ unavailable</code> when the app isn't running from the project venv. You can still browse and edit configs (the preview shows an unvalidated local draft) and run <i>Run &rarr; Start simulated demo</i>. Reinstall with <code>pip install -e ".[gui]"</code> and start the app again with <code>python -m frontend</code>.</p>
 
 <h3>Stopping</h3>
-<ul>
-  <li><b>Frontend:</b> close the window. Training that is already running keeps going, and reopening the app reconnects to it.</li>
-  <li><b>Backend:</b> press <code>Ctrl+C</code> in its terminal. This also stops TensorBoard.</li>
-</ul>
+<p>Closing the window while a run is training (or the queue is running) hides ThetaIDE to the <b>system tray</b> and training keeps going. The tray icon shows what is training, notifies you when runs finish or fail, and reopens the window when clicked; its menu also has <i>Stop all training</i>. To exit, use <i>File &rarr; Quit</i> (<code>Ctrl+Q</code>) or <i>Quit ThetaIDE</i> in the tray menu: if a run is still training ThetaIDE asks first, then stops it. Metrics written so far stay in <code>results/logs/</code>. Queued jobs are kept and wait for <i>Start queue</i> next time. TensorBoard stops with the app.</p>
 """,
     ),
     DocArticle(
@@ -1149,7 +1121,7 @@ workflow: sepsis_reciprocal</code></pre>
   <tr><td><b>Core Plugins</b></td><td>Turn built-in plugins (such as this Documentation plugin) on or off</td></tr>
   <tr><td><b>Community Plugins</b></td><td>Install, configure, or remove plugins from the Community Hub</td></tr>
   <tr><td><b>Hotkeys</b></td><td>Action key, terminal precedence, the <code>Action + digit</code> pane mapping, and menu shortcuts</td></tr>
-  <tr><td><b>Backend API</b></td><td>Backend URL and connection status</td></tr>
+  <tr><td><b>Training Pipeline</b></td><td>The Python environment that composes configs and runs training, with a check button</td></tr>
   <tr><td><b>Workspace &amp; Storage</b></td><td>Data and database locations, open the settings file, and reset the UI layout</td></tr>
 </table>
 
@@ -1247,17 +1219,17 @@ workflow: sepsis_reciprocal</code></pre>
         id="troubleshooting",
         title="Troubleshooting & FAQ",
         category="Getting Started",
-        summary="Answers to common setup, backend, OpenGL, and cluster connection questions.",
-        keywords=["troubleshooting", "faq", "errors", "backend", "connection", "opengl", "debug"],
+        summary="Answers to common setup, pipeline, OpenGL, and cluster connection questions.",
+        keywords=["troubleshooting", "faq", "errors", "pipeline", "environment", "opengl", "debug"],
         html_content="""
 <h2>Troubleshooting & FAQ</h2>
 
-<h3>1. Backend status says "connecting…" or "offline"</h3>
-<p>Theta-IDE communicates with a background FastAPI daemon (default port: <code>8000</code>). If the backend is not responding:</p>
+<h3>1. Status bar says "PIPELINE ○ unavailable"</h3>
+<p>Theta-IDE imports the training pipeline directly, so it must run from the project venv:</p>
 <ul>
-  <li>Check <i>Settings &rarr; Backend API</i> to verify the daemon URL (typically <code>http://127.0.0.1:8000</code>).</li>
-  <li>Ensure no other application is holding port 8000.</li>
-  <li>Simulated demo runs (<i>Run &rarr; Start simulated demo</i>) do not require a live backend.</li>
+  <li>Activate <code>venv/</code> and run <code>pip install -e ".[gui]"</code>, then start the app with <code>python -m frontend</code> from the repository root.</li>
+  <li><i>Settings &rarr; Training Pipeline</i> shows which Python the app is using and has a <b>Check pipeline</b> button.</li>
+  <li>Simulated demo runs (<i>Run &rarr; Start simulated demo</i>) work without the training environment.</li>
 </ul>
 
 <h3>2. OpenGL / Qt Display Errors on Headless or Cluster Nodes</h3>

@@ -37,9 +37,9 @@ class TestBuildReloadCommand(unittest.TestCase):
     def test_direct_script_preservation(self):
         cmd = build_reload_command(
             executable="/path/to/python",
-            argv=["frontend/app.py", "--api-url", "http://localhost:8000"],
+            argv=["frontend/app.py", "--data-dir", "/tmp/theta-runs"],
         )
-        self.assertEqual(cmd, ["/path/to/python", "frontend/app.py", "--api-url", "http://localhost:8000"])
+        self.assertEqual(cmd, ["/path/to/python", "frontend/app.py", "--data-dir", "/tmp/theta-runs"])
 
     def test_empty_argv_fallback(self):
         cmd = build_reload_command(

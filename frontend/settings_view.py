@@ -1,6 +1,7 @@
 """Organized, tabbed Settings view with side-tab navigation and ASCII Theta overlay."""
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Dict, List, Optional
 
@@ -29,6 +30,8 @@ from PyQt6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+
+from src.app.services import PROJECT_ROOT
 
 from .about import AsciiTheta, AnimationSettingsDialog
 from .hotkeys import parse_action_key
@@ -104,8 +107,8 @@ TAB_SPECS = [
     },
     {
         "id": "backend",
-        "title": "Backend API",
-        "subtitle": "FastAPI daemon connection and server status",
+        "title": "Training Pipeline",
+        "subtitle": "The Python environment that composes configs and runs training",
         "icon": "backend",
     },
     {
@@ -704,7 +707,7 @@ class SettingsView(QWidget):
         stack.addWidget(p_hotkeys)
         self.page_widgets["hotkeys"] = p_hotkeys
 
-        # Page 4: Backend API
+        # Page 4: Training pipeline
         p_backend = self._build_backend_page()
         stack.addWidget(p_backend)
         self.page_widgets["backend"] = p_backend
@@ -1879,51 +1882,42 @@ class SettingsView(QWidget):
         bc_layout.setContentsMargins(18, 16, 18, 16)
         bc_layout.setSpacing(12)
 
-        bc_layout.addWidget(label("FastAPI Backend Service", "cardTitle"))
-        bc_sub = label("The backend daemon manages training runs, sweeps, and job orchestration.", "muted")
+        bc_layout.addWidget(label("Training pipeline", "cardTitle"))
+        bc_sub = label("ThetaIDE composes configs in-process and runs run_pipeline.py with this Python, "
+                       "streaming its output and metrics. There is no server to start.", "muted")
+        bc_sub.setWordWrap(True)
         bc_layout.addWidget(bc_sub)
 
         # Status row
         status_box = QHBoxLayout()
         status_box.setSpacing(10)
-        self.window.settings_backend_status = label("Status: Checking connection…", "muted")
+        self.window.settings_backend_status = label("Status: Checking the training pipeline…", "muted")
         self.window.settings_backend_status.setStyleSheet("font-size: 12px; font-weight: 600;")
         status_box.addWidget(self.window.settings_backend_status, 1)
 
-        btn_test = QPushButton("Test connection")
-        btn_test.setToolTip("Ping the FastAPI daemon health check endpoint")
+        btn_test = QPushButton("Check pipeline")
+        btn_test.setToolTip("Compose the base experiment to confirm the training environment is installed")
         btn_test.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_test.clicked.connect(self.window.test_backend_connection)
         status_box.addWidget(btn_test)
-
-        btn_docs = QPushButton("Swagger docs")
-        btn_docs.setToolTip("Open interactive API documentation in your web browser")
-        btn_docs.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_docs.clicked.connect(self.window.open_swagger_docs)
-        status_box.addWidget(btn_docs)
-
         bc_layout.addLayout(status_box)
 
-        # URL row
-        url_row = QHBoxLayout()
-        url_row.setSpacing(10)
-        url_lbl = label("API URL:", "muted")
-        url_lbl.setStyleSheet("font-weight: 500;")
-        url_row.addWidget(url_lbl)
+        mono = "font-family: Menlo, Monaco, 'Consolas', monospace; font-size: 12px;"
+        for caption, value in (("Python:", sys.executable), ("Project:", str(PROJECT_ROOT))):
+            row = QHBoxLayout()
+            row.setSpacing(10)
+            cap = label(caption, "muted")
+            cap.setStyleSheet("font-weight: 500;")
+            cap.setFixedWidth(60)
+            row.addWidget(cap)
+            field = QLineEdit(value)
+            field.setReadOnly(True)
+            field.setStyleSheet(mono)
+            row.addWidget(field, 1)
+            bc_layout.addLayout(row)
 
-        self.window.settings_backend_url = QLineEdit(self.window.backend.base_url)
-        self.window.settings_backend_url.setReadOnly(True)
-        self.window.settings_backend_url.setStyleSheet("font-family: Menlo, Monaco, 'Consolas', monospace; font-size: 12px;")
-        self.window.settings_backend_url.setMaximumWidth(320)
-        url_row.addWidget(self.window.settings_backend_url, 1)
-        url_row.addStretch()
-        bc_layout.addLayout(url_row)
-
-        # CLI tip
-        tip_lbl = label(
-            "Daemon command:  uvicorn src.app.api.app:app --host 127.0.0.1 --port 8000",
-            "muted",
-        )
+        tip_lbl = label('Start ThetaIDE from the project venv:  pip install -e ".[gui]"  then  python -m frontend',
+                        "muted")
         tip_lbl.setWordWrap(True)
         tip_lbl.setStyleSheet("font-family: Menlo, Monaco, 'Consolas', monospace; font-size: 11px; font-style: italic;")
         bc_layout.addWidget(tip_lbl)

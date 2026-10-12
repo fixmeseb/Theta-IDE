@@ -54,12 +54,14 @@ dev = [
     "ruff>=0.5",
     "mypy>=1.0",
     "pre-commit>=3.0",
-    "fastapi>=0.100",
-    "httpx>=0.24",
 ]
-api = [
-    "fastapi>=0.100",
-    "uvicorn[standard]>=0.20",
+# The desktop app. It composes configs in-process and runs training as a QProcess,
+# so it installs into the same venv as the pipeline: pip install -e ".[gui]"
+gui = [
+    "PyQt6>=6.7,<7",
+    "PyQt6-WebEngine>=6.7,<7",
+    "psutil>=5.9",
+    "pywinpty>=2.0; sys_platform == 'win32'",
 ]
 atari = [
     "ocatari",
@@ -71,7 +73,7 @@ video = [
     "opencv-python",
 ]
 all = [
-    "nesyrl[dev,api,atari,video]",
+    "nesyrl[dev,gui,atari,video]",
 ]
 
 # ── Package discovery ────────────────────────────────────────

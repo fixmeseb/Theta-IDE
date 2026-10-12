@@ -43,7 +43,7 @@ pytest tests/ -v
 │   │   ├── pipeline/               # Orchestrator, tasks, slurm runner, sweeps, validation
 │   │   ├── core/                   # Base interfaces, paradigm loaders, vectorizers, factories
 │   │   ├── data/                   # Offline replay data modules
-│   │   ├── api/                    # FastAPI backend service
+│   │   ├── services/               # Config composition, run catalog, metrics & job store (used by the GUI)
 │   │   ├── dataset_utils.py        # Transition serialization & replay readers
 │   │   └── train.py                # PyTorch Lightning driver script
 │   └── usr/                        # User domain & research components

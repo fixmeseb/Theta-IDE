@@ -144,8 +144,8 @@ class TestRunNavigator(unittest.TestCase):
         text = self.window.storage_label.text()
         self.assertIn("jobs.db", text)
 
-    def test_telemetry_streaming_updates_monitor(self):
-        """Verify telemetry_received streams metrics from ppo_blendrl_human_neural and updates UI."""
+    def test_job_signals_update_monitor(self):
+        """Job signals (output, metrics, hardware) from ppo_blendrl_human_neural update the monitor."""
         run = new_run(Config(name="tests_cartpole", seed=42), simulated=False)
         run["backend"] = {
             "job_id": "test-job-123",
@@ -158,29 +158,14 @@ class TestRunNavigator(unittest.TestCase):
         self.window.active = run
         self.window.select_run(run)
 
-        telemetry_payload = {
-            "job_id": "test-job-123",
-            "job": {
-                "job_id": "test-job-123",
-                "status": "running",
-                "log": ["Training in progress..."],
-                "log_total": 1,
-            },
-            "hardware": {"cpu_percent": 15.2, "memory_mb": 210.5},
-            "agents": {
-                "ppo_blendrl_human_neural": {
-                    "source": "results/logs/tests/cartpole_test/ppo_blendrl_human_neural/version_0/metrics.csv",
-                    "rows": [
-                        {"eval/reward": 78.5, "eval/reward_std": 12.0, "step": 0.0, "transitions": 0.0},
-                        {"losses/total_loss": 32.1, "losses/entropy": 0.61, "step": 0.0, "transitions": 512.0},
-                    ],
-                    "next_byte": 120,
-                    "reset": False,
-                }
-            },
-        }
-
-        self.window.telemetry_received(run, telemetry_payload, None)
+        rows = [
+            {"eval/reward": 78.5, "eval/reward_std": 12.0, "step": 0.0, "transitions": 0.0},
+            {"losses/total_loss": 32.1, "losses/entropy": 0.61, "step": 0.0, "transitions": 512.0},
+        ]
+        self.window.on_job_output("test-job-123", ["Training in progress..."])
+        self.window.on_job_metrics("test-job-123", "ppo_blendrl_human_neural", rows, False)
+        self.window.on_job_hardware("test-job-123", {"cpu_percent": 15.2, "memory_mb": 210.5})
+        self.assertIn("Training in progress...", self.window.console.toPlainText())
         self.assertEqual(len(run["metrics"]), 2)
         self.assertEqual(run["metrics"][0]["reward"], 78.5)
         self.assertEqual(self.window.reward_card.value.text(), "78.5")
