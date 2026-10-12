@@ -187,6 +187,7 @@ DEFAULT_MENU_SHORTCUTS = [
     ("zoom_in", "Zoom in (increase text size)", "Ctrl++"),
     ("zoom_out", "Zoom out (decrease text size)", "Ctrl+-"),
     ("reset_zoom", "Reset zoom (default text size)", "Ctrl+0"),
+    ("open_launcher", "Open launcher (panels, plugins, settings, commands)", "Ctrl+Space"),
     ("quit", "Quit", "Ctrl+Q"),
 ]
 

@@ -162,6 +162,7 @@ activate_venv = true
 zoom_in = "Ctrl++"
 zoom_out = "Ctrl+-"
 reset_zoom = "Ctrl+0"
+open_launcher = "Ctrl+Space"
 """
 
 

@@ -306,7 +306,9 @@ class TestHotkeysSettingsPage(unittest.TestCase):
             self.assertIn(pid, self.settings.pane_conflict_labels)
 
         # Card 3 Menu shortcuts
-        self.assertEqual(len(self.settings.menu_shortcut_edits), 12)
+        from frontend.settings_view import DEFAULT_MENU_SHORTCUTS
+        self.assertEqual(len(self.settings.menu_shortcut_edits), len(DEFAULT_MENU_SHORTCUTS))
+        self.assertIn("open_launcher", self.settings.menu_shortcut_edits)  # the launcher is rebindable
         self.assertIn("zoom_in", self.settings.menu_shortcut_edits)
         self.assertIn("zoom_out", self.settings.menu_shortcut_edits)
         self.assertIn("reset_zoom", self.settings.menu_shortcut_edits)
