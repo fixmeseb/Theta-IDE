@@ -12,7 +12,7 @@ from PyQt6.QtWidgets import QApplication, QMessageBox, QSystemTrayIcon  # noqa: 
 app = QApplication.instance() or QApplication(sys.argv[:1])
 
 from frontend.app import Window  # noqa: E402
-from frontend.tray import TrayController  # noqa: E402
+from frontend.tray import BADGE_COLORS, TrayController  # noqa: E402
 
 RUNNING = {"job_id": "j1", "experiment_id": "cartpole_long", "status": "running"}
 
@@ -101,6 +101,39 @@ def test_tray_menu_shows_what_is_training(window, monkeypatch):
     assert window.tray.status_action.text() == "Training: cartpole_long"
     assert window.tray.stop_action.isEnabled()
     assert "cartpole_long" in window.tray.icon.toolTip()
+
+
+def badge_pixel(win, size=32):
+    """Colour at the centre of the badge (bottom-right quarter) of the tray icon at `size`."""
+    image = win.tray.icon.icon().pixmap(size, size).toImage()
+    scale = image.width() / size
+    return image.pixelColor(int(size * 0.75 * scale), int(size * 0.75 * scale)).name()
+
+
+def test_icon_shows_a_badge_while_training(window, monkeypatch):
+    assert window.tray.indicator == "idle"
+    training(window, monkeypatch)
+    window.tray.refresh()
+    assert window.tray.indicator == "training"
+    assert badge_pixel(window) == BADGE_COLORS["training"]
+    training(window, monkeypatch, busy=False)
+    window.tray.refresh()
+    assert window.tray.indicator == "idle"
+    assert window.tray.icon.icon().cacheKey() == window.tray._icons["idle"].cacheKey()
+
+
+def test_icon_shows_a_queued_badge_while_the_queue_waits(window, monkeypatch):
+    training(window, monkeypatch, busy=False)
+    window.jobs.queue_order = ["j2"]
+    window.jobs.queue_running = False
+    window.tray.refresh()
+    assert window.tray.indicator == "idle"  # paused queue: nothing will start on its own
+    window.jobs.queue_running = True
+    window.tray.refresh()
+    assert window.tray.indicator == "queued"
+    assert badge_pixel(window) == BADGE_COLORS["queued"]
+    window.jobs.queue_running = False
+    window.jobs.queue_order = []
 
 
 def test_stop_all_cancels_running_jobs_and_pauses_the_queue(window, monkeypatch):

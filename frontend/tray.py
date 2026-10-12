@@ -6,20 +6,56 @@ offers Show / Stop all training / Quit.
 """
 from __future__ import annotations
 
-from PyQt6.QtCore import QObject
-from PyQt6.QtGui import QAction
+from PyQt6.QtCore import QObject, QRect, QRectF, Qt
+from PyQt6.QtGui import QAction, QColor, QIcon, QPainter, QPixmap
 from PyQt6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 from .app_icon import app_icon
 
 FINAL_STATUSES = ("completed", "failed", "cancelled", "error", "interrupted")
+# Badge in the icon's bottom-right corner: green while a run is training, blue while the queue waits to start
+# the next job. No badge when idle.
+BADGE_COLORS = {"training": "#2ea043", "queued": "#3b82f6"}
+ICON_SIZES = (16, 20, 24, 32, 40, 48, 64)
+
+
+def badged_icon(base: QIcon, color: str) -> QIcon:
+    """`base` with a status dot in the bottom-right corner, at every tray size.
+
+    A transparent gap is cut around the dot rather than drawing a rim, so the dot stays round and separate
+    from the logo's rounded corner at 16 px and reads on light and dark taskbars alike. The dot is sized and
+    placed in whole pixels so small sizes stay crisp.
+    """
+    icon = QIcon()
+    for size in ICON_SIZES:
+        pixmap = QPixmap(size, size)
+        pixmap.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        base.paint(painter, QRect(0, 0, size, size))
+        diameter = 2 * round(size * 0.22)  # even, so the centre falls on a pixel boundary
+        gap = max(1, round(size / 16))
+        dot = QRectF(size - diameter, size - diameter, diameter, diameter)
+        painter.setPen(Qt.PenStyle.NoPen)
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_Clear)
+        painter.setBrush(QColor(0, 0, 0))
+        painter.drawEllipse(dot.adjusted(-gap, -gap, gap, gap))
+        painter.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
+        painter.setBrush(QColor(color))
+        painter.drawEllipse(dot)
+        painter.end()
+        icon.addPixmap(pixmap)
+    return icon
 
 
 class TrayController(QObject):
     def __init__(self, window, parent=None):
         super().__init__(parent or window)
         self.window = window
-        self.icon = QSystemTrayIcon(app_icon(), self)
+        base = app_icon()
+        self._icons = {"idle": base, **{state: badged_icon(base, color) for state, color in BADGE_COLORS.items()}}
+        self.indicator = "idle"
+        self.icon = QSystemTrayIcon(base, self)
         self.icon.activated.connect(self._on_activated)
 
         self.menu = QMenu()
@@ -99,6 +135,10 @@ class TrayController(QObject):
         self.status_action.setText(status)
         self.stop_action.setEnabled(bool(running) or (jobs.queue_running and bool(queued)))
         self.icon.setToolTip(f"ThetaIDE · {status}")
+        indicator = "training" if running else ("queued" if jobs.queue_running and queued else "idle")
+        if indicator != self.indicator:
+            self.indicator = indicator
+            self.icon.setIcon(self._icons[indicator])
 
     def _on_job_changed(self, job):
         self.refresh()
