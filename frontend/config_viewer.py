@@ -150,6 +150,16 @@ FIXED_BOX_KEYS = frozenset(
         "no_plot",
         "save_dataset",
         "recover",
+        # Claimed by the panel overhaul: the sweep box edits hydra.sweeper, and
+        # the dataset row edits dataset_path, so repeating them here would show
+        # the same setting twice.
+        "hydra",
+        "dataset_path",
+        "offline_datasets",
+        "description",
+        # The identity box was removed deliberately; the filename is the id, so
+        # surfacing experiment_id again would undo that.
+        "experiment_id",
     }
 )
 

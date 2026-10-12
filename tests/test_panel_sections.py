@@ -74,8 +74,15 @@ class TestKeyPartition(unittest.TestCase):
 
     def test_paradigm_specific_keys_are_not_claimed(self):
         """These are exactly what used to be invisible."""
-        for key in ("early_prediction", "eval_protocol", "plots", "hydra", "consolidate", "sweep"):
+        for key in ("early_prediction", "eval_protocol", "plots", "consolidate", "partition", "sweep"):
             self.assertNotIn(key, FIXED_BOX_KEYS)
+
+    def test_keys_the_panel_overhaul_owns_are_claimed(self):
+        """The sweep box edits hydra.sweeper and the dataset row edits
+        dataset_path, so this pass must leave both alone or the same setting
+        appears twice."""
+        for key in ("hydra", "dataset_path", "offline_datasets", "experiment_id"):
+            self.assertIn(key, FIXED_BOX_KEYS)
 
 
 def _headings(viewer):
@@ -121,10 +128,18 @@ class TestSupervisedConfigurationIsVisible(unittest.TestCase):
         viewer = _open(SUPERVISED / "quick_test.yaml")
         self.assertTrue(viewer.findChildren(QCheckBox))
 
-    def test_rl_experiments_gain_their_hidden_sections_too(self):
-        """The same change surfaces `hydra` for the RL paradigms."""
-        path = CONFIG / "experiment" / "cartpole" / "final_cartpole.yaml"
-        self.assertIn("hydra", _headings(_open(path)))
+    def test_no_section_is_rendered_twice(self):
+        """The fixed boxes and this pass must partition the keys between them."""
+        for name in ("cartpole/final_cartpole.yaml", "early_prediction/quick_test.yaml"):
+            with self.subTest(experiment=name):
+                headings = _headings(_open(CONFIG / "experiment" / name))
+                self.assertEqual(len(headings), len(set(headings)), f"duplicates in {headings}")
+
+    def test_a_section_the_fixed_boxes_own_is_left_to_them(self):
+        """cartpole/final_cartpole.yaml carries hydra.sweeper, which the sweep
+        box already edits, so this pass must not add a second copy."""
+        headings = _headings(_open(CONFIG / "experiment" / "cartpole" / "final_cartpole.yaml"))
+        self.assertNotIn("hydra", headings)
 
 
 # ---------------------------------------------------------------------------
