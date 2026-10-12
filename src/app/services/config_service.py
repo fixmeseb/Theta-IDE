@@ -175,8 +175,9 @@ def compose_report(experiment: str, overrides: list[str] | None = None) -> dict[
     }
 
 
-def prepare_launch(experiment: str, overrides: list[str] | None = None, overwrite: bool = False,
-                   active_jobs: list[dict] | None = None) -> dict[str, Any]:
+def prepare_launch(
+    experiment: str, overrides: list[str] | None = None, overwrite: bool = False, active_jobs: list[dict] | None = None
+) -> dict[str, Any]:
     """Validate a launch exactly as the pipeline will and describe the job to create.
 
     Raises LaunchError for an invalid config, for existing results that launching would delete

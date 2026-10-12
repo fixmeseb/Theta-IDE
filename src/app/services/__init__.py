@@ -3,6 +3,7 @@
 These used to sit behind the FastAPI server (src/app/api). The GUI now imports them directly
 and runs training as a QProcess (frontend/job_manager.py), so there is no server to start.
 """
+
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]

@@ -67,9 +67,7 @@ class TabularNpzDataModule(L.LightningDataModule, BaseDataModule):
         env = self._get(cfg, "env")
         name = self._get(env, "dataset_name") or self._get(env, "name")
         if not name:
-            raise FileNotFoundError(
-                "TabularNpzDataModule needs dataset_path, or dataset_name on the env config."
-            )
+            raise FileNotFoundError("TabularNpzDataModule needs dataset_path, or dataset_name on the env config.")
         stem = str(name).replace(".npz", "")
         for candidate in (
             Path("in/datasets") / stem / f"{stem}.npz",

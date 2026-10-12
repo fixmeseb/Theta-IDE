@@ -59,8 +59,13 @@ def list_experiments() -> list[dict[str, Any]]:
             continue
         rel_path = f.relative_to(exp_dir)
         try:
-            exps.append({"path": rel_path.as_posix(), "name": rel_path.with_suffix("").as_posix(),
-                         "config": yaml.safe_load(f.read_text(encoding="utf-8"))})
+            exps.append(
+                {
+                    "path": rel_path.as_posix(),
+                    "name": rel_path.with_suffix("").as_posix(),
+                    "config": yaml.safe_load(f.read_text(encoding="utf-8")),
+                }
+            )
         except (OSError, yaml.YAMLError):
             pass
     return exps
@@ -181,14 +186,16 @@ def list_runs() -> list[dict[str, Any]]:
             for agent_dir in sorted(p for p in run_dir.iterdir() if p.is_dir())
             if (summary := agent_summary(agent_dir)) is not None
         ]
-        runs.append({
-            "group": run_dir.parent.name,
-            "experiment_id": run_dir.name,
-            "metadata": metadata,
-            "config": run_config_summary(run_dir),
-            "agents": agents,
-            "finished": bool(agents) and all(agent["finished"] for agent in agents),
-        })
+        runs.append(
+            {
+                "group": run_dir.parent.name,
+                "experiment_id": run_dir.name,
+                "metadata": metadata,
+                "config": run_config_summary(run_dir),
+                "agents": agents,
+                "finished": bool(agents) and all(agent["finished"] for agent in agents),
+            }
+        )
     return runs
 
 
@@ -203,8 +210,9 @@ def _version_number(name: str) -> int:
     return int(suffix) if suffix.isdigit() else -1
 
 
-def run_metrics(group: str, experiment_id: str, agent: str, version: str | None = None,
-                since: int = 0) -> dict[str, Any]:
+def run_metrics(
+    group: str, experiment_id: str, agent: str, version: str | None = None, since: int = 0
+) -> dict[str, Any]:
     """Every row of an agent's metrics.csv (as text), with every column the engine logged.
 
     `version` picks a version_N folder (default: the newest). `since` skips rows the caller already has,
@@ -214,8 +222,9 @@ def run_metrics(group: str, experiment_id: str, agent: str, version: str | None 
     for part in (group, experiment_id, agent):
         check_path_segment(part)
     agent_dir = LOGS_DIR / group / experiment_id / agent
-    versions = sorted((p.name for p in agent_dir.glob("version_*") if (p / "metrics.csv").is_file()),
-                      key=_version_number)
+    versions = sorted(
+        (p.name for p in agent_dir.glob("version_*") if (p / "metrics.csv").is_file()), key=_version_number
+    )
     if version is None:
         metrics_file = latest_version_file(agent_dir, "metrics.csv")
     else:
@@ -229,7 +238,7 @@ def run_metrics(group: str, experiment_id: str, agent: str, version: str | None 
         rows = list(reader)
         columns = list(reader.fieldnames or [])
     return {
-        "metrics": rows[max(int(since), 0):],
+        "metrics": rows[max(int(since), 0) :],
         "columns": columns,
         "total_rows": len(rows),
         "version": metrics_file.parent.name,
@@ -245,13 +254,27 @@ RESULT_ROOTS = ("logs", "plots", "checkpoints", "tensorboard", "datasets")
 MANIFEST_LIMIT = 5000
 
 _KIND_BY_SUFFIX = {
-    ".csv": "table", ".tsv": "table",
-    ".png": "figure", ".jpg": "figure", ".jpeg": "figure", ".svg": "figure", ".pdf": "figure",
-    ".md": "report", ".txt": "report", ".html": "report",
-    ".yaml": "config", ".yml": "config",
+    ".csv": "table",
+    ".tsv": "table",
+    ".png": "figure",
+    ".jpg": "figure",
+    ".jpeg": "figure",
+    ".svg": "figure",
+    ".pdf": "figure",
+    ".md": "report",
+    ".txt": "report",
+    ".html": "report",
+    ".yaml": "config",
+    ".yml": "config",
     ".json": "metadata",
-    ".ckpt": "checkpoint", ".pt": "checkpoint", ".pth": "checkpoint", ".zip": "checkpoint",
-    ".npz": "cache", ".npy": "cache", ".pkl": "cache", ".parquet": "cache",
+    ".ckpt": "checkpoint",
+    ".pt": "checkpoint",
+    ".pth": "checkpoint",
+    ".zip": "checkpoint",
+    ".npz": "cache",
+    ".npy": "cache",
+    ".pkl": "cache",
+    ".parquet": "cache",
     ".log": "log",
 }
 
@@ -301,15 +324,17 @@ def run_manifest(group: str, experiment_id: str) -> dict[str, Any]:
                 break
             parts = path.relative_to(run_dir).parts
             stat = path.stat()
-            artifacts.append({
-                "path": path.relative_to(base).as_posix(),
-                "root": root,
-                "kind": _artifact_kind(root, path),
-                "agent": parts[0] if len(parts) > 1 else None,
-                "version": next((p for p in parts[1:-1] if p.startswith("version_")), None),
-                "size": stat.st_size,
-                "modified": stat.st_mtime,
-            })
+            artifacts.append(
+                {
+                    "path": path.relative_to(base).as_posix(),
+                    "root": root,
+                    "kind": _artifact_kind(root, path),
+                    "agent": parts[0] if len(parts) > 1 else None,
+                    "version": next((p for p in parts[1:-1] if p.startswith("version_")), None),
+                    "size": stat.st_size,
+                    "modified": stat.st_mtime,
+                }
+            )
     agents: dict[str, list[str]] = {}
     for item in artifacts:
         if item["kind"] == "metrics" and item["agent"] and item["version"]:
