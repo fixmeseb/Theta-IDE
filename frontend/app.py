@@ -1183,6 +1183,7 @@ class Window(QMainWindow):
             ("zoom_in", "Zoom In", "Ctrl++", self.zoom_in),
             ("zoom_out", "Zoom Out", "Ctrl+-", self.zoom_out),
             ("reset_zoom", "Reset Zoom", "Ctrl+0", self.reset_zoom),
+            ("open_launcher", "Open launcher…", "Ctrl+Space", self.toggle_launcher),
         ):
             action = QAction(title, self)
             action.setProperty("_default_sc", default_sc)
@@ -1232,6 +1233,14 @@ class Window(QMainWindow):
         path = self.settings_manager.workspace_settings_path
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(path)))
         self.statusBar().showMessage(f"Opened {path.name} — changes apply automatically on save.", 6000)
+
+    def toggle_launcher(self):
+        """Open or close the launcher (frontend/launcher.py): jump to any panel, plugin, setting or command."""
+        if getattr(self, "launcher", None) is None:
+            from .launcher import Launcher
+
+            self.launcher = Launcher(self)
+        self.launcher.toggle()
 
     def zoom_in(self):
         """Zoom in (increase interface and text size by 10%)."""
