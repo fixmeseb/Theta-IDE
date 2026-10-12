@@ -4,12 +4,13 @@ Executes SB3 algorithms (PPO, DQN, A2C, SAC) as a decoupled black-box engine,
 logging training telemetry to metrics.csv and saving checkpoints adhering to the
 Theta-IDE execution contract.
 """
+
 from __future__ import annotations
 
 import os
-from pathlib import Path
 import sys
 import time
+from pathlib import Path
 
 # Ensure project root is in sys.path
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -110,6 +111,7 @@ def main(cfg: DictConfig):
 
     # Build environment with Monitor wrapper for episode stats
     from stable_baselines3.common.monitor import Monitor
+
     env = Monitor(gym.make(env_id))
 
     # Resolve algorithm class

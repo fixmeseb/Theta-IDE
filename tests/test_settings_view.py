@@ -47,7 +47,7 @@ class TestSettingsViewStructureAndNavigation(unittest.TestCase):
         # Window attributes bound
         self.assertIsNotNone(self.window.settings_theme_select)
         self.assertIsNotNone(self.window.settings_action_key_combo)
-        self.assertIsNotNone(self.window.settings_backend_url)
+        self.assertIsNotNone(self.window.settings_backend_status)  # Training pipeline page
         self.assertIsNotNone(self.window.settings_backend_status)
         self.assertIsNotNone(self.window.settings_runs_count_label)
         self.assertIsNotNone(self.window.settings_ascii)

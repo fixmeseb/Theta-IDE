@@ -9,10 +9,8 @@ import subprocess
 import sys
 
 import pytest
-from fastapi.testclient import TestClient
 
 from frontend.model import BASE_EXPERIMENT, Config
-from src.app.api.app import app
 from src.app.pipeline.compose import comparable_config, compose_experiment, method_plans, validate_composed
 
 REFERENCE = "thetaide/cartpole_ppo_reference"
@@ -43,11 +41,6 @@ def export_recipe(project_root):
         path.unlink(missing_ok=True)
 
 
-@pytest.fixture
-def client():
-    return TestClient(app)
-
-
 def test_default_builder_matches_hand_written_reference():
     gui = gui_compose(Config())
     reference = compose_experiment(REFERENCE)
@@ -74,53 +67,6 @@ def test_builder_values_reach_the_method_config(config):
     assert cfg.tensorboard is config.tensorboard
 
 
-def test_compose_endpoint_matches_direct_composition(client):
-    config = CASES[1]
-    response = client.post("/api/config/compose", json={"experiment": BASE_EXPERIMENT, "overrides": config.overrides()})
-    body = response.json()
-    assert response.status_code == 200
-    assert body["valid"], body["errors"]
-    assert body["argv"] == ["python", "run_pipeline.py", BASE_EXPERIMENT, *config.overrides()]
-    expected = comparable_config(gui_compose(config).cfg)
-    body["config"].pop("experiment_name")
-    assert body["config"] == expected
-    train_overrides = body["methods"]["ppo"]["train_overrides"]
-    assert f"++agent.lr={config.lr}" in train_overrides
-    assert f"++agent.batch_size={config.batch_size}" in train_overrides
-
-
-def test_compose_endpoint_reports_invalid_override(client):
-    response = client.post("/api/config/compose", json={"experiment": BASE_EXPERIMENT, "overrides": ["seed=="]})
-    body = response.json()
-    assert not body["valid"]
-    assert body["errors"][0]["stage"] == "compose"
-
-
-def test_compose_endpoint_reports_paradigm_violation(client):
-    overrides = Config().overrides() + ["++methods.ppo.agent=cql"]
-    body = client.post("/api/config/compose", json={"experiment": BASE_EXPERIMENT, "overrides": overrides}).json()
-    assert not body["valid"]
-    assert body["errors"][0]["stage"] == "validation"
-
-
-def test_compose_endpoint_reports_unknown_experiment(client):
-    body = client.post("/api/config/compose", json={"experiment": "thetaide/does_not_exist"}).json()
-    assert not body["valid"]
-
-
-def test_schema_defaults_come_from_backend_and_match_builder(client):
-    schema = client.get("/api/config/schema").json()
-    assert schema["base_experiment"] == BASE_EXPERIMENT
-    assert schema["environment"]["env_id"] == "CartPole-v1"
-    defaults = {f["key"]: f["default"] for f in schema["fields"]}
-    builder = Config()
-    assert defaults["methods.ppo.lr"] == builder.lr
-    assert defaults["methods.ppo.batch_size"] == builder.batch_size
-    assert defaults["methods.ppo.gamma"] == builder.gamma
-    assert defaults["tensorboard"] is builder.tensorboard
-    assert set(schema["fixed_overrides"]) <= set(builder.overrides())
-
-
 def test_builder_command_passes_pipeline_dry_run(project_root):
     command = ["run_pipeline.py", BASE_EXPERIMENT, *Config().overrides(), "dry_run=true"]
     result = subprocess.run([sys.executable, *command], cwd=project_root, capture_output=True, text=True, timeout=300)
@@ -137,13 +83,3 @@ def test_builder_command_passes_pipeline_dry_run(project_root):
 def test_ppo_budget_rounds_up_to_whole_rollouts(total, extra, expected):
     rollout = method_plans(compose_experiment(BASE_EXPERIMENT, Config(total_timesteps=total).overrides() + extra))
     assert {k: rollout["ppo"]["rollout"][k] for k in expected} == expected
-
-
-def test_compose_endpoint_explains_rounded_budget(client):
-    def notices(total):
-        body = client.post("/api/config/compose", json={
-            "experiment": BASE_EXPERIMENT, "overrides": Config(total_timesteps=total).overrides()}).json()
-        return [n for n in body["notices"] if "rollouts" in n]
-
-    assert "trains 10,240 steps, not 10,000" in notices(10000)[0]
-    assert notices(10240) == []

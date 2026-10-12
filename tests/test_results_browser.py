@@ -33,7 +33,7 @@ class TestResultsBrowser(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
         # A runs folder inside the temp dir keeps this test's settings.toml out of the shared temp folder.
-        self.window = Window(Path(self.temp_dir.name) / "runs", api_url="http://127.0.0.1:1")
+        self.window = Window(Path(self.temp_dir.name) / "runs")
 
     def tearDown(self):
         self.window.close()
@@ -49,7 +49,7 @@ class TestResultsBrowser(unittest.TestCase):
     def test_offline_shows_examples_and_explains(self):
         self.assertEqual(self.column("Source"), ["Example", "Example"])
         self.assertTrue(self.window.show_examples.isHidden())  # nothing to hide examples from yet
-        self.assertIn("Backend offline", self.window.disk_status.text())
+        self.assertIn("Training pipeline unavailable", self.window.disk_status.text())
 
     def test_command_line_runs_are_listed_and_examples_hidden(self):
         self.listing(entry("cli_a", "2026-09-01T10:00:00+00:00", 50.0),

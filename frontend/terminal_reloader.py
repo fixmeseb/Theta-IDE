@@ -40,7 +40,7 @@ def build_reload_command(
       - Module executions like ``python -m frontend`` (where ``argv[0]`` points
         to ``.../frontend/__main__.py``).
       - Direct script executions like ``python frontend/app.py``.
-      - Custom CLI flags (e.g. ``--data-dir``, ``--api-url``).
+      - Custom CLI flags (e.g. ``--data-dir``, ``--install-desktop-entry``).
     """
     exe = executable or sys.executable
     args = argv if argv is not None else list(sys.argv)
@@ -275,6 +275,8 @@ def reload_frontend(
 
     if window is not None:
         try:
+            if hasattr(window, "_quitting"):
+                window._quitting = True  # a reload closes for real rather than hiding to the tray
             window.close()
         except Exception as exc:
             logger.debug("Error while closing window for reload: %s", exc)

@@ -1,4 +1,4 @@
-PyQt6>=6.7,<7
-PyQt6-WebEngine>=6.7,<7
-pyyaml>=6.0
-pywinpty>=2.0; sys_platform == "win32"
+# The desktop app now runs from the project venv (it imports the pipeline directly).
+# Install it from the repository root instead of this file:
+#   pip install -e ".[gui]"
+-e ..[gui]
