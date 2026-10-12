@@ -17,6 +17,7 @@ try:
     QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
     app = QApplication.instance() or QApplication(sys.argv[:1])
     from frontend.hub import AuthorInfo, HubClient, HubComponent, HubComponentCard, HubDialog, HubInstaller, ReleaseInfo
+    from frontend.theme import theme_color
     HAS_PYQT6 = True
 except ImportError:
     HAS_PYQT6 = False
@@ -218,7 +219,7 @@ class TestHubClientAndInstaller(unittest.TestCase):
         card = HubComponentCard(comp, self.client)
         # Uninstalled component has green Install button
         self.assertEqual(card.btn_action.text(), "Install")
-        self.assertIn("#b8bb26", card.btn_action.styleSheet())
+        self.assertIn(theme_color("primary"), card.btn_action.styleSheet())  # Install follows the theme
         self.assertEqual(card.btn_action.objectName(), "actionInstall")
 
         # Simulate install completion
@@ -243,5 +244,5 @@ class TestHubClientAndInstaller(unittest.TestCase):
         comp.installed_version = None
         card.update_action_state()
         self.assertEqual(card.btn_action.text(), "Install")
-        self.assertIn("#b8bb26", card.btn_action.styleSheet())
+        self.assertIn(theme_color("primary"), card.btn_action.styleSheet())  # Install follows the theme
 

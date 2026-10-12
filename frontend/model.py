@@ -91,25 +91,39 @@ METRIC_COLUMNS = {
 }
 
 
-def metric_points(rows):
-    """Convert Lightning metrics.csv rows into chart points keyed by environment transitions.
+# metrics.csv counters: a point's position ("step"), never a metric of their own.
+COUNTER_COLUMNS = ("transitions", "step", "epoch")
 
-    Evaluation rows carry eval/* and training rows carry losses/*; a point keeps None for
-    the metrics its row does not report.
+
+def _number(value):
+    return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
+def metric_points(rows):
+    """Convert metrics.csv rows into chart points keyed by environment transitions.
+
+    Every numeric column is kept, whatever engine logged it: the METRIC_COLUMNS under their
+    short run-record keys (which saved runs and the demo use), and any other column under its
+    own metrics.csv name (e.g. SB3's "losses/train/value_loss"). Evaluation rows carry eval/*
+    and training rows carry losses/*; a point keeps None for the short keys its row does not
+    report and simply lacks other columns it does not report.
     """
+    aliased = set(METRIC_COLUMNS.values())
     points = []
     for row in rows:
-        if "transitions" not in row:
+        if _number(row.get("transitions")) is None:
             continue
-        point = {key: row.get(column) for key, column in METRIC_COLUMNS.items()}
-        if all(value is None for value in point.values()):
+        point = {key: _number(row.get(column)) for key, column in METRIC_COLUMNS.items()}
+        extra = {name: value for name, value in row.items()
+                 if name not in aliased and name not in COUNTER_COLUMNS and _number(value) is not None}
+        if all(value is None for value in point.values()) and not extra:
             continue
-        points.append({"step": round(row["transitions"]), **point})
+        points.append({"step": round(row["transitions"]), **point, **extra})
     return points
 
 
 def metric_points_from_api(rows):
-    """metric_points() for the rows of GET /api/runs/.../metrics, whose values arrive as text."""
+    """metric_points() for the rows of catalog.run_metrics, whose values arrive as text."""
     numeric_rows = []
     for row in rows:
         numeric = {}
@@ -175,7 +189,7 @@ def _value(value, kind, fallback):
 def disk_run(entry):
     """Run record for a results/logs folder that no app record links to, such as a command-line run.
 
-    `entry` is one item of GET /api/runs. The record is `transient`: it is rebuilt from each listing
+    `entry` is one item of catalog.list_runs(). The record is `transient`: it is rebuilt from each listing
     and only written to the run store once something of the user's (such as notes) is attached.
     """
     cfg = entry.get("config") or {}
@@ -223,7 +237,7 @@ def format_duration(seconds):
 def result_row(run, disk=None):
     """(text, sort key) for each RESULT_COLUMNS cell of a run.
 
-    `disk` is the run's GET /api/runs entry, if the backend listed one: it supplies timing for
+    `disk` is the run's catalog.list_runs() entry, if one was listed: it supplies timing for
     every trained run and the reward summary until a command-line run's metrics are loaded.
     Values come from the run's first agent, the one whose metrics the Training monitor shows.
     """

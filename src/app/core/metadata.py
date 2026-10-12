@@ -100,6 +100,9 @@ def collect_run_metadata(cfg=None):
         lightning_version = "N/A"
 
     seed = getattr(cfg, "seed", None) if cfg else None
+    description = None
+    if cfg is not None:
+        description = getattr(cfg, "description", None) or (cfg.get("description") if isinstance(cfg, dict) else None)
 
     return {
         "git_commit": git_commit,
@@ -108,6 +111,7 @@ def collect_run_metadata(cfg=None):
         "git_diff_path": git_diff_path if git_dirty else None,
         "cli_command": " ".join(sys.argv),
         "seed": seed,
+        "description": description,
         "system": {
             "hostname": socket.gethostname(),
             "os": platform.platform(),

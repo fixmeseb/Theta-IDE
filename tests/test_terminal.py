@@ -95,8 +95,10 @@ class TestTerminalPanelAndWidget(unittest.TestCase):
         self.assertIsNotNone(self.panel.status_dot)
         self.assertIsNotNone(self.panel.title_label)
         self.assertIsNotNone(self.panel.terminal)
-        self.assertEqual(self.panel.restart_btn.text(), "+ New Shell")
+        self.assertEqual(self.panel.new_btn.text(), "New shell")
+        self.assertEqual(self.panel.close_btn.text(), "Close shell")
         self.assertEqual(self.panel.clear_btn.text(), "Clear")
+        self.assertEqual(self.panel.shell_list.count(), 1)
 
     def test_theme_application(self):
         # Dark theme

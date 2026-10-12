@@ -1,20 +1,21 @@
 """PyQt6 QWebEngineView wrapper for xterm.js terminal emulator with PTY integration."""
 import json
-import os
 from pathlib import Path
 from typing import Optional
 
 from PyQt6.QtCore import Qt, QUrl, pyqtSignal, pyqtSlot, QObject, QTimer, QPoint
-from PyQt6.QtGui import QAction, QCursor
+from PyQt6.QtGui import QAction, QColor, QCursor
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel,
-    QPlainTextEdit, QFrame, QSizePolicy, QMenu, QApplication
+    QPlainTextEdit, QFrame, QSizePolicy, QMenu, QApplication,
+    QListWidget, QListWidgetItem, QStackedWidget, QToolButton,
 )
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtWebEngineCore import QWebEngineSettings
 from PyQt6.QtWebChannel import QWebChannel
 
-from .pty_session import PtySession
+from ..theme import current_theme
+from .pty_session import PtySession, available_shells, get_default_shell, parse_shell_command
 
 
 HTML_PATH = Path(__file__).resolve().parent / "terminal.html"
@@ -428,6 +429,9 @@ class TerminalWidget(QWidget):
             self.apply_theme(self._pending_theme)
             self._pending_theme = None
 
+        if hasattr(self, "_font_size") and self._font_size:
+            self.bridge.font_size_received.emit(self._font_size)
+
         # Only claim focus if the terminal is currently visible to the user
         if self.isVisible():
             self.focus_terminal()
@@ -476,6 +480,12 @@ class TerminalWidget(QWidget):
         """Trigger fitAddon.fit() in xterm.js."""
         if self._is_ready:
             self.web_view.page().runJavaScript("if (typeof fitTerminal === 'function') fitTerminal();")
+
+    def set_font_size(self, size: int):
+        """Update terminal font size and refit."""
+        self._font_size = size
+        if self._is_ready:
+            self.bridge.font_size_received.emit(size)
 
     def focus_terminal(self):
         """Focus keyboard events on the terminal."""
@@ -656,12 +666,25 @@ class TerminalWidget(QWidget):
 
 
 class TerminalPanel(QWidget):
-    """Pure, modern interactive terminal pane with compact toolbar controls."""
+    """Terminal pane: a toolbar, the active shell, and a list of open shells to switch between.
+
+    `terminal` is always the active TerminalWidget, so callers that drive one terminal
+    (Settings' Restart terminal, the theme and font hooks, tests) keep working.
+    """
+
+    shells_changed = pyqtSignal()
 
     def __init__(self, cwd: Optional[str] = None, parent: Optional[QWidget] = None,
                  command: Optional[list[str]] = None, env: Optional[dict[str, str]] = None):
         super().__init__(parent)
         self.cwd = cwd or str(Path.cwd())
+        self._command = command
+        self._env = dict(env or {})
+        self._theme: Optional[dict] = None
+        self._font_size: Optional[int] = None
+        self._colors: dict = dict(current_theme().get("colors", {}))
+        self._next_number = 1
+        self.terminals: list[TerminalWidget] = []
 
         root_layout = QVBoxLayout(self)
         root_layout.setContentsMargins(0, 0, 0, 0)
@@ -675,23 +698,37 @@ class TerminalPanel(QWidget):
         tb_layout.setContentsMargins(10, 0, 10, 0)
         tb_layout.setSpacing(8)
 
-        self.status_dot = QLabel("●", self)
-        self.status_dot.setStyleSheet("color: #a6e3a1; font-size: 11px;")
+        self.status_dot = QLabel("●", self.toolbar)
+        self.status_dot.setObjectName("terminalStatusDot")
         tb_layout.addWidget(self.status_dot)
 
-        self.title_label = QLabel("Terminal", self)
-        self.title_label.setStyleSheet("font-weight: 600; font-size: 11px; opacity: 0.85;")
+        self.title_label = QLabel("Terminal", self.toolbar)
+        self.title_label.setObjectName("terminalTitle")
         tb_layout.addWidget(self.title_label)
 
         tb_layout.addStretch()
 
-        self.restart_btn = QPushButton("+ New Shell", self)
-        self.restart_btn.setToolTip("Start a fresh shell session")
-        self.restart_btn.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.restart_btn.clicked.connect(self._restart_shell)
-        tb_layout.addWidget(self.restart_btn)
+        # Split button: click opens the default shell, the arrow lists every installed shell
+        self.new_btn = QToolButton(self.toolbar)
+        self.new_btn.setObjectName("terminalNewShell")
+        self.new_btn.setText("New shell")
+        self.new_btn.setToolTip("Open another shell (arrow: choose which shell)")
+        self.new_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.new_btn.setPopupMode(QToolButton.ToolButtonPopupMode.MenuButtonPopup)
+        self.new_btn.clicked.connect(lambda: self.new_shell())
+        self.shell_menu = QMenu(self.new_btn)
+        self.shell_menu.aboutToShow.connect(lambda: self._fill_shell_menu(self.shell_menu))
+        self.new_btn.setMenu(self.shell_menu)
+        tb_layout.addWidget(self.new_btn)
+        self.restart_btn = self.new_btn  # backwards-compatible alias
 
-        self.clear_btn = QPushButton("Clear", self)
+        self.close_btn = QPushButton("Close shell", self.toolbar)
+        self.close_btn.setToolTip("End the selected shell")
+        self.close_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.close_btn.clicked.connect(lambda: self.close_shell())
+        tb_layout.addWidget(self.close_btn)
+
+        self.clear_btn = QPushButton("Clear", self.toolbar)
         self.clear_btn.setToolTip("Clear and reset terminal output")
         self.clear_btn.setCursor(Qt.CursorShape.PointingHandCursor)
         self.clear_btn.clicked.connect(self._clear_terminal)
@@ -699,36 +736,176 @@ class TerminalPanel(QWidget):
 
         root_layout.addWidget(self.toolbar)
 
-        # Full-bleed, edge-to-edge interactive terminal
-        self.terminal = TerminalWidget(cwd=self.cwd, parent=self, command=command, env=env)
-        root_layout.addWidget(self.terminal, 1)
+        # Body: the active shell, with the list of open shells beside it
+        body = QHBoxLayout()
+        body.setContentsMargins(0, 0, 0, 0)
+        body.setSpacing(0)
 
-        self.terminal.session_started.connect(self._on_session_started)
-        self.terminal.session_exited.connect(self._on_session_exited)
+        self.stack = QStackedWidget(self)
+        body.addWidget(self.stack, 1)
+
+        self.shell_list = QListWidget(self)
+        self.shell_list.setObjectName("terminalShellList")
+        self.shell_list.setFixedWidth(170)
+        self.shell_list.setToolTip("Open shells: click to switch, right-click for more")
+        self.shell_list.setFocusPolicy(Qt.FocusPolicy.NoFocus)  # keep keystrokes in the terminal
+        self.shell_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.shell_list.customContextMenuRequested.connect(self._show_list_menu)
+        self.shell_list.currentRowChanged.connect(self._on_row_changed)
+        body.addWidget(self.shell_list)
+
+        root_layout.addLayout(body, 1)
+
+        self.new_shell()
 
         self.status_timer = QTimer(self)
         self.status_timer.setInterval(2000)
         self.status_timer.timeout.connect(self._update_status)
         self.status_timer.start()
 
-    def _update_status(self):
-        if not self.terminal.pty.is_alive():
-            return
-        if self.terminal.pty.is_tmux_active():
-            self.title_label.setText("Terminal · tmux (Action: C-b)")
-            self.status_dot.setStyleSheet("color: #89b4fa; font-size: 11px;")
-        else:
-            sh_path = os.environ.get("SHELL", "shell")
-            shell_name = Path(sh_path).name or "shell"
-            self.title_label.setText(f"Terminal · {shell_name}")
-            self.status_dot.setStyleSheet("color: #a6e3a1; font-size: 11px;")
+    # ── Shells ───────────────────────────────────────────────────────────────
 
-    def _on_session_started(self):
+    @property
+    def terminal(self) -> "TerminalWidget":
+        """The active shell."""
+        return self.stack.currentWidget()
+
+    def shell_count(self) -> int:
+        return len(self.terminals)
+
+    def new_shell(self, command: Optional[list[str]] = None) -> "TerminalWidget":
+        """Open another shell and switch to it: `command` if given (chosen from the menu),
+        otherwise the default shell from Settings."""
+        term = TerminalWidget(cwd=self.cwd, parent=self, command=command or self._command, env=self._env)
+        term.chosen_shell = command is not None  # keeps its program when the Settings default changes
+        term.shell_number = self._next_number
+        self._next_number += 1
+        if self._theme:
+            term.apply_theme(self._theme)
+        if self._font_size:
+            term.set_font_size(self._font_size)
+        term.session_started.connect(lambda t=term: self._on_session_changed(t))
+        term.session_exited.connect(lambda code, t=term: self._on_session_changed(t, code))
+        self.terminals.append(term)
+        self.stack.addWidget(term)
+
+        item = QListWidgetItem(self._shell_label(term))
+        self.shell_list.addItem(item)
+        self.set_current_shell(len(self.terminals) - 1)
+        self.shells_changed.emit()
+        return term
+
+    def close_shell(self, index: Optional[int] = None):
+        """End a shell (the active one by default). The pane always keeps at least one."""
+        if index is None:
+            index = self.terminals.index(self.terminal)
+        if not 0 <= index < len(self.terminals):
+            return
+        term = self.terminals.pop(index)
+        self.shell_list.blockSignals(True)
+        self.shell_list.takeItem(index)
+        self.shell_list.blockSignals(False)
+        self.stack.removeWidget(term)
+        term.close()
+        term.deleteLater()
+        if not self.terminals:
+            self.new_shell()
+        else:
+            self.set_current_shell(min(index, len(self.terminals) - 1))
+        self.shells_changed.emit()
+
+    def set_current_shell(self, index: int):
+        if not 0 <= index < len(self.terminals):
+            return
+        if self.shell_list.currentRow() != index:
+            self.shell_list.setCurrentRow(index)  # re-enters through _on_row_changed
+            return
+        term = self.terminals[index]
+        self.stack.setCurrentWidget(term)
+        term.fit_terminal()
+        term.focus_terminal()
         self._update_status()
 
-    def _on_session_exited(self, code: int):
-        self.title_label.setText(f"Terminal · Exited ({code})")
-        self.status_dot.setStyleSheet("color: #f38ba8; font-size: 11px;")
+    def _on_row_changed(self, row: int):
+        if 0 <= row < len(self.terminals):
+            self.set_current_shell(row)
+
+    def _fill_shell_menu(self, menu: QMenu):
+        """Default shell first, then every shell installed on this machine."""
+        menu.clear()
+        default = self._command or get_default_shell()
+        menu.addAction(f"Default ({Path(default[0]).stem})", lambda: self.new_shell())
+        shells = available_shells()
+        if shells:
+            menu.addSeparator()
+        for name, command_line in shells:
+            argv = parse_shell_command(command_line)
+            if argv:
+                action = menu.addAction(name, lambda a=argv: self.new_shell(a))
+                action.setToolTip(command_line)
+
+    def _show_list_menu(self, pos):
+        row = self.shell_list.indexAt(pos).row()
+        menu = QMenu(self)
+        menu.addAction("New shell", self.new_shell)
+        choose = menu.addMenu("New shell with")
+        self._fill_shell_menu(choose)
+        if row >= 0:
+            menu.addAction("Restart shell", lambda: self.terminals[row].restart_session())
+            menu.addAction("Close shell", lambda: self.close_shell(row))
+        menu.exec(self.shell_list.viewport().mapToGlobal(pos))
+
+    # ── Status ───────────────────────────────────────────────────────────────
+
+    def _shell_name(self, term: "TerminalWidget") -> str:
+        argv = term.pty.command or get_default_shell()
+        return Path(argv[0]).stem or "shell"
+
+    def _shell_label(self, term: "TerminalWidget", exit_code: Optional[int] = None) -> str:
+        label_text = f"{term.shell_number}  {self._shell_name(term)}"
+        if exit_code is not None:
+            label_text += f"  (exited {exit_code})"
+        return label_text
+
+    def _on_session_changed(self, term: "TerminalWidget", exit_code: Optional[int] = None):
+        if term in self.terminals:
+            row = self.terminals.index(term)
+            item = self.shell_list.item(row)
+            if item is not None:
+                item.setText(self._shell_label(term, exit_code))
+                item.setForeground(QColor(self._colors.get("muted" if exit_code is not None else "text", "#ebdbb2")))
+        if term is self.terminal:
+            self._update_status(exit_code)
+
+    def _update_status(self, exit_code: Optional[int] = None):
+        term = self.terminal
+        if term is None:
+            return
+        name = self._shell_name(term)
+        if exit_code is not None or not term.pty.is_alive():
+            self.title_label.setText(f"Terminal · {name} · exited" if exit_code is None
+                                     else f"Terminal · {name} · exited ({exit_code})")
+            dot_role = "disabled"
+        elif term.pty.is_tmux_active():
+            self.title_label.setText("Terminal · tmux (Action: C-b)")
+            dot_role = "secondary"
+        else:
+            self.title_label.setText(f"Terminal · {name}")
+            dot_role = "primary"
+        self.status_dot.setStyleSheet(f"color: {self._colors.get(dot_role, '#b8bb26')}; font-size: 11px;")
+
+    # ── Commands and appearance ──────────────────────────────────────────────
+
+    def configure(self, command: Optional[list[str]] = None, cwd: Optional[str] = None,
+                  env: Optional[dict[str, str]] = None):
+        """Shell settings for every shell: open ones use them from their next restart, new ones at once."""
+        self._command = command
+        if cwd:
+            self.cwd = cwd
+        self._env = dict(env or {})
+        for term in self.terminals:
+            own = term.pty.command if getattr(term, "chosen_shell", False) else command
+            term.configure(command=own, cwd=cwd, env=env)
 
     def _restart_shell(self):
         self.terminal.restart_session()
@@ -736,13 +913,23 @@ class TerminalPanel(QWidget):
     def _clear_terminal(self):
         self.terminal.clear()
 
+    def set_font_size(self, size: int):
+        """Update font size of every shell."""
+        self._font_size = size
+        for term in self.terminals:
+            term.set_font_size(size)
+
     def apply_theme(self, theme_dict: dict):
-        """Apply active theme palette to terminal and toolbar."""
-        self.terminal.apply_theme(theme_dict)
+        """Apply active theme palette to every shell, the toolbar and the shell list."""
+        self._theme = theme_dict
+        for term in self.terminals:
+            term.apply_theme(theme_dict)
         colors = theme_dict.get("colors", {})
         if not colors:
             return
+        self._colors = colors
         panel_bg = colors.get("surface", colors.get("panel", "#282828"))
+        list_bg = colors.get("panel", "#282828")
         text_color = colors.get("text", "#ebdbb2")
         border_color = colors.get("border", "#504945")
         btn_bg = colors.get("raised", "#3c3836")
@@ -754,7 +941,12 @@ class TerminalPanel(QWidget):
                 border-bottom: 1px solid {border_color};
             }}
             QLabel {{
+                background: transparent;
                 color: {text_color};
+            }}
+            QLabel#terminalTitle {{
+                font-weight: 600;
+                font-size: 11px;
             }}
             QPushButton {{
                 background-color: {btn_bg};
@@ -767,8 +959,51 @@ class TerminalPanel(QWidget):
             QPushButton:hover {{
                 border-color: {accent};
             }}
+            QToolButton#terminalNewShell {{
+                background-color: {btn_bg};
+                color: {text_color};
+                border: 1px solid {border_color};
+                border-radius: 3px;
+                padding: 2px 18px 2px 8px;
+                font-size: 11px;
+            }}
+            QToolButton#terminalNewShell:hover {{
+                border-color: {accent};
+            }}
+            QToolButton#terminalNewShell::menu-button {{
+                border-left: 1px solid {border_color};
+                width: 14px;
+            }}
         """)
+        self.shell_list.setStyleSheet(f"""
+            QListWidget#terminalShellList {{
+                background-color: {list_bg};
+                border: 0;
+                border-left: 1px solid {border_color};
+                outline: 0;
+                padding: 4px;
+                font-size: 11px;
+            }}
+            QListWidget#terminalShellList::item {{
+                color: {text_color};
+                padding: 5px 8px;
+                border-radius: 4px;
+            }}
+            QListWidget#terminalShellList::item:hover {{
+                background-color: {panel_bg};
+            }}
+            QListWidget#terminalShellList::item:selected {{
+                background-color: {btn_bg};
+                color: {accent};
+            }}
+        """)
+        for row, term in enumerate(self.terminals):
+            item = self.shell_list.item(row)
+            if item is not None:
+                item.setForeground(QColor(text_color if term.pty.is_alive() else colors.get("muted", text_color)))
+        self._update_status()
 
     def closeEvent(self, event):
-        self.terminal.close()
+        for term in self.terminals:
+            term.close()
         super().closeEvent(event)

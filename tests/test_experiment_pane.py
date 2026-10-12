@@ -17,7 +17,7 @@ os.environ["QT_QPA_PLATFORM"] = "offscreen"
 try:
     from PyQt6 import QtWebEngineWidgets
     from PyQt6.QtCore import Qt
-    from PyQt6.QtWidgets import QApplication, QTreeWidget
+    from PyQt6.QtWidgets import QApplication, QLabel, QTreeWidget
     app = QApplication.instance() or QApplication(sys.argv[:1])
     from frontend.app import Window
     from frontend.components_panel import ComponentsPanel
@@ -51,6 +51,19 @@ class TestConfigTree(unittest.TestCase):
     def tearDown(self):
         self.tree_widget.close()
         self.temp_dir.cleanup()
+
+    def test_no_footer_text_at_bottom_of_tree(self):
+        tree_exp = ConfigTreeWidget(root_dir=self.root, mode="experiments")
+        tree_comp = ConfigTreeWidget(root_dir=self.root, mode="components")
+        self.assertIsNone(tree_exp.footer)
+        self.assertIsNone(tree_comp.footer)
+        from PyQt6.QtWidgets import QLabel
+        labels_exp = tree_exp.findChildren(QLabel)
+        labels_comp = tree_comp.findChildren(QLabel)
+        self.assertFalse(any("in/config" in lbl.text() for lbl in labels_exp))
+        self.assertFalse(any("in/config" in lbl.text() for lbl in labels_comp))
+        tree_exp.close()
+        tree_comp.close()
 
     def test_tree_populates_directories_and_files(self):
         # Top-level should have experiment, agent, env, and config.yaml
@@ -131,7 +144,8 @@ class TestConfigTree(unittest.TestCase):
             top_texts = [comp_tree.tree.topLevelItem(i).text(0) for i in range(top_count)]
             self.assertTrue(any("agent" in t for t in top_texts))
             self.assertTrue(any("env" in t for t in top_texts))
-            self.assertTrue(any(t == "config" for t in top_texts))
+            self.assertTrue(any("config" in t.lower() for t in top_texts))
+            self.assertTrue("config" in top_texts[0].lower(), "Global defaults config must be pinned at the top")
             self.assertFalse(any("experiment" in t for t in top_texts))
         finally:
             comp_tree.close()
@@ -227,6 +241,62 @@ class TestConfigTree(unittest.TestCase):
         finally:
             comp_tree.close()
 
+    def test_experiments_mode_header_buttons(self):
+        from PyQt6.QtWidgets import QToolButton
+        exp_tree = ConfigTreeWidget(root_dir=self.root, mode="experiments")
+        try:
+            self.assertIsInstance(exp_tree.btn_launch, QToolButton)
+            self.assertIsNone(exp_tree.btn_save)
+            self.assertIsInstance(exp_tree.btn_export, QToolButton)
+            self.assertIsInstance(exp_tree.btn_toggle_yaml, QToolButton)
+            self.assertEqual(exp_tree.btn_launch.property("svg_icon"), "launch")
+            self.assertEqual(exp_tree.btn_export.property("svg_icon"), "export")
+            self.assertEqual(exp_tree.btn_toggle_yaml.property("svg_icon"), "raw_yaml")
+            self.assertEqual(exp_tree.btn_launch.size().width(), 30)
+            self.assertEqual(exp_tree.btn_launch.size().height(), 30)
+            self.assertEqual(exp_tree.btn_export.size().width(), 30)
+            self.assertEqual(exp_tree.btn_export.size().height(), 30)
+            self.assertEqual(exp_tree.btn_toggle_yaml.size().width(), 30)
+            self.assertEqual(exp_tree.btn_toggle_yaml.size().height(), 30)
+            self.assertFalse(exp_tree.btn_launch.isEnabled())
+            self.assertTrue(exp_tree.btn_toggle_yaml.isCheckable())
+            self.assertIsNone(exp_tree.btn_hub)
+            self.assertIsNone(exp_tree.btn_toggle_raw)
+
+            header_widgets = [
+                exp_tree.header_layout.itemAt(i).widget()
+                for i in range(exp_tree.header_layout.count())
+                if exp_tree.header_layout.itemAt(i).widget() is not None
+            ]
+            self.assertIn(exp_tree.btn_new, header_widgets)
+            self.assertIn(exp_tree.btn_duplicate, header_widgets)
+            self.assertIn(exp_tree.btn_launch, header_widgets)
+            self.assertIn(exp_tree.btn_export, header_widgets)
+            self.assertIn(exp_tree.btn_toggle_yaml, header_widgets)
+            self.assertNotIn(exp_tree.btn_save, header_widgets)
+        finally:
+            exp_tree.close()
+
+    def test_hyperparameter_sweepers_folder_renamed(self):
+        from PyQt6.QtWidgets import QTreeWidgetItem
+        (self.root / "hydra" / "sweeper").mkdir(parents=True)
+        (self.root / "hydra" / "sweeper" / "optuna.yaml").write_text("n_trials: 10\n", encoding="utf-8")
+        tree = ConfigTreeWidget(root_dir=self.root, mode="components")
+        try:
+            sweeper_items = []
+            def find_sweepers(parent):
+                count = parent.childCount() if isinstance(parent, QTreeWidgetItem) else parent.topLevelItemCount()
+                for i in range(count):
+                    child = parent.child(i) if isinstance(parent, QTreeWidgetItem) else parent.topLevelItem(i)
+                    if child.text(0) == "Hyperparameter Sweepers":
+                        sweeper_items.append(child)
+                    find_sweepers(child)
+            find_sweepers(tree.tree)
+            self.assertEqual(len(sweeper_items), 1)
+        finally:
+            tree.close()
+
+
 
 @unittest.skipIf(not HAS_PYQT6, "PyQt6 not installed in current environment")
 class TestConfigViewer(unittest.TestCase):
@@ -247,6 +317,7 @@ class TestConfigViewer(unittest.TestCase):
             encoding="utf-8"
         )
         self.viewer = ConfigViewer()
+        self.viewer.auto_save = True
         self.viewer.load_file(self.file_path, "experiment/test_exp.yaml")
 
     def tearDown(self):
@@ -260,26 +331,32 @@ class TestConfigViewer(unittest.TestCase):
 
         # Boxes should be created as styled cards
         cards = self.viewer.findChildren(ConfigBox)
-        self.assertGreaterEqual(len(cards), 3)
+        self.assertGreaterEqual(len(cards), 2)
 
     def test_edits_mark_dirty_and_remember_values(self):
         events = []
         self.viewer.config_changed.connect(lambda: events.append(True))
 
         self.assertFalse(self.viewer.is_dirty)
+        self.assertEqual(self.viewer.dirty_status.text(), "")
         self.viewer.spin_seed.setValue(999)
 
-        self.assertTrue(self.viewer.is_dirty)
+        # Edits immediately auto-save to disk without showing dirty status
+        self.assertFalse(self.viewer.is_dirty)
+        self.assertEqual(self.viewer.dirty_status.text(), "")
         self.assertEqual(len(events), 1)
         self.assertEqual(self.viewer.raw_data["seed"], 999)
 
+        # Verify disk contents are updated immediately
+        disk_data = yaml.safe_load(self.file_path.read_text(encoding="utf-8"))
+        self.assertEqual(disk_data["seed"], 999)
+
     def test_save_to_disk(self):
         self.viewer.spin_timesteps.setValue(50000)
-        self.assertTrue(self.viewer.is_dirty)
-
         saved = self.viewer.save_to_disk()
         self.assertTrue(saved)
         self.assertFalse(self.viewer.is_dirty)
+        self.assertEqual(self.viewer.dirty_status.text(), "")
 
         # Verify disk contents
         data = yaml.safe_load(self.file_path.read_text(encoding="utf-8"))
@@ -293,10 +370,277 @@ class TestConfigViewer(unittest.TestCase):
 
     def test_boxes_do_not_have_titles_or_subtitles(self):
         cards = self.viewer.findChildren(ConfigBox)
-        self.assertGreaterEqual(len(cards), 3)
+        self.assertGreaterEqual(len(cards), 2)
         for card in cards:
             self.assertIsNone(card.title_label)
             self.assertIsNone(card.subtitle_label)
+
+    def test_config_viewer_header_has_no_save_button(self):
+        from PyQt6.QtWidgets import QPushButton
+        buttons = self.viewer.header_bar.findChildren(QPushButton)
+        self.assertEqual(len(buttons), 0)
+
+    def test_title_displayed_without_yaml(self):
+        self.assertEqual(self.viewer.file_title.text(), "test_exp")
+
+    def test_redundant_experiment_id_not_in_box_1_form(self):
+        cards = self.viewer.findChildren(ConfigBox)
+        self.assertGreaterEqual(len(cards), 1)
+        box_1 = cards[0]
+        # Inspect rows in form layouts inside box 1
+        labels = [lbl.text() for lbl in box_1.findChildren(QLabel)]
+        self.assertNotIn("Experiment ID", labels)
+
+    def test_paradigm_badge_hidden_in_experiment_pane(self):
+        self.assertTrue(self.viewer.paradigm_badge.isHidden())
+        header_widgets = [
+            self.viewer.header_bar.layout().itemAt(i).widget()
+            for i in range(self.viewer.header_bar.layout().count())
+            if self.viewer.header_bar.layout().itemAt(i).widget() is not None
+        ]
+        self.assertNotIn(self.viewer.paradigm_badge, header_widgets)
+
+    def test_experiment_identity_box_removed_and_first_box_is_budget(self):
+        cards = self.viewer.findChildren(ConfigBox)
+        self.assertEqual(len(cards), 2)  # Overrides mode: Budget & Methods
+
+        # Toggling to Show Resolved Defaults resolves and renders inherited blocks
+        self.viewer.chk_view_mode.setChecked(True)
+        resolved_cards = self.viewer.findChildren(ConfigBox)
+        self.assertGreaterEqual(len(resolved_cards), 3)
+
+        all_labels = [lbl.text() for lbl in self.viewer.findChildren(QLabel)]
+        self.assertNotIn("Group", all_labels)
+        self.assertNotIn("Paradigm", all_labels)
+        self.assertNotIn("Inherits Defaults", all_labels)
+
+        budget_card = cards[0]
+        budget_labels = [lbl.text() for lbl in budget_card.findChildren(QLabel)]
+        self.assertIn("Total Timesteps", budget_labels)
+        self.assertIn("Random Seed", budget_labels)
+
+    def test_redundant_params_stripped_from_experiment_yamls(self):
+        exp_file = Path(self.temp_dir.name) / "custom_exp.yaml"
+        exp_file.write_text(
+            "experiment_id: custom_exp\n"
+            "group: cartpole\n"
+            "seed: 42\n"
+            "total_timesteps: 10000\n",
+            encoding="utf-8"
+        )
+        viewer = ConfigViewer()
+        viewer.auto_save = True
+        viewer.load_file(exp_file, "experiment/cartpole/custom_exp.yaml")
+
+        self.assertNotIn("experiment_id", viewer.raw_data)
+        self.assertNotIn("group", viewer.raw_data)
+
+        viewer.save_to_disk()
+        saved_text = exp_file.read_text(encoding="utf-8")
+        saved_data = yaml.safe_load(saved_text)
+        self.assertNotIn("experiment_id", saved_data)
+        self.assertNotIn("group", saved_data)
+        self.assertEqual(saved_data.get("seed"), 42)
+        self.assertEqual(saved_data.get("total_timesteps"), 10000)
+
+    def test_redundant_params_filtered_in_generic_boxes(self):
+        agent_file = Path(self.temp_dir.name) / "agent_test.yaml"
+        agent_file.write_text("algorithm: test_algo\nlr: 0.001\nbatch_size: 64\n", encoding="utf-8")
+        viewer2 = ConfigViewer()
+        viewer2.load_file(agent_file, "agent/agent_test.yaml")
+        self.assertEqual(viewer2.file_title.text(), "agent_test")
+        labels = [lbl.text() for lbl in viewer2.findChildren(QLabel)]
+        self.assertNotIn("algorithm", labels)
+        self.assertIn("lr", labels)
+        self.assertIn("batch_size", labels)
+        viewer2.close()
+
+    def test_title_double_click_and_cancel(self):
+        self.viewer._start_title_edit()
+        self.assertFalse(self.viewer.title_editor.isHidden())
+        self.assertTrue(self.viewer.file_title.isHidden())
+        self.assertEqual(self.viewer.title_editor.text(), "test_exp")
+
+        self.viewer._cancel_title_edit()
+        self.assertTrue(self.viewer.title_editor.isHidden())
+        self.assertFalse(self.viewer.file_title.isHidden())
+        self.assertEqual(self.viewer.file_title.text(), "test_exp")
+
+    def test_title_edit_commit_renames_file_and_rewrites_params(self):
+        renamed_signals = []
+        self.viewer.file_renamed.connect(lambda old, new: renamed_signals.append((old, new)))
+
+        self.viewer._start_title_edit()
+        self.viewer.title_editor.setText("renamed_exp")
+        self.viewer._commit_title_edit()
+
+        # Title display updated
+        self.assertEqual(self.viewer.file_title.text(), "renamed_exp")
+        self.assertFalse(self.viewer.title_editor.isVisible())
+
+        # Old file should not exist, new file should exist
+        old_file = Path(self.temp_dir.name) / "test_exp.yaml"
+        new_file = Path(self.temp_dir.name) / "renamed_exp.yaml"
+        self.assertFalse(old_file.exists())
+        self.assertTrue(new_file.exists())
+
+        # Redundant experiment_id is stripped from experiment YAMLs
+        self.assertNotIn("experiment_id", self.viewer.raw_data)
+        disk_data = yaml.safe_load(new_file.read_text(encoding="utf-8"))
+        self.assertNotIn("experiment_id", disk_data)
+        self.assertEqual(self.viewer.txt_exp_id.text(), "renamed_exp")
+
+        # Signal emitted
+        self.assertEqual(len(renamed_signals), 1)
+        self.assertEqual(renamed_signals[0], ("experiment/test_exp.yaml", "experiment/renamed_exp.yaml"))
+
+    def test_title_edit_commit_capitalization_case_change(self):
+        # Renaming with only capitalization change (e.g. test_exp -> Test_Exp)
+        # must succeed on case-insensitive filesystems without false "already exists" error
+        self.viewer._start_title_edit()
+        self.viewer.title_editor.setText("Test_Exp")
+        self.viewer._commit_title_edit()
+
+        self.assertEqual(self.viewer.file_title.text(), "Test_Exp")
+        self.assertEqual(self.viewer.txt_exp_id.text(), "Test_Exp")
+        self.assertNotIn("experiment_id", self.viewer.raw_data)
+        self.assertEqual(self.viewer.current_path.name, "Test_Exp.yaml")
+        self.assertTrue(self.viewer.current_path.exists())
+
+    def test_breadcrumb_and_group_defaults_header(self):
+        exp_path = Path(self.temp_dir.name) / "exp1.yaml"
+        exp_path.write_text("total_timesteps: 5000\n", encoding="utf-8")
+        self.viewer.load_file(exp_path, "experiment/cartpole/exp1.yaml")
+        self.assertEqual(self.viewer.file_title.text(), "exp1")
+        self.assertFalse(self.viewer.group_badge.isHidden())
+        self.assertFalse(self.viewer.breadcrumb_sep.isHidden())
+
+        base_path = Path(self.temp_dir.name) / "_base.yaml"
+        base_path.write_text("paradigm: online_rl\n", encoding="utf-8")
+        self.viewer.load_file(base_path, "experiment/cartpole/_base.yaml")
+        self.assertEqual(self.viewer.file_title.text(), "Group Defaults")
+        self.assertEqual(self.viewer.group_badge.text(), "cartpole")
+        self.assertFalse(self.viewer.group_badge.isHidden())
+        self.assertTrue(self.viewer.breadcrumb_sep.isHidden())
+
+    def test_description_field_persistence_and_overrides(self):
+        self.assertIsNotNone(self.viewer.txt_description)
+        self.viewer.auto_save = False
+        self.viewer.txt_description.setText("My test hypothesis")
+        self.assertEqual(self.viewer.raw_data.get("description"), "My test hypothesis")
+        self.assertTrue(self.viewer.is_dirty)
+
+        overrides = self.viewer.get_overrides()
+        self.assertIn("++description='My test hypothesis'", overrides)
+
+        self.viewer.save_to_disk()
+        saved = yaml.safe_load(self.viewer.current_path.read_text(encoding="utf-8"))
+        self.assertEqual(saved.get("description"), "My test hypothesis")
+
+        # Empty description is cleaned
+        self.viewer.txt_description.setText("")
+        self.assertNotIn("description", self.viewer.raw_data)
+        self.viewer.save_to_disk()
+        saved_empty = yaml.safe_load(self.viewer.current_path.read_text(encoding="utf-8"))
+        self.assertNotIn("description", saved_empty)
+
+    def test_universal_params_crud(self):
+        # Adding universal parameter
+        self.viewer._add_universal_param("cql_alpha", 5.0)
+        self.assertEqual(self.viewer.raw_data["methods"]["params"]["cql_alpha"], 5.0)
+        self.assertIn("++methods.params.cql_alpha=5.0", self.viewer.get_overrides())
+
+        # Modifying universal parameter
+        self.viewer._on_universal_param_edited("cql_alpha", "10.0")
+        self.assertEqual(self.viewer.raw_data["methods"]["params"]["cql_alpha"], 10.0)
+
+        # Removing universal parameter
+        self.viewer._remove_universal_param("cql_alpha")
+        self.assertNotIn("cql_alpha", self.viewer.raw_data.get("methods", {}).get("params", {}))
+
+    def test_method_hyperparameter_crud(self):
+        # Adding hyperparameter to method
+        self.viewer._add_method_param("ppo", "ent_coef", 0.05)
+        self.assertEqual(self.viewer.raw_data["methods"]["ppo"]["ent_coef"], 0.05)
+        self.assertIn("++methods.ppo.ent_coef=0.05", self.viewer.get_overrides())
+
+        # Removing hyperparameter from method
+        self.viewer._remove_method_param("ppo", "ent_coef")
+        self.assertNotIn("ent_coef", self.viewer.raw_data["methods"]["ppo"])
+
+    def test_modular_block_crud(self):
+        # Add resources block
+        self.assertNotIn("resources", self.viewer.raw_data)
+        self.viewer.add_block("resources")
+        self.assertIn("resources", self.viewer.raw_data)
+        self.assertEqual(self.viewer.raw_data["resources"]["gpus"], 1)
+
+        # Add trainer block
+        self.assertNotIn("trainer", self.viewer.raw_data)
+        self.viewer.add_block("trainer")
+        self.assertIn("trainer", self.viewer.raw_data)
+
+        # Remove resources block
+        self.viewer.remove_block("resources")
+        self.assertNotIn("resources", self.viewer.raw_data)
+
+    def test_dataset_card_specification(self):
+        self.viewer.add_block("dataset")
+        self.assertIn("dataset_path", self.viewer.raw_data)
+        self.viewer._on_field_edited("dataset_path", "in/datasets/mimic/train.pkl")
+        self.assertIn("dataset_path='in/datasets/mimic/train.pkl'", self.viewer.get_overrides())
+
+    def test_method_inline_rename(self):
+        self.viewer.auto_save = False
+        self.viewer.raw_data["methods"] = {"ppo": {"agent": "ppo"}, "cql": {"agent": "cql"}}
+        self.viewer.rename_method("ppo", "ppo_renamed")
+        self.assertIn("ppo_renamed", self.viewer.raw_data["methods"])
+        self.assertNotIn("ppo", self.viewer.raw_data["methods"])
+        self.assertEqual(list(self.viewer.raw_data["methods"].keys()), ["ppo_renamed", "cql"])
+        self.assertTrue(self.viewer.is_dirty)
+
+    def test_method_reordering(self):
+        self.viewer.auto_save = False
+        self.viewer.raw_data["methods"] = {
+            "params": {"lr": 0.001},
+            "m1": {"agent": "ppo"},
+            "m2": {"agent": "cql"},
+            "m3": {"agent": "cew"},
+        }
+        self.viewer.reorder_method("m3", 0)
+        self.assertEqual(list(self.viewer.raw_data["methods"].keys()), ["params", "m3", "m1", "m2"])
+        self.viewer.reorder_method("m1", 2)
+        self.assertEqual(list(self.viewer.raw_data["methods"].keys()), ["params", "m3", "m2", "m1"])
+        self.assertTrue(self.viewer.is_dirty)
+
+    def test_method_param_auto_populates_default(self):
+        self.viewer.raw_data["methods"] = {"ppo": {"agent": "ppo"}}
+        self.viewer._add_method_param("ppo", "ent_coef")
+        self.assertEqual(self.viewer.raw_data["methods"]["ppo"]["ent_coef"], 0.01)
+
+        self.viewer._add_universal_param("lr")
+        self.assertEqual(self.viewer.raw_data["methods"]["params"]["lr"], 0.0003)
+
+    def test_add_overrides_button_and_labels(self):
+        self.assertEqual(self.viewer.btn_add_block.text(), "+ Add Overrides ▾")
+
+    def test_group_double_click_rename(self):
+        root = Path(self.temp_dir.name)
+        group_dir = root / "experiment" / "cartpole"
+        group_dir.mkdir(parents=True, exist_ok=True)
+        exp_file = group_dir / "exp1.yaml"
+        exp_file.write_text("paradigm: online_rl\n", encoding="utf-8")
+
+        self.viewer.load_file(exp_file, "experiment/cartpole/exp1.yaml")
+        self.viewer._start_group_edit()
+        self.viewer.group_editor.setText("cartpole_renamed")
+        renamed_signals = []
+        self.viewer.group_renamed.connect(lambda o, n: renamed_signals.append((o, n)))
+        self.viewer._commit_group_edit()
+
+        self.assertEqual(self.viewer.current_rel_path, "experiment/cartpole_renamed/exp1.yaml")
+        self.assertTrue((root / "experiment" / "cartpole_renamed" / "exp1.yaml").exists())
+        self.assertEqual(renamed_signals, [("cartpole", "cartpole_renamed")])
 
 
 @unittest.skipIf(not HAS_PYQT6, "PyQt6 not installed in current environment")
@@ -315,6 +659,7 @@ class TestComponentsPanel(unittest.TestCase):
         self.panel = ComponentsPanel()
         self.panel.components_tree.root_dir = self.root
         self.panel.components_tree.populate()
+        self.panel.components_tree.select_file("agent/ppo.yaml")
 
     def tearDown(self):
         self.panel.close()
@@ -329,7 +674,7 @@ class TestComponentsPanel(unittest.TestCase):
     def test_select_component_loads_into_viewer_and_raw_editor(self):
         ok = self.panel.components_tree.select_file("agent/ppo.yaml")
         self.assertTrue(ok)
-        self.assertEqual(self.panel.viewer.file_title.text(), "ppo.yaml")
+        self.assertEqual(self.panel.viewer.file_title.text(), "ppo")
         self.assertIn("lr", self.panel.viewer.raw_data)
         cards = self.panel.viewer.findChildren(ConfigBox)
         self.assertGreaterEqual(len(cards), 1)
@@ -365,7 +710,7 @@ class TestComponentsPanel(unittest.TestCase):
         self.assertFalse(self.panel.btn_hub.isChecked())
         self.assertFalse(self.panel.btn_toggle_raw.isHidden())
         self.assertEqual(self.panel.content_stack.currentWidget(), self.panel.content_splitter)
-        self.assertEqual(self.panel.viewer.file_title.text(), "cartpole.yaml")
+        self.assertEqual(self.panel.viewer.file_title.text(), "cartpole")
 
     def test_component_hub_toggle_and_close_button(self):
         # Open hub
@@ -411,6 +756,111 @@ class TestComponentsPanel(unittest.TestCase):
         self.assertFalse(self.panel.is_hub_active)
         self.assertEqual(self.panel.content_stack.currentWidget(), self.panel.content_splitter)
 
+    def test_hub_and_raw_yaml_buttons_in_tree_header(self):
+        from PyQt6.QtWidgets import QToolButton
+        tree = self.panel.components_tree
+        tree = self.panel.components_tree
+        self.assertIsNone(self.panel.btn_save)
+        self.assertIsInstance(self.panel.btn_hub, QToolButton)
+        self.assertIsInstance(self.panel.btn_toggle_raw, QToolButton)
+        self.assertEqual(self.panel.btn_hub.property("svg_icon"), "hub")
+        self.assertEqual(self.panel.btn_toggle_raw.property("svg_icon"), "raw_yaml")
+        self.assertEqual(self.panel.btn_hub.size().width(), 30)
+        self.assertEqual(self.panel.btn_hub.size().height(), 30)
+        self.assertEqual(self.panel.btn_toggle_raw.size().width(), 30)
+        self.assertEqual(self.panel.btn_toggle_raw.size().height(), 30)
+        # Verify they reside in the tree header layout next to btn_new and btn_duplicate
+        self.assertIs(tree.btn_hub, self.panel.btn_hub)
+        self.assertIs(tree.btn_toggle_raw, self.panel.btn_toggle_raw)
+        header_widgets = [
+            tree.header_layout.itemAt(i).widget()
+            for i in range(tree.header_layout.count())
+            if tree.header_layout.itemAt(i).widget() is not None
+        ]
+        self.assertIn(tree.btn_new, header_widgets)
+        self.assertIn(tree.btn_duplicate, header_widgets)
+        self.assertIn(tree.btn_hub, header_widgets)
+        self.assertIn(tree.btn_toggle_raw, header_widgets)
+        self.assertNotIn(tree.btn_save, header_widgets)
+
+    def test_filetree_unsynced_indicator(self):
+        # Initial state: clean
+        item = self.panel.components_tree.find_file_item("agent/ppo.yaml")
+        self.assertIsNotNone(item)
+        self.assertEqual(item.text(0), "ppo")
+        self.assertEqual(self.panel.viewer.dirty_status.text(), "")
+        self.assertIsNone(self.panel.btn_save)
+
+        # Modify value in viewer
+        from frontend.widgets import SpinBox, DoubleSpinBox
+        from frontend.config_viewer import ConfigBox
+        card = self.panel.viewer.findChildren(ConfigBox)[0]
+        spins = card.findChildren(SpinBox) + card.findChildren(DoubleSpinBox)
+        self.assertGreater(len(spins), 0)
+        orig_val = spins[0].value()
+        spins[0].setValue(orig_val + 1)
+
+        # Value immediately auto-saves to disk without needing a save button or dirty dot
+        self.assertFalse(self.panel.viewer.is_dirty)
+        self.assertEqual(self.panel.viewer.dirty_status.text(), "")
+        self.assertEqual(item.text(0), "ppo")
+        self.assertIsNone(item.data(0, Qt.ItemDataRole.ForegroundRole))
+
+        # Disk is updated live
+        ppo_disk = (self.root / "agent" / "ppo.yaml").read_text(encoding="utf-8")
+        self.assertIn(str(orig_val + 1), ppo_disk)
+
+    def test_switching_clean_files_does_not_mark_dirty_or_corrupt_colors(self):
+        # Click item 1
+        self.panel.components_tree.select_file("agent/ppo.yaml")
+        item1 = self.panel.components_tree.find_file_item("agent/ppo.yaml")
+        self.assertEqual(item1.text(0), "ppo")
+        self.assertIsNone(item1.data(0, Qt.ItemDataRole.ForegroundRole))
+
+        # Immediately click item 2 without making changes
+        self.panel.components_tree.select_file("env/cartpole.yaml")
+        item2 = self.panel.components_tree.find_file_item("env/cartpole.yaml")
+        self.assertEqual(item2.text(0), "cartpole")
+        self.assertIsNone(item2.data(0, Qt.ItemDataRole.ForegroundRole))
+
+        # Item 1 must remain clean and readable (no dot, no black brush override)
+        self.assertEqual(item1.text(0), "ppo")
+        self.assertIsNone(item1.data(0, Qt.ItemDataRole.ForegroundRole))
+        self.assertFalse(self.panel.viewer.is_dirty)
+
+    def test_component_rename_rewrites_params_and_updates_tree(self):
+        self.panel.components_tree.select_file("agent/ppo.yaml")
+        self.assertEqual(self.panel.viewer.file_title.text(), "ppo")
+
+        # Edit title in place
+        self.panel.viewer._start_title_edit()
+        self.panel.viewer.title_editor.setText("ppo_custom")
+        self.panel.viewer._commit_title_edit()
+
+        # Display updated
+        self.assertEqual(self.panel.viewer.file_title.text(), "ppo_custom")
+        self.assertEqual(self.panel.active_rel_path, "agent/ppo_custom.yaml")
+
+        # Check disk
+        old_file = self.root / "agent" / "ppo.yaml"
+        new_file = self.root / "agent" / "ppo_custom.yaml"
+        self.assertFalse(old_file.exists())
+        self.assertTrue(new_file.exists())
+
+        # Parameters rewritten in YAML
+        data = yaml.safe_load(new_file.read_text(encoding="utf-8"))
+        self.assertEqual(data.get("algorithm"), "ppo_custom")
+
+        # Raw editor preview updated
+        self.assertIn("ppo_custom", self.panel.raw_edit.toPlainText())
+
+        # Tree updated with new file
+        self.assertEqual(self.panel.components_tree.current_rel_path, "agent/ppo_custom.yaml")
+        item = self.panel.components_tree.find_file_item("agent/ppo_custom.yaml")
+        self.assertIsNotNone(item)
+        self.assertEqual(item.text(0), "ppo_custom")
+
+
 
 @unittest.skipIf(not HAS_PYQT6, "PyQt6 not installed in current environment")
 class TestExperimentPaneWindowIntegration(unittest.TestCase):
@@ -444,7 +894,7 @@ class TestExperimentPaneWindowIntegration(unittest.TestCase):
         ok = self.window.config_tree.select_file("experiment/cartpole/quick_test.yaml")
         if ok:
             self.assertEqual(self.window.current_experiment, "cartpole/quick_test")
-            self.assertEqual(self.window.config_viewer.file_title.text(), "quick_test.yaml")
+            self.assertEqual(self.window.config_viewer.file_title.text(), "quick_test")
 
     def test_experiment_pane_only_has_experiments(self):
         self.assertEqual(self.window.config_tree.mode, "experiments")
@@ -460,6 +910,41 @@ class TestExperimentPaneWindowIntegration(unittest.TestCase):
         top_count = self.window.components_panel.components_tree.tree.topLevelItemCount()
         top_texts = [self.window.components_panel.components_tree.tree.topLevelItem(i).text(0) for i in range(top_count)]
         self.assertFalse(any("experiment" in t for t in top_texts))
+
+    def test_experiment_pane_square_header_buttons_and_actions_bar_removed(self):
+        from PyQt6.QtWidgets import QToolButton
+        tree = self.window.config_tree
+        self.assertIsInstance(self.window.start_button, QToolButton)
+        self.assertIsNone(self.window.btn_save)
+        self.assertIsInstance(self.window.btn_export, QToolButton)
+        self.assertIsInstance(self.window.btn_toggle_yaml, QToolButton)
+        self.assertIs(self.window.start_button, tree.btn_launch)
+        self.assertIs(self.window.btn_export, tree.btn_export)
+        self.assertIs(self.window.btn_toggle_yaml, tree.btn_toggle_yaml)
+        self.assertEqual(self.window.start_button.property("svg_icon"), "launch")
+        self.assertEqual(self.window.btn_export.property("svg_icon"), "export")
+        self.assertEqual(self.window.btn_toggle_yaml.property("svg_icon"), "raw_yaml")
+        self.assertIsNone(self.window.queue_button)
+        self.assertIsNone(self.window.stop_button)
+
+        # Header layout widgets check
+        header_widgets = [
+            tree.header_layout.itemAt(i).widget()
+            for i in range(tree.header_layout.count())
+            if tree.header_layout.itemAt(i).widget() is not None
+        ]
+        self.assertIn(tree.btn_new, header_widgets)
+        self.assertIn(tree.btn_duplicate, header_widgets)
+        self.assertIn(tree.btn_launch, header_widgets)
+        self.assertIn(tree.btn_export, header_widgets)
+        self.assertIn(tree.btn_toggle_yaml, header_widgets)
+        self.assertNotIn(tree.btn_save, header_widgets)
+
+        # Ensure right panel layout has no actions_bar
+        right_panel = self.window.preview_splitter.parentWidget()
+        right_layout = right_panel.layout()
+        self.assertEqual(right_layout.count(), 1)
+        self.assertIs(right_layout.itemAt(0).widget(), self.window.preview_splitter)
 
 
 if __name__ == "__main__":

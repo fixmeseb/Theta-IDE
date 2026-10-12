@@ -453,6 +453,27 @@ class TestParseMethodsDict:
         assert m["model_params"]["neural"]["architecture"] == "dueling_resnet"
         assert m["style"]["label"] == "BlendRL CEW+ResNet"
 
+    def test_group_method_base_decoupling(self):
+        """Methods can declare a custom key with base: pointing to a group method template."""
+        from src.app.pipeline.config import parse_methods_dict
+
+        cfg = {
+            "group": "mimic",
+            "methods": {
+                "custom_baseline": {
+                    "base": "cql_dnn",
+                    "lr": 5e-4,
+                }
+            },
+        }
+        res = parse_methods_dict(cfg)
+        assert "custom_baseline" in res
+        m = res["custom_baseline"]
+        assert m["agent"] == "cql"
+        assert m["model"] == "dnn"
+        assert m["lr"] == 5e-4
+        assert m["style"]["label"] == "DNN"
+
     def test_method_level_tune_search_space(self):
         """Methods can declare their own tune: block specifying search space intervals."""
         from src.app.pipeline.config import parse_methods_dict

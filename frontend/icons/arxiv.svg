@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+  <!-- A paper with a magnifying glass: search papers -->
+  <path d="M13 21H6a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h7l5 5v3"/>
+  <path d="M13 3v5h5"/>
+  <path d="M8 12h5M8 16h3"/>
+  <circle cx="17" cy="17" r="3"/>
+  <path d="M19.2 19.2 21.5 21.5"/>
+</svg>

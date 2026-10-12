@@ -1,0 +1,8 @@
+agent: ppo
+model: blendrl
+
+style:
+  label: "BlendRL"
+  color: "#ff7f0e"
+  marker: "s"
+  linestyle: "-"

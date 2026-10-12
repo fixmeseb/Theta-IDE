@@ -28,13 +28,53 @@ import numpy as np
 import pandas as pd
 import yaml
 
-# Import styling and alias resolution from the unified method style registry
-from src.usr.methods.method_style_registry import (
-    clean_label,
-    get_canonical_method_name,
-    get_method_aliases,
-    get_style_info,
-)
+# Qualitative palette guaranteeing distinct colors for methods on the same plot
+QUALITATIVE_PALETTE = [
+    "#1f77b4",  # blue
+    "#ff7f0e",  # orange
+    "#2ca02c",  # green
+    "#d62728",  # red
+    "#9467bd",  # purple
+    "#8c564b",  # brown
+    "#e377c2",  # pink
+    "#7f7f7f",  # gray
+    "#bcbd22",  # olive
+    "#17becf",  # cyan
+]
+
+
+def clean_label(name: str, style_override: dict | None = None) -> str:
+    """Return human-readable display label for a method name, honoring style overrides."""
+    if style_override and isinstance(style_override, dict) and style_override.get("label"):
+        return str(style_override["label"])
+    return str(name)
+
+
+def get_canonical_method_name(name: str) -> str:
+    """Map method name to normalized form."""
+    return str(name).replace("/", "_")
+
+
+def get_method_aliases(name: str) -> set[str]:
+    """Return all known aliases (raw and normalized) for a method identifier."""
+    raw = str(name)
+    return {raw, raw.replace("/", "_")}
+
+
+def get_style(name: str, style_override: dict | None = None) -> dict:
+    """Return style dictionary for a method name, incorporating overrides."""
+    base = {"label": str(name), "color": None, "marker": "o", "linestyle": "-"}
+    if style_override and isinstance(style_override, dict):
+        for k in ("label", "color", "marker", "linestyle"):
+            if style_override.get(k) is not None:
+                base[k] = style_override[k]
+    return base
+
+
+def get_style_info(name: str, style_override: dict | None = None) -> tuple[str | None, str, str]:
+    """Return (color, linestyle, marker) tuple for plotting."""
+    s = get_style(name, style_override=style_override)
+    return s.get("color"), s.get("linestyle", "-"), s.get("marker", "o")
 
 
 def moving_average(a: np.ndarray, n: int = 5) -> np.ndarray:
@@ -261,16 +301,28 @@ class BasePlotter:
         group = self.get_group(exp_id, exp_cfg)
         clean_exp = Path(exp_id).stem
 
-        # Extract per-plotter options from experiment YAML
+        # Extract general plot options and per-plotter options from experiment YAML
+        general_plot_opts = {}
         exp_plot_opts = {}
         plots_sec = exp_cfg.get("plots", {})
-        if isinstance(plots_sec, dict) and self.name in plots_sec:
-            if isinstance(plots_sec[self.name], dict):
+        if isinstance(plots_sec, dict):
+            # General plot parameters (e.g. title, xlabel, ylabel, smoothing_window, figsize, dpi)
+            for k, v in plots_sec.items():
+                if k != self.name and k != "output_dir" and not (isinstance(v, dict) and k not in ("style", "figsize")):
+                    general_plot_opts[k] = v
+            if self.name in plots_sec and isinstance(plots_sec[self.name], dict):
                 exp_plot_opts = plots_sec[self.name]
 
-        merged = deep_update(self.default_cfg, exp_plot_opts)
+        merged = deep_update(self.default_cfg, general_plot_opts)
+        merged = deep_update(merged, exp_plot_opts)
         if cli_overrides:
             merged = deep_update(merged, cli_overrides)
+
+        # Retain method definitions and group for method-level plot styling
+        if "methods" in exp_cfg:
+            merged["methods"] = exp_cfg["methods"]
+        merged["group"] = group
+        merged["_exp_config"] = exp_cfg
 
         # Allow output_dir to be explicitly overridden in plotter config, experiment config, or CLI
         if "output_dir" in merged and merged["output_dir"]:
@@ -397,7 +449,82 @@ class BasePlotter:
             plt.figure(figsize=figsize)
             has_data = False
             used_xlabel = None
+
+            # 1. Determine active methods that have valid data for this metric
+            active_methods = []
             for method_name, versions in sorted(runs_data.items()):
+                for v_name, df in versions.items():
+                    if metric in df.columns and not df.dropna(subset=[metric]).empty:
+                        active_methods.append(method_name)
+                        break
+
+            if not active_methods:
+                plt.close()
+                continue
+
+            # 2. Build per-graph style map to guarantee distinct colors for all methods on this plot
+            method_styles: dict[str, dict] = {}
+            reserved_colors = set()
+            methods_cfg = cfg.get("methods", {}) if isinstance(cfg.get("methods"), dict) else {}
+
+            for m_name in active_methods:
+                style_dict = {}
+                m_entry = methods_cfg.get(m_name, {})
+                if isinstance(m_entry, dict):
+                    if "style" in m_entry and isinstance(m_entry["style"], dict):
+                        style_dict.update(m_entry["style"])
+                    for k in ("label", "color", "linestyle", "marker", "display_name"):
+                        if k in m_entry and m_entry[k] is not None:
+                            target_k = "label" if k == "display_name" else k
+                            style_dict[target_k] = m_entry[k]
+
+                if not style_dict:
+                    from src.app.pipeline.config import find_group_method_config
+
+                    gm_cfg = find_group_method_config(m_name, group=group)
+                    if gm_cfg and isinstance(gm_cfg, dict):
+                        if "style" in gm_cfg and isinstance(gm_cfg["style"], dict):
+                            style_dict.update(gm_cfg["style"])
+                        for k in ("label", "color", "linestyle", "marker", "display_name"):
+                            if k in gm_cfg and gm_cfg[k] is not None:
+                                target_k = "label" if k == "display_name" else k
+                                style_dict[target_k] = gm_cfg[k]
+
+                # Fallback label: method_name
+                if not style_dict.get("label"):
+                    style_dict["label"] = m_name
+
+                # Reserve explicit color
+                if style_dict.get("color"):
+                    reserved_colors.add(style_dict["color"])
+
+                method_styles[m_name] = style_dict
+
+            # Assign distinct colors from QUALITATIVE_PALETTE to methods without explicit color
+            palette_idx = 0
+            for m_name in active_methods:
+                if not method_styles[m_name].get("color"):
+                    while (
+                        palette_idx < len(QUALITATIVE_PALETTE) and QUALITATIVE_PALETTE[palette_idx] in reserved_colors
+                    ):
+                        palette_idx += 1
+                    if palette_idx < len(QUALITATIVE_PALETTE):
+                        chosen_color = QUALITATIVE_PALETTE[palette_idx]
+                        palette_idx += 1
+                    else:
+                        chosen_color = QUALITATIVE_PALETTE[palette_idx % len(QUALITATIVE_PALETTE)]
+                        palette_idx += 1
+                    method_styles[m_name]["color"] = chosen_color
+                    reserved_colors.add(chosen_color)
+
+                if not method_styles[m_name].get("linestyle"):
+                    method_styles[m_name]["linestyle"] = "-"
+                if not method_styles[m_name].get("marker"):
+                    method_styles[m_name]["marker"] = "o"
+
+            for method_name, versions in sorted(runs_data.items()):
+                if method_name not in method_styles:
+                    continue
                 all_x = []
                 all_y = []
 
@@ -431,21 +558,11 @@ class BasePlotter:
                             all_y.append(y_vals)
 
                 if all_y:
-                    # Resolve style from experiment config or group methods YAML
-                    method_style = None
-                    if isinstance(cfg, dict) and "methods" in cfg and isinstance(cfg["methods"], dict):
-                        m_entry = cfg["methods"].get(method_name, {})
-                        if isinstance(m_entry, dict) and "style" in m_entry:
-                            method_style = m_entry["style"]
-                    if method_style is None:
-                        from src.app.pipeline.config import find_group_method_config
-
-                        gm_cfg = find_group_method_config(method_name, group=group)
-                        if gm_cfg and "style" in gm_cfg:
-                            method_style = gm_cfg["style"]
-
-                    display_name = clean_label(method_name, style_override=method_style)
-                    color, ls, marker = get_style_info(method_name, style_override=method_style)
+                    has_data = True
+                    display_name = method_styles[method_name]["label"]
+                    color = method_styles[method_name]["color"]
+                    ls = method_styles[method_name]["linestyle"]
+                    marker = method_styles[method_name]["marker"]
 
                     if len(all_y) > 1:
                         # Multi-version: compute mean ± SEM across versions

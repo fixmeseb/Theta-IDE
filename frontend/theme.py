@@ -112,7 +112,7 @@ def write_json(path, value):
 
 
 _BASE_STYLE = """
-* { color: #ebdbb2; font-family: 'Segoe UI'; font-size: 12px; }
+* { color: #ebdbb2; font-family: .AppleSystemUIFont, "Segoe UI", system-ui, sans-serif; font-size: 12px; }
 QMainWindow, QDialog { background: #1d2021; }
 QWidget { background: #282828; }
 QMenuBar, QMenu, QToolBar, QStatusBar { background: #1d2021; }
@@ -162,7 +162,7 @@ QSpinBox::up-arrow, QDoubleSpinBox::up-arrow { image: url("@ARROW_UP@"); width: 
 QSpinBox::down-arrow, QDoubleSpinBox::down-arrow { image: url("@ARROW_DOWN@"); width: 10px; height: 10px; }
 QSpinBox::up-arrow:disabled, QSpinBox::up-arrow:off, QDoubleSpinBox::up-arrow:disabled, QDoubleSpinBox::up-arrow:off { image: url("@ARROW_UP_OFF@"); }
 QSpinBox::down-arrow:disabled, QSpinBox::down-arrow:off, QDoubleSpinBox::down-arrow:disabled, QDoubleSpinBox::down-arrow:off { image: url("@ARROW_DOWN_OFF@"); }
-QPlainTextEdit, QTextEdit { background: #1d2021; border: 0; padding: 10px; selection-background-color: #504945; font-family: 'Cascadia Code', 'Consolas', monospace; font-size: 12px; }
+QPlainTextEdit, QTextEdit { background: #1d2021; border: 0; padding: 10px; selection-background-color: #504945; font-family: Menlo, Monaco, 'Cascadia Code', 'Consolas', monospace; font-size: 12px; }
 QTreeWidget, QTableWidget { background: #282828; alternate-background-color: #32302f; border: 0; outline: 0; }
 QTreeWidget::item { padding: 6px 2px; }
 QTreeWidget::item:selected, QTableWidget::item:selected { background: #504945; color: #fabd2f; }
@@ -203,6 +203,31 @@ QToolButton#sideTab:checked { background: #3c3836; color: #fabd2f; }
 QToolButton#sideTabLogo { background: transparent; border: 0; border-radius: 6px; padding: 6px 0; margin-bottom: 2px; }
 QToolButton#sideTabLogo:hover { background: #32302f; }
 QToolButton#sideTabLogo:checked { background: #3c3836; border: 1px solid #504945; }
+QToolButton#sideTabBin { background: transparent; border: 0; border-radius: 5px; padding: 3px 2px 3px 3px; color: #a89984; font-size: 10px; font-weight: 600; text-align: left; }
+QToolButton#sideTabBin:hover { background: #32302f; color: #ebdbb2; }
+QToolButton#sideTabBin:checked { color: #fabd2f; }
+QLineEdit#sideTabBinEditor { font-size: 10px; padding: 1px 3px; border: 1px solid #fabd2f; border-radius: 4px; background: #1d2021; color: #ebdbb2; }
+QFrame#resultsChartCard { border: 1px solid #3c3836; border-radius: 5px; }
+QFrame#resultsChartCard[flat="true"] { border: 0; }
+QWidget#resultsCardCorner, QLabel#resultsCardValue { background: transparent; }
+QLabel#resultsCardValue { font-weight: 600; }
+QToolButton#resultsSection { background: transparent; border: 0; border-bottom: 1px solid #3c3836; border-radius: 0; color: #83a598; font-size: 10px; font-weight: 700; padding: 6px 2px; text-align: left; }
+QToolButton#resultsSection:hover { color: #ebdbb2; }
+QWidget#resultsKpiStrip { background: transparent; }
+QFrame#resultsKpi { background: #32302f; border: 1px solid #3c3836; border-radius: 6px; }
+QFrame#resultsKpi:hover { border-color: #504945; }
+QFrame#resultsKpi[primary="true"] { border: 1px solid #fabd2f; }
+QFrame#resultsKpi QLabel { background: transparent; }
+QLabel#resultsKpiName { font-weight: 600; }
+QLabel#resultsKpiCaption { color: #928374; font-size: 10px; }
+QLabel#resultsKpiValue { font-size: 15px; font-weight: 600; }
+QPushButton#resultsChip { background: #32302f; border: 1px solid #3c3836; border-radius: 4px; padding: 5px 10px; }
+QPushButton#resultsChip:checked { background: #3c3836; border-color: #fabd2f; color: #fabd2f; }
+QFrame#resultsSparkline { background: #32302f; border: 1px solid #3c3836; border-radius: 5px; }
+QFrame#resultsSparkline:hover { border-color: #504945; }
+QFrame#resultsSparkline[focused="true"] { border: 1px solid #fabd2f; }
+QListWidget#resultsPlotsList { background: #282828; border: 0; outline: 0; }
+QListWidget#resultsPlotsList::item { padding: 3px 2px; }
 QLabel#configOk { color: #b8bb26; }
 QLabel#configError { color: #d79921; }
 """
@@ -223,13 +248,20 @@ def _chevron(direction, color):
     return path.as_posix()
 
 
-def stylesheet(theme):
+def stylesheet(theme, zoom: float = 1.0):
     colors = theme["colors"]
     style = re.sub(r"#[0-9a-fA-F]{6}", lambda m: colors[_LEGACY_ROLES[m[0]]], _BASE_STYLE)
     for direction in _CHEVRON_POINTS:
         style = style.replace(f"@ARROW_{direction}@", _chevron(direction, colors["text"]))
         style = style.replace(f"@ARROW_{direction}_OFF@", _chevron(direction, colors["disabled"]))
-    return style.replace("@CHECK@", _chevron("CHECK", colors["base"]))
+    style = style.replace("@CHECK@", _chevron("CHECK", colors["base"]))
+    if abs(zoom - 1.0) > 1e-4:
+        def _scale_font(m):
+            size = int(m.group(1))
+            scaled = max(6, round(size * zoom))
+            return f"font-size: {scaled}px"
+        style = re.sub(r"font-size:\s*(\d+)px", _scale_font, style)
+    return style
 
 
 STYLE = stylesheet(DEFAULT)  # Backward-compatible default for tests and previews.
@@ -239,12 +271,16 @@ class ThemeManager(QObject):
     changed = pyqtSignal()
     committed = pyqtSignal(str)  # a theme the user chose to keep (not a builder preview)
 
-    def __init__(self, path, parent=None, initial_theme: str | None = None):
+    def __init__(self, path, parent=None, initial_theme: str | None = None, initial_zoom: float = 1.0):
         super().__init__(parent)
         self.path = Path(path)
         self.custom = {}
         self.active = copy.deepcopy(DEFAULT)
         self.error = None
+        self.zoom = round(float(initial_zoom), 2)
+        # Widget that set_zoom() styled directly. A widget's own stylesheet overrides the
+        # application's, so apply() must restyle it too or theme changes never reach it.
+        self._style_target = None
         # Migrate existing .appearance.json on first load (for backward compat)
         if self.path.exists():
             try:
@@ -269,13 +305,15 @@ class ThemeManager(QObject):
         elif initial_theme:
             # No .appearance.json yet — apply whatever settings.toml declares
             self.select_by_name(initial_theme, _emit=False)
-        self.apply(self.active)
+        self.apply(self.active, zoom=self.zoom)
 
     def themes(self):
         return {**BUILTINS, **self.custom}
 
-    def apply(self, theme):
+    def apply(self, theme, zoom: float | None = None):
         theme = validate_theme(theme)
+        if zoom is not None:
+            self.zoom = round(float(zoom), 2)
         app = QApplication.instance()
         app.theta_theme = copy.deepcopy(theme)
         self.active = copy.deepcopy(theme)
@@ -292,10 +330,35 @@ class ThemeManager(QObject):
         for role in (QPalette.ColorRole.Text, QPalette.ColorRole.WindowText, QPalette.ColorRole.ButtonText):
             palette.setColor(QPalette.ColorGroup.Disabled, role, QColor(colors["disabled"]))
         app.setPalette(palette)
-        app.setStyleSheet(stylesheet(theme))
+        sheet = stylesheet(theme, zoom=self.zoom)
+        app.setStyleSheet(sheet)  # top-level dialogs and anything outside the styled target
+        self._restyle_target(sheet)
         self.changed.emit()
         for widget in app.allWidgets():
             widget.update()
+
+    def set_zoom(self, zoom: float, target_widget=None):
+        """Update zoom factor and reapply current stylesheet without triggering full theme reload."""
+        self.zoom = round(float(zoom), 2)
+        ss = stylesheet(self.active, zoom=self.zoom)
+        target = target_widget or self.parent()
+        if target is not None and hasattr(target, "setStyleSheet"):
+            self._style_target = target
+            target.setStyleSheet(ss)
+        else:
+            app = QApplication.instance()
+            if app:
+                app.setStyleSheet(ss)
+
+    def _restyle_target(self, sheet):
+        """Give the zoom target the new stylesheet; forget it if Qt has already deleted it."""
+        target = self._style_target
+        if target is None:
+            return
+        try:
+            target.setStyleSheet(sheet)
+        except RuntimeError:  # wrapped C++ widget was deleted
+            self._style_target = None
 
     def select_by_name(self, name: str, _emit: bool = True) -> bool:
         """Switch the active theme to *name* without writing to .appearance.json.

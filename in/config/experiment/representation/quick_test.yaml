@@ -2,7 +2,6 @@
 defaults:
   - representation/_base
 
-experiment_id: quick_test
 seed: 42
 total_timesteps: 10000
 

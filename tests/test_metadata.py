@@ -65,8 +65,10 @@ def test_collect_run_metadata_no_cfg():
 def test_collect_run_metadata_with_cfg():
     cfg = MagicMock()
     cfg.seed = 42
+    cfg.description = "Test note"
     with patch("src.app.core.metadata.get_git_info", return_value=("hash", "dev", True)):
         meta = collect_run_metadata(cfg)
         assert meta["seed"] == 42
+        assert meta["description"] == "Test note"
         assert meta["git_dirty"] is True
         assert meta["git_diff_path"] == "git_patch.diff"

@@ -33,7 +33,7 @@ ARTICLES: List[DocArticle] = [
 <h3>Framework Architecture</h3>
 <ul>
   <li><b>Hydra Configuration Layer (<code>in/config/</code>):</b> Declarative, three-tier hierarchical configuration defining environments, agents, models, cluster resources, and experiment recipes.</li>
-  <li><b>FastAPI Backend Daemon (<code>src/app/api/</code>):</b> Decoupled API service managing local training subprocesses, Slurm cluster submissions, and job queue states.</li>
+  <li><b>In-process pipeline services (<code>src/app/services/</code>) &amp; job manager (<code>frontend/job_manager.py</code>):</b> The app composes and validates configs with the pipeline's own code and runs <code>run_pipeline.py</code> as a child process, streaming its output and metrics through Qt signals. There is no server to start.</li>
   <li><b>PyTorch Lightning Runtime (<code>src/app/train.py</code>):</b> Standardized training driver providing automated checkpointing, device acceleration (CUDA/MPS/CPU), and structured logging.</li>
   <li><b>Modular Model &amp; Method Architecture:</b> Pluggable registries for RL algorithms and model architectures. Theta-IDE ships with the <b>PPO</b>, <b>CQL</b> and <b>IQL</b> algorithms and with MLP, CNN, Dueling ResNet, Transformer, Cross-Attention and CEW models, plus the composite BlendRL model. Other algorithms and architectures can be added as plugins (see <a href="authoring_plugins">Authoring Guide</a>).</li>
   <li><b>Extensible Component Hub &amp; Plugin System:</b> Core plugins shipping natively with zero overhead when toggled off, plus community plugins (UI tabs, RL methods, models, environments, and experiment recipes) installable directly from the Community Hub.</li>
@@ -52,53 +52,29 @@ ARTICLES: List[DocArticle] = [
         id="launching",
         title="Installing & Launching",
         category="Getting Started",
-        summary="Set up the backend and frontend environments, then start Theta-IDE on macOS, Linux, or Windows.",
-        keywords=["install", "setup", "launch", "start", "run", "venv", "uvicorn", "backend", "windows", "powershell", "api url"],
+        summary="Set up the project environment, then start Theta-IDE on macOS, Linux, or Windows.",
+        keywords=["install", "setup", "launch", "start", "run", "venv", "pipeline", "windows", "powershell", "gui"],
         html_content=r"""
 <h2>Installing & Launching</h2>
-<p>Theta-IDE has two parts, each with its own virtual environment. Run every command from the <b>repository root</b>.</p>
-
-<table border="1" cellpadding="8" cellspacing="0" style="border-collapse: collapse; width: 100%; border-color: rgba(255,255,255,0.15);">
-  <tr style="background-color: rgba(255,255,255,0.05); font-weight: bold;">
-    <td>Part</td>
-    <td>What it does</td>
-    <td>Environment</td>
-  </tr>
-  <tr><td><b>Backend API</b></td><td>Validates configs, runs training, serves TensorBoard</td><td><code>venv/</code></td></tr>
-  <tr><td><b>Frontend</b></td><td>This desktop app</td><td><code>frontend/.venv/</code> (PyQt6 only)</td></tr>
-</table>
+<p>Theta-IDE runs from the same virtual environment as the training pipeline. Run every command from the <b>repository root</b>.</p>
 
 <h3>1. One-Time Setup</h3>
 <p><b>macOS / Linux:</b></p>
 <pre><code>python3 -m venv venv
 source venv/bin/activate
-pip install -e ".[api]"
-deactivate
-
-python3 -m venv frontend/.venv
-source frontend/.venv/bin/activate
-pip install -r frontend/requirements.txt</code></pre>
+pip install -e ".[gui]"</code></pre>
 
 <p><b>Windows (PowerShell):</b></p>
 <pre><code>Set-ExecutionPolicy -Scope CurrentUser RemoteSigned   # once, so venvs can activate
 
 py -m venv venv
 .\venv\Scripts\Activate.ps1
-pip install -e ".[api]"
-deactivate
+pip install -e ".[gui]"</code></pre>
 
-py -m venv frontend\.venv
-.\frontend\.venv\Scripts\Activate.ps1
-pip install -r frontend\requirements.txt</code></pre>
-
-<h3>2. Start the Backend (Terminal 1)</h3>
+<h3>2. Start Theta-IDE</h3>
 <pre><code>source venv/bin/activate          # Windows: .\venv\Scripts\Activate.ps1
-uvicorn src.app.api.app:app --host 127.0.0.1 --port 8000</code></pre>
-<p>Leave it running. Its interactive API docs are at <code>http://127.0.0.1:8000/docs</code>.</p>
-
-<h3>3. Start the Frontend (Terminal 2)</h3>
-<pre><code>source frontend/.venv/bin/activate   # Windows: .\frontend\.venv\Scripts\Activate.ps1
 python -m frontend</code></pre>
+<p>That is the only command. The app composes configs in-process and runs training itself; there is no server to start first. The status bar shows <code>PIPELINE ● local</code> once the pipeline has loaded.</p>
 
 <h3>Launch Options</h3>
 <table border="1" cellpadding="8" cellspacing="0" style="border-collapse: collapse; width: 100%; border-color: rgba(255,255,255,0.15);">
@@ -107,8 +83,7 @@ python -m frontend</code></pre>
     <td>Default</td>
     <td>Purpose</td>
   </tr>
-  <tr><td><code>--api-url &lt;url&gt;</code></td><td><code>http://127.0.0.1:8000</code></td><td>Backend address. The <code>THETAIDE_API_URL</code> environment variable sets it too.</td></tr>
-  <tr><td><code>--data-dir &lt;path&gt;</code></td><td><code>.thetaide/runs/</code></td><td>Where run records are stored.</td></tr>
+  <tr><td><code>--data-dir &lt;path&gt;</code></td><td><code>.thetaide/runs/</code></td><td>Where run records and the job database are stored.</td></tr>
   <tr><td><code>--install-desktop-entry</code></td><td></td><td><b>Linux only:</b> add Theta-IDE to the application menu, then exit.</td></tr>
 </table>
 
@@ -119,14 +94,11 @@ python -m frontend</code></pre>
   <li><b>Windows:</b> works once per launch. Windows can't replace a running program in place, so the reload starts a fresh copy and the terminal prompt returns; the new window no longer listens to the terminal. It also needs a real console (PowerShell, Windows Terminal, or Command Prompt), not Git Bash.</li>
 </ul>
 
-<h3>Without the Backend</h3>
-<p>The app still opens. You can browse and edit configs (the preview shows an unvalidated local draft) and run <i>Run &rarr; Start simulated demo</i>. Launching training, the job queue, and the TensorBoard tab need the backend.</p>
+<h3>If the Pipeline Is Unavailable</h3>
+<p>The status bar shows <code>PIPELINE ○ unavailable</code> when the app isn't running from the project venv. You can still browse and edit configs (the preview shows an unvalidated local draft) and run <i>Run &rarr; Start simulated demo</i>. Reinstall with <code>pip install -e ".[gui]"</code> and start the app again with <code>python -m frontend</code>.</p>
 
 <h3>Stopping</h3>
-<ul>
-  <li><b>Frontend:</b> close the window. Training that is already running keeps going, and reopening the app reconnects to it.</li>
-  <li><b>Backend:</b> press <code>Ctrl+C</code> in its terminal. This also stops TensorBoard.</li>
-</ul>
+<p>Closing the window while a run is training (or the queue is running) hides ThetaIDE to the <b>system tray</b> and training keeps going. The tray icon gets a green dot while a run is training (blue while the queue waits to start the next job), shows what is training, notifies you when runs finish or fail, and reopens the window when clicked; its menu also has <i>Stop all training</i>. To exit, use <i>File &rarr; Quit</i> (<code>Ctrl+Q</code>) or <i>Quit ThetaIDE</i> in the tray menu: if a run is still training ThetaIDE asks first, then stops it. Metrics written so far stay in <code>results/logs/</code>. Queued jobs are kept and wait for <i>Start queue</i> next time. TensorBoard stops with the app.</p>
 """,
     ),
     DocArticle(
@@ -182,7 +154,7 @@ python -m frontend</code></pre>
         html_content="""
 <h2>IDE Panels & Navigation</h2>
 <p>Theta-IDE organizes its interface into vertical sidebar tabs. Each tab represents a specialized workstation for your experiments.</p>
-<p>Results, Plots, TensorBoard and Queue are hidden by default. Turn them on in <i>Settings &rarr; Appearance</i> (see <a href="sidebar_layout">Sidebar &amp; Layout</a>).</p>
+<p>Plots, TensorBoard and Queue are hidden by default. Turn them on in <i>Settings &rarr; Appearance</i> (see <a href="sidebar_layout">Sidebar &amp; Layout</a>).</p>
 
 <h3>1. Experiment Config (<code>config</code>)</h3>
 <p>The primary workspace for configuring and launching experiments:</p>
@@ -227,7 +199,8 @@ python -m frontend</code></pre>
 <ul>
   <li>Full shell access with support for zsh, bash, and tmux.</li>
   <li>Terminal precedence mode: allows tmux prefix keys and terminal hotkeys to pass through uninterrupted.</li>
-  <li><b>macOS and Linux only.</b> The terminal needs a POSIX pseudo-terminal, so it is unavailable on Windows. Use a separate PowerShell window there.</li>
+  <li><b>Every platform:</b> a pseudo-terminal on macOS and Linux, ConPTY on Windows (via <code>pywinpty</code>, which <code>frontend/requirements.txt</code> installs there).</li>
+  <li><b>Choosing the shell:</b> set <code>shell</code> under <code>[terminal]</code> in <code>settings.toml</code> (e.g. <code>"pwsh -NoLogo"</code> or <code>"/bin/zsh -l"</code>). Empty picks one: PowerShell 7, then Windows PowerShell, then cmd on Windows; your login shell elsewhere. With <code>activate_venv = true</code> the project's <code>venv/</code> comes first on PATH.</li>
 </ul>
 
 <h3>6. Modular Components &amp; Community Hub (<code>components</code>)</h3>
@@ -241,7 +214,7 @@ python -m frontend</code></pre>
 <p>Compose multi-stage experiments as string diagrams, wiring the outputs of one stage into the inputs of the next. See <a href="workflows_pane">Workflows Pane</a>.</p>
 
 <h3>8. Results Browser (<code>results</code>)</h3>
-<p>Every run you have launched, with its seed, status and reward. Reload a run's config, compare two runs, or open a run's plots. See <a href="results_browser">Results Browser</a>.</p>
+<p>Every metric, value and file your runs produced: tick runs to chart every metric they logged, compare them, and open their tables, figures, reports and configs. See <a href="results_browser">Results Browser</a>.</p>
 
 <h3>9. TensorBoard (<code>tensorboard</code>)</h3>
 <p>An embedded TensorBoard dashboard for runs logged with <i>Log to TensorBoard</i>. See <a href="tensorboard_tab">TensorBoard Tab</a>.</p>
@@ -1044,36 +1017,57 @@ workflow: sepsis_reciprocal</code></pre>
         id="results_browser",
         title="Results Browser",
         category="Interface",
-        summary="Find past runs, reload their configs, compare two runs side by side, and open their plots.",
-        keywords=["results", "runs", "history", "compare", "diff", "reward", "seed", "plots", "records"],
+        summary="Every metric, value and file your runs produced: chart, inspect, compare, summarize and export them.",
+        keywords=["results", "runs", "metrics", "curves", "compare", "summary", "seeds", "versions", "export",
+                  "inspector", "tables", "figures", "reports", "config", "files", "live"],
         html_content=r"""
 <h2>Results Browser</h2>
-<p>The <a href="ide://results">Results</a> pane lists every run launched from Theta-IDE. It is hidden by default; turn it on in <i>Settings &rarr; Appearance</i> or open it with <code>Action + 4</code>.</p>
+<p>The <a href="ide://results">Results</a> pane (<code>Action + 4</code>) shows everything your runs produced, from every logged value to every file, whichever engine trained them and however they were launched (Theta-IDE, the command line, or Slurm). It reads <code>results/</code> through the backend, so the backend must be running.</p>
 
-<h3>The Run Table</h3>
-<table border="1" cellpadding="8" cellspacing="0" style="border-collapse: collapse; width: 100%; border-color: rgba(255,255,255,0.15);">
-  <tr style="background-color: rgba(255,255,255,0.05); font-weight: bold;">
-    <td>Column</td>
-    <td>Meaning</td>
-  </tr>
-  <tr><td><b>Experiment</b></td><td>The run's experiment ID, <code>&lt;name&gt;_&lt;YYYYmmdd-HHMMSS&gt;</code></td></tr>
-  <tr><td><b>Seed</b></td><td>Random seed used for the run</td></tr>
-  <tr><td><b>Status</b></td><td>The run's current status, such as running or completed</td></tr>
-  <tr><td><b>Reward</b></td><td>The run's latest evaluation reward (<code>&mdash;</code> before the first evaluation)</td></tr>
-  <tr><td><b>Source</b></td><td><i>Trained</i> for a real backend run, <i>Simulated</i> for a demo run</td></tr>
-</table>
-<p>Type in the search box to filter runs by name, seed, or status.</p>
-<p>Double-click a row to open that run in the <a href="ide://monitor">Training Monitor</a>.</p>
+<h3>Choosing Runs</h3>
+<p>The tree on the left lists every run in <code>results/logs</code>: group &rarr; experiment &rarr; agent. Tick a group, an experiment or an agent; ticking a parent ticks everything under it. When an agent has several <b>versions</b> (repeated runs, e.g. seeds, stored as <code>version_N</code> folders) they appear as children, with the newest ticked. Use the filter box to find runs by name.</p>
 
-<h3>Actions</h3>
+<h3>Curves</h3>
 <ul>
-  <li><b>Load saved config:</b> load the exact configuration the selected run used back into the config editor, so you can rerun or tweak it.</li>
-  <li><b>Compare two runs:</b> select two rows (Ctrl+click) to see a <i>Parameter / Run A / Run B</i> table of every setting that differs.</li>
-  <li><b>View plot:</b> open the selected run's plots in the Plot Viewer.</li>
+  <li><b>One chart per metric</b> the ticked runs logged, grouped by prefix (<code>eval/</code>, <code>losses/</code>, <code>val/</code>, <code>time/</code>, …). Nothing is whitelisted: every numeric column of every <code>metrics.csv</code> gets a chart, including metrics from Stable-Baselines3 or custom engines.</li>
+  <li><b>Hide</b> a chart with its button, or use <b>Plots ▾</b> to show or hide any metric. Hidden plots are remembered under <code>[results] hidden_plots</code> in <code>settings.toml</code>.</li>
+  <li><b>X-axis:</b> environment steps, logged step, epoch, wall time or training time, whichever the runs logged. <b>Smoothing</b> works like the Training monitor's.</li>
+  <li><b>Versions:</b> <i>Separate</i> draws each version; <i>Mean ± std</i> or <i>Mean ± SEM</i> combine an agent's ticked versions into one curve with a shaded band.</li>
+  <li><b>Primary:</b> the series whose logged steps hovering snaps to. It is drawn on top and thicker, and listed first in the inspector. <i>Nearest</i> snaps to whichever series is closest to the mouse.</li>
+  <li><b>Point inspector:</b> hover over any chart to see every metric of every ticked run at that step. Runs that did not log exactly that step show their nearest logged point.</li>
+  <li><b>Live:</b> while the pane is open, ticked runs that are still training update every few seconds with their new values.</li>
 </ul>
 
-<h3>Where Records Are Stored</h3>
-<p>Run records are saved in <code>.thetaide/runs/</code> (change it with <code>--data-dir</code>). Training outputs such as metrics, checkpoints, and plots are under <code>results/</code>; see <a href="troubleshooting">Troubleshooting &amp; FAQ</a> for the layout.</p>
+<h3>Layouts</h3>
+<p>Pick how the pane is arranged in <i>Settings &rarr; Appearance &rarr; Results Panel Layout</i>. The choice applies immediately, keeps what is ticked, and is saved as <code>layout</code> under <code>[results]</code> in <code>settings.toml</code>.</p>
+<ul>
+  <li><b>Overview first</b> (default): a card per series with its best and final value, where the best was (or, with a Summary threshold for that metric, when it was reached) and its training time. Click a card to make its series primary. Below, the reward chart is drawn large and its hover card lists every series; the other charts follow in sections you can fold.</li>
+  <li><b>Quiet toolbar:</b> one row of controls; charts in sections you can fold, each showing the primary series' latest value; the inspector beside them.</li>
+  <li><b>Control rail:</b> runs, view settings and a checkbox per plot in a left rail; three columns of charts; the inspector below, one row per run.</li>
+  <li><b>Focus + filmstrip:</b> one large chart at a time, picked from a strip of small previews of every metric. Chips above it make a series primary.</li>
+</ul>
+
+<h3>Summary</h3>
+<p>One sortable row per series and metric: final, best (the highest for rewards, the lowest for losses; blank when a metric has no better direction), where the best was, minimum, maximum, mean, area under the curve, and the number of points. Pick one metric and enter a <b>threshold</b> to see when each run first reached it.</p>
+
+<h3>Tables, Figures, Reports, Config and Files</h3>
+<table border="1" cellpadding="8" cellspacing="0" style="border-collapse: collapse; width: 100%; border-color: rgba(255,255,255,0.15);">
+  <tr style="background-color: rgba(255,255,255,0.05); font-weight: bold;">
+    <td>Tab</td>
+    <td>Shows</td>
+  </tr>
+  <tr><td><b>Tables</b></td><td>Every CSV a run wrote, including each raw <code>metrics.csv</code>: every row and column, sortable, with a plot of any column against another</td></tr>
+  <tr><td><b>Figures</b></td><td>Every plot image; scroll to zoom, drag to pan</td></tr>
+  <tr><td><b>Reports</b></td><td>Markdown and text reports, rendered</td></tr>
+  <tr><td><b>Config</b></td><td>Every config and metadata file, plus a table of the settings that differ between the ticked runs. <b>Load in experiment builder</b> puts a run's builder settings into the Experiment tab (for runs Theta-IDE launched, or single-method CartPole/PPO runs).</td></tr>
+  <tr><td><b>Files</b></td><td>Every file of the ticked runs, checkpoints and TensorBoard logs included. Files too large or of a kind that cannot be previewed can still be saved with <b>Save a copy…</b></td></tr>
+</table>
+
+<h3>Export</h3>
+<p><b>Export ▾</b> writes the visible curves as CSV (one row per point, as drawn), the Summary as CSV, or the charts as a PNG image.</p>
+
+<h3>Run List</h3>
+<p>The <b>Run list</b> tab keeps the earlier table of runs launched from Theta-IDE: double-click a row to open it in the <a href="ide://monitor">Training Monitor</a>.</p>
 """,
     ),
     DocArticle(
@@ -1113,7 +1107,7 @@ workflow: sepsis_reciprocal</code></pre>
         html_content=r"""
 <h2>Console</h2>
 <p>The <a href="ide://console">Console</a> pane is the IDE's log. It streams the training pipeline's output while a run is active, along with IDE messages such as saves, queue changes, and connection status.</p>
-<p>It is not a shell. For an interactive shell, use the <a href="ide://terminal">Terminal</a> tab (macOS and Linux only).</p>
+<p>It is not a shell. For an interactive shell, use the <a href="ide://terminal">Terminal</a> tab.</p>
 
 <h3>Commands</h3>
 <p>Type a command into the input line at the bottom and press Enter:</p>
@@ -1145,11 +1139,11 @@ workflow: sepsis_reciprocal</code></pre>
     <td>Page</td>
     <td>What you can change</td>
   </tr>
-  <tr><td><b>Appearance</b></td><td>Color theme, which sidebar panels are shown, auto-hide sidebar, and the sculpture animation</td></tr>
+  <tr><td><b>Appearance</b></td><td>Color theme, which sidebar panels are shown, auto-hide sidebar, the sculpture animation, and the Results panel layout</td></tr>
   <tr><td><b>Core Plugins</b></td><td>Turn built-in plugins (such as this Documentation plugin) on or off</td></tr>
   <tr><td><b>Community Plugins</b></td><td>Install, configure, or remove plugins from the Community Hub</td></tr>
   <tr><td><b>Hotkeys</b></td><td>Action key, terminal precedence, the <code>Action + digit</code> pane mapping, and menu shortcuts</td></tr>
-  <tr><td><b>Backend API</b></td><td>Backend URL and connection status</td></tr>
+  <tr><td><b>Training Pipeline</b></td><td>The Python environment that composes configs and runs training, with a check button</td></tr>
   <tr><td><b>Workspace &amp; Storage</b></td><td>Data and database locations, open the settings file, and reset the UI layout</td></tr>
 </table>
 
@@ -1223,7 +1217,7 @@ workflow: sepsis_reciprocal</code></pre>
 <h2>Sidebar & Layout</h2>
 
 <h3>Showing and Hiding Panels</h3>
-<p>To keep the sidebar short, four panels are <b>hidden by default</b>: Results, Plots, TensorBoard, and Queue. Turn any panel on or off with its switch in <i>Settings &rarr; Appearance &rarr; Sidebar Panels Visibility</i>. At least one panel must stay visible, so the last switch can't be turned off.</p>
+<p>To keep the sidebar short, three panels are <b>hidden by default</b>: Plots, TensorBoard, and Queue. Turn any panel on or off with its switch in <i>Settings &rarr; Appearance &rarr; Sidebar Panels Visibility</i>. At least one panel must stay visible, so the last switch can't be turned off.</p>
 <p>A hidden panel is still reachable: choose it from the <i>View</i> menu, or press its <code>Action + digit</code> hotkey.</p>
 
 <h3>Reordering Tabs</h3>
@@ -1247,17 +1241,17 @@ workflow: sepsis_reciprocal</code></pre>
         id="troubleshooting",
         title="Troubleshooting & FAQ",
         category="Getting Started",
-        summary="Answers to common setup, backend, OpenGL, and cluster connection questions.",
-        keywords=["troubleshooting", "faq", "errors", "backend", "connection", "opengl", "debug"],
+        summary="Answers to common setup, pipeline, OpenGL, and cluster connection questions.",
+        keywords=["troubleshooting", "faq", "errors", "pipeline", "environment", "opengl", "debug"],
         html_content="""
 <h2>Troubleshooting & FAQ</h2>
 
-<h3>1. Backend status says "connecting…" or "offline"</h3>
-<p>Theta-IDE communicates with a background FastAPI daemon (default port: <code>8000</code>). If the backend is not responding:</p>
+<h3>1. Status bar says "PIPELINE ○ unavailable"</h3>
+<p>Theta-IDE imports the training pipeline directly, so it must run from the project venv:</p>
 <ul>
-  <li>Check <i>Settings &rarr; Backend API</i> to verify the daemon URL (typically <code>http://127.0.0.1:8000</code>).</li>
-  <li>Ensure no other application is holding port 8000.</li>
-  <li>Simulated demo runs (<i>Run &rarr; Start simulated demo</i>) do not require a live backend.</li>
+  <li>Activate <code>venv/</code> and run <code>pip install -e ".[gui]"</code>, then start the app with <code>python -m frontend</code> from the repository root.</li>
+  <li><i>Settings &rarr; Training Pipeline</i> shows which Python the app is using and has a <b>Check pipeline</b> button.</li>
+  <li>Simulated demo runs (<i>Run &rarr; Start simulated demo</i>) work without the training environment.</li>
 </ul>
 
 <h3>2. OpenGL / Qt Display Errors on Headless or Cluster Nodes</h3>
@@ -1287,8 +1281,8 @@ workflow: sepsis_reciprocal</code></pre>
 <h3>6. Windows: <code>Python was not found; run without arguments to install from the Microsoft Store</code></h3>
 <p>Windows is using its Store shortcut instead of your Python install. Turn off the <code>python.exe</code> and <code>python3.exe</code> entries in <i>Settings &rarr; Apps &rarr; Advanced app settings &rarr; App execution aliases</i>, or activate the virtual environment first.</p>
 
-<h3>7. The Terminal tab doesn't work on Windows</h3>
-<p>The embedded terminal needs a POSIX pseudo-terminal, which Windows doesn't provide. Use a separate PowerShell window instead.</p>
+<h3>7. The Terminal tab is blank or says no shell was found (Windows)</h3>
+<p>The Windows terminal needs <code>pywinpty</code>. Reinstall the frontend requirements with <code>pip install -r frontend/requirements.txt</code> in the frontend environment. To use a particular shell, set <code>shell</code> under <code>[terminal]</code> in <code>settings.toml</code>, for example <code>shell = "pwsh -NoLogo"</code>.</p>
 
 <h3>8. Linux: <code>libEGL.so.1: cannot open shared object file</code></h3>
 <p>Qt needs system graphics libraries that minimal Linux installs and CI runners often lack:</p>

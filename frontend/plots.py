@@ -1,5 +1,6 @@
 """Interactive local plot viewer, using Qt without additional dependencies."""
 import csv
+import io
 import math
 from pathlib import Path
 
@@ -14,19 +15,29 @@ from .theme import theme_color
 
 
 def read_metrics_csv(path):
-    """Read finite numeric columns; retain gaps and ignore text metadata columns."""
+    """Read finite numeric columns of a CSV file; retain gaps and ignore text metadata columns."""
     with Path(path).open(encoding="utf-8-sig", newline="") as stream:
-        reader = csv.DictReader(stream)
-        headers = reader.fieldnames
-        if not headers or len(set(headers)) != len(headers) or any(not h.strip() for h in headers):
-            raise ValueError("CSV needs unique, nonempty column headers.")
-        rows = []
-        for row in reader:
-            if len(rows) >= 50000:
-                raise ValueError("This preview supports CSV files with up to 50,000 rows.")
-            if None in row or None in row.values():
-                raise ValueError("A CSV row has a different number of fields than its header.")
-            rows.append(row)
+        return read_metrics_csv_stream(stream)
+
+
+def read_metrics_csv_text(text):
+    """read_metrics_csv() for CSV text already in memory (e.g. a file served by the backend)."""
+    return read_metrics_csv_stream(io.StringIO(text.lstrip("\ufeff"), newline=""))
+
+
+def read_metrics_csv_stream(stream):
+    """Numeric columns of a CSV stream, by header; text columns are skipped."""
+    reader = csv.DictReader(stream)
+    headers = reader.fieldnames
+    if not headers or len(set(headers)) != len(headers) or any(not h.strip() for h in headers):
+        raise ValueError("CSV needs unique, nonempty column headers.")
+    rows = []
+    for row in reader:
+        if len(rows) >= 50000:
+            raise ValueError("This preview supports CSV files with up to 50,000 rows.")
+        if None in row or None in row.values():
+            raise ValueError("A CSV row has a different number of fields than its header.")
+        rows.append(row)
     columns = {}
     for header in headers:
         values = []

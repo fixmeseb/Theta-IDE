@@ -1,10 +1,11 @@
 """Organized, tabbed Settings view with side-tab navigation and ASCII Theta overlay."""
 from __future__ import annotations
 
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Dict, List, Optional
 
-from PyQt6.QtCore import QByteArray, QRectF, QSize, Qt, pyqtSignal
+from PyQt6.QtCore import QByteArray, QEvent, QRectF, QSize, Qt, pyqtSignal
 from PyQt6.QtGui import QColor, QFont, QIcon, QKeySequence, QPainter, QPixmap
 from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtWidgets import (
@@ -13,7 +14,6 @@ from PyQt6.QtWidgets import (
     QDoubleSpinBox,
     QFileDialog,
     QFrame,
-    QGraphicsDropShadowEffect,
     QGridLayout,
     QHBoxLayout,
     QKeySequenceEdit,
@@ -31,10 +31,13 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from src.app.services import PROJECT_ROOT
+
 from .about import AsciiTheta, AnimationSettingsDialog
 from .hotkeys import parse_action_key
+from .results.layouts import DEFAULT_LAYOUT, LAYOUTS
 from .theme import current_theme, theme_color
-from .widgets import ToggleSlider, label
+from .widgets import ToggleSlider, label, SmoothScrollArea
 
 if TYPE_CHECKING:
     from .app import Window
@@ -105,8 +108,8 @@ TAB_SPECS = [
     },
     {
         "id": "backend",
-        "title": "Backend API",
-        "subtitle": "FastAPI daemon connection and server status",
+        "title": "Training Pipeline",
+        "subtitle": "The Python environment that composes configs and runs training",
         "icon": "backend",
     },
     {
@@ -181,8 +184,15 @@ DEFAULT_MENU_SHORTCUTS = [
     ("add_to_queue", "Add to queue", "Ctrl+Shift+Q"),
     ("toggle_queue", "Start or pause queue", "Ctrl+Shift+R"),
     ("start_demo", "Start simulated demo", "Ctrl+F5"),
+    ("zoom_in", "Zoom in (increase text size)", "Ctrl++"),
+    ("zoom_out", "Zoom out (decrease text size)", "Ctrl+-"),
+    ("reset_zoom", "Reset zoom (default text size)", "Ctrl+0"),
     ("quit", "Quit", "Ctrl+Q"),
 ]
+
+
+SIDE_TAB_ICON = 20      # px
+SIDE_TAB_ICON_GAP = 8   # px of space between a settings tab's icon and its label
 
 
 class SettingsSideTabButton(QToolButton):
@@ -197,18 +207,36 @@ class SettingsSideTabButton(QToolButton):
         self.setCheckable(True)
         self.setAutoRaise(True)
         self.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
-        self.setText(title)
+        self.setText(title.replace("&", "&&"))  # a lone & is a mnemonic marker: "Workspace _Storage"
         self.setToolTip(f"Configure {title}")
-        self.setIconSize(QSize(20, 20))
+        self.setIconSize(QSize(SIDE_TAB_ICON + SIDE_TAB_ICON_GAP, SIDE_TAB_ICON))
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setFixedHeight(38)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.refresh_icon()
 
     def refresh_icon(self):
-        icon = get_settings_icon(self.icon_name, 20)
+        icon = get_settings_icon(self.icon_name, SIDE_TAB_ICON)
         if not icon.isNull():
-            self.setIcon(icon)
+            self.setIcon(_with_trailing_gap(icon))
+
+
+def _with_trailing_gap(icon: QIcon) -> QIcon:
+    """The icon on a canvas SIDE_TAB_ICON_GAP px wider, transparent on the right, so the
+    tab's text sits a little further from it (QToolButton has no icon-text spacing setting)."""
+    ratio = QApplication.instance().devicePixelRatio() if QApplication.instance() else 1.0
+    padded = QIcon()
+    for mode in (QIcon.Mode.Normal, QIcon.Mode.Active, QIcon.Mode.Selected, QIcon.Mode.Disabled):
+        for state in (QIcon.State.Off, QIcon.State.On):
+            glyph = icon.pixmap(QSize(SIDE_TAB_ICON, SIDE_TAB_ICON), ratio, mode, state)
+            canvas = QPixmap(round((SIDE_TAB_ICON + SIDE_TAB_ICON_GAP) * ratio), round(SIDE_TAB_ICON * ratio))
+            canvas.setDevicePixelRatio(ratio)
+            canvas.fill(Qt.GlobalColor.transparent)
+            painter = QPainter(canvas)
+            painter.drawPixmap(0, 0, glyph)
+            painter.end()
+            padded.addPixmap(canvas, mode, state)
+    return padded
 
 
 class AsciiThetaSplash(QWidget):
@@ -246,12 +274,55 @@ TAB_SIZES = {
 
 
 class DynamicStackedWidget(QStackedWidget):
-    """QStackedWidget that constrains horizontal minimumSizeHint to 0 to prevent child sizeHint blowup in QScrollArea."""
+    """QStackedWidget sized by its current page only.
+
+    A plain QStackedWidget's layout takes its minimum height from the tallest page, so inside a
+    scroll area every short page gained the Hotkeys page's height of empty space to scroll into.
+    Hidden pages get the Ignored size policy, which the stacked layout skips. Width is
+    unconstrained to prevent child sizeHint blowup in the QScrollArea.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.currentChanged.connect(self._fit_current_page)
+
+    def addWidget(self, widget):
+        index = super().addWidget(widget)
+        self._fit_current_page()
+        return index
+
+    def _fit_current_page(self, _index=None):
+        current = self.currentWidget()
+        for i in range(self.count()):
+            page = self.widget(i)
+            if page is current:
+                page.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+            else:
+                page.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
+        self.updateGeometry()
+        # The stack sits in the scroll area's viewport, which has no layout, so the new size hint
+        # never reaches the scroll area on its own; ask it to re-fit the page now.
+        area = self.parentWidget().parentWidget() if self.parentWidget() else None
+        if isinstance(area, QScrollArea):
+            QApplication.sendEvent(area, QEvent(QEvent.Type.LayoutRequest))
 
     def minimumSizeHint(self) -> QSize:
         curr = self.currentWidget()
         h = curr.minimumSizeHint().height() if curr is not None else 0
         return QSize(0, h)
+
+    def hasHeightForWidth(self) -> bool:
+        return True
+
+    def heightForWidth(self, width: int) -> int:
+        # QStackedLayout.heightForWidth returns the tallest of *all* pages, and the scroll area
+        # sizes its content from it whenever pages hold word-wrapped labels. Answer for the
+        # current page only.
+        curr = self.currentWidget()
+        if curr is None:
+            return 0
+        hfw = curr.heightForWidth(width) if curr.hasHeightForWidth() else -1
+        return max(hfw, curr.minimumSizeHint().height())
 
     def sizeHint(self) -> QSize:
         curr = self.currentWidget()
@@ -284,11 +355,9 @@ class SettingsDetailWindow(QFrame):
         self.card.setObjectName("settingsDetailCard")
         self.card.setProperty("dock", "top-left")
 
-        self.shadow = QGraphicsDropShadowEffect(self.card)
-        self.shadow.setBlurRadius(24)
-        self.shadow.setColor(QColor(0, 0, 0, 140))
-        self.shadow.setOffset(4, 4)
-        self.card.setGraphicsEffect(self.shadow)
+        # No QGraphicsDropShadowEffect: it re-renders and blurs the whole card off-screen on
+        # every repaint (each scroll step). paintEvent draws a cheap shadow instead.
+        self.shadow = None
 
         card_layout = QVBoxLayout(self.card)
         card_layout.setContentsMargins(24, 20, 24, 20)
@@ -333,12 +402,15 @@ class SettingsDetailWindow(QFrame):
         card_layout.addWidget(sep)
 
         # Content Area: Scrollable stacked pages (vertical only, no horizontal scrollbars)
-        self.scroll_area = QScrollArea()
+        self.scroll_area = SmoothScrollArea()
         self.scroll_area.setWidgetResizable(True)
         self.scroll_area.setFrameShape(QFrame.Shape.NoFrame)
         self.scroll_area.setObjectName("settingsScrollArea")
         self.scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.scroll_area.verticalScrollBar().setSingleStep(16)
+        if hasattr(self.scroll_area, "viewport") and self.scroll_area.viewport():
+            self.scroll_area.viewport().setAutoFillBackground(True)
 
         self.pages_stack = DynamicStackedWidget()
         self.scroll_area.setWidget(self.pages_stack)
@@ -365,17 +437,14 @@ class SettingsDetailWindow(QFrame):
         if is_bottom:
             self.outer_layout.setAlignment(Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignLeft)
             self.card.setProperty("dock", "bottom-left")
-            if hasattr(self, "shadow") and self.shadow:
-                self.shadow.setOffset(4, -4)
         else:
             self.outer_layout.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
             self.card.setProperty("dock", "top-left")
-            if hasattr(self, "shadow") and self.shadow:
-                self.shadow.setOffset(4, 4)
         self.card.style().unpolish(self.card)
         self.card.style().polish(self.card)
         self.card.update()
         self._update_card_geometry()
+        self.update()  # repaint the shadow around the card's new position
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -403,6 +472,19 @@ class SettingsDetailWindow(QFrame):
     def paintEvent(self, event):
         # Translucent overlay layer leaves right and bottom margins clear so ASCII art is visible
         super().paintEvent(event)
+        if not self.card.isVisible():
+            return
+        # Soft shadow: a few translucent rounded rects stepping out from the card, offset
+        # toward the open side (down-right, or up-right when docked at the bottom).
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.setPen(Qt.PenStyle.NoPen)
+        dy = -4 if self.dock_position == "bottom_left" else 4
+        rect = QRectF(self.card.geometry()).translated(4, dy)
+        for spread, alpha in ((1, 40), (3, 26), (5, 14)):
+            painter.setBrush(QColor(0, 0, 0, alpha))
+            painter.drawRoundedRect(rect.adjusted(-spread, -spread, spread, spread), 8 + spread, 8 + spread)
+        painter.end()
 
 
 def normalize_hotkey_combo(text: str) -> str:
@@ -423,6 +505,18 @@ def normalize_hotkey_combo(text: str) -> str:
     return f"Action + {cleaned}"
 
 
+def normalize_menu_shortcut(shortcut_str: str) -> str:
+    """Normalize user-entered shortcut string for Qt QKeySequence.
+
+    Replaces 'cmd' and 'command' with 'Ctrl' so that macOS command shortcuts
+    are properly parsed by QKeySequence on all platforms.
+    """
+    if not shortcut_str:
+        return ""
+    import re
+    return re.sub(r"(?i)\b(cmd|command)\b", "Ctrl", str(shortcut_str).strip())
+
+
 class HotkeyComboEdit(QLineEdit):
     """Interactive hotkey input field for pane navigation chords.
 
@@ -439,7 +533,7 @@ class HotkeyComboEdit(QLineEdit):
         self.setPlaceholderText("Unassigned (click to set)")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-        self.setStyleSheet("font-family: 'Consolas', monospace; font-size: 12px; font-weight: 600;")
+        self.setStyleSheet("font-family: Menlo, Monaco, 'Consolas', monospace; font-size: 12px; font-weight: 600;")
         self.editingFinished.connect(self._on_editing_finished)
 
     def get_canonical_combo(self) -> str:
@@ -522,11 +616,6 @@ class SettingsView(QWidget):
         sb_layout = QVBoxLayout(self.sidebar_frame)
         sb_layout.setContentsMargins(10, 16, 10, 14)
         sb_layout.setSpacing(6)
-
-        # Sidebar title
-        sb_title = label("Settings", "heading")
-        sb_title.setStyleSheet("font-size: 16px; font-weight: 700; padding-left: 6px; margin-bottom: 6px;")
-        sb_layout.addWidget(sb_title)
 
         # Navigation tabs list
         for spec in TAB_SPECS:
@@ -619,7 +708,7 @@ class SettingsView(QWidget):
         stack.addWidget(p_hotkeys)
         self.page_widgets["hotkeys"] = p_hotkeys
 
-        # Page 4: Backend API
+        # Page 4: Training pipeline
         p_backend = self._build_backend_page()
         stack.addWidget(p_backend)
         self.page_widgets["backend"] = p_backend
@@ -675,7 +764,61 @@ class SettingsView(QWidget):
         tc_layout.addLayout(theme_row)
         layout.addWidget(theme_card)
 
-        # Card 2: Sidebar Panels
+        # Card 2: Display & Text Scaling (Zoom)
+        zoom_card = QFrame()
+        zoom_card.setObjectName("card")
+        zc_layout = QVBoxLayout(zoom_card)
+        zc_layout.setContentsMargins(16, 14, 16, 14)
+        zc_layout.setSpacing(10)
+
+        zc_layout.addWidget(label("Display & Text Scaling", "cardTitle"))
+        zc_sub = label("Resize interface text and elements. Use Cmd++ / Cmd+- or bind custom hotkeys in Hotkeys.", "muted")
+        zc_sub.setWordWrap(True)
+        zc_layout.addWidget(zc_sub)
+
+        current_zoom = getattr(self.window, "zoom_factor", 1.0)
+        current_pct = int(round(current_zoom * 100))
+
+        zoom_row = QHBoxLayout()
+        zoom_row.setSpacing(10)
+
+        btn_zoom_out = QPushButton("−")
+        btn_zoom_out.setToolTip("Zoom out (decrease text size)")
+        btn_zoom_out.setFixedSize(32, 28)
+        btn_zoom_out.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_zoom_out.clicked.connect(self.window.zoom_out)
+        zoom_row.addWidget(btn_zoom_out)
+
+        self.window.zoom_slider = QSlider(Qt.Orientation.Horizontal)
+        self.window.zoom_slider.setRange(60, 240)
+        self.window.zoom_slider.setSingleStep(10)
+        self.window.zoom_slider.setValue(current_pct)
+        self.window.zoom_slider.setToolTip("Drag to adjust display scaling factor (60% – 240%)")
+        self.window.zoom_slider.valueChanged.connect(lambda val: self.window.set_zoom(val / 100.0))
+        zoom_row.addWidget(self.window.zoom_slider, 1)
+
+        btn_zoom_in = QPushButton("+")
+        btn_zoom_in.setToolTip("Zoom in (increase text size)")
+        btn_zoom_in.setFixedSize(32, 28)
+        btn_zoom_in.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_zoom_in.clicked.connect(self.window.zoom_in)
+        zoom_row.addWidget(btn_zoom_in)
+
+        self.window.zoom_percent_label = label(f"{current_pct}%", "badge")
+        self.window.zoom_percent_label.setFixedWidth(54)
+        self.window.zoom_percent_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        zoom_row.addWidget(self.window.zoom_percent_label)
+
+        btn_reset_zoom = QPushButton("Reset (100%)")
+        btn_reset_zoom.setToolTip("Reset text and interface zoom to 100%")
+        btn_reset_zoom.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_reset_zoom.clicked.connect(self.window.reset_zoom)
+        zoom_row.addWidget(btn_reset_zoom)
+
+        zc_layout.addLayout(zoom_row)
+        layout.addWidget(zoom_card)
+
+        # Card 3: Sidebar Panels
         sidebar_card = QFrame()
         sidebar_card.setObjectName("card")
         sb_layout = QVBoxLayout(sidebar_card)
@@ -785,11 +928,84 @@ class SettingsView(QWidget):
         sc_layout.addLayout(btn_row)
 
         layout.addWidget(sculpture_card)
+
+        # Card 4: Experiment Panel Preferences
+        exp_card = QFrame()
+        exp_card.setObjectName("card")
+        ec_layout = QVBoxLayout(exp_card)
+        ec_layout.setContentsMargins(16, 14, 16, 14)
+        ec_layout.setSpacing(8)
+
+        ec_layout.addWidget(label("Experiment Panel Configuration", "cardTitle"))
+        ec_sub = label("Control how configurations and inherited defaults are displayed in the Experiment panel.", "muted")
+        ec_sub.setWordWrap(True)
+        ec_layout.addWidget(ec_sub)
+
+        row_defaults = QHBoxLayout()
+        row_defaults.addWidget(label("Show Resolved Defaults (Experiment Panel)", "muted"), 1)
+        self.defaults_toggle = ToggleSlider(checked=self.window.settings_manager.show_resolved_defaults)
+        self.defaults_toggle.toggled.connect(self._on_show_resolved_defaults_toggled)
+        self.window.toggle_resolved_defaults = self.defaults_toggle
+        row_defaults.addWidget(self.defaults_toggle)
+        ec_layout.addLayout(row_defaults)
+
+        layout.addWidget(exp_card)
+
+        # Card 5: Results Panel Layout
+        results_card = QFrame()
+        results_card.setObjectName("card")
+        rc_layout = QVBoxLayout(results_card)
+        rc_layout.setContentsMargins(16, 14, 16, 14)
+        rc_layout.setSpacing(8)
+
+        rc_layout.addWidget(label("Results Panel Layout", "cardTitle"))
+        rc_sub = label("Choose how the Results browser arranges its runs, controls, charts and inspector.", "muted")
+        rc_sub.setWordWrap(True)
+        rc_layout.addWidget(rc_sub)
+
+        descriptions = {
+            "overview": "A card of headline numbers per run, one large reward chart, then the rest.",
+            "quiet": "One row of controls; charts in folding sections with the inspector beside them.",
+            "rail": "Every control in a left rail with the runs; three columns of charts, inspector below.",
+            "focus": "One large chart at a time, picked from a strip of small previews of every metric.",
+        }
+        row_layout = QHBoxLayout()
+        row_layout.addWidget(label("Layout:", "muted"))
+        self.results_layout_combo = QComboBox()
+        for key, title in LAYOUTS.items():
+            self.results_layout_combo.addItem(title + (" (default)" if key == DEFAULT_LAYOUT else ""), key)
+        current = self.window.settings_manager.get("results", "layout", default=DEFAULT_LAYOUT)
+        self.results_layout_combo.setCurrentIndex(max(0, self.results_layout_combo.findData(current)))
+        self.results_layout_combo.setMaximumWidth(320)
+        row_layout.addWidget(self.results_layout_combo, 1)
+        row_layout.addStretch()
+        rc_layout.addLayout(row_layout)
+        results_hint = label("", "muted")
+        results_hint.setWordWrap(True)
+        rc_layout.addWidget(results_hint)
+
+        def results_layout_picked(_index):
+            key = self.results_layout_combo.currentData()
+            results_hint.setText(descriptions.get(key, ""))
+            view = getattr(self.window, "results_view", None)
+            if view is not None:
+                view.set_layout(key)
+            else:
+                self.window.settings_manager.set("results", "layout", key)
+
+        self.results_layout_combo.currentIndexChanged.connect(results_layout_picked)
+        results_hint.setText(descriptions.get(self.results_layout_combo.currentData(), ""))
+
+        layout.addWidget(results_card)
         layout.addStretch()
         return container
 
     def _open_animation_settings_dialog(self):
         self.show_tab("animation")
+
+    def _on_show_resolved_defaults_toggled(self, checked: bool):
+        if hasattr(self.window, "settings_manager") and self.window.settings_manager:
+            self.window.settings_manager.show_resolved_defaults = checked
 
     def _on_ascii_setting_toggled(self, checked: bool):
         if hasattr(self.window, "settings_manager") and self.window.settings_manager:
@@ -1061,7 +1277,7 @@ class SettingsView(QWidget):
             title_box.addWidget(t_lbl)
 
             sub_lbl = label(f"ID: {pid}", "muted")
-            sub_lbl.setStyleSheet("font-size: 11px; font-family: 'Consolas', monospace; opacity: 0.75;")
+            sub_lbl.setStyleSheet("font-size: 11px; font-family: Menlo, Monaco, 'Consolas', monospace; opacity: 0.75;")
             title_box.addWidget(sub_lbl)
             top_row.addLayout(title_box, 1)
 
@@ -1143,15 +1359,16 @@ class SettingsView(QWidget):
         m_grid.setVerticalSpacing(10)
 
         self.menu_shortcut_edits = {}
+        half = (len(DEFAULT_MENU_SHORTCUTS) + 1) // 2
         for i, (aid, title, default_sc) in enumerate(DEFAULT_MENU_SHORTCUTS):
-            col_offset = 0 if i < 5 else 2
-            row = i if i < 5 else i - 5
+            col_offset = 0 if i < half else 2
+            row = i if i < half else i - half
 
             t_lbl = label(title)
             t_lbl.setStyleSheet("font-weight: 500; font-size: 12px;")
 
             current_sc = self.window.settings_manager.get("shortcuts", aid, default=default_sc) or default_sc
-            seq_edit = QKeySequenceEdit(QKeySequence(current_sc))
+            seq_edit = QKeySequenceEdit(QKeySequence(normalize_menu_shortcut(current_sc)))
             seq_edit.setProperty("_action_id", aid)
             seq_edit.setProperty("_default_sc", default_sc)
             seq_edit.keySequenceChanged.connect(lambda seq, a=aid: self._on_menu_shortcut_changed(a, seq))
@@ -1343,7 +1560,7 @@ class SettingsView(QWidget):
                 other_str = ", ".join(other_titles)
 
                 edit.setStyleSheet(
-                    "font-family: 'Consolas', monospace; font-size: 12px; font-weight: 700; "
+                    "font-family: Menlo, Monaco, 'Consolas', monospace; font-size: 12px; font-weight: 700; "
                     "border: 1.5px solid #fb4934; background: rgba(251, 73, 52, 0.15); "
                     "color: #ff9999; border-radius: 4px; padding: 4px 8px;"
                 )
@@ -1352,7 +1569,7 @@ class SettingsView(QWidget):
                     warn_lbl.setVisible(True)
             else:
                 edit.setStyleSheet(
-                    "font-family: 'Consolas', monospace; font-size: 12px; font-weight: 600; "
+                    "font-family: Menlo, Monaco, 'Consolas', monospace; font-size: 12px; font-weight: 600; "
                     "border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 4px; padding: 4px 8px;"
                 )
                 if warn_lbl:
@@ -1430,21 +1647,45 @@ class SettingsView(QWidget):
         if hasattr(self.window, "settings_manager"):
             self.window.settings_manager.set("shortcuts", action_id, seq_str)
         if hasattr(self.window, "menu_actions") and action_id in self.window.menu_actions:
-            self.window.menu_actions[action_id].setShortcut(sequence)
+            action = self.window.menu_actions[action_id]
+            norm = normalize_menu_shortcut(seq_str)
+            if norm:
+                seq = QKeySequence(norm)
+                if action_id == "zoom_in":
+                    shortcuts = [seq]
+                    if norm.endswith("+"):
+                        shortcuts.append(QKeySequence(norm[:-1] + "="))
+                    elif norm.endswith("="):
+                        shortcuts.append(QKeySequence(norm[:-1] + "+"))
+                    action.setShortcuts(shortcuts)
+                else:
+                    action.setShortcut(seq)
+            else:
+                action.setShortcut(QKeySequence())
         if hasattr(self.window, "statusBar") and self.window.statusBar():
             self.window.statusBar().showMessage(f"Shortcut for {action_id} set to {seq_str or 'None'}", 3000)
 
     def _reset_menu_shortcuts_to_default(self):
         for aid, _, default_sc in DEFAULT_MENU_SHORTCUTS:
+            norm = normalize_menu_shortcut(default_sc)
+            seq = QKeySequence(norm)
             if aid in self.menu_shortcut_edits:
-                seq = QKeySequence(default_sc)
                 self.menu_shortcut_edits[aid].blockSignals(True)
                 self.menu_shortcut_edits[aid].setKeySequence(seq)
                 self.menu_shortcut_edits[aid].blockSignals(False)
             if hasattr(self.window, "settings_manager"):
                 self.window.settings_manager.set("shortcuts", aid, default_sc)
             if hasattr(self.window, "menu_actions") and aid in self.window.menu_actions:
-                self.window.menu_actions[aid].setShortcut(QKeySequence(default_sc))
+                action = self.window.menu_actions[aid]
+                if aid == "zoom_in":
+                    shortcuts = [seq]
+                    if norm.endswith("+"):
+                        shortcuts.append(QKeySequence(norm[:-1] + "="))
+                    elif norm.endswith("="):
+                        shortcuts.append(QKeySequence(norm[:-1] + "+"))
+                    action.setShortcuts(shortcuts)
+                else:
+                    action.setShortcut(seq)
         if hasattr(self.window, "statusBar") and self.window.statusBar():
             self.window.statusBar().showMessage("Restored default application menu shortcuts.", 3000)
 
@@ -1488,13 +1729,24 @@ class SettingsView(QWidget):
             for aid, edit in self.menu_shortcut_edits.items():
                 default_sc = edit.property("_default_sc") or ""
                 sc = sm.get("shortcuts", aid, default=default_sc) or default_sc
-                seq = QKeySequence(sc)
+                norm = normalize_menu_shortcut(sc)
+                seq = QKeySequence(norm)
                 if edit.keySequence() != seq:
                     edit.blockSignals(True)
                     edit.setKeySequence(seq)
                     edit.blockSignals(False)
 
-        # 5. Animation playback toggle
+        # 5. Zoom controls sync
+        zoom_val = getattr(self.window, "zoom_factor", sm.zoom)
+        zoom_pct = int(round(zoom_val * 100))
+        if hasattr(self.window, "zoom_slider") and self.window.zoom_slider:
+            self.window.zoom_slider.blockSignals(True)
+            self.window.zoom_slider.setValue(zoom_pct)
+            self.window.zoom_slider.blockSignals(False)
+        if hasattr(self.window, "zoom_percent_label") and self.window.zoom_percent_label:
+            self.window.zoom_percent_label.setText(f"{zoom_pct}%")
+
+        # 6. Animation playback toggle
         if hasattr(self, "anim_toggle_active") and self.anim_toggle_active:
             is_anim = bool(sm.get("appearance", "ascii_animation", default=True))
             self.anim_toggle_active.blockSignals(True)
@@ -1502,6 +1754,13 @@ class SettingsView(QWidget):
             self.anim_toggle_active.blockSignals(False)
             if hasattr(self, "anim_status_lbl") and self.anim_status_lbl:
                 self.anim_status_lbl.setText("Running" if is_anim else "Paused")
+
+        # 7. Experiment panel resolved defaults toggle
+        if hasattr(self, "defaults_toggle") and self.defaults_toggle:
+            is_def = bool(sm.get("appearance", "show_resolved_defaults", default=False))
+            self.defaults_toggle.blockSignals(True)
+            self.defaults_toggle.setChecked(is_def)
+            self.defaults_toggle.blockSignals(False)
 
     def _build_terminal_page(self) -> QWidget:
         """Shell, start folder and venv for the Terminal pane, saved to [terminal] in settings.toml."""
@@ -1550,7 +1809,7 @@ class SettingsView(QWidget):
         self.terminal_shell_edit = QLineEdit()
         self.terminal_shell_edit.setPlaceholderText('e.g. "C:/tools/nu.exe" or /bin/zsh -l')
         self.terminal_shell_edit.setMaximumWidth(420)
-        self.terminal_shell_edit.setStyleSheet("font-family: 'Consolas', monospace; font-size: 12px;")
+        self.terminal_shell_edit.setStyleSheet("font-family: Menlo, Monaco, 'Consolas', monospace; font-size: 12px;")
         row("Command", self.terminal_shell_edit)
 
         self.terminal_shell_status = label("", "muted")
@@ -1655,8 +1914,8 @@ class SettingsView(QWidget):
         if panel is None:
             return
         command, cwd, env = self.window.terminal_config()
-        panel.terminal.configure(command=command, cwd=cwd, env=env)
-        panel.terminal.restart_session()
+        panel.configure(command=command, cwd=cwd, env=env)
+        panel.terminal.restart_session()  # the active shell; other open shells pick it up on restart
         self.window.statusBar().showMessage("Terminal restarted with the new settings.", 4000)
 
     def _build_backend_page(self) -> QWidget:
@@ -1671,53 +1930,44 @@ class SettingsView(QWidget):
         bc_layout.setContentsMargins(18, 16, 18, 16)
         bc_layout.setSpacing(12)
 
-        bc_layout.addWidget(label("FastAPI Backend Service", "cardTitle"))
-        bc_sub = label("The backend daemon manages training runs, sweeps, and job orchestration.", "muted")
+        bc_layout.addWidget(label("Training pipeline", "cardTitle"))
+        bc_sub = label("ThetaIDE composes configs in-process and runs run_pipeline.py with this Python, "
+                       "streaming its output and metrics. There is no server to start.", "muted")
+        bc_sub.setWordWrap(True)
         bc_layout.addWidget(bc_sub)
 
         # Status row
         status_box = QHBoxLayout()
         status_box.setSpacing(10)
-        self.window.settings_backend_status = label("Status: Checking connection…", "muted")
+        self.window.settings_backend_status = label("Status: Checking the training pipeline…", "muted")
         self.window.settings_backend_status.setStyleSheet("font-size: 12px; font-weight: 600;")
         status_box.addWidget(self.window.settings_backend_status, 1)
 
-        btn_test = QPushButton("Test connection")
-        btn_test.setToolTip("Ping the FastAPI daemon health check endpoint")
+        btn_test = QPushButton("Check pipeline")
+        btn_test.setToolTip("Compose the base experiment to confirm the training environment is installed")
         btn_test.setCursor(Qt.CursorShape.PointingHandCursor)
         btn_test.clicked.connect(self.window.test_backend_connection)
         status_box.addWidget(btn_test)
-
-        btn_docs = QPushButton("Swagger docs")
-        btn_docs.setToolTip("Open interactive API documentation in your web browser")
-        btn_docs.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_docs.clicked.connect(self.window.open_swagger_docs)
-        status_box.addWidget(btn_docs)
-
         bc_layout.addLayout(status_box)
 
-        # URL row
-        url_row = QHBoxLayout()
-        url_row.setSpacing(10)
-        url_lbl = label("API URL:", "muted")
-        url_lbl.setStyleSheet("font-weight: 500;")
-        url_row.addWidget(url_lbl)
+        mono = "font-family: Menlo, Monaco, 'Consolas', monospace; font-size: 12px;"
+        for caption, value in (("Python:", sys.executable), ("Project:", str(PROJECT_ROOT))):
+            row = QHBoxLayout()
+            row.setSpacing(10)
+            cap = label(caption, "muted")
+            cap.setStyleSheet("font-weight: 500;")
+            cap.setFixedWidth(60)
+            row.addWidget(cap)
+            field = QLineEdit(value)
+            field.setReadOnly(True)
+            field.setStyleSheet(mono)
+            row.addWidget(field, 1)
+            bc_layout.addLayout(row)
 
-        self.window.settings_backend_url = QLineEdit(self.window.backend.base_url)
-        self.window.settings_backend_url.setReadOnly(True)
-        self.window.settings_backend_url.setStyleSheet("font-family: 'Consolas', monospace; font-size: 12px;")
-        self.window.settings_backend_url.setMaximumWidth(320)
-        url_row.addWidget(self.window.settings_backend_url, 1)
-        url_row.addStretch()
-        bc_layout.addLayout(url_row)
-
-        # CLI tip
-        tip_lbl = label(
-            "Daemon command:  uvicorn src.app.api.app:app --host 127.0.0.1 --port 8000",
-            "muted",
-        )
+        tip_lbl = label('Start ThetaIDE from the project venv:  pip install -e ".[gui]"  then  python -m frontend',
+                        "muted")
         tip_lbl.setWordWrap(True)
-        tip_lbl.setStyleSheet("font-family: 'Consolas', monospace; font-size: 11px; font-style: italic;")
+        tip_lbl.setStyleSheet("font-family: Menlo, Monaco, 'Consolas', monospace; font-size: 11px; font-style: italic;")
         bc_layout.addWidget(tip_lbl)
 
         layout.addWidget(backend_card)
@@ -1752,7 +2002,7 @@ class SettingsView(QWidget):
         row_root.addWidget(lbl_root)
         val_root = label(str(root_path))
         val_root.setWordWrap(True)
-        val_root.setStyleSheet("font-family: 'Consolas', monospace; font-size: 11px;")
+        val_root.setStyleSheet("font-family: Menlo, Monaco, 'Consolas', monospace; font-size: 11px;")
         val_root.setToolTip(str(root_path))
         row_root.addWidget(val_root, 1)
         info_layout.addLayout(row_root)
@@ -1951,7 +2201,7 @@ class SettingsView(QWidget):
         name_lbl = QLabel(title)
         name_lbl.setStyleSheet("font-weight: 600; font-size: 12px;")
         val_lbl = QLabel(fmt_fn(init_val))
-        val_lbl.setStyleSheet(f"font-family: monospace; font-size: 12px; font-weight: 600; color: {theme_color('primary')};")
+        val_lbl.setStyleSheet(f"font-family: Menlo, Monaco, 'Consolas', monospace; font-size: 12px; font-weight: 600; color: {theme_color('primary')};")
         hdr.addWidget(name_lbl)
         hdr.addStretch()
         hdr.addWidget(val_lbl)
@@ -2096,11 +2346,15 @@ class SettingsView(QWidget):
         # Switch stacked widget to target page
         target_page = self.page_widgets[tab_id]
         self.settings_window.pages_stack.setCurrentWidget(target_page)
+        self.settings_window.scroll_area.verticalScrollBar().setValue(0)  # every page opens at its top
 
         # Switch main content stack to settings window (Page 1) so it is overlayed on top
         self.settings_window.setVisible(True)
         self.content_stack.setCurrentIndex(1)
         self.settings_window.raise_()
+        # The sculpture behind the card would redraw ~30x a second and compete with scrolling.
+        # Keep it moving only on Animation Settings, where it is the live preview.
+        self.ascii_splash.ascii_sculpture.set_hold(tab_id != "animation")
 
     def hide_overlay(self):
         """Hide settings and return to full ASCII Theta view."""
@@ -2110,6 +2364,7 @@ class SettingsView(QWidget):
         self.settings_window.setVisible(False)
         self.content_stack.setCurrentIndex(0)
         self.ascii_splash.raise_()
+        self.ascii_splash.ascii_sculpture.set_hold(False)
 
     def reset_to_ascii(self):
         """Explicitly reset settings view to the clean ASCII Theta."""
@@ -2124,6 +2379,15 @@ class SettingsView(QWidget):
         text_col = theme_color("text")
         muted_col = theme_color("muted")
 
+        zoom = getattr(self.window, "zoom_factor", 1.0) if hasattr(self, "window") else 1.0
+        font_12 = max(8, round(12 * zoom))
+        font_20 = max(12, round(20 * zoom))
+
+        if hasattr(self, "title_label") and self.title_label:
+            self.title_label.setStyleSheet(f"font-size: {font_20}px; font-weight: 700;")
+        if hasattr(self, "subtitle_label") and self.subtitle_label:
+            self.subtitle_label.setStyleSheet(f"font-size: {font_12}px;")
+
         # Sidebar styling
         self.sidebar_frame.setStyleSheet(f"""
             QFrame#settingsSidebar {{
@@ -2137,7 +2401,7 @@ class SettingsView(QWidget):
                 border-radius: 6px;
                 background-color: transparent;
                 color: {muted_col};
-                font-size: 12px;
+                font-size: {font_12}px;
                 font-weight: 500;
             }}
             QToolButton#settingsSideTab:hover {{
@@ -2212,7 +2476,7 @@ class SettingsView(QWidget):
                 border-radius: 6px;
                 padding: 4px 12px;
                 color: {text_col};
-                font-size: 12px;
+                font-size: {font_12}px;
                 font-weight: 600;
             }}
             QToolButton#settingsCloseButton:hover {{
@@ -2221,11 +2485,11 @@ class SettingsView(QWidget):
                 color: #fb4934;
             }}
             QScrollArea#settingsScrollArea {{
-                background: transparent;
+                background-color: {panel_col};
                 border: none;
             }}
             QScrollArea#settingsScrollArea > QWidget > QWidget {{
-                background: transparent;
+                background-color: {panel_col};
             }}
             QScrollBar:horizontal {{
                 height: 0px;
@@ -2237,19 +2501,14 @@ class SettingsView(QWidget):
                 border-radius: 4px;
                 padding: 4px 8px;
                 color: {text_col};
-                font-family: 'Consolas', monospace;
-                font-size: 12px;
+                font-family: Menlo, Monaco, 'Consolas', monospace;
+                font-size: {font_12}px;
                 font-weight: 600;
             }}
             QKeySequenceEdit:focus {{
                 border: 1px solid {accent_col};
             }}
         """)
-
-        if hasattr(self.settings_window, "shadow") and self.settings_window.shadow:
-            is_bottom = getattr(self.settings_window, "dock_position", "top_left") == "bottom_left"
-            self.settings_window.shadow.setColor(QColor(0, 0, 0, 160))
-            self.settings_window.shadow.setOffset(4, -4 if is_bottom else 4)
 
         # Refresh icons on buttons
         for btn in self.tab_buttons.values():

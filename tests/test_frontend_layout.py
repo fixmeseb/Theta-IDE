@@ -129,7 +129,10 @@ class TestWindowLayoutAndSliders(unittest.TestCase):
 
     def test_default_tab_order(self):
         expected_order = ["components", "config", "workflows", "monitor", "results", "plots", "tensorboard", "queue", "terminal", "console"]
-        self.assertEqual(self.window.tabs.tab_order, expected_order)
+        order = self.window.tabs.tab_order
+        self.assertEqual(order[:len(expected_order)], expected_order)
+        # Tabs from enabled plugins (e.g. arXiv Papers) follow the built-in panes
+        self.assertTrue(set(order[len(expected_order):]) <= set(self.window.plugin_manager.instances))
 
     def test_pane_sliders_registered(self):
         expected_panes = ["components", "config", "workflows", "monitor", "results", "plots", "tensorboard", "queue", "terminal", "console"]
@@ -176,7 +179,7 @@ class TestWindowLayoutAndSliders(unittest.TestCase):
         # Reset
         self.window.reset_sidebar_layout()
         default_order = ["components", "config", "workflows", "monitor", "results", "plots", "tensorboard", "queue", "terminal", "console"]
-        self.assertEqual(self.window.tabs.tab_order, default_order)
+        self.assertEqual(self.window.tabs.tab_order[:len(default_order)], default_order)
         for p in default_order:
             self.assertTrue(self.window.tabs.is_tab_visible(p))
             self.assertTrue(self.window.pane_sliders[p].isChecked())

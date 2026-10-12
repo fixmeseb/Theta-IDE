@@ -37,8 +37,15 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 from sklearn.metrics import average_precision_score, precision_recall_curve, roc_auc_score
 
-from plot.base import BasePlotter, clean_label, get_canonical_method_name, get_method_aliases
-from src.usr.methods.method_style_registry import get_style as get_method_style
+from plot.base import (
+    BasePlotter,
+    clean_label,
+    get_canonical_method_name,
+    get_method_aliases,
+)
+from plot.base import (
+    get_style as get_method_style,
+)
 
 
 def compute_trajectory_agreement(

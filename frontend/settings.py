@@ -19,6 +19,9 @@ which writes the change back into the workspace ``settings.toml`` and emits
 """
 from __future__ import annotations
 
+import copy
+import re
+import time
 import tomllib
 from pathlib import Path
 from typing import Any
@@ -49,6 +52,9 @@ _DEFAULT_TOML = """\
 #   "Apollo", "Athena", "Ares", "Dionysus", "Poseidon"
 theme = "Catppuccin"
 
+# Display zoom factor (1.0 = 100%). Use Cmd++ / Cmd+- to resize.
+zoom = 1.0
+
 # Enable the rotating 3-D ASCII sculpture on the Settings & About panel.
 ascii_animation = true
 ascii_speed = 1.0
@@ -57,12 +63,9 @@ ascii_thickness = 1.0
 ascii_tilt = 1.0
 ascii_distance = 4.8
 
-[backend]
-# FastAPI backend that manages training runs and pipelines.
-url = "http://127.0.0.1:8000"
-
-# Seconds before a connection-test attempt times out.
-timeout = 5
+# Show all resolved group defaults in the experiment configuration panel.
+# When disabled (false), only explicit overrides and configured methods are shown.
+show_resolved_defaults = false
 
 [sidebar]
 # Canonical panel IDs, in left-to-right display order.
@@ -153,6 +156,12 @@ cwd = ""
 # Put the backend venv (venv/) first on PATH, so python, pytest and run_pipeline.py
 # use the project's environment without activating it by hand.
 activate_venv = true
+
+[shortcuts]
+# Application-wide keyboard shortcuts (customizable in Settings -> Hotkeys).
+zoom_in = "Ctrl++"
+zoom_out = "Ctrl+-"
+reset_zoom = "Ctrl+0"
 """
 
 
@@ -207,7 +216,16 @@ def _write_toml_file(path: Path, data: dict) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(".toml.tmp")
     tmp.write_text(content, encoding="utf-8")
-    tmp.replace(path)
+    # On Windows, replacing a file another process briefly holds open (antivirus, the search indexer, a
+    # second ThetaIDE watching it) fails with "Access is denied"; it clears within moments, so retry.
+    for attempt in range(20):
+        try:
+            tmp.replace(path)
+            return
+        except PermissionError:
+            if attempt == 19:
+                raise
+            time.sleep(0.025 * (attempt + 1))
 
 
 def _toml_value(v: Any) -> str:
@@ -219,11 +237,23 @@ def _toml_value(v: Any) -> str:
     if isinstance(v, float):
         return repr(v)
     if isinstance(v, str):
-        return '"' + v.replace("\\", "\\\\").replace('"', '\\"') + '"'
+        escaped = v.replace("\\", "\\\\").replace('"', '\\"')
+        for char, code in (("\n", "\\n"), ("\r", "\\r"), ("\t", "\\t")):
+            escaped = escaped.replace(char, code)
+        return '"' + escaped + '"'
     if isinstance(v, list):
         items = ", ".join(_toml_value(i) for i in v)
         return f"[{items}]"
+    if isinstance(v, dict):
+        # Inline table, e.g. a sidebar bin: { name = "Training", members = ["monitor"], expanded = true }
+        items = ", ".join(f"{_toml_key(k)} = {_toml_value(val)}" for k, val in v.items())
+        return "{ " + items + " }" if items else "{}"
     return repr(v)  # fallback
+
+
+def _toml_key(key: Any) -> str:
+    key = str(key)
+    return key if re.fullmatch(r"[A-Za-z0-9_-]+", key) else _toml_value(key)
 
 
 # ---------------------------------------------------------------------------
@@ -333,6 +363,25 @@ class SettingsManager(QObject):
 
         self.changed.emit()
 
+    def persist_key(self, section: str, key: str, value: Any) -> None:
+        """Persist a single preference to disk without emitting the ``changed`` signal.
+
+        Useful for debounced settings (like live display scaling) where the UI has
+        already applied the change and re-evaluating the full settings cascade is unnecessary.
+        """
+        node = self._data.setdefault(section, {})
+        node[key] = value
+
+        on_disk = _parse_toml_file(self._workspace_path)
+        disk_node = on_disk.setdefault(section, {})
+        if disk_node.get(key) != value:
+            disk_node[key] = value
+            self._watcher.removePath(str(self._workspace_path))
+            try:
+                _write_toml_file(self._workspace_path, on_disk)
+            finally:
+                self._watcher.addPath(str(self._workspace_path))
+
     # ------------------------------------------------------------------
     # Convenience helpers for the most-touched sections
     # ------------------------------------------------------------------
@@ -381,8 +430,23 @@ class SettingsManager(QObject):
             return 4.8
 
     @property
-    def backend_url(self) -> str:
-        return self.get("backend", "url", default="http://127.0.0.1:8000")
+    def zoom(self) -> float:
+        try:
+            return float(self.get("appearance", "zoom", default=1.0))
+        except (ValueError, TypeError):
+            return 1.0
+
+    @zoom.setter
+    def zoom(self, val: float) -> None:
+        self.set("appearance", "zoom", round(float(val), 2))
+
+    @property
+    def show_resolved_defaults(self) -> bool:
+        return bool(self.get("appearance", "show_resolved_defaults", default=False))
+
+    @show_resolved_defaults.setter
+    def show_resolved_defaults(self, val: bool) -> None:
+        self.set("appearance", "show_resolved_defaults", bool(val))
 
     @property
     def sidebar_order(self) -> list[str]:
@@ -467,6 +531,11 @@ class SettingsManager(QObject):
         ]
 
     @property
+    def shortcuts(self) -> dict[str, str]:
+        v = self.get("shortcuts", default=None)
+        return dict(v) if isinstance(v, dict) else {}
+
+    @property
     def workspace_settings_path(self) -> Path:
         """Absolute path to the workspace ``settings.toml``."""
         return self._workspace_path
@@ -498,6 +567,8 @@ class SettingsManager(QObject):
         # Some editors (Vim, Neovim) replace the file via rename; re-watch.
         self._watcher.removePath(str(self._workspace_path))
         self._watcher.removePath(str(self._user_path))
+        old_data = copy.deepcopy(self._data)
         self._reload()
         self._watch_files()
-        self.changed.emit()
+        if old_data != self._data:
+            self.changed.emit()

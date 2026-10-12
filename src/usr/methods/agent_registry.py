@@ -94,7 +94,6 @@ def auto_discover():
         if module_info.name.startswith("_") or module_info.name in (
             "agent_registry",
             "base_agent",
-            "method_style_registry",
             "cew_utils",
         ):
             continue

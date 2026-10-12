@@ -5,5 +5,11 @@
   "version": "1.0.0",
   "installed_from": "https://raw.githubusercontent.com/CameronEgb/theta-hub/main/packages/sb3_suite-1.0.0.zip",
   "sha256": "71fce1003367afe2ea8eba6dc4c0308369c5c81ad13c20d64b1deaef098e10fd",
-  "config_path": null
+  "config_path": "in/config/agent/sb3/a2c.yaml",
+  "config_paths": [
+    "in/config/agent/sb3/a2c.yaml",
+    "in/config/agent/sb3/dqn.yaml",
+    "in/config/agent/sb3/ppo.yaml",
+    "in/config/agent/sb3/sac.yaml"
+  ]
 }

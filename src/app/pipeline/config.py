@@ -474,8 +474,9 @@ def parse_methods_dict(cfg) -> dict[str, dict]:
         else:
             m_dict = {}
 
-        # Look up reusable group method definition if available
-        base_group_method = find_group_method_config(method_name, group=group)
+        # Look up reusable group method definition if available (supporting explicit base/template or method_name)
+        base_name = m_dict.get("base") or m_dict.get("template") or method_name
+        base_group_method = find_group_method_config(base_name, group=group)
         if base_group_method:
             m_dict = deep_merge(base_group_method, m_dict)
 

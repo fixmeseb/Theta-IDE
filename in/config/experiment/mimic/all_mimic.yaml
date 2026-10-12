@@ -1,13 +1,11 @@
 # @package _global_
 defaults:
-  - mimic/_base
-
+- mimic/_base
 resources:
-  time: "24:00:00"
+  time: '24:00:00'
   gpus: 1
   cores: 16
-  memory: "64G"
-
+  memory: 64G
 methods:
   params:
     agent: cql
@@ -16,7 +14,6 @@ methods:
     lr: 2e-4
     cql_alpha: 2.0
     weight_decay: 1e-4
-
   cql_dnn:
     model: dnn
     ent_coef: 0.05
