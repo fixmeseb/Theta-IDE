@@ -13,6 +13,9 @@ constraints:
   forbids:
     eval_episodes: non_zero
 
+# The registry's `dnn` is MLPQNetwork, an RL Q-network: it cannot train here.
+default_model: mlp_classifier
+
 allowed_agents: []
 forbidden_agents:
   - cql

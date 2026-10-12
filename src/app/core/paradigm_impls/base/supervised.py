@@ -34,6 +34,10 @@ log = logging.getLogger(__name__)
 class SupervisedDataModule(L.LightningDataModule, BaseDataModule):
     """Domain-independent data module wrapping train, val, and test DataLoaders."""
 
+    #: Loader used for a plain .npz dataset. Supervised needs the labels in the
+    #: batch; paradigms that must not see them override this.
+    npz_delegate = "SupervisedNpzDataModule"
+
     def __init__(
         self,
         train_loader: DataLoader | None = None,
@@ -87,6 +91,23 @@ class SupervisedDataModule(L.LightningDataModule, BaseDataModule):
 
                 self._delegate = EPSepsisDataModule(self._cfg)
                 self.input_dim = getattr(self._delegate, "input_dim", 64)
+                return
+
+            # Any other offline dataset: a labelled .npz. Resolved here rather
+            # than demanded as a `data_module` key, because that key cannot be
+            # set from the configuration panel - requiring it would mean
+            # supervised still only worked for MIMIC as far as the UI is
+            # concerned. Staying undelegated is fine: the loaders may have been
+            # supplied directly instead.
+            try:
+                from src.app.core.paradigm_loader import get_component
+
+                delegate = get_component(self.npz_delegate)(self._cfg)
+            except (FileNotFoundError, KeyError, ValueError) as exc:
+                log.debug("No labelled .npz dataset for this config: %s", exc)
+            else:
+                self._delegate = delegate
+                self.input_dim = getattr(delegate, "input_dim", 64)
 
     def train_dataloader(self) -> DataLoader:
         if self._delegate is not None:

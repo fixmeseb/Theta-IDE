@@ -883,7 +883,9 @@ class ConfigTreeWidget(QWidget):
                 # A paradigm with no agents still requires methods to be
                 # non-empty, and supervised satisfies that with model-only
                 # methods, so seed one instead of writing an invalid file.
-                model = default_method_model(tree.group(group_name), tree.models)
+                model = default_method_model(
+                    tree.group(group_name), tree.models, paradigm=tree.paradigms.get(paradigm_name)
+                )
 
         if subpath:
             target_dir = (self.root_dir / "experiment" / group_name / subpath) if self.root_dir.name not in ("experiment", "experiments") else (self.root_dir / group_name / subpath)
@@ -1144,7 +1146,11 @@ class ConfigTreeWidget(QWidget):
         if tree and group_paradigm:
             permitted = [a.name for a in tree.agents_for(group_paradigm)]
             agent = permitted[0] if permitted else None
-            model = default_method_model(group_obj, tree.models) if not agent else "dnn"
+            model = (
+                default_method_model(group_obj, tree.models, paradigm=tree.paradigms.get(group_paradigm))
+                if not agent
+                else "dnn"
+            )
             if agent or model:
                 m_name = unique_method_name((), agent, model)
                 lines += ["", "methods:", f"  {m_name}:"]

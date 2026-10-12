@@ -240,3 +240,74 @@ def test_scoring_leaves_eval_mode_alone_when_it_started_there():
         module.eval()
         load_paradigm_definition("supervised").eval_protocol_cls().evaluate(module, dm.val_dataloader())
         assert module.training is False
+
+
+# ---------------------------------------------------------------------------
+# Resolving a loader without a data_module key
+# ---------------------------------------------------------------------------
+
+
+def _env_cfg(name="breast_cancer"):
+    return _Cfg(env=_Cfg(name=name, dataset_name=f"{name}.npz"), batch_size=32)
+
+
+def test_supervised_finds_a_labelled_loader_with_no_data_module_key():
+    """`data_module` cannot be set from the configuration panel, so requiring it
+    would mean supervised still only worked for MIMIC as far as the UI goes."""
+    dm = get_component("SupervisedDataModule")(_env_cfg())
+    assert type(dm._delegate).__name__ == "SupervisedNpzDataModule"
+    assert len(next(iter(dm.train_dataloader()))) == 2
+
+
+def test_unsupervised_resolves_the_unlabelled_loader_instead():
+    """Same dataset, same absent key, different paradigm: labels must not leak."""
+    dm = get_component("UnsupervisedDataModule")(_env_cfg())
+    assert type(dm._delegate).__name__ == "TabularNpzDataModule"
+    assert len(next(iter(dm.train_dataloader()))) == 1
+
+
+def test_the_two_paradigms_declare_different_delegates():
+    supervised = get_component("SupervisedDataModule")
+    unsupervised = get_component("UnsupervisedDataModule")
+    assert supervised.npz_delegate != unsupervised.npz_delegate
+
+
+def test_the_environment_does_not_choose_the_loader():
+    """An env is shared across paradigms, and train.py prefers the env's choice
+    over the paradigm's, so naming a loader there picked the wrong one."""
+    import yaml
+
+    for name in ("breast_cancer", "digits"):
+        env = yaml.safe_load((CONFIG / "env" / f"{name}.yaml").read_text())
+        assert "data_module" not in env, f"{name}.yaml should leave the loader to the paradigm"
+
+
+def test_a_paradigm_declares_the_model_its_runner_can_build():
+    """The bare fallback is dnn, which is MLPQNetwork and cannot train here."""
+    import yaml
+
+    from frontend.config_model import ConfigTree, default_method_model
+
+    tree = ConfigTree.discover()
+    for paradigm, expected in (("supervised", "mlp_classifier"), ("unsupervised", "dense_autoencoder")):
+        declared = yaml.safe_load((CONFIG / "paradigms" / f"{paradigm}.yaml").read_text())["default_model"]
+        assert declared == expected
+        assert default_method_model(None, tree.models, paradigm=tree.paradigms[paradigm]) == expected
+
+
+def test_an_existing_group_still_wins_over_the_paradigm_default():
+    from frontend.config_model import ConfigTree, default_method_model
+
+    tree = ConfigTree.discover()
+    chosen = default_method_model(
+        tree.group("early_prediction"), tree.models, paradigm=tree.paradigms["supervised"]
+    )
+    assert chosen in {"lstm", "transformer"}
+
+
+def test_rl_paradigms_keep_the_dnn_default():
+    from frontend.config_model import ConfigTree, default_method_model
+
+    tree = ConfigTree.discover()
+    for paradigm in ("online_rl", "offline_rl"):
+        assert default_method_model(None, tree.models, paradigm=tree.paradigms[paradigm]) == "dnn"

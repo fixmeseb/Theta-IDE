@@ -15,6 +15,9 @@ constraints:
 
 # No policy chooses actions here, so methods name a model only, exactly as in
 # supervised. The empty allow-list is what makes that a rule rather than a habit.
+# Reconstruction needs an autoencoder; a classifier head has nothing to learn from.
+default_model: dense_autoencoder
+
 allowed_agents: []
 forbidden_agents:
   - cql

@@ -1700,7 +1700,11 @@ class ConfigViewer(QWidget):
         )
         if not permitted_agents and choices:
             self.combo_new_method.setCurrentText(
-                default_method_model(tree.group(self._group_name() or "") if tree else None, choices)
+                default_method_model(
+                    tree.group(self._group_name() or "") if tree else None,
+                    choices,
+                    paradigm=tree.paradigms.get(paradigm) if tree else None,
+                )
             )
         add_row.addWidget(self.combo_new_method)
         self.btn_add_method = QPushButton("Add")
@@ -2537,6 +2541,24 @@ class ConfigViewer(QWidget):
             elif self.raw_data.get(name) == forced:
                 self.raw_data.pop(name, None)
 
+    def _reconcile_group_base(self):
+        """Re-pin a group base against whatever paradigm it currently declares.
+
+        _on_paradigm_changed covers picking a paradigm, but not a base that
+        already had one - an older group, or one where only the environment was
+        changed. Those keep inheriting intervals_count: 4 and eval_episodes: 100
+        and stay unrunnable, so the base is reconciled whenever it is saved.
+
+        Only _base.yaml: the pin belongs on the file that binds the paradigm,
+        and experiments inherit it.
+        """
+        if not self.current_path or self.current_path.name != "_base.yaml":
+            return
+        paradigm = self.raw_data.get("paradigm")
+        tree = config_tree()
+        if tree and isinstance(paradigm, str) and paradigm in tree.paradigms:
+            self._pin_fields_the_paradigm_forbids(tree.paradigms[paradigm])
+
     def _drop_empty_methods(self):
         """Remove a methods block with nothing in it.
 
@@ -2554,6 +2576,7 @@ class ConfigViewer(QWidget):
             return False
         try:
             self._clean_redundant_params()
+            self._reconcile_group_base()
             self._drop_empty_methods()
             yaml_str = yaml.safe_dump(self.raw_data, sort_keys=False)
             self.current_path.write_text(self._preamble + yaml_str, encoding="utf-8")

@@ -373,17 +373,30 @@ class ExperimentGroup:
         )
 
 
-def default_method_model(group: ExperimentGroup | None, known: Any = (), fallback: str = "dnn") -> str:
+def default_method_model(
+    group: ExperimentGroup | None,
+    known: Any = (),
+    fallback: str = "dnn",
+    paradigm: Paradigm | None = None,
+) -> str:
     """The architecture a new agent-less method should name.
 
     A group whose base already declares methods has settled on an architecture
     (early_prediction uses lstm and transformer), so follow that rather than
     impose a default on a group that has already chosen.
+
+    Failing that, the paradigm's own `default_model`. This matters because the
+    bare fallback is `dnn`, which is MLPQNetwork - an RL Q-network built around
+    n_actions. Offering it for a supervised or unsupervised group points at the
+    one model whose training is certain to fail.
     """
     for spec in (group.base_methods if group else {}).values():
         if isinstance(spec, dict) and isinstance(spec.get("model"), str):
             return spec["model"]
     names = set(known or ())
+    declared = paradigm.raw.get("default_model") if paradigm is not None else None
+    if isinstance(declared, str) and (not names or declared in names):
+        return declared
     if not names or fallback in names:
         return fallback
     return sorted(names)[0]

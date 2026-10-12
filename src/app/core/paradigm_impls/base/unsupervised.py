@@ -48,6 +48,10 @@ class UnsupervisedDataModule(SupervisedDataModule):
     #: Batches are (x, y, ...); nothing downstream of here consults index 1.
     label_index = 1
 
+    #: The unlabelled loader: letting labels into the batch here would make the
+    #: run supervised by accident.
+    npz_delegate = "TabularNpzDataModule"
+
 
 # ---------------------------------------------------------------------------
 # 2. Label-free Evaluation Protocol

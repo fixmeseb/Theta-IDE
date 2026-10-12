@@ -5,7 +5,6 @@ monitor_metric: "val/loss"
 # There is no gym env here: actions cannot alter a fixed table of biopsies.
 offline_only: true
 dataset_name: breast_cancer.npz
-data_module: TabularNpzDataModule
 
 # 569 real biopsies, 30 features, benign/malignant. Bundled with scikit-learn,
 # so `python in/datasets/prepare_tabular.py breast_cancer` needs no network.
