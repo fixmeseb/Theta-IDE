@@ -339,10 +339,19 @@ python -m frontend</code></pre>
         title="Keyboard Shortcuts & Leader Chords",
         category="Workflow & Tools",
         summary="Complete reference for tmux-style leader key navigation and quick action hotkeys.",
-        keywords=["hotkeys", "shortcuts", "leader", "tmux", "keyboard", "navigation"],
+        keywords=["hotkeys", "shortcuts", "leader", "tmux", "keyboard", "navigation", "launcher", "rofi", "palette"],
         html_content="""
 <h2>Keyboard Shortcuts & Leader Navigation</h2>
 <p>Theta-IDE features a high-efficiency <b>Leader key system</b> inspired by tmux and Vim. You can navigate between any panel instantly without taking your hands off the keyboard.</p>
+
+<h3>The Launcher</h3>
+<p>Press <code>Ctrl+Space</code> to open the launcher, a rofi-style search over every panel, plugin, settings page and menu command. Type part of a name (letters in order are enough: <code>tb</code> finds TensorBoard, <code>tr q</code> finds <i>Start or pause queue</i>), move with the arrow keys, <code>Tab</code>, <code>Ctrl+N</code>/<code>Ctrl+P</code> or <code>Ctrl+J</code>/<code>Ctrl+K</code>, and press <code>Enter</code> to open. <code>Esc</code>, a click outside or <code>Ctrl+Space</code> again closes it.</p>
+<ul>
+  <li>With nothing typed, what you opened most recently comes first.</li>
+  <li>Opening a panel that is hidden in the sidebar shows it again. Plugins that are switched off are listed as <i>Turn on &hellip;</i>.</li>
+  <li>Each row shows its shortcut, so the launcher also teaches the faster keys.</li>
+  <li>Rebind it in <i>Settings &rarr; Hotkeys &rarr; Application Menu Shortcuts</i> (<code>open_launcher</code> under <code>[shortcuts]</code>).</li>
+</ul>
 
 <h3>The Action Key (Leader)</h3>
 <p>Default: <code>Ctrl+B</code> (Customizable in <i>Settings &rarr; Hotkeys</i> to <code>Caps Lock</code>, <code>Alt</code>, <code>Ctrl</code>, or <code>Meta</code>).</p>
