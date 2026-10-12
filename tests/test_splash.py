@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 pytest.importorskip("PyQt6")
+from PyQt6.QtGui import QColor  # noqa: E402
 from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 app = QApplication.instance() or QApplication(sys.argv[:1])
@@ -25,15 +26,36 @@ def test_progress_only_moves_forward_and_is_clamped():
     assert splash.progress == 1.0
 
 
-def test_splash_paints_the_theme_background():
+def test_splash_paints_the_painting_faded_into_the_theme():
     theme = BUILTINS["Nord"]
     splash = SplashScreen(theme)
+    assert not splash.background.isNull()  # images/splash_landscape.jpg is bundled
     splash.set_progress("Loading settings…", 0.4)
     splash.show()
     app.processEvents()
     image = splash.grab().toImage()
     scale = image.width() / splash.width()
-    assert image.pixelColor(int(20 * scale), int(20 * scale)).name() == theme["colors"]["base"]
+
+    def distance(x, y):
+        a, b = image.pixelColor(int(x * scale), int(y * scale)), QColor(theme["colors"]["base"])
+        return abs(a.red() - b.red()) + abs(a.green() - b.green()) + abs(a.blue() - b.blue())
+
+    assert distance(splash.width() / 2, 30) > 120  # the painting's sky shows at the top
+    assert distance(20, splash.height() - 12) < 30  # the theme's base colour behind the text
+    splash.close()
+
+
+def test_splash_without_the_painting_falls_back_to_the_theme(monkeypatch):
+    import frontend.splash as splash_module
+
+    monkeypatch.setattr(splash_module, "BACKGROUND_PATH", Path("missing.jpg"))
+    theme = BUILTINS["Nord"]
+    splash = SplashScreen(theme)
+    splash.show()
+    app.processEvents()
+    image = splash.grab().toImage()
+    scale = image.width() / splash.width()
+    assert image.pixelColor(int(40 * scale), int(40 * scale)).name() == theme["colors"]["base"]
     splash.close()
 
 
