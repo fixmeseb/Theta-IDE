@@ -122,7 +122,9 @@ def normalize_menu_shortcut(shortcut_str: str) -> str:
 
 
 class Window(QMainWindow):
-    def __init__(self, data_dir):
+    def __init__(self, data_dir, progress=None):
+        """`progress(message, fraction)` reports startup steps (the splash screen shows them)."""
+        step = progress or (lambda message, fraction: None)
         super().__init__()
         self.setWindowTitle("ThetaIDE")
         self.resize(1480, 940)
@@ -131,6 +133,7 @@ class Window(QMainWindow):
         self.store = Store(data_dir)
 
         # --- Unified settings (must be first; everything else reads from it) ---
+        step("Loading settings…", 0.02)
         self.settings_manager = SettingsManager(Path(data_dir))
         self.settings_manager.changed.connect(self._on_settings_changed)
         self.zoom_factor = self.settings_manager.zoom
@@ -156,6 +159,7 @@ class Window(QMainWindow):
             workspace_dir = data_p.parent
             ide_data_dir = data_p
 
+        step("Discovering plugins…", 0.04)
         self.plugin_manager = PluginManager(
             self,
             [Path(__file__).parent / "plugins" / "core", Path(__file__).parent / "plugins", ide_data_dir / "plugins"],
@@ -168,6 +172,7 @@ class Window(QMainWindow):
             on_change_callback=self._on_hub_component_changed,
             settings_manager=self.settings_manager,
         )
+        step("Loading run history…", 0.06)
         saved, errors = self.store.load()
         self.runs = saved or example_runs()
         # catalog.list_runs() entries by (group, experiment_id): every results/logs folder, however it was launched.
@@ -205,10 +210,14 @@ class Window(QMainWindow):
         self.current_experiment = None
         self.fixed_fields = {}
         self.fields = {}
+        step("Building the workspace…", 0.08)
         self.make_center()
+        step("Starting plugins…", 0.56)
         self.plugin_manager.initialize_plugins()
+        step("Loading the default experiment…", 0.58)
         self.init_default_experiment()
         self.tabs.tabOrderChanged.connect(lambda _: self.save_layout())
+        step("Restoring layout…", 0.66)
         self.load_layout()
         if hasattr(self, "settings_manager"):
             self.tabs.set_auto_hide(bool(self.settings_manager.get("sidebar", "auto_hide", default=False)))
@@ -218,11 +227,13 @@ class Window(QMainWindow):
         self.statusBar().addWidget(self.theme_status)
         self.theme_manager.changed.connect(self.theme_changed)
         self.theme_manager.committed.connect(self.persist_theme_choice)
+        step("Applying theme…", 0.68)
         self.theme_changed()
         self.state_label = label("TRAINING   •   idle  ", "muted")
         self.statusBar().addPermanentWidget(self.state_label)
         self.backend_label = label("PIPELINE   ○   loading…  ", "muted")
         self.statusBar().addPermanentWidget(self.backend_label)
+        step("Loading runs…", 0.79)
         self.refresh_runs()
         self.update_config()
         if self.runs:
@@ -235,6 +246,7 @@ class Window(QMainWindow):
             self.log(error)
         if self.theme_manager.error:
             self.log(self.theme_manager.error)
+        step("Finishing up…", 0.8)
         self.set_zoom(self.zoom_factor, persist=False)
         self.default_layout = self.saveState()
 
@@ -2567,12 +2579,20 @@ def main():
     if ICON_PATH.is_file():
         app.setWindowIcon(app_icon())  # every window's title bar, the taskbar and (macOS) the Dock
 
+    from .splash import SplashScreen, splash_theme
+
+    splash = SplashScreen(splash_theme(args.data_dir))
+    splash.show()
+    app.processEvents()  # paint it now: the event loop doesn't run until the window is built
     try:
-        window = Window(args.data_dir)
+        window = Window(args.data_dir, progress=splash.set_progress)
     except OSError as exc:
+        splash.close()
         QMessageBox.critical(None, "Workspace unavailable", f"Could not open local run storage:\n{exc}")
         return 1
+    splash.set_progress("Opening window…", 0.88)
     window.show()
+    splash.finish(window)
 
     from .tray import TrayController
 
