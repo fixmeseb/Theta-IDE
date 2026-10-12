@@ -2250,6 +2250,7 @@ class ConfigViewer(QWidget):
             if isinstance(env_name, str) and env_name in tree.environments:
                 if not rules.permits_environment(tree.environments[env_name]):
                     self.raw_data.pop("env", None)
+            self._pin_fields_the_paradigm_forbids(rules)
         self._mark_dirty()
         self._render_boxes()
 
@@ -2515,12 +2516,45 @@ class ConfigViewer(QWidget):
             self.dirty_status.hide()
             self.dirty_changed.emit(False)
 
+    #: The only value each rollout field may take under a paradigm that forbids it.
+    _FORBIDDEN_FIELD_VALUES = {"intervals_count": 1, "eval_episodes": 0}
+
+    def _pin_fields_the_paradigm_forbids(self, rules):
+        """Write legal values for the fields the chosen paradigm disables.
+
+        in/config/config.yaml defaults intervals_count to 4 and eval_episodes to
+        100 for the online case. A config that simply omits them inherits those
+        and is rejected before training starts, which is why the shipped offline
+        and supervised bases pin both. Marking the fields "not used" in the panel
+        is not enough on its own: the inherited value still reaches the backend.
+
+        Switching back to a paradigm that allows a field clears the pin, but only
+        while it still holds the value set here, so a deliberate choice survives.
+        """
+        for name, forced in self._FORBIDDEN_FIELD_VALUES.items():
+            if not rules.field_enabled(name):
+                self.raw_data[name] = forced
+            elif self.raw_data.get(name) == forced:
+                self.raw_data.pop(name, None)
+
+    def _drop_empty_methods(self):
+        """Remove a methods block with nothing in it.
+
+        Every paradigm requires methods to be non-empty, and `methods: {}`
+        satisfies that no better than having none - worse, in fact, since an
+        absent block lets the group base supply one.
+        """
+        methods = self.raw_data.get("methods")
+        if isinstance(methods, dict) and not [k for k in methods if k != "params"]:
+            self.raw_data.pop("methods", None)
+
     def save_to_disk(self, show_error: bool = False):
         """Save current YAML dictionary back to disk."""
         if not self.current_path:
             return False
         try:
             self._clean_redundant_params()
+            self._drop_empty_methods()
             yaml_str = yaml.safe_dump(self.raw_data, sort_keys=False)
             self.current_path.write_text(self._preamble + yaml_str, encoding="utf-8")
             self.is_dirty = False

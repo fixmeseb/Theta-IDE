@@ -213,3 +213,85 @@ class TestRoundTrip(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+# ---------------------------------------------------------------------------
+# Keeping a group valid when its paradigm is chosen
+# ---------------------------------------------------------------------------
+
+
+@unittest.skipIf(not HAS_PYQT6, "PyQt6 not installed in current environment")
+class TestParadigmChangeKeepsTheConfigValid(unittest.TestCase):
+    """Inline group creation writes `paradigm: null` and the paradigm is picked
+    afterwards, so the base has to be reconciled at that point. Without it the
+    group inherits intervals_count: 4 and eval_episodes: 100 from config.yaml,
+    which every non-RL paradigm rejects before training starts."""
+
+    def setUp(self):
+        self.dir = CONFIG / "experiment" / "_ParadigmProbe"
+        self.dir.mkdir(parents=True, exist_ok=True)
+        self.base = self.dir / "_base.yaml"
+        self.base.write_text(
+            "# @package _global_\ndefaults:\n  - override /env: mimic\n\n"
+            "paradigm: null\n\nseed: 1\nsave_dataset: false\nrecover: false\n"
+        )
+        self.viewer = ConfigViewer()
+        self.viewer.load_file(self.base, "experiment/_ParadigmProbe/_base.yaml")
+
+    def tearDown(self):
+        shutil.rmtree(self.dir, ignore_errors=True)
+
+    def _pick(self, paradigm):
+        self.viewer._on_paradigm_changed(paradigm)
+        self.viewer.save_to_disk()
+        return yaml.safe_load(self.base.read_text())
+
+    def test_supervised_pins_the_fields_it_forbids(self):
+        data = self._pick("supervised")
+        self.assertEqual(data["intervals_count"], 1)
+        self.assertEqual(data["eval_episodes"], 0)
+
+    def test_unsupervised_pins_them_too(self):
+        data = self._pick("unsupervised")
+        self.assertEqual(data["intervals_count"], 1)
+        self.assertEqual(data["eval_episodes"], 0)
+
+    def test_offline_rl_pins_them_too(self):
+        """offline_rl forbids both as well; mimic/_base.yaml is the reference."""
+        data = self._pick("offline_rl")
+        self.assertEqual(data["intervals_count"], 1)
+        self.assertEqual(data["eval_episodes"], 0)
+
+    def test_online_rl_leaves_them_to_the_defaults(self):
+        self._pick("supervised")
+        data = self._pick("online_rl")
+        self.assertNotIn("intervals_count", data)
+        self.assertNotIn("eval_episodes", data)
+
+    def test_switching_back_does_not_clobber_a_deliberate_value(self):
+        """Only the pin this wrote is cleared, not a value the user chose."""
+        self._pick("supervised")
+        self.viewer._on_field_edited("intervals_count", 7)
+        data = self._pick("online_rl")
+        self.assertEqual(data["intervals_count"], 7)
+
+    def test_a_group_pinned_this_way_satisfies_the_backend(self):
+        """The pins are exactly what the shipped offline and supervised bases use."""
+        data = self._pick("supervised")
+        reference = yaml.safe_load((CONFIG / "experiment" / "early_prediction" / "_base.yaml").read_text())
+        for key in ("intervals_count", "eval_episodes"):
+            self.assertEqual(data[key], reference[key])
+
+    def test_an_empty_methods_block_is_not_written(self):
+        """`methods: {}` satisfies non_empty no better than having none, and an
+        absent block lets the group base supply one."""
+        self.viewer.raw_data["methods"] = {}
+        self.assertNotIn("methods", self._pick("supervised"))
+
+    def test_a_methods_block_holding_only_params_is_dropped_too(self):
+        self.viewer.raw_data["methods"] = {"params": {"lr": 0.0003}}
+        self.assertNotIn("methods", self._pick("supervised"))
+
+    def test_a_real_method_is_kept(self):
+        self.viewer.raw_data["methods"] = {"m1": {"model": "lstm"}}
+        self.assertEqual(self._pick("supervised")["methods"], {"m1": {"model": "lstm"}})
