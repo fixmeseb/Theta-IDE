@@ -1,8 +1,0 @@
-# @package _global_
-defaults:
-  - override /hydra/sweeper: optuna_online
-
-seed: 1
-save_dataset: false
-paradigm: online_rl
-

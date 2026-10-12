@@ -1001,10 +1001,44 @@ class ConfigViewer(QWidget):
             return None
         return tree.group(group).env
 
+    def _get_base_env(self) -> str | None:
+        """The environment configured in a group's _base.yaml defaults."""
+        if not self.raw_data or not isinstance(self.raw_data, dict):
+            return None
+        for entry in self.raw_data.get("defaults") or []:
+            if isinstance(entry, dict) and "override /env" in entry:
+                val = entry.get("override /env")
+                return str(val) if val is not None else None
+        return None
+
+    def _set_base_env(self, env_name: str | None):
+        """Update or insert override /env in the group's _base.yaml defaults."""
+        if not self.raw_data or not isinstance(self.raw_data, dict):
+            return
+        defaults = self.raw_data.get("defaults")
+        if not isinstance(defaults, list):
+            defaults = []
+            self.raw_data["defaults"] = defaults
+        found = False
+        for entry in defaults:
+            if isinstance(entry, dict) and "override /env" in entry:
+                entry["override /env"] = env_name
+                found = True
+                break
+        if not found:
+            defaults.append({"override /env": env_name})
+        self._mark_dirty()
+
     def _clean_redundant_params(self):
         """Strip redundant parameters inherited from defaults or matching filename stem."""
         if not self.raw_data or not isinstance(self.raw_data, dict):
             return
+        is_base = (self.current_path.stem == "_base") if self.current_path else False
+        if is_base:
+            self.raw_data.pop("group", None)
+            self.raw_data.pop("experiment_id", None)
+            return
+
         is_experiment = (
             (self.current_rel_path and self.current_rel_path.startswith("experiment/"))
             or "methods" in self.raw_data
@@ -1015,11 +1049,12 @@ class ConfigViewer(QWidget):
             stem = self.current_path.stem if self.current_path else ""
             if self.raw_data.get("experiment_id") == stem:
                 self.raw_data.pop("experiment_id", None)
-            if self.raw_data.get("paradigm") == self._inherited_paradigm():
+            inh_paradigm = self._inherited_paradigm()
+            if inh_paradigm is not None and self.raw_data.get("paradigm") == inh_paradigm:
                 self.raw_data.pop("paradigm", None)
             inh_env = self._inherited_env()
             if isinstance(self.raw_data.get("env"), str) and (
-                self.raw_data["env"] == inh_env or self.raw_data["env"] == self.INHERIT
+                (inh_env is not None and self.raw_data["env"] == inh_env) or self.raw_data["env"] == self.INHERIT
             ):
                 self.raw_data.pop("env", None)
             if "description" in self.raw_data and not self.raw_data["description"]:
@@ -1082,39 +1117,143 @@ class ConfigViewer(QWidget):
         self.txt_group.textChanged.connect(lambda v: self._on_field_edited("group", v))
         self.field_widgets["group"] = self.txt_group
 
+        is_base = (self.current_path.stem == "_base") if self.current_path else False
+
         # Paradigm + Environment, driven by in/config/paradigms constraints.
         tree = config_tree()
-        if tree and tree.paradigms:
-            self.combo_paradigm = ComboBox()
-            self.combo_paradigm.addItems(sorted(tree.paradigms))
-            if paradigm in tree.paradigms:
-                self.combo_paradigm.setCurrentText(paradigm)
-            rules = tree.paradigms.get(self.combo_paradigm.currentText())
-            if rules and rules.description:
-                self.combo_paradigm.setToolTip(rules.description)
-            self.combo_paradigm.currentTextChanged.connect(self._on_paradigm_changed)
-            self.field_widgets["paradigm"] = self.combo_paradigm
+        if is_base:
+            box_base = ConfigBox("1. Group Paradigm & Environment", "Default paradigm and environment applied to all experiments in this group")
+            form_base = QGridLayout()
+            form_base.setVerticalSpacing(10)
+            form_base.setHorizontalSpacing(16)
 
+            form_base.addWidget(label("Paradigm"), 0, 0)
+            self.combo_paradigm = ComboBox()
+            self.combo_paradigm.addItem("— Select Paradigm —", None)
+            if tree and tree.paradigms:
+                self.combo_paradigm.addItems(sorted(tree.paradigms))
+            base_p = data.get("paradigm")
+            if base_p and tree and base_p in tree.paradigms:
+                self.combo_paradigm.setCurrentText(base_p)
+            else:
+                self.combo_paradigm.setCurrentIndex(0)
+            form_base.addWidget(self.combo_paradigm, 0, 1)
+
+            form_base.addWidget(label("Environment"), 0, 2)
             self.combo_env = ComboBox()
-            inherited_env = tree.group(self._group_name() or "").env
-            inherit_label = f"(inherit from base — {inherited_env})" if inherited_env else self.INHERIT
-            self.combo_env.addItem(inherit_label, self.INHERIT)
-            allowed_envs = [e.name for e in tree.environments_for(self.combo_paradigm.currentText())]
-            self.combo_env.addItems(allowed_envs)
-            current_env = data.get("env")
-            if isinstance(current_env, str) and current_env in allowed_envs:
-                self.combo_env.setCurrentText(current_env)
-            self.combo_env.setToolTip(
-                f"Environments compatible with {self.combo_paradigm.currentText()} "
-                f"(offline_only must match)"
-            )
-            self.combo_env.currentTextChanged.connect(
-                lambda v: self._on_field_edited("env", v) if self.env_selection() else None
-            )
+            self.combo_env.addItem("— Select Environment —", None)
+
+            def _refresh_base_env_choices(selected_p):
+                curr_text = self.combo_env.currentText()
+                self.combo_env.blockSignals(True)
+                self.combo_env.clear()
+                self.combo_env.addItem("— Select Environment —", None)
+                if selected_p and tree and selected_p in tree.paradigms:
+                    allowed = [e.name for e in tree.environments_for(selected_p)]
+                elif tree:
+                    allowed = sorted(list(set(e.name for e in tree.environments.values())))
+                else:
+                    allowed = []
+                self.combo_env.addItems(allowed)
+                if curr_text and curr_text in allowed:
+                    self.combo_env.setCurrentText(curr_text)
+                else:
+                    base_e = self._get_base_env()
+                    if base_e and base_e in allowed:
+                        self.combo_env.setCurrentText(base_e)
+                    else:
+                        self.combo_env.setCurrentIndex(0)
+                self.combo_env.blockSignals(False)
+
+            base_env = self._get_base_env()
+            if base_p and tree and base_p in tree.paradigms:
+                allowed_init = [e.name for e in tree.environments_for(base_p)]
+            elif tree:
+                allowed_init = sorted(list(set(e.name for e in tree.environments.values())))
+            else:
+                allowed_init = []
+            self.combo_env.addItems(allowed_init)
+            if base_env and base_env in allowed_init:
+                self.combo_env.setCurrentText(base_env)
+            else:
+                self.combo_env.setCurrentIndex(0)
+            form_base.addWidget(self.combo_env, 0, 3)
+
+            def _on_base_p_changed(p_text):
+                val = None if p_text in ("", "— Select Paradigm —") else p_text
+                self.raw_data["paradigm"] = val
+                _refresh_base_env_choices(val)
+                self._mark_dirty()
+
+            def _on_base_e_changed(e_text):
+                val = None if e_text in ("", "— Select Environment —") else e_text
+                self._set_base_env(val)
+
+            self.combo_paradigm.currentTextChanged.connect(_on_base_p_changed)
+            self.combo_env.currentTextChanged.connect(_on_base_e_changed)
+
+            self.field_widgets["paradigm"] = self.combo_paradigm
             self.field_widgets["env"] = self.combo_env
 
+            box_base.add_layout(form_base)
+            self.boxes_layout.addWidget(box_base)
+        else:
+            if tree and tree.paradigms:
+                self.combo_paradigm = ComboBox()
+                self.combo_paradigm.addItems(sorted(tree.paradigms))
+                if paradigm in tree.paradigms:
+                    self.combo_paradigm.setCurrentText(paradigm)
+                rules = tree.paradigms.get(self.combo_paradigm.currentText())
+                if rules and rules.description:
+                    self.combo_paradigm.setToolTip(rules.description)
+                self.combo_paradigm.currentTextChanged.connect(self._on_paradigm_changed)
+                self.field_widgets["paradigm"] = self.combo_paradigm
+
+                self.combo_env = ComboBox()
+                inherited_env = tree.group(self._group_name() or "").env
+                inherit_label = f"(inherit from base — {inherited_env})" if inherited_env else self.INHERIT
+                self.combo_env.addItem(inherit_label, self.INHERIT)
+                allowed_envs = [e.name for e in tree.environments_for(self.combo_paradigm.currentText())]
+                self.combo_env.addItems(allowed_envs)
+                current_env = data.get("env")
+                if isinstance(current_env, str) and current_env in allowed_envs:
+                    self.combo_env.setCurrentText(current_env)
+                self.combo_env.setToolTip(
+                    f"Environments compatible with {self.combo_paradigm.currentText()} "
+                    f"(offline_only must match)"
+                )
+                self.combo_env.currentTextChanged.connect(
+                    lambda v: self._on_field_edited("env", v) if self.env_selection() else self.raw_data.pop("env", None)
+                )
+                self.field_widgets["env"] = self.combo_env
+
         # --- BOX 1: TRAINING BUDGET & ROLLOUT SCHEDULE ---
-        box_budget = ConfigBox("1. Training Budget & Schedule", "Timesteps, evaluation frequency, and random seeds")
+        budget_num = "2" if is_base else "1"
+        box_budget = ConfigBox(f"{budget_num}. Training Budget & Schedule", "Timesteps, evaluation frequency, and random seeds")
+
+        # Prompt rows if experiment requires paradigm or env (not provided by group defaults)
+        if not is_base and ("paradigm" in data or "env" in data):
+            prompt_grid = QGridLayout()
+            prompt_grid.setVerticalSpacing(8)
+            prompt_grid.setHorizontalSpacing(16)
+            col = 0
+            if "paradigm" in data:
+                if not data.get("paradigm") or data.get("paradigm") not in tree.paradigms:
+                    if self.combo_paradigm.findText("— Select Paradigm —") == -1:
+                        self.combo_paradigm.insertItem(0, "— Select Paradigm —", None)
+                        self.combo_paradigm.setCurrentIndex(0)
+                prompt_grid.addWidget(label("Paradigm (Required)", "accent"), 0, col)
+                prompt_grid.addWidget(self.combo_paradigm, 0, col + 1)
+                col += 2
+            if "env" in data:
+                if not data.get("env") or data.get("env") not in allowed_envs:
+                    if self.combo_env.findText("— Select Environment —") == -1:
+                        self.combo_env.insertItem(1, "— Select Environment —", None)
+                        self.combo_env.setCurrentIndex(1)
+                prompt_grid.addWidget(label("Environment (Required)", "accent"), 0, col)
+                prompt_grid.addWidget(self.combo_env, 0, col + 1)
+                col += 2
+            box_budget.add_layout(prompt_grid)
 
         # Experiment Description / Commit Note
         desc_row = QHBoxLayout()
@@ -1231,9 +1370,10 @@ class ConfigViewer(QWidget):
         box_budget.add_layout(form_budget)
         self.boxes_layout.addWidget(box_budget)
 
-        # --- BOX 2: METHODS & AGENT ARCHITECTURES ---
+        # --- BOX 2 / 3: METHODS & AGENT ARCHITECTURES ---
         methods_dict = data.get("methods", {})
-        box_methods = ConfigBox("2. Methods & Algorithms", "Configured agents, policies, and hyperparameter overrides")
+        methods_num = "3" if is_base else "2"
+        box_methods = ConfigBox(f"{methods_num}. Methods & Algorithms", "Configured agents, policies, and hyperparameter overrides")
         m_layout = QVBoxLayout()
         m_layout.setSpacing(10)
 

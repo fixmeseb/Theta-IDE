@@ -1,0 +1,13 @@
+# @package _global_
+defaults:
+- override /env: null
+paradigm: online_rl
+seed: 1
+save_dataset: false
+recover: false
+description: Experiment to test ppo in atari environmetns
+intervals_count: 1
+methods:
+  ppo_dnn:
+    agent: ppo
+    model: dnn

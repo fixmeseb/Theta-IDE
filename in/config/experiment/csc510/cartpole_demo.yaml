@@ -1,14 +1,9 @@
 # @package _global_
 defaults:
 - csc510/_base
-
-# CSC510 Online CartPole Demo: Neural PPO vs Hybrid BlendRL (Logic+Neural)
 total_timesteps: 3000
 eval_episodes: 1
 intervals_count: 1
-
-
-# Two online methods comparing standard RL vs neuro-symbolic RL
 plots:
   convergence:
     smoothing_window: 3
