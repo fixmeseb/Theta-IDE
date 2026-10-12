@@ -59,6 +59,49 @@ def number_field(value):
     spin.setValue(value)
     return spin
 
+# Top-level experiment keys the five fixed boxes already render. Everything else
+# goes through _render_remaining_sections, so a paradigm's own settings are
+# editable rather than invisible: every supervised experiment keeps its real
+# configuration under `early_prediction:`, and none of it used to appear at all.
+FIXED_BOX_KEYS = frozenset(
+    {
+        "defaults",
+        "paradigm",
+        "experiment_id",
+        "seed",
+        "total_timesteps",
+        "intervals_count",
+        "eval_episodes",
+        "methods",
+        "env",
+        "trainer",
+        "resources",
+        "tensorboard",
+        "no_plot",
+        "save_dataset",
+        "recover",
+    }
+)
+
+
+def parse_list_field(text):
+    """Comma-separated text back to a YAML list, keeping each item's type.
+
+    `plots` holds names while `eval_protocol.horizons` holds numbers, so items
+    go through the YAML scalar parser instead of all becoming strings.
+    """
+    items = []
+    for part in text.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            items.append(yaml.safe_load(part))
+        except yaml.YAMLError:
+            items.append(part)
+    return items
+
+
 _CONFIG_TREE = None
 _CONFIG_TREE_LOADED = False
 
@@ -724,6 +767,89 @@ class ConfigViewer(QWidget):
 
         box_res.add_layout(grid_res)
         self.boxes_layout.addWidget(box_res)
+
+        self._render_remaining_sections()
+
+    def _scalar_widget(self, value, write):
+        """A widget matching the YAML type, so an int survives a round trip.
+
+        The bool test comes first: bool is a subclass of int, and a checkbox
+        rendered as a spin box would write 0/1 back over true/false.
+        """
+        if isinstance(value, bool):
+            widget = QCheckBox()
+            widget.setChecked(value)
+            widget.toggled.connect(write)
+        elif isinstance(value, (int, float)):
+            widget = number_field(value)
+            widget.valueChanged.connect(write)
+        else:
+            widget = QLineEdit("" if value is None else str(value))
+            widget.textChanged.connect(write)
+        return widget
+
+    def _list_field(self, items, write):
+        """Comma-separated editor for a YAML list, item types preserved."""
+        field = QLineEdit(", ".join(str(item) for item in items))
+        field.setToolTip("Comma-separated list")
+        field.textChanged.connect(lambda text: write(parse_list_field(text)))
+        return field
+
+    def _render_remaining_sections(self):
+        """Surface every top-level key the fixed boxes do not cover.
+
+        Without this an experiment's paradigm-specific configuration is simply
+        absent from the panel - 20 settings for supervised, which keeps all of
+        it under `early_prediction:` - even though saving preserves it. Values
+        nested more than one level stay read-only rather than being flattened
+        into something that would not round trip.
+        """
+        leftovers = {k: v for k, v in self.raw_data.items() if k not in FIXED_BOX_KEYS}
+        if not leftovers:
+            return
+
+        scalars = {k: v for k, v in leftovers.items() if not isinstance(v, (dict, list))}
+        sections = {k: v for k, v in leftovers.items() if isinstance(v, (dict, list))}
+
+        if scalars:
+            box = ConfigBox()
+            # ConfigBox drops its title argument since the param box headers were
+            # removed, and an unlabelled box of tau_min/tau_max tells you nothing,
+            # so these sections carry their own heading the way method cards do.
+            box.add_widget(label("Additional Settings", "cardTitle"))
+            form = QFormLayout()
+            form.setVerticalSpacing(8)
+            for key, value in scalars.items():
+                form.addRow(key, self._scalar_widget(value, lambda v, k=key: self._on_field_edited(k, v)))
+            box.add_layout(form)
+            self.boxes_layout.addWidget(box)
+
+        for name, value in sections.items():
+            box = ConfigBox()
+            box.add_widget(label(name, "cardTitle"))
+            form = QFormLayout()
+            form.setVerticalSpacing(8)
+            if isinstance(value, list):
+                form.addRow("items", self._list_field(value, lambda v, k=name: self._on_field_edited(k, v)))
+            else:
+                for key, sub in value.items():
+                    if isinstance(sub, list):
+                        form.addRow(
+                            key,
+                            self._list_field(sub, lambda v, s=name, k=key: self._on_nested_edited(s, k, v)),
+                        )
+                    elif isinstance(sub, dict):
+                        nested = label(yaml.safe_dump(sub, default_flow_style=True).strip(), "muted")
+                        nested.setWordWrap(True)
+                        nested.setToolTip(f"Nested under {name}.{key}; edit this one in the YAML tab")
+                        form.addRow(key, nested)
+                    else:
+                        form.addRow(
+                            key,
+                            self._scalar_widget(sub, lambda v, s=name, k=key: self._on_nested_edited(s, k, v)),
+                        )
+            box.add_layout(form)
+            self.boxes_layout.addWidget(box)
 
     def _render_generic_boxes(self):
         """Render clean boxes for modular YAML configs (agent/*.yaml, env/*.yaml, etc.)."""
