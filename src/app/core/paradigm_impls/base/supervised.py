@@ -160,24 +160,31 @@ class ClassificationEvalProtocol(BaseEvalProtocol):
         elif isinstance(device, str):
             device = torch.device(device)
 
+        # Scoring must not leave the model in eval mode: a caller that evaluates a
+        # checkpoint and then keeps training would lose dropout without saying so.
+        # Restored before the early returns below, which no longer touch the model.
+        was_training = model.training
         model.eval()
         model.to(device)
 
         all_probs: list[np.ndarray] = []
         all_targets: list[np.ndarray] = []
 
-        with torch.no_grad():
-            for batch in data_source:
-                x, y, kwargs = self._unpack_batch(batch, device)
-                logits = self._forward_model(model, x, kwargs)
+        try:
+            with torch.no_grad():
+                for batch in data_source:
+                    x, y, kwargs = self._unpack_batch(batch, device)
+                    logits = self._forward_model(model, x, kwargs)
 
-                if logits.ndim > 1 and logits.shape[-1] > 1:
-                    probs = torch.softmax(logits, dim=-1)[:, 1]
-                else:
-                    probs = torch.sigmoid(logits).view(-1)
+                    if logits.ndim > 1 and logits.shape[-1] > 1:
+                        probs = torch.softmax(logits, dim=-1)[:, 1]
+                    else:
+                        probs = torch.sigmoid(logits).view(-1)
 
-                all_probs.append(probs.detach().cpu().numpy())
-                all_targets.append(y.detach().cpu().numpy().reshape(-1))
+                    all_probs.append(probs.detach().cpu().numpy())
+                    all_targets.append(y.detach().cpu().numpy().reshape(-1))
+        finally:
+            model.train(was_training)
 
         if not all_targets or len(all_targets[0]) == 0:
             return {"auc": 0.0, "auprc": 0.0, "f1_opt": 0.0, "f1_max": 0.0, "f1_05": 0.0}

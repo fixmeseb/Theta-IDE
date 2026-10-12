@@ -20,6 +20,7 @@ from typing import Any
 import lightning as L
 import numpy as np
 import torch
+import torch.nn as nn
 from torch.utils.data import DataLoader, TensorDataset
 
 from src.app.core.interfaces import BaseDataModule
@@ -156,3 +157,92 @@ class TabularNpzDataModule(L.LightningDataModule, BaseDataModule):
         if self.labels is None or not hasattr(self, "val_indices"):
             return None
         return self.labels[self.val_indices]
+
+
+@register_component("SupervisedNpzDataModule")
+class SupervisedNpzDataModule(TabularNpzDataModule):
+    """The same .npz datasets, with the labels in the batch.
+
+    Kept separate from TabularNpzDataModule rather than switched by a flag: the
+    unsupervised paradigm must not be one config key away from quietly training
+    against labels, and an experiment names the module it wants anyway.
+    """
+
+    def _loader(self, array: np.ndarray, batch_size: int, shuffle: bool) -> DataLoader:
+        if self.labels is None:
+            raise ValueError(
+                "SupervisedNpzDataModule needs a 'labels' array in the dataset. "
+                "in/datasets/prepare_tabular.py writes one."
+            )
+        split = self.train_indices if shuffle else self.val_indices
+        x = torch.from_numpy(np.ascontiguousarray(array))
+        y = torch.from_numpy(np.ascontiguousarray(self.labels[split])).float()
+        return DataLoader(TensorDataset(x, y), batch_size=batch_size, shuffle=shuffle)
+
+
+@register_component("TabularClassifierLightningModule")
+class TabularClassifierLightningModule(L.LightningModule):
+    """Trains a registered classifier architecture on labelled data.
+
+    The constructor matches what train.py already calls for an agent-less
+    paradigm (architecture_name, input_dim, lr, **kwargs), so a supervised
+    experiment needs no special case there - only `lightning_module` in its
+    model config, exactly as the autoencoder does.
+
+    Logs `val/loss`, which build_trainer monitors by default.
+    """
+
+    def __init__(
+        self,
+        architecture_name: str = "mlp_classifier",
+        input_dim: int = 64,
+        lr: float = 1e-3,
+        **kwargs: Any,
+    ):
+        super().__init__()
+        self.save_hyperparameters()
+        self.architecture_name = architecture_name
+        self.lr = lr
+
+        from src.app.core.model_registry import MODEL_REGISTRY, auto_discover_models
+
+        auto_discover_models()
+        arch = MODEL_REGISTRY.get(str(architecture_name).lower())
+        if arch is None:
+            raise ValueError(
+                f"Unknown supervised architecture '{architecture_name}'. "
+                f"Registered classifiers: {sorted(k for k in MODEL_REGISTRY if 'classif' in k)}"
+            )
+
+        accepted = ("hidden_sizes", "dropout", "n_classes", "activation")
+        arch_kwargs = {k: kwargs[k] for k in accepted if k in kwargs and kwargs[k] is not None}
+        self.n_classes = int(arch_kwargs.get("n_classes", 1))
+        self.model = arch(input_dim=input_dim, **arch_kwargs)
+
+        if self.n_classes > 1:
+            self.loss_fn: nn.Module = nn.CrossEntropyLoss()
+        else:
+            pos_weight = kwargs.get("pos_weight")
+            weight = torch.tensor([float(pos_weight)]) if pos_weight else None
+            self.loss_fn = nn.BCEWithLogitsLoss(pos_weight=weight)
+
+    def forward(self, x: torch.Tensor, **_: object) -> torch.Tensor:
+        return self.model(x)
+
+    def _step(self, batch: Any, stage: str) -> torch.Tensor:
+        x, y = batch[0], batch[1]
+        logits = self(x)
+        target = y.long() if self.n_classes > 1 else y.float().view(-1)
+        loss = self.loss_fn(logits, target)
+        self.log(f"{stage}/loss", loss, on_step=False, on_epoch=True, prog_bar=True)
+        return loss
+
+    def training_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
+        return self._step(batch, "train")
+
+    def validation_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
+        return self._step(batch, "val")
+
+    def configure_optimizers(self):
+        weight_decay = self.hparams.get("weight_decay", 1e-4) or 1e-4
+        return torch.optim.AdamW(self.parameters(), lr=self.lr, weight_decay=weight_decay)

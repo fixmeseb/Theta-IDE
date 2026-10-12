@@ -1,0 +1,14 @@
+# @package _global_
+defaults:
+  - tabular_classification/_base
+
+experiment_id: quick_test
+seed: 42
+total_timesteps: 10000
+
+no_plot: true
+tensorboard: true
+
+methods:
+  clf:
+    epochs_per_interval: 5

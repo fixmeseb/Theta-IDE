@@ -1,0 +1,18 @@
+# @package _global_
+defaults:
+- override /env: breast_cancer
+
+paradigm: supervised
+intervals_count: 1
+eval_episodes: 0
+consolidate: false
+partition: common
+
+# The env ships the unlabelled loader for the unsupervised paradigm; supervised
+# needs the labels in the batch, so the group names the labelled one.
+data_module: SupervisedNpzDataModule
+
+# Model-only methods: supervised declares no agents.
+methods:
+  clf:
+    model: mlp_classifier
