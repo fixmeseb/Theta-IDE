@@ -207,6 +207,27 @@ QToolButton#sideTabBin { background: transparent; border: 0; border-radius: 5px;
 QToolButton#sideTabBin:hover { background: #32302f; color: #ebdbb2; }
 QToolButton#sideTabBin:checked { color: #fabd2f; }
 QLineEdit#sideTabBinEditor { font-size: 10px; padding: 1px 3px; border: 1px solid #fabd2f; border-radius: 4px; background: #1d2021; color: #ebdbb2; }
+QFrame#resultsChartCard { border: 1px solid #3c3836; border-radius: 5px; }
+QFrame#resultsChartCard[flat="true"] { border: 0; }
+QWidget#resultsCardCorner, QLabel#resultsCardValue { background: transparent; }
+QLabel#resultsCardValue { font-weight: 600; }
+QToolButton#resultsSection { background: transparent; border: 0; border-bottom: 1px solid #3c3836; border-radius: 0; color: #83a598; font-size: 10px; font-weight: 700; padding: 6px 2px; text-align: left; }
+QToolButton#resultsSection:hover { color: #ebdbb2; }
+QWidget#resultsKpiStrip { background: transparent; }
+QFrame#resultsKpi { background: #32302f; border: 1px solid #3c3836; border-radius: 6px; }
+QFrame#resultsKpi:hover { border-color: #504945; }
+QFrame#resultsKpi[primary="true"] { border: 1px solid #fabd2f; }
+QFrame#resultsKpi QLabel { background: transparent; }
+QLabel#resultsKpiName { font-weight: 600; }
+QLabel#resultsKpiCaption { color: #928374; font-size: 10px; }
+QLabel#resultsKpiValue { font-size: 15px; font-weight: 600; }
+QPushButton#resultsChip { background: #32302f; border: 1px solid #3c3836; border-radius: 4px; padding: 5px 10px; }
+QPushButton#resultsChip:checked { background: #3c3836; border-color: #fabd2f; color: #fabd2f; }
+QFrame#resultsSparkline { background: #32302f; border: 1px solid #3c3836; border-radius: 5px; }
+QFrame#resultsSparkline:hover { border-color: #504945; }
+QFrame#resultsSparkline[focused="true"] { border: 1px solid #fabd2f; }
+QListWidget#resultsPlotsList { background: #282828; border: 0; outline: 0; }
+QListWidget#resultsPlotsList::item { padding: 3px 2px; }
 QLabel#configOk { color: #b8bb26; }
 QLabel#configError { color: #d79921; }
 """

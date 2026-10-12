@@ -21,7 +21,7 @@ def clock(seconds):
 
 
 class QueuePanel(QWidget):
-    """Shows GET /api/queue. Actions call back into the window, which talks to the backend."""
+    """Shows JobManager.queue_state(). Actions call back into the window, which drives the JobManager."""
 
     def __init__(self, on_move, on_remove, on_open, on_toggle, parent=None):
         super().__init__(parent)
@@ -87,7 +87,7 @@ class QueuePanel(QWidget):
         return (None, None)
 
     def set_offline(self, error):
-        self.summary.setText("Backend offline — the queue is kept by the API server")
+        self.summary.setText("Training pipeline unavailable: the queue can't run")
         self.summary.setToolTip(str(error or ""))
         self.run_button.setEnabled(False)
 

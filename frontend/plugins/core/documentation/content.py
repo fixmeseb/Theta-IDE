@@ -154,7 +154,7 @@ python -m frontend</code></pre>
         html_content="""
 <h2>IDE Panels & Navigation</h2>
 <p>Theta-IDE organizes its interface into vertical sidebar tabs. Each tab represents a specialized workstation for your experiments.</p>
-<p>Results, Plots, TensorBoard and Queue are hidden by default. Turn them on in <i>Settings &rarr; Appearance</i> (see <a href="sidebar_layout">Sidebar &amp; Layout</a>).</p>
+<p>Plots, TensorBoard and Queue are hidden by default. Turn them on in <i>Settings &rarr; Appearance</i> (see <a href="sidebar_layout">Sidebar &amp; Layout</a>).</p>
 
 <h3>1. Experiment Config (<code>config</code>)</h3>
 <p>The primary workspace for configuring and launching experiments:</p>
@@ -199,7 +199,8 @@ python -m frontend</code></pre>
 <ul>
   <li>Full shell access with support for zsh, bash, and tmux.</li>
   <li>Terminal precedence mode: allows tmux prefix keys and terminal hotkeys to pass through uninterrupted.</li>
-  <li><b>macOS and Linux only.</b> The terminal needs a POSIX pseudo-terminal, so it is unavailable on Windows. Use a separate PowerShell window there.</li>
+  <li><b>Every platform:</b> a pseudo-terminal on macOS and Linux, ConPTY on Windows (via <code>pywinpty</code>, which <code>frontend/requirements.txt</code> installs there).</li>
+  <li><b>Choosing the shell:</b> set <code>shell</code> under <code>[terminal]</code> in <code>settings.toml</code> (e.g. <code>"pwsh -NoLogo"</code> or <code>"/bin/zsh -l"</code>). Empty picks one: PowerShell 7, then Windows PowerShell, then cmd on Windows; your login shell elsewhere. With <code>activate_venv = true</code> the project's <code>venv/</code> comes first on PATH.</li>
 </ul>
 
 <h3>6. Modular Components &amp; Community Hub (<code>components</code>)</h3>
@@ -213,7 +214,7 @@ python -m frontend</code></pre>
 <p>Compose multi-stage experiments as string diagrams, wiring the outputs of one stage into the inputs of the next. See <a href="workflows_pane">Workflows Pane</a>.</p>
 
 <h3>8. Results Browser (<code>results</code>)</h3>
-<p>Every run you have launched, with its seed, status and reward. Reload a run's config, compare two runs, or open a run's plots. See <a href="results_browser">Results Browser</a>.</p>
+<p>Every metric, value and file your runs produced: tick runs to chart every metric they logged, compare them, and open their tables, figures, reports and configs. See <a href="results_browser">Results Browser</a>.</p>
 
 <h3>9. TensorBoard (<code>tensorboard</code>)</h3>
 <p>An embedded TensorBoard dashboard for runs logged with <i>Log to TensorBoard</i>. See <a href="tensorboard_tab">TensorBoard Tab</a>.</p>
@@ -1016,36 +1017,57 @@ workflow: sepsis_reciprocal</code></pre>
         id="results_browser",
         title="Results Browser",
         category="Interface",
-        summary="Find past runs, reload their configs, compare two runs side by side, and open their plots.",
-        keywords=["results", "runs", "history", "compare", "diff", "reward", "seed", "plots", "records"],
+        summary="Every metric, value and file your runs produced: chart, inspect, compare, summarize and export them.",
+        keywords=["results", "runs", "metrics", "curves", "compare", "summary", "seeds", "versions", "export",
+                  "inspector", "tables", "figures", "reports", "config", "files", "live"],
         html_content=r"""
 <h2>Results Browser</h2>
-<p>The <a href="ide://results">Results</a> pane lists every run launched from Theta-IDE. It is hidden by default; turn it on in <i>Settings &rarr; Appearance</i> or open it with <code>Action + 4</code>.</p>
+<p>The <a href="ide://results">Results</a> pane (<code>Action + 4</code>) shows everything your runs produced, from every logged value to every file, whichever engine trained them and however they were launched (Theta-IDE, the command line, or Slurm). It reads <code>results/</code> through the backend, so the backend must be running.</p>
 
-<h3>The Run Table</h3>
-<table border="1" cellpadding="8" cellspacing="0" style="border-collapse: collapse; width: 100%; border-color: rgba(255,255,255,0.15);">
-  <tr style="background-color: rgba(255,255,255,0.05); font-weight: bold;">
-    <td>Column</td>
-    <td>Meaning</td>
-  </tr>
-  <tr><td><b>Experiment</b></td><td>The run's experiment ID, <code>&lt;name&gt;_&lt;YYYYmmdd-HHMMSS&gt;</code></td></tr>
-  <tr><td><b>Seed</b></td><td>Random seed used for the run</td></tr>
-  <tr><td><b>Status</b></td><td>The run's current status, such as running or completed</td></tr>
-  <tr><td><b>Reward</b></td><td>The run's latest evaluation reward (<code>&mdash;</code> before the first evaluation)</td></tr>
-  <tr><td><b>Source</b></td><td><i>Trained</i> for a real backend run, <i>Simulated</i> for a demo run</td></tr>
-</table>
-<p>Type in the search box to filter runs by name, seed, or status.</p>
-<p>Double-click a row to open that run in the <a href="ide://monitor">Training Monitor</a>.</p>
+<h3>Choosing Runs</h3>
+<p>The tree on the left lists every run in <code>results/logs</code>: group &rarr; experiment &rarr; agent. Tick a group, an experiment or an agent; ticking a parent ticks everything under it. When an agent has several <b>versions</b> (repeated runs, e.g. seeds, stored as <code>version_N</code> folders) they appear as children, with the newest ticked. Use the filter box to find runs by name.</p>
 
-<h3>Actions</h3>
+<h3>Curves</h3>
 <ul>
-  <li><b>Load saved config:</b> load the exact configuration the selected run used back into the config editor, so you can rerun or tweak it.</li>
-  <li><b>Compare two runs:</b> select two rows (Ctrl+click) to see a <i>Parameter / Run A / Run B</i> table of every setting that differs.</li>
-  <li><b>View plot:</b> open the selected run's plots in the Plot Viewer.</li>
+  <li><b>One chart per metric</b> the ticked runs logged, grouped by prefix (<code>eval/</code>, <code>losses/</code>, <code>val/</code>, <code>time/</code>, …). Nothing is whitelisted: every numeric column of every <code>metrics.csv</code> gets a chart, including metrics from Stable-Baselines3 or custom engines.</li>
+  <li><b>Hide</b> a chart with its button, or use <b>Plots ▾</b> to show or hide any metric. Hidden plots are remembered under <code>[results] hidden_plots</code> in <code>settings.toml</code>.</li>
+  <li><b>X-axis:</b> environment steps, logged step, epoch, wall time or training time, whichever the runs logged. <b>Smoothing</b> works like the Training monitor's.</li>
+  <li><b>Versions:</b> <i>Separate</i> draws each version; <i>Mean ± std</i> or <i>Mean ± SEM</i> combine an agent's ticked versions into one curve with a shaded band.</li>
+  <li><b>Primary:</b> the series whose logged steps hovering snaps to. It is drawn on top and thicker, and listed first in the inspector. <i>Nearest</i> snaps to whichever series is closest to the mouse.</li>
+  <li><b>Point inspector:</b> hover over any chart to see every metric of every ticked run at that step. Runs that did not log exactly that step show their nearest logged point.</li>
+  <li><b>Live:</b> while the pane is open, ticked runs that are still training update every few seconds with their new values.</li>
 </ul>
 
-<h3>Where Records Are Stored</h3>
-<p>Run records are saved in <code>.thetaide/runs/</code> (change it with <code>--data-dir</code>). Training outputs such as metrics, checkpoints, and plots are under <code>results/</code>; see <a href="troubleshooting">Troubleshooting &amp; FAQ</a> for the layout.</p>
+<h3>Layouts</h3>
+<p>Pick how the pane is arranged in <i>Settings &rarr; Appearance &rarr; Results Panel Layout</i>. The choice applies immediately, keeps what is ticked, and is saved as <code>layout</code> under <code>[results]</code> in <code>settings.toml</code>.</p>
+<ul>
+  <li><b>Overview first</b> (default): a card per series with its best and final value, where the best was (or, with a Summary threshold for that metric, when it was reached) and its training time. Click a card to make its series primary. Below, the reward chart is drawn large and its hover card lists every series; the other charts follow in sections you can fold.</li>
+  <li><b>Quiet toolbar:</b> one row of controls; charts in sections you can fold, each showing the primary series' latest value; the inspector beside them.</li>
+  <li><b>Control rail:</b> runs, view settings and a checkbox per plot in a left rail; three columns of charts; the inspector below, one row per run.</li>
+  <li><b>Focus + filmstrip:</b> one large chart at a time, picked from a strip of small previews of every metric. Chips above it make a series primary.</li>
+</ul>
+
+<h3>Summary</h3>
+<p>One sortable row per series and metric: final, best (the highest for rewards, the lowest for losses; blank when a metric has no better direction), where the best was, minimum, maximum, mean, area under the curve, and the number of points. Pick one metric and enter a <b>threshold</b> to see when each run first reached it.</p>
+
+<h3>Tables, Figures, Reports, Config and Files</h3>
+<table border="1" cellpadding="8" cellspacing="0" style="border-collapse: collapse; width: 100%; border-color: rgba(255,255,255,0.15);">
+  <tr style="background-color: rgba(255,255,255,0.05); font-weight: bold;">
+    <td>Tab</td>
+    <td>Shows</td>
+  </tr>
+  <tr><td><b>Tables</b></td><td>Every CSV a run wrote, including each raw <code>metrics.csv</code>: every row and column, sortable, with a plot of any column against another</td></tr>
+  <tr><td><b>Figures</b></td><td>Every plot image; scroll to zoom, drag to pan</td></tr>
+  <tr><td><b>Reports</b></td><td>Markdown and text reports, rendered</td></tr>
+  <tr><td><b>Config</b></td><td>Every config and metadata file, plus a table of the settings that differ between the ticked runs. <b>Load in experiment builder</b> puts a run's builder settings into the Experiment tab (for runs Theta-IDE launched, or single-method CartPole/PPO runs).</td></tr>
+  <tr><td><b>Files</b></td><td>Every file of the ticked runs, checkpoints and TensorBoard logs included. Files too large or of a kind that cannot be previewed can still be saved with <b>Save a copy…</b></td></tr>
+</table>
+
+<h3>Export</h3>
+<p><b>Export ▾</b> writes the visible curves as CSV (one row per point, as drawn), the Summary as CSV, or the charts as a PNG image.</p>
+
+<h3>Run List</h3>
+<p>The <b>Run list</b> tab keeps the earlier table of runs launched from Theta-IDE: double-click a row to open it in the <a href="ide://monitor">Training Monitor</a>.</p>
 """,
     ),
     DocArticle(
@@ -1085,7 +1107,7 @@ workflow: sepsis_reciprocal</code></pre>
         html_content=r"""
 <h2>Console</h2>
 <p>The <a href="ide://console">Console</a> pane is the IDE's log. It streams the training pipeline's output while a run is active, along with IDE messages such as saves, queue changes, and connection status.</p>
-<p>It is not a shell. For an interactive shell, use the <a href="ide://terminal">Terminal</a> tab (macOS and Linux only).</p>
+<p>It is not a shell. For an interactive shell, use the <a href="ide://terminal">Terminal</a> tab.</p>
 
 <h3>Commands</h3>
 <p>Type a command into the input line at the bottom and press Enter:</p>
@@ -1117,7 +1139,7 @@ workflow: sepsis_reciprocal</code></pre>
     <td>Page</td>
     <td>What you can change</td>
   </tr>
-  <tr><td><b>Appearance</b></td><td>Color theme, which sidebar panels are shown, auto-hide sidebar, and the sculpture animation</td></tr>
+  <tr><td><b>Appearance</b></td><td>Color theme, which sidebar panels are shown, auto-hide sidebar, the sculpture animation, and the Results panel layout</td></tr>
   <tr><td><b>Core Plugins</b></td><td>Turn built-in plugins (such as this Documentation plugin) on or off</td></tr>
   <tr><td><b>Community Plugins</b></td><td>Install, configure, or remove plugins from the Community Hub</td></tr>
   <tr><td><b>Hotkeys</b></td><td>Action key, terminal precedence, the <code>Action + digit</code> pane mapping, and menu shortcuts</td></tr>
@@ -1195,7 +1217,7 @@ workflow: sepsis_reciprocal</code></pre>
 <h2>Sidebar & Layout</h2>
 
 <h3>Showing and Hiding Panels</h3>
-<p>To keep the sidebar short, four panels are <b>hidden by default</b>: Results, Plots, TensorBoard, and Queue. Turn any panel on or off with its switch in <i>Settings &rarr; Appearance &rarr; Sidebar Panels Visibility</i>. At least one panel must stay visible, so the last switch can't be turned off.</p>
+<p>To keep the sidebar short, three panels are <b>hidden by default</b>: Plots, TensorBoard, and Queue. Turn any panel on or off with its switch in <i>Settings &rarr; Appearance &rarr; Sidebar Panels Visibility</i>. At least one panel must stay visible, so the last switch can't be turned off.</p>
 <p>A hidden panel is still reachable: choose it from the <i>View</i> menu, or press its <code>Action + digit</code> hotkey.</p>
 
 <h3>Reordering Tabs</h3>
@@ -1259,8 +1281,8 @@ workflow: sepsis_reciprocal</code></pre>
 <h3>6. Windows: <code>Python was not found; run without arguments to install from the Microsoft Store</code></h3>
 <p>Windows is using its Store shortcut instead of your Python install. Turn off the <code>python.exe</code> and <code>python3.exe</code> entries in <i>Settings &rarr; Apps &rarr; Advanced app settings &rarr; App execution aliases</i>, or activate the virtual environment first.</p>
 
-<h3>7. The Terminal tab doesn't work on Windows</h3>
-<p>The embedded terminal needs a POSIX pseudo-terminal, which Windows doesn't provide. Use a separate PowerShell window instead.</p>
+<h3>7. The Terminal tab is blank or says no shell was found (Windows)</h3>
+<p>The Windows terminal needs <code>pywinpty</code>. Reinstall the frontend requirements with <code>pip install -r frontend/requirements.txt</code> in the frontend environment. To use a particular shell, set <code>shell</code> under <code>[terminal]</code> in <code>settings.toml</code>, for example <code>shell = "pwsh -NoLogo"</code>.</p>
 
 <h3>8. Linux: <code>libEGL.so.1: cannot open shared object file</code></h3>
 <p>Qt needs system graphics libraries that minimal Linux installs and CI runners often lack:</p>

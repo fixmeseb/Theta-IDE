@@ -225,8 +225,114 @@ def test_metric_points_keep_evaluation_and_training_rows_separate():
             {"losses/total_loss": 1.5, "losses/entropy": 0.69, "losses/approx_kl": 0.001, "transitions": 512.0},
             {"eval/reward": 20.0, "step": 0.0},  # epoch-level duplicate without transitions
             {"time/train": 0.3, "transitions": 600.0}]
-    evaluation, training = metric_points(rows)
+    evaluation, training, timing = metric_points(rows)
     assert (evaluation["step"], evaluation["reward"], evaluation["reward_std"], evaluation["entropy"]) == (0, 20.0, 8.5, None)
     assert (training["step"], training["reward"], training["loss"], training["entropy"], training["approx_kl"]) == \
         (512, None, 1.5, 0.69, 0.001)
     assert set(evaluation) == set(training) == {"step", *METRIC_COLUMNS}
+    # Columns outside METRIC_COLUMNS are kept under their own names, not dropped.
+    assert (timing["step"], timing["time/train"], timing["reward"]) == (600, 0.3, None)
+
+
+def test_metric_points_keep_metrics_from_any_engine():
+    """SB3 (through ContractLogger) logs loss names the Lightning agents never use."""
+    rows = [{"step": 1000.0, "transitions": 1000.0, "eval/reward": 15.0, "losses/train/value_loss": 3.5},
+            {"transitions": 2000.0, "custom/success_rate": 0.4, "epoch": 3.0}]
+    first, second = metric_points(rows)
+    assert (first["reward"], first["losses/train/value_loss"]) == (15.0, 3.5)
+    assert "step" in first and first["step"] == 1000  # the counter becomes the position, not a metric
+    assert second["custom/success_rate"] == 0.4 and "epoch" not in second
+
+
+# ── Results panel: versions, incremental metrics, manifests and run files ─────
+# (ported from the FastAPI endpoints results-explorer added: GET .../metrics?version=&since=, .../manifest,
+# .../files/{path})
+
+
+def test_run_metrics_returns_every_column_and_supports_versions_and_since(logs):
+    write_run(logs, "g", "multi", versions={0: ([1.0, 2.0], True), 1: ([5.0, 6.0, 7.0], True)})
+    newest = catalog.run_metrics("g", "multi", "ppo")
+    assert newest["version"] == "version_1" and newest["versions"] == ["version_0", "version_1"]
+    assert newest["columns"] == ["epoch", "eval/reward", "transitions"] and newest["total_rows"] == 6
+    older = catalog.run_metrics("g", "multi", "ppo", version="0")
+    assert older["version"] == "version_0" and older["total_rows"] == 4
+    # `since` returns only rows after the ones the caller already has.
+    tail = catalog.run_metrics("g", "multi", "ppo", since=4)
+    assert len(tail["metrics"]) == 2 and tail["metrics"][0]["eval/reward"] == "7.0"
+    with pytest.raises(FileNotFoundError):
+        catalog.run_metrics("g", "multi", "ppo", version="9")
+    with pytest.raises(ValueError):
+        catalog.run_metrics("g", "..", "ppo")
+
+
+def _write_artifacts(logs):
+    """A run with plots, checkpoints and TensorBoard files next to its logs, plus another run's file."""
+    results = logs.parent
+    run = write_run(logs, "g", "exp")
+    plots = results / "plots" / "g" / "exp"
+    (plots / "losses" / "ppo").mkdir(parents=True)
+    (plots / "losses" / "ppo" / "losses_value_loss.png").write_bytes(b"\x89PNG fake")
+    (plots / "time_report.csv").write_bytes(b"Method,Avg\nppo,1.0\n")
+    (plots / "hyperparameters_report.md").write_text("# Report\n", encoding="utf-8")
+    ckpt = results / "checkpoints" / "g" / "exp" / "ppo" / "0"
+    ckpt.mkdir(parents=True)
+    (ckpt / "best_model.ckpt").write_bytes(b"weights")
+    tb = results / "tensorboard" / "g" / "exp" / "ppo" / "version_0"
+    tb.mkdir(parents=True)
+    (tb / "events.out.tfevents.1.host.0").write_bytes(b"tb")
+    other = results / "plots" / "g" / "other"
+    other.mkdir(parents=True)
+    (other / "secret.csv").write_text("x\n1\n", encoding="utf-8")
+    return run
+
+
+def test_manifest_lists_every_artifact_of_a_run(logs):
+    _write_artifacts(logs)
+    data = catalog.run_manifest("g", "exp")
+    kinds = {a["path"]: a["kind"] for a in data["artifacts"]}
+    assert kinds == {
+        "logs/g/exp/config.yaml": "config",
+        "logs/g/exp/ppo/version_0/metrics.csv": "metrics",
+        "logs/g/exp/ppo/version_0/runtime.json": "metadata",
+        "plots/g/exp/hyperparameters_report.md": "report",
+        "plots/g/exp/losses/ppo/losses_value_loss.png": "figure",  # nested plots are found too
+        "plots/g/exp/time_report.csv": "table",
+        "checkpoints/g/exp/ppo/0/best_model.ckpt": "checkpoint",
+        "tensorboard/g/exp/ppo/version_0/events.out.tfevents.1.host.0": "tensorboard",
+    }
+    assert data["agents"] == {"ppo": ["version_0"]} and data["truncated"] is False
+    metrics = next(a for a in data["artifacts"] if a["kind"] == "metrics")
+    assert (metrics["root"], metrics["agent"], metrics["version"]) == ("logs", "ppo", "version_0")
+    assert metrics["size"] > 0 and metrics["modified"] > 0
+    with pytest.raises(FileNotFoundError):
+        catalog.run_manifest("g", "missing")
+
+
+def test_run_files_are_read_only_from_that_run(logs):
+    _write_artifacts(logs)
+    results = logs.parent
+    assert catalog.read_run_file("g", "exp", "plots/g/exp/time_report.csv") == b"Method,Avg\nppo,1.0\n"
+    with pytest.raises(FileNotFoundError):
+        catalog.read_run_file("g", "exp", "plots/g/exp/nope.csv")
+    # Another run's file, paths climbing out of results/, absolute paths and bad segments are all refused.
+    (results.parent / "secret.txt").write_text("top secret", encoding="utf-8")
+    for path in ("plots/g/other/secret.csv", "logs/g/exp/../../../../secret.txt",
+                 "plots/g/exp/../../../../secret.txt", str(results.parent / "secret.txt")):
+        with pytest.raises(PermissionError):
+            catalog.read_run_file("g", "exp", path)
+    with pytest.raises(ValueError):
+        catalog.run_manifest("g", "..\\exp")
+
+
+def test_agent_summaries_are_cached_until_their_files_change(logs, monkeypatch):
+    run = write_run(logs, "g", "cached")
+    reads = []
+    real = catalog._read_agent_summary
+    monkeypatch.setattr(catalog, "_read_agent_summary", lambda *a: reads.append(a) or real(*a))
+    catalog.list_runs()
+    catalog.list_runs()
+    assert len(reads) == 1  # the second listing came from the cache
+    metrics = run / "ppo" / "version_0" / "metrics.csv"
+    metrics.write_text(metrics.read_text(encoding="utf-8") + ",99.0,9000.0\n", encoding="utf-8")
+    assert catalog.list_runs()[0]["agents"][0]["best_reward"] == 99.0 and len(reads) == 2
+

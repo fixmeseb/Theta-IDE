@@ -73,8 +73,17 @@ class LocalBackend(QObject):
     def list_runs(self, callback: Callback):
         self._submit(lambda: {"runs": catalog.list_runs()}, callback=callback)
 
-    def run_metrics(self, group: str, experiment_id: str, agent: str, callback: Callback):
-        self._submit(catalog.run_metrics, group, experiment_id, agent, callback=callback)
+    def run_metrics(self, group: str, experiment_id: str, agent: str, callback: Callback,
+                    version: str | None = None, since: int = 0):
+        self._submit(catalog.run_metrics, group, experiment_id, agent, version, since, callback=callback)
+
+    def run_manifest(self, group: str, experiment_id: str, callback: Callback):
+        """Every artifact a run produced (catalog.run_manifest)."""
+        self._submit(catalog.run_manifest, group, experiment_id, callback=callback)
+
+    def run_file(self, group: str, experiment_id: str, path: str, callback: Callback):
+        """One artifact's bytes, by the path its manifest lists (catalog.read_run_file)."""
+        self._submit(catalog.read_run_file, group, experiment_id, path, callback=callback)
 
     def wait(self, msecs: int = 30000) -> bool:
         """Block until queued calls finish (tests and shutdown)."""

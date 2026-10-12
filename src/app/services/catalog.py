@@ -1,4 +1,8 @@
-"""What exists on disk: environments, experiments, finished and running runs, their metrics and plots."""
+"""What exists on disk: environments, experiments, finished and running runs, their metrics, plots and artifacts.
+
+Paths come from the caller (the Results panel), so every group, experiment and agent name is checked to be a
+plain folder name, and run files are only read from inside that run's own results folders.
+"""
 
 from __future__ import annotations
 
@@ -62,10 +66,38 @@ def list_experiments() -> list[dict[str, Any]]:
     return exps
 
 
+# agent_summary results by agent folder, valid while the files they were read from are unchanged.
+_SUMMARY_CACHE: dict[Path, tuple[tuple, dict[str, Any] | None]] = {}
+
+
+def _file_stamp(path: Path | None) -> tuple:
+    if path is None:
+        return (None,)
+    try:
+        stat = path.stat()
+    except OSError:
+        return (str(path), None)
+    return (str(path), stat.st_mtime_ns, stat.st_size)
+
+
 def agent_summary(agent_dir: Path) -> dict[str, Any] | None:
-    """Timing and reward summary for one agent of a run, or None if it never logged anything."""
+    """Timing and reward summary for one agent of a run, or None if it never logged anything.
+
+    Cached until the newest runtime.json or metrics.csv changes, so listing many runs stays cheap.
+    """
     runtime_file = latest_version_file(agent_dir, "runtime.json")
     metrics_file = latest_version_file(agent_dir, "metrics.csv")
+    key = agent_dir.resolve()
+    stamp = (_file_stamp(runtime_file and runtime_file.resolve()), _file_stamp(metrics_file and metrics_file.resolve()))
+    cached = _SUMMARY_CACHE.get(key)
+    if cached is not None and cached[0] == stamp:
+        return cached[1]
+    summary = _read_agent_summary(agent_dir, runtime_file, metrics_file)
+    _SUMMARY_CACHE[key] = (stamp, summary)
+    return summary
+
+
+def _read_agent_summary(agent_dir: Path, runtime_file: Path | None, metrics_file: Path | None) -> dict[str, Any] | None:
     if runtime_file is None and metrics_file is None:
         return None
     runtime: dict[str, Any] = {}
@@ -160,12 +192,150 @@ def list_runs() -> list[dict[str, Any]]:
     return runs
 
 
-def run_metrics(group: str, experiment_id: str, agent: str) -> dict[str, Any]:
-    """All rows of an agent's newest metrics.csv. Raises FileNotFoundError if it has none."""
-    metrics_file = latest_version_file(LOGS_DIR / group / experiment_id / agent, "metrics.csv")
+def check_path_segment(part: str) -> None:
+    """Reject names that could step outside results/ (e.g. '..', a slash or a drive letter)."""
+    if not part or part in (".", "..") or any(c in part for c in "/\\\x00") or ":" in part:
+        raise ValueError(f"Invalid path segment: {part!r}")
+
+
+def _version_number(name: str) -> int:
+    suffix = name.removeprefix("version_")
+    return int(suffix) if suffix.isdigit() else -1
+
+
+def run_metrics(group: str, experiment_id: str, agent: str, version: str | None = None,
+                since: int = 0) -> dict[str, Any]:
+    """Every row of an agent's metrics.csv (as text), with every column the engine logged.
+
+    `version` picks a version_N folder (default: the newest). `since` skips rows the caller already has,
+    so a client following a run that is still training reads only new rows; `total_rows` says where to
+    resume. Raises FileNotFoundError if there are no such metrics, ValueError for a bad name.
+    """
+    for part in (group, experiment_id, agent):
+        check_path_segment(part)
+    agent_dir = LOGS_DIR / group / experiment_id / agent
+    versions = sorted((p.name for p in agent_dir.glob("version_*") if (p / "metrics.csv").is_file()),
+                      key=_version_number)
+    if version is None:
+        metrics_file = latest_version_file(agent_dir, "metrics.csv")
+    else:
+        name = version if version.startswith("version_") else f"version_{version}"
+        check_path_segment(name)
+        metrics_file = agent_dir / name / "metrics.csv"
     if metrics_file is None or not metrics_file.exists():
         raise FileNotFoundError(f"No metrics for {group}/{experiment_id}/{agent}")
-    return {"metrics": read_metrics_table(metrics_file), "source": str(metrics_file)}
+    with open(metrics_file, encoding="utf-8", newline="") as f:
+        reader = csv.DictReader(f)
+        rows = list(reader)
+        columns = list(reader.fieldnames or [])
+    return {
+        "metrics": rows[max(int(since), 0):],
+        "columns": columns,
+        "total_rows": len(rows),
+        "version": metrics_file.parent.name,
+        "versions": versions,
+        "source": str(metrics_file),
+    }
+
+
+# ── Run manifest: every artifact a run produced ───────────────────────────────
+
+# Top-level folders of results/ that hold per-run output as <root>/<group>/<experiment_id>/...
+RESULT_ROOTS = ("logs", "plots", "checkpoints", "tensorboard", "datasets")
+MANIFEST_LIMIT = 5000
+
+_KIND_BY_SUFFIX = {
+    ".csv": "table", ".tsv": "table",
+    ".png": "figure", ".jpg": "figure", ".jpeg": "figure", ".svg": "figure", ".pdf": "figure",
+    ".md": "report", ".txt": "report", ".html": "report",
+    ".yaml": "config", ".yml": "config",
+    ".json": "metadata",
+    ".ckpt": "checkpoint", ".pt": "checkpoint", ".pth": "checkpoint", ".zip": "checkpoint",
+    ".npz": "cache", ".npy": "cache", ".pkl": "cache", ".parquet": "cache",
+    ".log": "log",
+}
+
+
+def results_dir() -> Path:
+    """results/, the parent of results/logs (follows LOGS_DIR, so tests can point it elsewhere)."""
+    return LOGS_DIR.parent
+
+
+def _artifact_kind(root: str, path: Path) -> str:
+    if root == "logs" and path.name == "metrics.csv":
+        return "metrics"
+    if root == "tensorboard" and path.name.startswith("events.out.tfevents"):
+        return "tensorboard"
+    return _KIND_BY_SUFFIX.get(path.suffix.lower(), "other")
+
+
+def _run_dirs(group: str, experiment_id: str) -> dict[str, Path]:
+    """The existing results/<root>/<group>/<experiment_id> folders of one run, by root."""
+    check_path_segment(group)
+    check_path_segment(experiment_id)
+    base = results_dir()
+    dirs = {root: base / root / group / experiment_id for root in RESULT_ROOTS}
+    return {root: path for root, path in dirs.items() if path.is_dir()}
+
+
+def run_manifest(group: str, experiment_id: str) -> dict[str, Any]:
+    """Every file a run produced across results/{logs,plots,checkpoints,tensorboard,datasets}.
+
+    Each artifact has a `path` relative to results/ (read it with read_run_file), a `kind` (metrics, table,
+    figure, report, config, metadata, checkpoint, cache, tensorboard, log, other), and the `agent` and
+    `version` folders it sits under, when it has them. `agents` maps each agent with logged metrics to its
+    version folders, oldest first. Raises FileNotFoundError if the run has no folders.
+    """
+    dirs = _run_dirs(group, experiment_id)
+    if not dirs:
+        raise FileNotFoundError(f"Run not found: {group}/{experiment_id}")
+    base = results_dir()
+    artifacts: list[dict[str, Any]] = []
+    truncated = False
+    for root, run_dir in dirs.items():
+        for path in sorted(run_dir.rglob("*")):
+            if not path.is_file():
+                continue
+            if len(artifacts) >= MANIFEST_LIMIT:
+                truncated = True
+                break
+            parts = path.relative_to(run_dir).parts
+            stat = path.stat()
+            artifacts.append({
+                "path": path.relative_to(base).as_posix(),
+                "root": root,
+                "kind": _artifact_kind(root, path),
+                "agent": parts[0] if len(parts) > 1 else None,
+                "version": next((p for p in parts[1:-1] if p.startswith("version_")), None),
+                "size": stat.st_size,
+                "modified": stat.st_mtime,
+            })
+    agents: dict[str, list[str]] = {}
+    for item in artifacts:
+        if item["kind"] == "metrics" and item["agent"] and item["version"]:
+            agents.setdefault(item["agent"], []).append(item["version"])
+    return {
+        "group": group,
+        "experiment_id": experiment_id,
+        "agents": {name: sorted(versions, key=_version_number) for name, versions in sorted(agents.items())},
+        "artifacts": artifacts,
+        "truncated": truncated,
+    }
+
+
+def read_run_file(group: str, experiment_id: str, path: str) -> bytes:
+    """One artifact of a run, by the `path` its manifest lists (relative to results/).
+
+    Only files inside this run's own results/<root>/<group>/<experiment_id> folders are read: anything
+    else raises PermissionError. A missing file raises FileNotFoundError.
+    """
+    dirs = _run_dirs(group, experiment_id)
+    target = (results_dir().resolve() / path).resolve()
+    if not any(target.is_relative_to(d.resolve()) for d in dirs.values()):
+        raise PermissionError("Path is outside this run's results")
+    if not target.is_file():
+        raise FileNotFoundError(f"File not found: {path}")
+    return target.read_bytes()
 
 
 def list_plots(group: str, experiment_id: str) -> list[str]:
