@@ -1516,31 +1516,91 @@ class ConfigViewer(QWidget):
                     widget.setSuffix(f"   (not used by {paradigm})")
                 widget.setToolTip(rules.disabled_reason(key))
 
-        # Checkboxes: Tensorboard, Save Dataset, Recover, No Plots
+        # Runtime & Logging Options (TensorBoard, Save Dataset, Recover, No Plots)
+        OPTIONAL_RUNTIME_FLAGS = [
+            ("tensorboard", "Log to TensorBoard"),
+            ("save_dataset", "Save Dataset"),
+            ("recover", "Recover Checkpoint"),
+            ("no_plot", "No Plots"),
+        ]
+
         chk_row = QHBoxLayout()
-        chk_row.setSpacing(18)
-        self.chk_tb = QCheckBox("Log to TensorBoard")
-        self.chk_tb.setChecked(bool(data.get("tensorboard", resolved.get("tensorboard", False))))
-        self.chk_tb.toggled.connect(lambda v: self._on_field_edited("tensorboard", True) if v else (self.raw_data.pop("tensorboard", None), self._mark_dirty()))
-        chk_row.addWidget(self.chk_tb)
+        chk_row.setSpacing(14)
+        chk_widgets = {}
 
-        self.chk_save_ds = QCheckBox("Save Dataset")
-        self.chk_save_ds.setChecked(bool(data.get("save_dataset", resolved.get("save_dataset", False))))
-        self.chk_save_ds.toggled.connect(lambda v: self._on_field_edited("save_dataset", True) if v else (self.raw_data.pop("save_dataset", None), self._mark_dirty()))
-        chk_row.addWidget(self.chk_save_ds)
+        # Show checkboxes only for flags explicitly present in the experiment config (or when showing resolved defaults)
+        active_flags = [
+            (k, lbl) for k, lbl in OPTIONAL_RUNTIME_FLAGS
+            if k in data or self.view_mode == "resolved"
+        ]
 
-        self.chk_recover = QCheckBox("Recover Checkpoint")
-        self.chk_recover.setChecked(bool(data.get("recover", resolved.get("recover", False))))
-        self.chk_recover.toggled.connect(lambda v: self._on_field_edited("recover", True) if v else (self.raw_data.pop("recover", None), self._mark_dirty()))
-        chk_row.addWidget(self.chk_recover)
+        for flag_key, flag_label in active_flags:
+            row_flag = QHBoxLayout()
+            row_flag.setSpacing(4)
+            chk = QCheckBox(flag_label)
+            chk.setChecked(bool(data.get(flag_key, resolved.get(flag_key, False))))
+            chk.toggled.connect(
+                lambda v, fk=flag_key: (
+                    self._on_field_edited(fk, True)
+                    if v
+                    else (self.raw_data.pop(fk, None), self._mark_dirty(), self._render_boxes())
+                )
+            )
+            row_flag.addWidget(chk)
+            chk_widgets[flag_key] = chk
 
-        self.chk_no_plot = QCheckBox("No Plots")
-        self.chk_no_plot.setChecked(bool(data.get("no_plot", resolved.get("no_plot", False))))
-        self.chk_no_plot.toggled.connect(lambda v: self._on_field_edited("no_plot", True) if v else (self.raw_data.pop("no_plot", None), self._mark_dirty()))
-        chk_row.addWidget(self.chk_no_plot)
+            if flag_key in data:
+                btn_del_flag = _make_subtle_tool_button("close", f"Remove '{flag_key}' override", size=18, icon_size=11)
+                btn_del_flag.clicked.connect(
+                    lambda _, fk=flag_key: (self.raw_data.pop(fk, None), self._mark_dirty(), self._render_boxes())
+                )
+                row_flag.addWidget(btn_del_flag)
+            else:
+                row_flag.addWidget(label("(inherited)", "muted"))
 
-        chk_row.addStretch()
-        form_budget.addLayout(chk_row, 2, 0, 1, 4)
+            chk_row.addLayout(row_flag)
+
+        self.chk_tb = chk_widgets.get("tensorboard")
+        self.chk_save_ds = chk_widgets.get("save_dataset")
+        self.chk_recover = chk_widgets.get("recover")
+        self.chk_no_plot = chk_widgets.get("no_plot")
+
+        # Option adder button for unadded flags
+        unadded_flags = [(k, lbl) for k, lbl in OPTIONAL_RUNTIME_FLAGS if k not in data]
+        if unadded_flags and self.view_mode != "resolved":
+            btn_add_opt = QPushButton("+ Add Option ▾")
+            btn_add_opt.setObjectName("addOptionButton")
+            btn_add_opt.setStyleSheet("""
+                QPushButton#addOptionButton {
+                    background: transparent;
+                    color: #a89984;
+                    border: 1px dashed #504945;
+                    border-radius: 4px;
+                    padding: 3px 8px;
+                    font-size: 12px;
+                }
+                QPushButton#addOptionButton:hover {
+                    background: #32302f;
+                    color: #ebdbb2;
+                    border-color: #a89984;
+                }
+            """)
+            opt_menu = QMenu(self)
+            for fk, flbl in unadded_flags:
+                act = opt_menu.addAction(flbl)
+                act.triggered.connect(
+                    lambda _, k=fk: (
+                        self.raw_data.__setitem__(k, True),
+                        self._mark_dirty(),
+                        self._render_boxes(),
+                    )
+                )
+            btn_add_opt.setMenu(opt_menu)
+            chk_row.addWidget(btn_add_opt)
+
+        if active_flags or (unadded_flags and self.view_mode != "resolved"):
+            chk_row.addStretch()
+            form_budget.addLayout(chk_row, 2, 0, 1, 4)
 
         box_budget.add_layout(form_budget)
         self.boxes_layout.addWidget(box_budget)

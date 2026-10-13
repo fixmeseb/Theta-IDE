@@ -183,3 +183,36 @@ def test_add_and_remove_parameters_in_hierarchy(qapp, tmp_path):
     viewer._remove_method_param(method_name, "hidden_sizes")
     assert "hidden_sizes" not in viewer.raw_data["methods"][method_name]
 
+
+def test_top_box_defaults_hidden_until_added(qapp, tmp_path):
+    src_file = Path("in/config/experiment/cartpole/final_cartpole.yaml")
+    dest_file = tmp_path / "final_cartpole.yaml"
+    shutil.copy(src_file, dest_file)
+
+    viewer = ConfigViewer()
+    viewer.load_file(dest_file, "experiment/cartpole/final_cartpole.yaml")
+
+    # None of the 4 flags are in final_cartpole.yaml -> none should be rendered
+    assert viewer.chk_tb is None
+    assert viewer.chk_save_ds is None
+    assert viewer.chk_recover is None
+    assert viewer.chk_no_plot is None
+
+    # Add option via raw_data or adder
+    viewer.raw_data["tensorboard"] = True
+    viewer._render_boxes()
+
+    # Now tensorboard is rendered as a visible checkbox
+    assert viewer.chk_tb is not None
+    assert viewer.chk_tb.isChecked() is True
+    # The others remain unrendered
+    assert viewer.chk_save_ds is None
+    assert viewer.chk_recover is None
+    assert viewer.chk_no_plot is None
+
+    # Remove option
+    viewer.raw_data.pop("tensorboard", None)
+    viewer._render_boxes()
+    assert viewer.chk_tb is None
+
+
