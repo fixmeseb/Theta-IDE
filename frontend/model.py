@@ -31,7 +31,7 @@ class Config:
     lr: float = 0.0003
     batch_size: int = 64
     gamma: float = 0.99
-    tensorboard: bool = True
+    tensorboard: bool = False
 
     def overrides(self):
         """Hydra overrides applied to BASE_EXPERIMENT, exactly as typed after `run_pipeline.py`."""

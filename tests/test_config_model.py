@@ -258,3 +258,63 @@ def test_command_line_is_a_string():
     line = Selection(experiment="tests/cartpole").command_line()
     assert isinstance(line, str)
     assert "run_pipeline.py tests/cartpole" in line
+
+
+# ------------------------------------------------ composite & dynamic parameters
+
+def test_composite_model_properties(tree):
+    blendrl = tree.models["blendrl"]
+    assert blendrl.is_composite is True
+    subcomps = blendrl.subcomponents
+    assert "neural" in subcomps
+    assert "symbolic" in subcomps
+    assert "blender" in subcomps
+
+    dnn = tree.models["dnn"]
+    assert dnn.is_composite is False
+    assert dnn.subcomponents == {}
+
+
+def test_tree_agent_and_model_helpers(tree):
+    ppo_params = tree.agent_hyperparameters("ppo")
+    assert "clip_coef" in ppo_params
+    assert "ent_coef" in ppo_params
+    assert "lr" in ppo_params
+
+    dnn_params = tree.model_parameters("dnn")
+    assert "hidden_sizes" in dnn_params
+    assert "activation" in dnn_params
+    assert "blend_ent_coef" not in dnn_params
+
+
+def test_candidate_hyperparameters_filtering(tree):
+    from frontend.config_viewer import get_method_candidate_hyperparameters
+
+    # For pure DNN: blend_ent_coef must NOT be suggested
+    dnn_hypers = get_method_candidate_hyperparameters("cql", "dnn", tree)
+    assert "hidden_sizes" in dnn_hypers
+    assert "activation" in dnn_hypers
+    assert "cql_alpha" in dnn_hypers
+    assert "blend_ent_coef" not in dnn_hypers
+    assert "logic_lr" not in dnn_hypers
+
+    # For BlendRL: blend_ent_coef and logic_lr MUST be suggested
+    blend_hypers = get_method_candidate_hyperparameters("cql", "blendrl", tree)
+    assert "blend_ent_coef" in blend_hypers
+    assert "logic_lr" in blend_hypers
+    assert "blend_q_values" in blend_hypers
+
+
+def test_candidate_subcomponents(tree):
+    from frontend.config_viewer import get_method_candidate_subcomponents
+
+    # For blendrl with no existing subcomponents
+    subs = get_method_candidate_subcomponents("blendrl", tree)
+    assert set(subs) == {"neural", "symbolic", "blender"}
+
+    # For blendrl with neural already present
+    subs_filtered = get_method_candidate_subcomponents("blendrl", tree, current_keys={"neural"})
+    assert set(subs_filtered) == {"symbolic", "blender"}
+
+    # For non-composite dnn
+    assert get_method_candidate_subcomponents("dnn", tree) == []

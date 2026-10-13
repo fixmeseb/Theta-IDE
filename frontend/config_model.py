@@ -80,6 +80,7 @@ class Agent:
     name: str
     algorithm: str
     hyperparameters: Mapping[str, Any] = field(default_factory=dict, repr=False)
+    raw: Mapping[str, Any] = field(default_factory=dict, repr=False)
 
     @classmethod
     def from_file(cls, path: Path, root: Path | None = None) -> Agent:
@@ -94,6 +95,7 @@ class Agent:
             name=name,
             algorithm=raw.get("algorithm") or path.stem,
             hyperparameters={k: v for k, v in raw.items() if k != "algorithm"},
+            raw=raw,
         )
 
 
@@ -102,6 +104,7 @@ class Model:
     name: str
     architecture: str
     parameters: Mapping[str, Any] = field(default_factory=dict, repr=False)
+    raw: Mapping[str, Any] = field(default_factory=dict, repr=False)
 
     @classmethod
     def from_file(cls, path: Path, root: Path | None = None) -> Model:
@@ -116,7 +119,16 @@ class Model:
             name=name,
             architecture=raw.get("architecture") or path.stem,
             parameters={k: v for k, v in raw.items() if k != "architecture"},
+            raw=raw,
         )
+
+    @property
+    def is_composite(self) -> bool:
+        return self.name == "blendrl" or any(isinstance(v, dict) for v in self.parameters.values())
+
+    @property
+    def subcomponents(self) -> dict[str, dict[str, Any]]:
+        return {k: dict(v) for k, v in self.parameters.items() if isinstance(v, dict)}
 
 
 @dataclass(frozen=True)
@@ -337,6 +349,25 @@ class ConfigTree:
                 return g
         return ExperimentGroup(name=name)
 
+    def agent_hyperparameters(self, agent_name: str | None) -> dict[str, Any]:
+        if not agent_name or agent_name not in self.agents:
+            return {}
+        return dict(self.agents[agent_name].hyperparameters)
+
+    def model_parameters(self, model_name: str | None) -> dict[str, Any]:
+        if not model_name or model_name not in self.models:
+            return {}
+        return dict(self.models[model_name].parameters)
+
+    def model_subcomponents(self, model_name: str | None) -> dict[str, dict[str, Any]]:
+        if not model_name or model_name not in self.models:
+            return {}
+        return {
+            k: dict(v)
+            for k, v in self.models[model_name].parameters.items()
+            if isinstance(v, dict)
+        }
+
 
 @dataclass(frozen=True)
 class ExperimentGroup:
@@ -454,7 +485,6 @@ def experiment_yaml(
         lines.append("intervals_count: 4")
     if paradigm is None or paradigm.field_enabled("eval_episodes"):
         lines.append("eval_episodes: 100")
-    lines += ["", "tensorboard: true"]
 
     # A paradigm with no agents still needs a method, so a model on its own is
     # enough to write one: supervised groups name methods for the architecture.

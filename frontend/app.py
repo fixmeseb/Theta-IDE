@@ -1406,7 +1406,7 @@ class Window(QMainWindow):
             exp_id = d.get("experiment_id") or (self.config_viewer.current_path.stem if getattr(self.config_viewer, "current_path", None) else "cartpole_ppo_baseline")
             seed = int(d.get("seed") if d.get("seed") is not None else 42)
             steps = int(d.get("total_timesteps") or 10000)
-            tb = bool(d.get("tensorboard", True))
+            tb = bool(d.get("tensorboard", False))
             methods = d.get("methods", {})
             ppo_spec = methods.get("ppo", {}) if isinstance(methods, dict) else {}
             lr = float(ppo_spec.get("lr") or 0.0003)

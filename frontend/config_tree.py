@@ -1140,8 +1140,6 @@ class ConfigTreeWidget(QWidget):
             lines.append("intervals_count: 4")
             lines.append("eval_episodes: 100")
 
-        lines += ["", "tensorboard: true"]
-
         # Methods block
         if tree and group_paradigm:
             permitted = [a.name for a in tree.agents_for(group_paradigm)]
