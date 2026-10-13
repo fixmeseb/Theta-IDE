@@ -33,6 +33,22 @@ ENV_MAX_REWARD = {"cartpole": 500}
 _REWARD_KEYS = {"reward", "reward_std"}
 
 
+def run_setup_label(run, config):
+    """The "environment / methods" half of a run's caption.
+
+    Derived from the run itself. This used to be hardcoded to "CartPole-v1 / PPO"
+    for anything launched from the app, so a run on another environment was
+    mislabelled, and so was every agent-less one, whose methods name a model
+    rather than an algorithm. Only the simulated demo run keeps the literal,
+    because that run really is cartpole with PPO.
+    """
+    if run.get("simulated"):
+        return "CartPole-v1  /  PPO"
+    env = (config or {}).get("env") or "?"
+    methods = (run.get("backend") or {}).get("agents") or ["?"]
+    return f"{env}  /  {' + '.join(methods).upper()}"
+
+
 def second_metric_choices(run) -> list[str]:
     """Every metric this run logged except reward: the hand-described ones first, then the rest by group."""
     available = available_metrics(run) - _REWARD_KEYS
@@ -277,10 +293,9 @@ class MonitorPanel(QWidget):
         title = run_display_name(run)
         if run.get("origin") == "cli":  # found in results/logs: no app job, and any environment or method
             source = "COMMAND LINE"
-            setup = f"{config['env']}  /  {' + '.join(run['backend'].get('agents') or ['?']).upper()}"
         else:
             source = f"LIVE · job {run['backend']['job_id'][:8]}" if live else "SIMULATED"
-            setup = "CartPole-v1  /  PPO"
+        setup = run_setup_label(run, config)
         self.run_title.setText(title)
         self.run_caption.setText(f"{setup}  /  seed {config['seed']}   •   {run['status'].upper()}   •   {source}")
         if live:
