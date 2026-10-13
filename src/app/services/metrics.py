@@ -53,8 +53,16 @@ def read_metrics_table(path: Path) -> list[dict[str, str]]:
 class MetricsTail:
     """Reads only the rows appended to one metrics CSV since the previous read.
 
-    Lightning rewrites the file from scratch when a new column appears; the tail notices the
-    file shrinking, starts over, and reports `reset` so the caller can drop what it had.
+    Lightning rewrites the file from scratch when a new column appears, and the rewrite is
+    usually *longer* than what it replaces: a supervised run logs `epoch,step,val/loss` during
+    the validation sanity check and then `epoch,step,train/loss,training_time_seconds,val/loss`
+    once training starts. Watching for the file to shrink therefore misses the common case, and
+    a stale header zipped onto wider rows files every value under the wrong name - train/loss
+    arriving as val/loss, and the columns past the end of the old header disappearing entirely.
+
+    So the header itself is compared on every read. A changed header means the file was
+    rewritten, whichever direction its size went, and `reset` tells the caller to drop what it
+    had and take these rows as the whole run.
     """
 
     def __init__(self, path: Path):
@@ -73,11 +81,16 @@ class MetricsTail:
             self.offset, self.header, reset = 0, [], True
         try:
             with open(self.path, "rb") as f:
-                if not self.header:
-                    header_line = f.readline().decode("utf-8", errors="replace")
-                    if not header_line.endswith("\n"):
-                        return [], reset  # header still being written
-                    self.header = next(csv.reader([header_line.rstrip("\r\n")]), [])
+                header_line = f.readline().decode("utf-8", errors="replace")
+                if not header_line.endswith("\n"):
+                    return [], reset  # header still being written
+                header = next(csv.reader([header_line.rstrip("\r\n")]), [])
+                if header != self.header:
+                    # A rewrite. Only a reset if we had already read a different header:
+                    # the first read of a file is not one.
+                    reset = reset or bool(self.header)
+                    self.header, self.offset = header, f.tell()
+                elif not self.offset:
                     self.offset = f.tell()
                 f.seek(self.offset)
                 raw = f.read()

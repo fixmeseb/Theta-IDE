@@ -220,6 +220,62 @@ def test_metrics_tail_restarts_when_lightning_rewrites_the_file(tmp_path):
     assert reset and rows == [{"step": 0.0, "loss": 0.5, "entropy": 0.6}]
 
 
+def test_metrics_tail_restarts_when_the_rewrite_is_longer(tmp_path):
+    """The common case, and the one a size check misses.
+
+    A supervised run logs step,val/loss during the validation sanity check and then gains
+    train/loss once training starts, so the rewritten file is bigger than what it replaced.
+    Keeping the old header zipped 4 columns onto 3 names: train/loss was filed as val/loss,
+    the real val/loss was dropped, and the monitor displayed one under the other's label.
+    """
+    csv_file = tmp_path / "metrics.csv"
+    csv_file.write_text("epoch,step,val/loss\n0,12,0.43\n", encoding="utf-8")
+    tail = MetricsTail(csv_file)
+    assert tail.read() == ([{"epoch": 0.0, "step": 12.0, "val/loss": 0.43}], False)
+
+    csv_file.write_text(
+        "epoch,step,train/loss,val/loss\n0,12,0.57,0.43\n0,13,0.55,0.41\n", encoding="utf-8"
+    )
+    rows, reset = tail.read()
+    assert reset, "a wider header is a rewrite even though the file grew"
+    assert rows == [
+        {"epoch": 0.0, "step": 12.0, "train/loss": 0.57, "val/loss": 0.43},
+        {"epoch": 0.0, "step": 13.0, "train/loss": 0.55, "val/loss": 0.41},
+    ]
+
+
+def test_metrics_tail_keeps_streaming_after_a_rewrite(tmp_path):
+    """A reset must not turn every later read into one, or the monitor would redraw the
+    whole run on each append."""
+    csv_file = tmp_path / "metrics.csv"
+    csv_file.write_text("epoch,step,val/loss\n0,12,0.43\n", encoding="utf-8")
+    tail = MetricsTail(csv_file)
+    tail.read()
+    csv_file.write_text("epoch,step,train/loss,val/loss\n0,12,0.57,0.43\n", encoding="utf-8")
+    tail.read()
+
+    with open(csv_file, "a", encoding="utf-8") as handle:
+        handle.write("0,13,0.55,0.41\n")
+    rows, reset = tail.read()
+    assert not reset
+    assert rows == [{"epoch": 0.0, "step": 13.0, "train/loss": 0.55, "val/loss": 0.41}]
+
+
+def test_metrics_tail_does_not_call_the_first_read_a_reset(tmp_path):
+    csv_file = tmp_path / "metrics.csv"
+    csv_file.write_text("step,loss\n0,0.5\n", encoding="utf-8")
+    assert MetricsTail(csv_file).read() == ([{"step": 0.0, "loss": 0.5}], False)
+
+
+def test_metrics_tail_waits_for_a_complete_header(tmp_path):
+    csv_file = tmp_path / "metrics.csv"
+    csv_file.write_text("step,lo", encoding="utf-8")  # still being written
+    tail = MetricsTail(csv_file)
+    assert tail.read() == ([], False)
+    csv_file.write_text("step,loss\n0,0.5\n", encoding="utf-8")
+    assert tail.read() == ([{"step": 0.0, "loss": 0.5}], False)
+
+
 def test_metric_points_keep_evaluation_and_training_rows_separate():
     rows = [{"eval/reward": 20.0, "eval/reward_std": 8.5, "transitions": 0.0},
             {"losses/total_loss": 1.5, "losses/entropy": 0.69, "losses/approx_kl": 0.001, "transitions": 512.0},
