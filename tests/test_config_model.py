@@ -64,9 +64,10 @@ def test_experiments_exclude_base_templates(tree):
 # ----------------------------------------------------------- agent rules
 
 
-def test_online_rl_permits_only_ppo(tree):
+def test_online_rl_permits_online_algorithms(tree):
     names = {a.name for a in tree.agents_for("online_rl")}
-    assert names == {"ppo"}
+    assert "ppo" in names
+    assert {"sb3/a2c", "sb3/dqn", "sb3/ppo", "sb3/sac"}.issubset(names)
 
 
 def test_offline_rl_permits_offline_algorithms(tree):

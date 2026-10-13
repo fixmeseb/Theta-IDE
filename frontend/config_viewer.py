@@ -159,7 +159,7 @@ def get_model_candidate_hyperparameters(
         return []
     current_keys = current_keys or set()
     if model_name == "blendrl":
-        blend_keys = ["blend_q_values", "blend_ent_coef", "actor_mode", "logic_lr", "blender_lr"]
+        blend_keys = ["neural", "symbolic", "blender", "blend_q_values", "blend_ent_coef", "actor_mode", "logic_lr", "blender_lr"]
         return [k for k in blend_keys if k not in current_keys]
     candidates: list[str] = []
     if tree:
@@ -219,10 +219,10 @@ def get_method_candidate_subcomponents(
     current_keys: set[str] | None = None,
 ) -> list[str]:
     """Return available subcomponent names for a composite model that are not yet added."""
-    if not tree or not model_name:
+    if not model_name:
         return []
     current_keys = current_keys or set()
-    subcomps = tree.model_subcomponents(model_name)
+    subcomps = tree.model_subcomponents(model_name) if tree else {}
     if not subcomps and model_name == "blendrl":
         subcomps = {"neural": {}, "symbolic": {}, "blender": {}}
     return [k for k in subcomps.keys() if k not in current_keys]
@@ -2017,29 +2017,6 @@ class ConfigViewer(QWidget):
                                 row_bp.addStretch()
                                 model_block.addRow(str(bk), row_bp)
 
-                        curr_blend_keys = set()
-                        if isinstance(model_inner, dict):
-                            curr_blend_keys.update(model_inner.keys())
-                        curr_blend_keys.update(m_spec.keys())
-                        cand_blend = [k for k in blend_param_keys if k not in curr_blend_keys]
-                        if cand_blend:
-                            row_add_bp = QHBoxLayout()
-                            row_add_bp.setSpacing(6)
-                            combo_add_bp = ComboBox()
-                            combo_add_bp.setEditable(True)
-                            combo_add_bp.setMaximumWidth(180)
-                            combo_add_bp.addItems(cand_blend)
-                            combo_add_bp.setEditText("")
-                            combo_add_bp.setPlaceholderText("Add blendrl param...")
-                            row_add_bp.addWidget(combo_add_bp)
-                            btn_add_bp = _make_subtle_tool_button("plus", "Add blendrl parameter", size=22, icon_size=12)
-                            btn_add_bp.clicked.connect(
-                                lambda _, mn=m_name, cb=combo_add_bp: self._add_method_param(mn, cb.currentText().strip())
-                            )
-                            row_add_bp.addWidget(btn_add_bp)
-                            row_add_bp.addStretch()
-                            model_block.addRow("Add blendrl param", row_add_bp)
-
                         subcomps_present = {}
                         if isinstance(model_inner, dict):
                             for sk in ("neural", "symbolic", "blender"):
@@ -2048,19 +2025,6 @@ class ConfigViewer(QWidget):
                         for sk in ("neural", "symbolic", "blender"):
                             if sk in m_spec and sk not in subcomps_present:
                                 subcomps_present[sk] = m_spec[sk]
-
-                        # For composite models (e.g. BlendRL), seed constituent subcomponents
-                        # so Neural, Logic Module, and Blender are immediately accessible
-                        base_subcomps = tree.model_subcomponents(model_name) if tree else {}
-                        if not base_subcomps and model_name == "blendrl":
-                            base_subcomps = {
-                                "neural": {"type": "dnn"},
-                                "symbolic": {"type": "nsfr"},
-                                "blender": {"mode": "neural"},
-                            }
-                        for sk in ("neural", "symbolic", "blender"):
-                            if sk not in subcomps_present and (sk in base_subcomps or model_name == "blendrl"):
-                                subcomps_present[sk] = base_subcomps.get(sk, {})
 
                         for s_name, s_val in list(subcomps_present.items()):
                             if s_name == "neural":
@@ -2084,14 +2048,9 @@ class ConfigViewer(QWidget):
                                     lambda v, mn=m_name, sn=s_name: self._on_method_subcomponent_type_changed(mn, sn, v)
                                 )
                                 row_arch.addWidget(combo_arch)
-                                is_overridden = (
-                                    (isinstance(model_inner, dict) and s_name in model_inner)
-                                    or (s_name in m_spec)
-                                )
-                                if is_overridden:
-                                    btn_del_sc = _make_subtle_tool_button("close", f"Reset '{s_name}' to default", size=20, icon_size=12)
-                                    btn_del_sc.clicked.connect(lambda _, mn=m_name, sn=s_name: self._remove_method_subcomponent(mn, sn))
-                                    row_arch.addWidget(btn_del_sc)
+                                btn_del_sc = _make_subtle_tool_button("close", f"Remove '{s_name}' subcomponent", size=20, icon_size=12)
+                                btn_del_sc.clicked.connect(lambda _, mn=m_name, sn=s_name: self._remove_method_subcomponent(mn, sn))
+                                row_arch.addWidget(btn_del_sc)
                                 row_arch.addStretch()
                                 model_block.addRow("Neural Architecture", row_arch)
 
@@ -2114,14 +2073,9 @@ class ConfigViewer(QWidget):
                                     lambda v, mn=m_name, sn=s_name: self._on_method_subcomponent_type_changed(mn, sn, v)
                                 )
                                 row_sym.addWidget(combo_sym)
-                                is_overridden = (
-                                    (isinstance(model_inner, dict) and s_name in model_inner)
-                                    or (s_name in m_spec)
-                                )
-                                if is_overridden:
-                                    btn_del_sc = _make_subtle_tool_button("close", f"Reset '{s_name}' to default", size=20, icon_size=12)
-                                    btn_del_sc.clicked.connect(lambda _, mn=m_name, sn=s_name: self._remove_method_subcomponent(mn, sn))
-                                    row_sym.addWidget(btn_del_sc)
+                                btn_del_sc = _make_subtle_tool_button("close", f"Remove '{s_name}' subcomponent", size=20, icon_size=12)
+                                btn_del_sc.clicked.connect(lambda _, mn=m_name, sn=s_name: self._remove_method_subcomponent(mn, sn))
+                                row_sym.addWidget(btn_del_sc)
                                 row_sym.addStretch()
                                 model_block.addRow("Logic Module (Symbolic)", row_sym)
 
@@ -2136,30 +2090,20 @@ class ConfigViewer(QWidget):
                                     lambda v, mn=m_name: self._on_method_subcomponent_param_edited(mn, "blender", "mode", v)
                                 )
                                 row_blender.addWidget(combo_bmode)
-                                is_overridden = (
-                                    (isinstance(model_inner, dict) and s_name in model_inner)
-                                    or (s_name in m_spec)
-                                )
-                                if is_overridden:
-                                    btn_del_sc = _make_subtle_tool_button("close", f"Reset '{s_name}' to default", size=20, icon_size=12)
-                                    btn_del_sc.clicked.connect(lambda _, mn=m_name, sn=s_name: self._remove_method_subcomponent(mn, sn))
-                                    row_blender.addWidget(btn_del_sc)
+                                btn_del_sc = _make_subtle_tool_button("close", f"Remove '{s_name}' subcomponent", size=20, icon_size=12)
+                                btn_del_sc.clicked.connect(lambda _, mn=m_name, sn=s_name: self._remove_method_subcomponent(mn, sn))
+                                row_blender.addWidget(btn_del_sc)
                                 row_blender.addStretch()
                                 model_block.addRow("Blender Mode", row_blender)
 
                             sub_block = IndentedHierarchyBlock(level=2)
                             sub_params = {}
                             if isinstance(s_val, dict):
-                                is_explicit_sub = (
-                                    (isinstance(model_inner, dict) and s_name in model_inner)
-                                    or (s_name in m_spec)
-                                )
-                                if is_explicit_sub:
-                                    if s_name == "symbolic" and any(k in ("cew", "nsfr", "neumann") for k in s_val):
-                                        inner_r = next(k for k in ("cew", "nsfr", "neumann") if k in s_val)
-                                        sub_params = s_val[inner_r] if isinstance(s_val[inner_r], dict) else {}
-                                    else:
-                                        sub_params = {k: v for k, v in s_val.items() if k not in ("type", "architecture", "reasoner", "mode")}
+                                if s_name == "symbolic" and any(k in ("cew", "nsfr", "neumann") for k in s_val):
+                                    inner_r = next(k for k in ("cew", "nsfr", "neumann") if k in s_val)
+                                    sub_params = s_val[inner_r] if isinstance(s_val[inner_r], dict) else {}
+                                else:
+                                    sub_params = {k: v for k, v in s_val.items() if k not in ("type", "architecture", "reasoner", "mode")}
 
                             for sp_k, sp_v in list(sub_params.items()):
                                 sp_row = QHBoxLayout()
@@ -2222,23 +2166,33 @@ class ConfigViewer(QWidget):
                                     sub_add_row
                                 )
 
-                            model_block.addRow(sub_block)
+                            if sub_params or filtered_sub_cand:
+                                model_block.addRow(sub_block)
+
+                        curr_blend_keys = set()
+                        if isinstance(model_inner, dict):
+                            curr_blend_keys.update(model_inner.keys())
+                        curr_blend_keys.update(m_spec.keys())
 
                         cand_subcomps = get_method_candidate_subcomponents(model_name, tree, set(subcomps_present.keys()))
-                        if cand_subcomps:
-                            add_sc_row = QHBoxLayout()
-                            add_sc_row.setSpacing(6)
-                            combo_new_sc = ComboBox()
-                            combo_new_sc.setMaximumWidth(180)
-                            combo_new_sc.addItems(cand_subcomps)
-                            add_sc_row.addWidget(combo_new_sc)
-                            btn_add_sc = _make_subtle_tool_button("plus", "Add subcomponent", size=22, icon_size=12)
-                            btn_add_sc.clicked.connect(
-                                lambda _, mn=m_name, cb=combo_new_sc: self._add_method_subcomponent(mn, cb.currentText().strip())
+                        cand_blend = cand_subcomps + [k for k in blend_param_keys if k not in curr_blend_keys]
+                        if cand_blend:
+                            row_add_bp = QHBoxLayout()
+                            row_add_bp.setSpacing(6)
+                            combo_add_bp = ComboBox()
+                            combo_add_bp.setEditable(True)
+                            combo_add_bp.setMaximumWidth(180)
+                            combo_add_bp.addItems(cand_blend)
+                            combo_add_bp.setEditText("")
+                            combo_add_bp.setPlaceholderText("Add blendrl param...")
+                            row_add_bp.addWidget(combo_add_bp)
+                            btn_add_bp = _make_subtle_tool_button("plus", "Add blendrl parameter", size=22, icon_size=12)
+                            btn_add_bp.clicked.connect(
+                                lambda _, mn=m_name, cb=combo_add_bp: self._add_method_param(mn, cb.currentText().strip())
                             )
-                            add_sc_row.addWidget(btn_add_sc)
-                            add_sc_row.addStretch()
-                            model_block.addRow("Add Subcomponent", add_sc_row)
+                            row_add_bp.addWidget(btn_add_bp)
+                            row_add_bp.addStretch()
+                            model_block.addRow("Add blendrl param", row_add_bp)
 
                     else:
                         model_keys_raw = set(tree.model_parameters(model_name).keys()) if tree else set()
@@ -3398,20 +3352,16 @@ class ConfigViewer(QWidget):
         model_val = m_spec.get("model")
         model_name = next(iter(model_val)) if isinstance(model_val, dict) else str(model_val or "blendrl")
 
-        sub_default = {}
-        if tree:
-            subcomps = tree.model_subcomponents(model_name)
-            if subcomp_name in subcomps:
-                sub_default = dict(subcomps[subcomp_name])
-        if not sub_default:
-            if subcomp_name == "neural":
-                sub_default = {"type": "dnn", "hidden_sizes": [256, 256]}
-            elif subcomp_name == "symbolic":
-                sub_default = {"type": "nsfr", "rules": "default"}
-            elif subcomp_name == "blender":
-                sub_default = {"mode": "neural", "blend_function": "softmax"}
-            else:
-                sub_default = {}
+        if subcomp_name == "neural":
+            sub_default = {"type": "dnn"}
+        elif subcomp_name == "symbolic":
+            sub_default = {"type": "nsfr"}
+        elif subcomp_name == "blender":
+            sub_default = {"mode": "neural"}
+        else:
+            tree = config_tree()
+            subcomps = tree.model_subcomponents(model_name) if tree else {}
+            sub_default = dict(subcomps.get(subcomp_name, {}))
 
         if isinstance(m_spec.get("model"), dict):
             m_spec["model"].setdefault(model_name, {})[subcomp_name] = sub_default
@@ -3545,6 +3495,9 @@ class ConfigViewer(QWidget):
 
     def _add_method_param(self, method_name, param_key, value=None):
         if not param_key:
+            return
+        if param_key in ("neural", "symbolic", "blender"):
+            self._add_method_subcomponent(method_name, param_key)
             return
         if value is None or value == "":
             value = self._resolve_default_param_value(method_name, param_key)

@@ -370,11 +370,32 @@ def test_blendrl_model_block_and_logic_module_rendering(qapp, tmp_path):
     assert "ppo_blendrl_final_cp" in viewer.raw_data["methods"]
     assert viewer.raw_data["methods"]["ppo_blendrl_final_cp"]["model"] == "blendrl"
 
-    # Find all labels and hierarchy blocks in viewer
+    # Initially, composite subcomponents (neural, symbolic, blender) are NOT seeded/populated
+    # until the user explicitly adds them via the blendrl param adder
     labels = [l.text() for l in viewer.findChildren(QLabel)]
-    assert "Neural Architecture" in labels
+    assert "Neural Architecture" not in labels
+    assert "Logic Module (Symbolic)" not in labels
+    assert "Blender Mode" not in labels
+
+    # Find the ComboBox for Add blendrl param
+    combos = viewer.findChildren(ComboBox)
+    add_bp_combos = [c for c in combos if c.placeholderText() == "Add blendrl param..."]
+    assert len(add_bp_combos) >= 1
+    add_bp_combo = add_bp_combos[0]
+    bp_items = [add_bp_combo.itemText(i) for i in range(add_bp_combo.count())]
+    assert "symbolic" in bp_items
+    assert "neural" in bp_items
+    assert "blender" in bp_items
+
+    # 1. Add symbolic subcomponent via adder
+    viewer._add_method_param("ppo_blendrl_final_cp", "symbolic")
+    qapp.processEvents()
+
+    # Now Logic Module (Symbolic) is rendered
+    labels = [l.text() for l in viewer.findChildren(QLabel)]
     assert "Logic Module (Symbolic)" in labels
-    assert "Blender Mode" in labels
+    assert "Neural Architecture" not in labels
+    assert "Blender Mode" not in labels
 
     # Find the ComboBox for Logic Module
     combos = viewer.findChildren(ComboBox)
@@ -382,7 +403,7 @@ def test_blendrl_model_block_and_logic_module_rendering(qapp, tmp_path):
     assert len(logic_combos) >= 1, "Expected Logic Module ComboBox with symbolic reasoner tooltip"
     logic_combo = logic_combos[0]
 
-    # Verify choices include nsfr, neumann, cew
+    # Verify choices include nsfr, neumann, cew with default nsfr
     combo_items = [logic_combo.itemText(i) for i in range(logic_combo.count())]
     assert "nsfr" in combo_items
     assert "neumann" in combo_items
@@ -406,6 +427,66 @@ def test_blendrl_model_block_and_logic_module_rendering(qapp, tmp_path):
     assert method_spec.get("symbolic") == "neumann" or (
         isinstance(method_spec.get("symbolic"), dict) and method_spec["symbolic"].get("type") == "neumann"
     )
+
+    # 2. Add rule parameter under symbolic
+    viewer._add_method_subcomponent_param("ppo_blendrl_final_cp", "symbolic", "rules", "custom_rules")
+    sym_spec = viewer.raw_data["methods"]["ppo_blendrl_final_cp"]["symbolic"]
+    assert (sym_spec.get("rules") if isinstance(sym_spec, dict) else sym_spec) == "custom_rules"
+
+    # Remove rule parameter
+    viewer._remove_method_subcomponent_param("ppo_blendrl_final_cp", "symbolic", "rules")
+    sym_spec = viewer.raw_data["methods"]["ppo_blendrl_final_cp"]["symbolic"]
+    if isinstance(sym_spec, dict):
+        assert "rules" not in sym_spec
+
+    # 3. Remove symbolic subcomponent
+    viewer._remove_method_subcomponent("ppo_blendrl_final_cp", "symbolic")
+    qapp.processEvents()
+
+    labels = [l.text() for l in viewer.findChildren(QLabel)]
+    assert "Logic Module (Symbolic)" not in labels
+
+    # Verify symbolic is back in candidate blend parameters
+    combos = viewer.findChildren(ComboBox)
+    add_bp_combos = [c for c in combos if c.placeholderText() == "Add blendrl param..."]
+    assert len(add_bp_combos) >= 1
+    bp_items = [add_bp_combos[0].itemText(i) for i in range(add_bp_combos[0].count())]
+    assert "symbolic" in bp_items
+
+    # 4. Add neural subcomponent
+    viewer._add_method_param("ppo_blendrl_final_cp", "neural")
+    qapp.processEvents()
+    labels = [l.text() for l in viewer.findChildren(QLabel)]
+    assert "Neural Architecture" in labels
+
+    # Add hidden_sizes under neural
+    viewer._add_method_subcomponent_param("ppo_blendrl_final_cp", "neural", "hidden_sizes", [128, 128])
+    neural_spec = viewer.raw_data["methods"]["ppo_blendrl_final_cp"]["neural"]
+    assert (neural_spec.get("hidden_sizes") if isinstance(neural_spec, dict) else neural_spec) == [128, 128]
+
+    # Remove hidden_sizes
+    viewer._remove_method_subcomponent_param("ppo_blendrl_final_cp", "neural", "hidden_sizes")
+    neural_spec = viewer.raw_data["methods"]["ppo_blendrl_final_cp"]["neural"]
+    if isinstance(neural_spec, dict):
+        assert "hidden_sizes" not in neural_spec
+
+    # Remove neural
+    viewer._remove_method_subcomponent("ppo_blendrl_final_cp", "neural")
+    qapp.processEvents()
+    labels = [l.text() for l in viewer.findChildren(QLabel)]
+    assert "Neural Architecture" not in labels
+
+    # 5. Add blender subcomponent
+    viewer._add_method_param("ppo_blendrl_final_cp", "blender")
+    qapp.processEvents()
+    labels = [l.text() for l in viewer.findChildren(QLabel)]
+    assert "Blender Mode" in labels
+
+    # Remove blender
+    viewer._remove_method_subcomponent("ppo_blendrl_final_cp", "blender")
+    qapp.processEvents()
+    labels = [l.text() for l in viewer.findChildren(QLabel)]
+    assert "Blender Mode" not in labels
 
 
 def test_blendrl_params_and_rules_editing(qapp, tmp_path):
