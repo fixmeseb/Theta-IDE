@@ -329,6 +329,24 @@ class PluginManager(QObject):
         self.window.log(f"Plugin deactivated: {self.manifests[plugin_id].name} ({plugin_id})")
         return True
 
+    def shutdown(self) -> None:
+        """Safely deactivate all running plugins on application exit without changing saved enabled states."""
+        for pid in list(self.instances.keys()):
+            instance = self.instances.pop(pid, None)
+            context = self.contexts.pop(pid, None)
+            if instance:
+                try:
+                    instance.deactivate()
+                except Exception as exc:
+                    self.window.log(f"Error during shutdown deactivation of plugin {pid}: {exc}")
+            if context:
+                try:
+                    context.cleanup()
+                except Exception as exc:
+                    self.window.log(f"Error cleaning up context during shutdown for {pid}: {exc}")
+        self.instances.clear()
+        self.contexts.clear()
+
     # ── Events ───────────────────────────────────────────────────────────────
 
     def notify_experiment_changed(

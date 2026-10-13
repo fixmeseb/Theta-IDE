@@ -192,7 +192,12 @@ class MonitorPanel(QWidget):
         self.monitor_note.setWordWrap(True)
         monitor_footer = QHBoxLayout()
         monitor_footer.addWidget(self.monitor_note, 1)
-        monitor_footer.addWidget(host.button("Open TensorBoard", host.show_tensorboard))
+        if hasattr(host, "extension_slots") and host.extension_slots is not None:
+            from ..plugins.slots import ExtensionSlotWidget
+            slot = host.extension_slots.get_slot("monitor.footer")
+            if slot:
+                self.footer_slot_widget = ExtensionSlotWidget(slot)
+                monitor_footer.addWidget(self.footer_slot_widget)
         layout.addLayout(monitor_footer)
 
     # ── Run navigation ───────────────────────────────────────────────────────

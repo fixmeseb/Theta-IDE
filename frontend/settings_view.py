@@ -842,11 +842,17 @@ class SettingsView(QWidget):
             ("monitor", "Training Monitor"),
             ("results", "Results Browser"),
             ("plots", "Plot Viewer"),
-            ("tensorboard", "TensorBoard"),
             ("queue", "Job Queue"),
             ("terminal", "Terminal"),
             ("console", "Console"),
         ]
+        # Include any dynamically contributed tabs (e.g. from plugins)
+        if hasattr(self.window, "tabs") and self.window.tabs is not None:
+            existing_pids = {p[0] for p in pane_metadata}
+            for tid, entry in self.window.tabs.tabs.items():
+                if tid not in existing_pids:
+                    display_name = entry.get("text") or entry.get("short") or tid.capitalize()
+                    pane_metadata.append((tid, display_name))
 
         self.window.pane_sliders = {}
         for i, (pid, name) in enumerate(pane_metadata):

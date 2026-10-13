@@ -221,6 +221,22 @@ def collect_items(window) -> list[LaunchItem]:
             key=f"command:{aid}", title=title, category="Command", action=action.trigger,
             detail="", icon="launch", keywords=(aid.replace("_", " "),),
             shortcut=sequence.toString(QKeySequence.SequenceFormat.NativeText) if not sequence.isEmpty() else ""))
+
+    # Dynamic commands from CommandRegistry (contributed by plugins)
+    command_reg = getattr(window, "command_registry", None)
+    if command_reg is not None:
+        for cmd in command_reg.get_commands():
+            items.append(LaunchItem(
+                key=f"cmd:{cmd.command_id}",
+                title=cmd.title,
+                category=cmd.category,
+                action=cmd.callback,
+                detail=cmd.detail,
+                icon=cmd.icon or "launch",
+                keywords=tuple(cmd.keywords) + (cmd.command_id.replace("_", " ").replace(".", " "),),
+                shortcut=cmd.default_hotkey or "",
+            ))
+
     return items
 
 

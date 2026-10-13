@@ -230,6 +230,10 @@ class SamplePlugin(Plugin):
         client.registry = {"comp_inst": c1, "comp_uninst": c2}
 
         dialog = HubDialog(client, parent=self.window)
+        try:
+            dialog.client.indexLoaded.disconnect(dialog._on_index_loaded)
+        except Exception:
+            pass
         dialog._populate_cards([c1, c2])
 
         # Sort by uninstalled first

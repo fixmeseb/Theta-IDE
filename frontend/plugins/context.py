@@ -2,8 +2,14 @@
 from __future__ import annotations
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple, Union
+
+from PyQt6.QtCore import QObject, QProcess
 from PyQt6.QtWidgets import QWidget
+
+from src.app.services.processes import kill_process_tree
+from .commands import Command
+from .slots import ExtensionSlot
 
 if TYPE_CHECKING:
     from ..app import Window
@@ -19,6 +25,14 @@ class PluginContext:
         self._registered_tabs: List[str] = []
         self._experiment_listeners: List[Callable[[Optional[str], Optional[str]], None]] = []
         self._storage_cache: Optional[Dict[str, Any]] = None  # lazy-loaded on first access
+        self._tracked_processes: List[QProcess] = []
+        self._contributed_actions: List[Tuple[str, str]] = []  # (slot_id, action_id)
+        self._registered_commands: List[str] = []
+
+    @property
+    def window(self) -> Window:
+        """The main IDE window instance."""
+        return self._window
 
     # ── Sidebar & UI Contributions ──────────────────────────────────────────
 
@@ -80,6 +94,104 @@ class PluginContext:
             entry = self._window.tabs.tabs.get(tab_id)
             if entry and "widget" in entry:
                 self._window.tabs.setCurrentWidget(entry["widget"])
+
+    # ── Extension Slots ──────────────────────────────────────────────────────
+
+    def contribute_to_slot(
+        self,
+        slot_id: str,
+        action_id: str,
+        factory_or_widget: Union[Callable[[], Optional[QWidget]], QWidget],
+        priority: int = 100,
+    ) -> None:
+        """Contribute a widget or action button to a named UI extension slot."""
+        if hasattr(self._window, "extension_slots") and self._window.extension_slots is not None:
+            slot = self._window.extension_slots.get_slot(slot_id)
+            if slot:
+                slot.add_action(action_id, factory_or_widget, priority=priority)
+                pair = (slot_id, action_id)
+                if pair not in self._contributed_actions:
+                    self._contributed_actions.append(pair)
+
+    def remove_from_slot(self, slot_id: str, action_id: str) -> None:
+        """Remove a previously contributed action from an extension slot."""
+        if hasattr(self._window, "extension_slots") and self._window.extension_slots is not None:
+            slot = self._window.extension_slots.get_slot(slot_id, create=False)
+            if slot:
+                slot.remove_action(action_id)
+        pair = (slot_id, action_id)
+        if pair in self._contributed_actions:
+            self._contributed_actions.remove(pair)
+
+    # ── Commands & Hotkeys ───────────────────────────────────────────────────
+
+    def register_command(
+        self,
+        command_id: str,
+        title: str,
+        callback: Callable[[], None],
+        default_hotkey: Optional[str] = None,
+        keywords: Tuple[str, ...] = (),
+        category: str = "Plugin",
+        icon: Optional[str] = None,
+        detail: str = "",
+    ) -> Command:
+        """Register an executable command discoverable via launcher and hotkeys."""
+        cmd = Command(
+            command_id=command_id,
+            title=title,
+            callback=callback,
+            default_hotkey=default_hotkey,
+            keywords=keywords,
+            category=category,
+            icon=icon,
+            plugin_id=self.plugin_id,
+            detail=detail,
+        )
+        if hasattr(self._window, "command_registry") and self._window.command_registry is not None:
+            self._window.command_registry.register_command(cmd)
+            if command_id not in self._registered_commands:
+                self._registered_commands.append(command_id)
+        return cmd
+
+    def unregister_command(self, command_id: str) -> None:
+        """Unregister a command previously contributed by this plugin."""
+        if hasattr(self._window, "command_registry") and self._window.command_registry is not None:
+            self._window.command_registry.unregister_command(command_id)
+        if command_id in self._registered_commands:
+            self._registered_commands.remove(command_id)
+
+    # ── Process Management & Supervision ─────────────────────────────────────
+
+    def track_process(self, process: QProcess) -> QProcess:
+        """Register a QProcess to be tracked and cleanly terminated on plugin deactivation or IDE exit."""
+        if process not in self._tracked_processes:
+            self._tracked_processes.append(process)
+            try:
+                process.destroyed.connect(lambda: self._untrack_process(process))
+            except Exception:
+                pass
+        return process
+
+    def _untrack_process(self, process: QProcess) -> None:
+        if process in self._tracked_processes:
+            self._tracked_processes.remove(process)
+
+    def spawn_process(
+        self,
+        program: str,
+        arguments: Optional[List[str]] = None,
+        working_dir: Optional[Union[str, Path]] = None,
+        parent: Optional[QObject] = None,
+    ) -> QProcess:
+        """Create and track a QProcess configured with the given executable and arguments."""
+        proc = QProcess(parent or self._window)
+        proc.setProgram(program)
+        if arguments:
+            proc.setArguments(arguments)
+        if working_dir:
+            proc.setWorkingDirectory(str(working_dir))
+        return self.track_process(proc)
 
     # ── Workspace & Environment ──────────────────────────────────────────────
 
@@ -188,8 +300,33 @@ class PluginContext:
     # ── Cleanup ──────────────────────────────────────────────────────────────
 
     def cleanup(self) -> None:
-        """Remove any remaining tabs and listeners registered by this context."""
+        """Remove any remaining tabs, slots, commands, and safely terminate tracked processes."""
+        # 1. Terminate tracked subprocesses
+        for proc in list(self._tracked_processes):
+            try:
+                if proc.state() != QProcess.ProcessState.NotRunning:
+                    pid = int(proc.processId())
+                    if pid > 0:
+                        kill_process_tree(pid)
+                    if proc.state() != QProcess.ProcessState.NotRunning:
+                        proc.kill()
+                        proc.waitForFinished(1000)
+            except Exception as exc:
+                self.log(f"Error terminating child process: {exc}")
+        self._tracked_processes.clear()
+
+        # 2. Unregister UI tabs
         for tab_id in list(self._registered_tabs):
             self.remove_sidebar_tab(tab_id)
+
+        # 3. Remove contributed slot actions
+        for slot_id, action_id in list(self._contributed_actions):
+            self.remove_from_slot(slot_id, action_id)
+
+        # 4. Remove registered commands
+        for cmd_id in list(self._registered_commands):
+            self.unregister_command(cmd_id)
+
+        # 5. Clear listeners and caches
         self._experiment_listeners.clear()
         self._storage_cache = None

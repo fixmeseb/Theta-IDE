@@ -59,10 +59,9 @@ from .local_backend import LocalBackend
 from .monitor import ENV_MAX_REWARD, MonitorPanel
 from .results.panel import ResultsPanel
 from .plots import PlotViewer
-from .plugins import PluginManager
+from .plugins import CommandRegistry, ExtensionSlotRegistry, PluginManager
 from .queue_panel import QueuePanel
 from .sidetabs import SideTabs, svg_icon
-from .tensorboard import TensorBoardPanel, TensorBoardServer
 from .terminal import TerminalPanel
 from .titlebar import apply_title_bar
 from .workflows import WorkflowsPanel
@@ -122,6 +121,9 @@ class Window(QMainWindow):
             workspace_dir = data_p.parent
             ide_data_dir = data_p
 
+        self.extension_slots = ExtensionSlotRegistry(parent=self)
+        self.command_registry = CommandRegistry(parent=self)
+
         step("Discovering plugins…", 0.04)
         self.plugin_manager = PluginManager(
             self,
@@ -155,7 +157,6 @@ class Window(QMainWindow):
         self.jobs.job_metrics.connect(self.on_job_metrics)
         self.jobs.job_hardware.connect(self.on_job_hardware)
         self.jobs.queue_changed.connect(self.on_queue_changed)
-        self.tensorboard_server = TensorBoardServer(parent=self)
         self.tray = None  # TrayController, set up by main(): closing while training hides to the tray
         self._quitting = False  # an explicit Quit (menu, tray, reload) closes for real
         self.schema = None
@@ -416,11 +417,7 @@ class Window(QMainWindow):
         self.plot_viewer = PlotViewer()
         self.tabs.addTab(self.plot_viewer, "Plot viewer", "plots", "Plots", tab_id="plots")
 
-        # 6. TensorBoard Panel
-        self.tensorboard_panel = TensorBoardPanel(self.tensorboard_server, self.log)
-        self.tabs.addTab(self.tensorboard_panel, "TensorBoard", "tensorboard", "TensorBoard", tab_id="tensorboard")
-
-        # 7. Job Queue Panel
+        # 6. Job Queue Panel
         self.queue_panel = QueuePanel(self.move_queued, self.remove_queued, self.open_job, self.set_queue_running)
         self.tabs.addTab(self.queue_panel, "Job queue", "queue", "Queue", tab_id="queue")
 
@@ -1205,7 +1202,8 @@ class Window(QMainWindow):
         view_menu.addAction("Training monitor", lambda: self.tabs.setCurrentWidget(self.monitor_panel))
         view_menu.addAction("Results browser", lambda: self.tabs.setCurrentWidget(self.results_panel))
         view_menu.addAction("Plot viewer", lambda: self.tabs.setCurrentWidget(self.plot_viewer))
-        view_menu.addAction("TensorBoard", self.show_tensorboard)
+        if hasattr(self, "tabs") and "tensorboard" in self.tabs.tabs:
+            view_menu.addAction("TensorBoard", self.show_tensorboard)
         view_menu.addAction("Job queue", lambda: self.tabs.setCurrentWidget(self.queue_panel))
         view_menu.addAction("Terminal", lambda: self.tabs.setCurrentWidget(self.terminal_panel))
         view_menu.addAction("Console", lambda: self.tabs.setCurrentWidget(self.console_panel))
@@ -1310,11 +1308,13 @@ class Window(QMainWindow):
             self.settings_manager.persist_key("appearance", "zoom", self.zoom_factor)
 
     def show_tensorboard(self):
-        self.tabs.setCurrentWidget(self.tensorboard_panel)
+        if hasattr(self, "tabs") and "tensorboard" in self.tabs.tabs:
+            self.tabs.setCurrentWidget(self.tabs.tabs["tensorboard"]["widget"])
 
     def tab_changed(self, index):
-        if self.tabs.widget(index) is self.tensorboard_panel:
-            self.tensorboard_panel.activate()
+        w = self.tabs.widget(index)
+        if hasattr(w, "activate") and callable(w.activate):
+            w.activate()
         if self.tabs.widget(index) is self.queue_panel:
             self.on_queue_changed(self.jobs.queue_state())
         if hasattr(self, "terminal_panel") and self.tabs.widget(index) is self.terminal_panel:
@@ -2264,7 +2264,10 @@ class Window(QMainWindow):
         elif self.active:
             self.persist(self.active)
         self.jobs.shutdown()
-        self.tensorboard_server.stop()
+        if hasattr(self, "plugin_manager") and self.plugin_manager is not None:
+            self.plugin_manager.shutdown()
+        if hasattr(self, "tensorboard_server") and self.tensorboard_server is not None:
+            self.tensorboard_server.stop()
         if hasattr(self, "reloader") and self.reloader is not None:
             self.reloader.stop()
         if hasattr(self, "terminal_panel"):
