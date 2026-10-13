@@ -200,7 +200,6 @@ class TestFolderCRUD(unittest.TestCase):
         self.assertIn("defaults:\n  - cartpole/_base", exp_text)
         self.assertNotIn("paradigm:", exp_text)  # inherited
         self.assertNotIn("env:", exp_text)       # inherited
-        self.assertIn("intervals_count: 4", exp_text)
 
         # 2. Group with null defaults prompts paradigm and env with null
         empty_group_dir = self.root / "experiment" / "empty_group"
@@ -257,8 +256,8 @@ class TestFolderCRUD(unittest.TestCase):
         self.assertEqual(len(cards), 2)  # Budget & Methods
         budget_card = cards[0]
         labels = [lbl.text() for lbl in budget_card.findChildren(QLabel)]
-        self.assertIn("Paradigm (Required)", labels)
-        self.assertIn("Environment (Required)", labels)
+        self.assertIn("Paradigm", labels)
+        self.assertIn("Environment", labels)
 
 
 if __name__ == "__main__":

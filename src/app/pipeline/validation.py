@@ -90,17 +90,13 @@ def paradigm_uses_agents(paradigm_name: str | None) -> bool:
 
 
 def paradigm_uses_static_dataset(paradigm_name: str | None) -> bool:
-    """Whether this paradigm trains from a dataset file rather than a live simulator.
-
-    Declared as `requires: {env.offline_only: true}`, which is the same fact the
-    validator already enforces, so the two cannot drift apart.
-    """
+    """Whether this paradigm trains from a dataset file rather than a live simulator."""
     try:
         defn = load_paradigm(paradigm_name or "")
     except ConfigurationError:
         return False
-    requires = (defn.get("constraints") or {}).get("requires") or {}
-    return requires.get("env.offline_only") is True
+    data_module = defn.get("data_module")
+    return bool(data_module and data_module != "SimulatorDataModule")
 
 
 # ---------------------------------------------------------------------------
@@ -111,7 +107,7 @@ def paradigm_uses_static_dataset(paradigm_name: str | None) -> bool:
 def _deep_get(cfg: Any, dotted_key: str, default=None):
     """Resolve a dotted key path against a Hydra cfg or plain dict.
 
-    E.g. _deep_get(cfg, 'env.offline_only') returns cfg.env.offline_only.
+    E.g. _deep_get(cfg, 'env.name') returns cfg.env.name.
     """
     parts = dotted_key.split(".")
     obj = cfg
@@ -212,22 +208,6 @@ def validate_experiment_config(cfg: Any, experiment_name: str, is_sweep: bool = 
 
     paradigm_def = load_paradigm(paradigm_name)  # raises ConfigurationError if unknown
     constraints = paradigm_def.get("constraints", {})
-
-    # --- intervals_count: check raw YAML for explicit override ---
-    # Only enforce if the paradigm does not allow intervals > 1.
-    # Currently only paradigms with offline data disallow intervals.
-    # Paradigms with allows_intervals: true skip this.
-    allows_intervals = paradigm_def.get("allows_intervals", False)
-    if not allows_intervals:
-        explicit_intervals = raw_exp.get("intervals_count", None)
-        resolved_intervals = cfg.get("intervals_count", 1)
-        intervals_to_check = explicit_intervals if explicit_intervals is not None else resolved_intervals
-        if intervals_to_check and intervals_to_check > 1:
-            raise ConfigurationError(
-                f"[ConfigurationError] Paradigm '{paradigm_name}' (env '{env_name}') does not "
-                f"support intervals_count > 1 (got {intervals_to_check}). "
-                f"Progressive dataset slicing requires a paradigm with allows_intervals: true."
-            )
 
     # --- eval_episodes: check raw YAML for explicit override ---
     allows_eval_episodes = paradigm_def.get("allows_eval_episodes", False)

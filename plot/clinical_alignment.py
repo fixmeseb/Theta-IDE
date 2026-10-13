@@ -146,11 +146,9 @@ class ClinicalAlignmentPlotter(BasePlotter):
                         method_ckpts[canon] = best_ckpt
 
                 # 2. Interval checkpoints
-                intervals = []
                 seen_epochs = set()
-                candidate_files = list(method_dir.rglob("interval_epoch_*.ckpt")) + list(
-                    method_dir.rglob("epoch_*.ckpt")
-                )
+                intervals = []
+                candidate_files = list(method_dir.rglob("epoch_*.ckpt"))
                 for ifile in candidate_files:
                     match_eq = re.search(r"epoch=(\d+)", ifile.name)
                     match_us = re.search(r"epoch_(\d+)", ifile.name)

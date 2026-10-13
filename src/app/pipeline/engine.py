@@ -62,6 +62,32 @@ def resolve_engine(
     # Check engine name (e.g. 'sb3', 'cleanrl', 'pytorch')
     if not script:
         engine_name = m_cfg.get("engine")
+        if not engine_name:
+            agent_val = m_cfg.get("agent")
+            if isinstance(agent_val, dict):
+                agent_str = str(agent_val.get("name") or agent_val.get("algorithm") or "").lower()
+            else:
+                agent_str = str(agent_val or "").lower()
+
+            if "/" in agent_str:
+                prefix = agent_str.split("/")[0]
+                if prefix in ENGINE_SCRIPT_MAP:
+                    engine_name = prefix
+            elif agent_str in ENGINE_SCRIPT_MAP:
+                engine_name = agent_str
+
+            if not engine_name and agent_str:
+                agent_yaml = Path("in/config/agent") / f"{agent_str}.yaml"
+                if agent_yaml.exists():
+                    try:
+                        import yaml
+
+                        adata = yaml.safe_load(agent_yaml.read_text(encoding="utf-8"))
+                        if isinstance(adata, dict) and "engine" in adata:
+                            engine_name = adata["engine"]
+                    except Exception:
+                        pass
+
         if not engine_name and cfg is not None and hasattr(cfg, "agent") and cfg.agent is not None:
             engine_name = (
                 getattr(cfg.agent, "engine", None) if not hasattr(cfg.agent, "get") else cfg.agent.get("engine")

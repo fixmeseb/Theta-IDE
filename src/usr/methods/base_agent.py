@@ -316,41 +316,20 @@ class OfflineAgentBase(BaseAgent):
         return unique_callbacks
 
     def on_train_epoch_start(self):
-        """Set dataset limit based on current training interval.
-
-        Implements the progressive data exposure schedule defined by
-        intervals_count and epochs_per_interval (when intervals_count > 1).
-        """
+        """Handle per-epoch preparation for offline training."""
         datamodule = getattr(self.trainer, "datamodule", None)
         if datamodule is not None and hasattr(datamodule, "reader") and datamodule.reader is not None:
-            is_offline_only = getattr(self.cfg.env, "offline_only", False)
-            intervals_count = 1 if is_offline_only else self.cfg.get("intervals_count", 1)
-            if intervals_count > 1:
-                epochs_per_interval = self.get_cfg("epochs_per_interval", 1)
-                current_interval = self.current_epoch // epochs_per_interval
-                interval_size = self.cfg.total_timesteps // intervals_count
-                current_limit = interval_size * (current_interval + 1)
-                datamodule.reader.set_limit(min(current_limit, len(datamodule.reader)))
-            else:
-                datamodule.reader.set_limit(len(datamodule.reader))
+            datamodule.reader.set_limit(len(datamodule.reader))
         self._handle_optimizer_rebind()
 
     def _log_offline_transitions(self):
         """Calculate and log the current transition count for offline training."""
         cfg = self.cfg
-        is_offline_only = getattr(cfg.env, "offline_only", False)
-        intervals_count = 1 if is_offline_only else cfg.get("intervals_count", 1)
-        if intervals_count > 1:
-            epochs_per_interval = self.get_cfg("epochs_per_interval", 1)
-            current_interval = self.current_epoch // epochs_per_interval
-            interval_size = cfg.total_timesteps // intervals_count
-            current_transitions = interval_size * (current_interval + 1)
-        else:
-            current_transitions = (
-                cfg.total_timesteps
-                if hasattr(cfg, "total_timesteps") and isinstance(cfg.total_timesteps, (int, float))
-                else len(self.trainer.datamodule.reader)
-            )
+        current_transitions = (
+            cfg.total_timesteps
+            if hasattr(cfg, "total_timesteps") and isinstance(cfg.total_timesteps, (int, float))
+            else len(self.trainer.datamodule.reader)
+        )
         self.log("transitions", float(current_transitions), logger=False, prog_bar=True)
         return current_transitions
 

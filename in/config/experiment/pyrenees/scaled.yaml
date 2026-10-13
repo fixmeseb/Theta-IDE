@@ -14,8 +14,8 @@ methods:
   cql_blendrl_human_dueling_resnet:
     agent: cql
     model: blendrl
-    epochs_per_interval: 30
-    eval_interval_epochs: 5
+    epochs: 30
+    eval_every_n_epochs: 5
     batch_size: 512
     lr: 3e-4
     cql_alpha: 1.0

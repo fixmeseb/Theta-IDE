@@ -1,9 +1,6 @@
 name: breast_cancer
 env_id: breast_cancer
 monitor_metric: "val/loss"
-# Required by every paradigm that trains from a file rather than a simulator.
-# There is no gym env here: actions cannot alter a fixed table of biopsies.
-offline_only: true
 dataset_name: breast_cancer.npz
 
 # 569 real biopsies, 30 features, benign/malignant. Bundled with scikit-learn,

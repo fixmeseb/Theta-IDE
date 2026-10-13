@@ -16,7 +16,7 @@ class TestBuildMethodOverrides:
             "paradigm": "offline_rl",
             "methods": {
                 "params": {
-                    "epochs_per_interval": 25,
+                    "epochs": 25,
                     "agent": {
                         "cql": {
                             "cql_alpha": 0.1,
@@ -48,7 +48,7 @@ class TestBuildMethodOverrides:
         assert "++agent.cql_alpha=0.1" in overrides
         assert "++agent.lr=0.0003" in overrides
         assert "++model.hidden_sizes=[512,512]" in overrides
-        assert "++agent.epochs_per_interval=25" in overrides
+        assert "++agent.epochs=25" in overrides
 
     def test_dueling_resnet_relies_on_model_defaults(self):
         """dueling_resnet should NOT receive model.dnn overrides, relying on its own defaults."""
@@ -94,7 +94,7 @@ class TestBuildMethodOverrides:
             "paradigm": "supervised",
             "methods": {
                 "params": {
-                    "epochs_per_interval": 1,
+                    "epochs": 1,
                     "batch_size": 128,
                     "model": {
                         "lstm": {

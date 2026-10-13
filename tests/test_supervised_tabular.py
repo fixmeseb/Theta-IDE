@@ -203,7 +203,7 @@ def test_the_shipped_group_is_configured_for_this_path():
     base = yaml.safe_load((CONFIG / "experiment" / "tabular_classification" / "_base.yaml").read_text())
     assert base["paradigm"] == "supervised"
     assert base["data_module"] == "SupervisedNpzDataModule"
-    assert base["intervals_count"] == 1
+    assert "intervals_count" not in base
     assert base["eval_episodes"] == 0
     for spec in base["methods"].values():
         assert "agent" not in spec

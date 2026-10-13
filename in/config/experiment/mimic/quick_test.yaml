@@ -11,8 +11,8 @@ methods:
     agent: cql
     model: dnn
     batch_size: 256
-    epochs_per_interval: 1
-    eval_interval_epochs: 1
+    epochs: 1
+    eval_every_n_epochs: 1
     lr: 1e-4
     cql_alpha: 2.0
     weight_decay: 1e-4

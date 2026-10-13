@@ -137,7 +137,7 @@ def test_scoped_candidate_hyperparameters(qapp):
     assert "lr" in train_cand
     assert "batch_size" in train_cand
     assert "gamma" in train_cand
-    assert "epochs_per_interval" in train_cand
+    assert "epochs" in train_cand
 
 
 def test_indented_hierarchy_blocks_in_gui(qapp, tmp_path):
@@ -379,7 +379,7 @@ def test_blendrl_model_block_and_logic_module_rendering(qapp, tmp_path):
 
     # Find the ComboBox for Add blendrl param
     combos = viewer.findChildren(ComboBox)
-    add_bp_combos = [c for c in combos if c.placeholderText() == "Add blendrl param..."]
+    add_bp_combos = [c for c in combos if "blendrl" in c.placeholderText()]
     assert len(add_bp_combos) >= 1
     add_bp_combo = add_bp_combos[0]
     bp_items = [add_bp_combo.itemText(i) for i in range(add_bp_combo.count())]
@@ -448,7 +448,7 @@ def test_blendrl_model_block_and_logic_module_rendering(qapp, tmp_path):
 
     # Verify symbolic is back in candidate blend parameters
     combos = viewer.findChildren(ComboBox)
-    add_bp_combos = [c for c in combos if c.placeholderText() == "Add blendrl param..."]
+    add_bp_combos = [c for c in combos if "blendrl" in c.placeholderText()]
     assert len(add_bp_combos) >= 1
     bp_items = [add_bp_combos[0].itemText(i) for i in range(add_bp_combos[0].count())]
     assert "symbolic" in bp_items
@@ -532,6 +532,84 @@ def test_blendrl_params_and_rules_editing(qapp, tmp_path):
     saved = yaml.safe_load(dest_file.read_text(encoding="utf-8"))
     assert "ppo_blendrl_final_cp" in saved["methods"]
     assert saved["methods"]["ppo_blendrl_final_cp"]["logic_lr"] == 0.001
+
+
+def test_group_defaults_disallows_concrete_methods(qapp, tmp_path):
+    base_file = tmp_path / "_base.yaml"
+    base_file.write_text(
+        "# @package _global_\n"
+        "defaults:\n"
+        "  - override /env: cartpole\n"
+        "paradigm: online_rl\n"
+        "seed: 42\n"
+        "methods:\n"
+        "  params:\n"
+        "    lr: 0.0003\n"
+        "  stray_method:\n"
+        "    agent: ppo\n"
+        "    model: dnn\n",
+        encoding="utf-8"
+    )
+
+    viewer = ConfigViewer()
+    viewer.load_file(base_file, "experiment/test_group/_base.yaml")
+
+    # 1. UI shows muted note instead of method cards
+    from PyQt6.QtWidgets import QLabel
+    labels = [lbl.text() for lbl in viewer.findChildren(QLabel)]
+    assert any("Individual methods are configured per experiment" in l for l in labels)
+
+    # 2. Methods cannot be added or duplicated in base
+    assert viewer.add_method(agent="ppo", model="dnn") is None
+    assert viewer.duplicate_method("stray_method") is None
+
+    # 3. Save cleans stray concrete methods from _base.yaml
+    viewer.save_to_disk()
+    saved = yaml.safe_load(base_file.read_text(encoding="utf-8"))
+    assert "stray_method" not in saved.get("methods", {})
+    # Universal params remain intact
+    assert saved.get("methods", {}).get("params", {}).get("lr") == 0.0003
+
+
+def test_experiment_environment_saved_to_defaults_override(qapp, tmp_path):
+    exp_file = tmp_path / "exp.yaml"
+    exp_file.write_text(
+        "# @package _global_\n"
+        "defaults:\n"
+        "  - test_group/_base\n"
+        "methods:\n"
+        "  PPO:\n"
+        "    agent: ppo\n"
+        "    model: dnn\n",
+        encoding="utf-8"
+    )
+
+    viewer = ConfigViewer()
+    viewer.load_file(exp_file, "experiment/test_group/exp.yaml")
+
+    # Set environment override
+    viewer._set_experiment_env("atari/pong")
+    assert viewer.raw_data.get("env") is None
+    defaults = viewer.raw_data.get("defaults", [])
+    assert any(isinstance(d, dict) and d.get("override /env") == "atari/pong" for d in defaults)
+
+    # Save to disk
+    viewer.save_to_disk()
+    saved_text = exp_file.read_text(encoding="utf-8")
+    assert "- override /env: atari/pong" in saved_text
+    assert "\nenv: " not in saved_text
+
+    # Re-read YAML
+    saved = yaml.safe_load(saved_text)
+    assert any(isinstance(d, dict) and d.get("override /env") == "atari/pong" for d in saved["defaults"])
+    assert "env" not in saved
+
+    # Clear override
+    viewer._set_experiment_env(None)
+    viewer.save_to_disk()
+    saved_text_cleared = exp_file.read_text(encoding="utf-8")
+    assert "override /env" not in saved_text_cleared
+
 
 
 

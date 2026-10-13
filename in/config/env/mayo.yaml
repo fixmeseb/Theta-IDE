@@ -1,7 +1,6 @@
 name: mayo
 monitor_metric: "val/loss"
 env_id: mayo
-offline_only: true
 preprocess_on_load: false
 gamma: 0.99
 gae_lambda: 0.95

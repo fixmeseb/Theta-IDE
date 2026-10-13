@@ -13,8 +13,8 @@ tensorboard: true
 methods:
   clf:
     hidden_sizes: [64]
-    epochs_per_interval: 25
+    epochs: 25
   clf_deep:
     model: mlp_classifier
     hidden_sizes: [128, 64, 32]
-    epochs_per_interval: 25
+    epochs: 25

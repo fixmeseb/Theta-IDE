@@ -14,8 +14,8 @@ resources:
 methods:
   params:
     agent: cql
-    epochs_per_interval: 50
-    eval_interval_epochs: 5
+    epochs: 50
+    eval_every_n_epochs: 5
     batch_size: 256
     lr: 3e-4
     cql_alpha: 1.0

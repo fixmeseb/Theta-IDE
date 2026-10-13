@@ -3,7 +3,6 @@ defaults:
   - cartpole/_base
 
 total_timesteps: 640
-intervals_count: 1
 eval_episodes: 2
 no_plot: true
 

@@ -176,7 +176,7 @@ def build_method_overrides(
 
         if not uses_agents:
             _flatten_overrides(f"model.{k}", v)
-            if k in ("lr", "batch_size", "epochs", "epochs_per_interval", "eval_interval_epochs", "weight_decay"):
+            if k in ("lr", "batch_size", "epochs", "eval_every_n_epochs", "weight_decay"):
                 overrides.append(f"++{k}={_format_hydra_val(v)}")
         else:
             if k in _MODEL_KEYS:
@@ -184,8 +184,8 @@ def build_method_overrides(
             else:
                 _flatten_overrides(f"agent.{k}", v)
                 if k in (
-                    "epochs_per_interval",
-                    "eval_interval_epochs",
+                    "epochs",
+                    "eval_every_n_epochs",
                     "gamma",
                     "reward_scale",
                     "pos_action_weight",

@@ -119,8 +119,8 @@ def main(cfg: DictConfig):
                 "module",
                 "lr",
                 "type",
-                "epochs_per_interval",
-                "eval_interval_epochs",
+                "epochs",
+                "eval_every_n_epochs",
             }
             for k, v in model_cfg.items():
                 if k not in reserved and v is not None:

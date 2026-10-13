@@ -85,7 +85,7 @@ Experiments are structured hierarchically under `in/config/`:
 ### Creating an Experiment Configuration
 To specify a new run (e.g., `in/config/experiment/mimic/mimic_cql.yaml`):
 1. Add `# @package _global_` at the top of the file.
-2. Override configurations using the `defaults` section (offline defaults auto-set `total_timesteps: auto`, `intervals_count: 1`, and `save_dataset: false`):
+2. Override configurations using the `defaults` section (offline defaults auto-set `total_timesteps: auto` and `save_dataset: false`):
     ```yaml
     # @package _global_
     defaults:
@@ -158,7 +158,7 @@ To optimize efficiency and avoid wasting compute resources on cluster runs, foll
 ### Step 1: Local Sanity Check (Getting Methods Healthy)
 Before pushing code or running sweeps, validate that the training methods, callbacks, logging, and dataset-saving loops work correctly using a low-footprint local run:
 ```bash
-python run_pipeline.py cp_final total_timesteps=1000 intervals_count=2 eval_episodes=5 local=true save_dataset=false
+python run_pipeline.py cp_final total_timesteps=1000 eval_episodes=5 local=true save_dataset=false
 ```
 
 ### Step 2: Local Hyperparameter Sweeping (Optuna)

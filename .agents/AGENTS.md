@@ -40,13 +40,12 @@ An experiment's declared **paradigm** determines what training, evaluation, and 
 Trains agents via live simulator rollouts (e.g. CartPole, Seaquest).
 - **Agents:** Online RL algorithms (`allowed_agents: [ppo]`, forbidding `cql, iql, cew`).
 - **Evaluation:** Fixed-episode average reward in the live simulator via `EnvironmentEvaluatorCallback`.
-- **Required env keys:** `offline_only: false`.
 
 ### `offline_rl`
 Trains agents on static transition datasets (e.g. MIMIC, Pyrenees, pre-collected datasets).
 - **Agents:** Offline RL algorithms (`allowed_agents: [cql, iql, cew]`, forbidding `ppo`).
 - **Data & Evaluation:** Replay buffer data module; validation loss and Bellman error via Lightning.
-- **Constraints:** `intervals_count: 1`, `eval_episodes: 0`.
+- **Constraints:** `eval_episodes: 0`.
 
 ### `supervised`
 Supervised representation learning and early prediction tasks.
@@ -69,7 +68,7 @@ Supervised representation learning and early prediction tasks.
 Configurations follow a 3-tier hierarchy that eliminates parameter repetition and cleanly separates algorithm, model, and training hyperparameters:
 1. **Tier 1: Defaults & Base Profiles**: Base defaults defined in `in/config/agent/<algo>.yaml` and `in/config/model/<arch>.yaml`.
 2. **Tier 2: Universal Experiment Parameters (`methods.params`)**:
-   - Universal scalars and training hyperparameters applied across all methods (e.g. `epochs_per_interval: 25`, `gamma: 0.95`).
+   - Universal scalars and training hyperparameters applied across all methods (e.g. `epochs: 25`, `gamma: 0.95`).
    - Algorithmic hyperparameter groups (`params.agent.<algo>` or `params.<algo>`).
    - Model architecture hyperparameter groups (`params.model.<arch>` or `params.<arch>`).
 3. **Tier 3: Method-Level Declarations (`methods.<method_name>`)**:
@@ -88,7 +87,6 @@ Configurations follow a 3-tier hierarchy that eliminates parameter repetition an
 
 ### Declarative Environment Config Keys
 Environment YAMLs (`in/config/env/*.yaml`) define behavior declaratively — no hardcoded env-name checks in Python:
-- `offline_only: true/false` — drives paradigm selection
 - `monitor_metric: "val/loss"` or `"eval/reward"` — checkpointing/tuning target
 - `preprocess_on_load: true/false` — whether dataset needs preprocessing on load
 - `default_plots: [...]` — default plotters for this environment; **experiments can override via `plots:` in their YAML**

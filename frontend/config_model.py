@@ -21,7 +21,6 @@ import yaml
 # always match the Hydra key the field maps to.
 _ALLOW_FLAGS = {
     "eval_episodes": "allows_eval_episodes",
-    "intervals_count": "allows_intervals",
 }
 
 _GROUPS = ("paradigms", "env", "agent", "model", "site")
@@ -47,7 +46,6 @@ def _yaml_files(directory: Path) -> list[Path]:
 @dataclass(frozen=True)
 class Environment:
     name: str
-    offline_only: bool
     raw: Mapping[str, Any] = field(default_factory=dict, repr=False)
 
     @classmethod
@@ -70,7 +68,6 @@ class Environment:
 
         return cls(
             name=chosen_name,
-            offline_only=bool(raw.get("offline_only", False)),
             raw=raw,
         )
 
@@ -200,10 +197,7 @@ class Paradigm:
         return False
 
     def permits_environment(self, environment: Environment) -> bool:
-        required = self.requires.get("env.offline_only")
-        if required is None:
-            return True
-        return bool(required) == environment.offline_only
+        return True
 
     def field_enabled(self, name: str) -> bool:
         if name in self.forbids:
@@ -441,13 +435,7 @@ def default_method_model(
 
 
 def group_base_yaml(env: str, paradigm: str, rules: Paradigm | None = None, seed: int = 1) -> str:
-    """The _base.yaml for a new group, which is what binds env and paradigm.
-
-    in/config/config.yaml defaults intervals_count to 4 and eval_episodes to 100
-    for the online case, so a base whose paradigm forbids them must pin them to
-    their only legal values - exactly as the existing offline bases do. Leaving
-    them to the root defaults makes every experiment in the group invalid.
-    """
+    """The _base.yaml for a new group, which is what binds env and paradigm."""
     lines = [
         "# @package _global_",
         "defaults:",
@@ -456,8 +444,6 @@ def group_base_yaml(env: str, paradigm: str, rules: Paradigm | None = None, seed
         f"paradigm: {paradigm}",
         "",
     ]
-    if rules is not None and not rules.field_enabled("intervals_count"):
-        lines.append("intervals_count: 1")
     if rules is not None and not rules.field_enabled("eval_episodes"):
         lines.append("eval_episodes: 0")
     lines += [f"seed: {seed}", "save_dataset: false", "recover: false"]
@@ -473,12 +459,7 @@ def experiment_yaml(
     seed: int = 42,
     total_timesteps: int = 10000,
 ) -> str:
-    """A valid experiment for `group`, omitting whatever its paradigm forbids.
-
-    Offline and supervised paradigms reject intervals_count > 1 and non-zero
-    eval_episodes, and their group bases already pin both to legal values, so
-    the experiment must not restate them.
-    """
+    """A valid experiment for `group`, omitting whatever its paradigm forbids."""
     lines = [
         "# @package _global_",
         "defaults:",
@@ -488,8 +469,6 @@ def experiment_yaml(
         f"seed: {seed}",
         f"total_timesteps: {total_timesteps}",
     ]
-    if paradigm is None or paradigm.field_enabled("intervals_count"):
-        lines.append("intervals_count: 4")
     if paradigm is None or paradigm.field_enabled("eval_episodes"):
         lines.append("eval_episodes: 100")
 
@@ -517,7 +496,6 @@ class Selection:
     experiment_id: str | None = None
     seed: int | None = None
     total_timesteps: int | None = None
-    intervals_count: int | None = None
     eval_episodes: int | None = None
     extra: list[str] = field(default_factory=list)
 
@@ -532,7 +510,6 @@ class Selection:
         ("experiment_id", "experiment_id"),
         ("seed", "seed"),
         ("total_timesteps", "total_timesteps"),
-        ("intervals_count", "intervals_count"),
         ("eval_episodes", "eval_episodes"),
     )
 

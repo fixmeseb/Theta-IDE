@@ -33,10 +33,10 @@ Because `results/` and `in/datasets/` are `.gitignore`d to prevent committing la
    Running an experiment automatically generates the replay buffer in Phase 1 and trains offline agents on it in Phase 2:
    ```bash
    # Fast local smoke test (~15-30 seconds)
-   python run_pipeline.py cp_final total_timesteps=1000 intervals_count=2 eval_episodes=5 site=local
+   python run_pipeline.py cp_final total_timesteps=1000 eval_episodes=5 site=local
    ```
 
-2. **Static Clinical / Offline Datasets (`offline_only` paradigm):**
+2. **Static Clinical / Offline Datasets (`offline_rl` paradigm):**
    Datasets like `MIMIC` or `Pyrenees` reside in `in/datasets/mimic/` or `in/datasets/pyrenees/`. 
    If working on clinical offline RL, obtain the dataset chunks (`.pkl`) from the team storage or run the preprocessing utilities in `scripts/preprocess_pyrenees.py`.
 

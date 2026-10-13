@@ -5,6 +5,6 @@ methods:
   cql_blendrl_human_neural:
     agent: cql
     model: blendrl
-    epochs_per_interval: 200
-    eval_interval_epochs: 20
+    epochs: 200
+    eval_every_n_epochs: 20
 

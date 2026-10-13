@@ -1,7 +1,6 @@
 name: digits
 env_id: digits
 monitor_metric: "val/loss"
-offline_only: true
 dataset_name: digits.npz
 
 # 1797 real handwritten digits, 64 features, 10 classes. Stored flat and as

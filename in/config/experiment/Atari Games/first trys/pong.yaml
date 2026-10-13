@@ -1,13 +1,13 @@
 # @package _global_
 defaults:
 - Atari Games/_base
+- override /env: atari/pong
 seed: 42
 total_timesteps: 10000
-env: atari/pong
-intervals_count: 4
 eval_episodes: 100
 tensorboard: true
 methods:
   ppo_dnn:
     agent: ppo
-    model: dnn
+    model: blendrl
+description: test it aout why is typing so

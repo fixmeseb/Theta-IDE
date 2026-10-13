@@ -69,10 +69,10 @@ class TestGroupBaseYaml(unittest.TestCase):
         self.assertIn({"override /env": "cartpole"}, data["defaults"])
 
     def test_offline_base_pins_fields_the_root_defaults_would_break(self):
-        """config.yaml defaults intervals_count to 4, which offline_rl rejects,
+        """config.yaml defaults eval_episodes to 100, which offline_rl rejects,
         so the base must override it as the existing offline bases do."""
         data = parse(group_base_yaml("mimic", "offline_rl", self.tree.paradigms["offline_rl"]))
-        self.assertEqual(data["intervals_count"], 1)
+        self.assertNotIn("intervals_count", data)
         self.assertEqual(data["eval_episodes"], 0)
 
     def test_online_base_leaves_rollout_fields_to_the_defaults(self):
@@ -84,8 +84,9 @@ class TestGroupBaseYaml(unittest.TestCase):
         """mimic/_base.yaml is the reference for what an offline base must pin."""
         existing = parse((self.tree.config_root / "experiment" / "mimic" / "_base.yaml").read_text())
         generated = parse(group_base_yaml("mimic", "offline_rl", self.tree.paradigms["offline_rl"]))
-        for key in ("intervals_count", "eval_episodes"):
-            self.assertEqual(generated[key], existing[key], f"{key} differs from the reference base")
+        self.assertEqual(generated["eval_episodes"], existing["eval_episodes"])
+        self.assertNotIn("intervals_count", generated)
+        self.assertNotIn("intervals_count", existing)
 
     def test_is_a_global_package(self):
         self.assertTrue(group_base_yaml("mimic", "offline_rl").startswith("# @package _global_"))
@@ -116,7 +117,7 @@ class TestExperimentYaml(unittest.TestCase):
 
     def test_online_keeps_rollout_fields(self):
         data = parse(experiment_yaml("cartpole", "demo", self.online))
-        self.assertIn("intervals_count", data)
+        self.assertNotIn("intervals_count", data)
         self.assertIn("eval_episodes", data)
 
     def test_offline_omits_forbidden_fields(self):
@@ -133,7 +134,7 @@ class TestExperimentYaml(unittest.TestCase):
     def test_unknown_paradigm_keeps_both_fields(self):
         """With no paradigm to consult, stay permissive and let the backend rule."""
         data = parse(experiment_yaml("cartpole", "demo", None))
-        self.assertIn("intervals_count", data)
+        self.assertNotIn("intervals_count", data)
         self.assertIn("eval_episodes", data)
 
     def test_methods_block_is_written(self):
@@ -345,7 +346,7 @@ class TestEveryAgentlessParadigm(unittest.TestCase):
         for name, paradigm in self.agentless.items():
             with self.subTest(paradigm=name):
                 data = parse(experiment_yaml("grp", "demo", paradigm, None, "lstm"))
-                for field_name in ("intervals_count", "eval_episodes"):
+                for field_name in ("eval_episodes",):
                     if not paradigm.field_enabled(field_name):
                         self.assertNotIn(field_name, data)
 
@@ -359,7 +360,7 @@ class TestEveryAgentlessParadigm(unittest.TestCase):
         for name, paradigm in self.agentless.items():
             with self.subTest(paradigm=name):
                 base = parse(group_base_yaml("mimic", name, paradigm))
-                self.assertEqual(base["intervals_count"], 1)
+                self.assertNotIn("intervals_count", base)
                 self.assertEqual(base["eval_episodes"], 0)
 
     def test_every_group_on_such_a_paradigm_declares_model_only_methods(self):
@@ -390,15 +391,13 @@ class TestUnsupervisedParadigmInThePanel(unittest.TestCase):
     def test_it_permits_no_agents(self):
         self.assertEqual(self.tree.agents_for("unsupervised"), [])
 
-    def test_it_permits_only_offline_environments(self):
+    def test_it_permits_environments(self):
         envs = self.tree.environments_for("unsupervised")
         self.assertTrue(envs, "expected at least one permitted environment")
-        for env in envs:
-            self.assertTrue(env.offline_only, f"{env.name} is not offline-only")
 
     def test_it_disables_the_rollout_fields_with_a_reason(self):
         paradigm = self.tree.paradigms["unsupervised"]
-        for field_name in ("intervals_count", "eval_episodes"):
+        for field_name in ("eval_episodes",):
             self.assertFalse(paradigm.field_enabled(field_name))
             self.assertIn("unsupervised", paradigm.disabled_reason(field_name))
 
@@ -410,10 +409,8 @@ class TestUnsupervisedParadigmInThePanel(unittest.TestCase):
         self.assertEqual(group.paradigm, "unsupervised")
         self.assertEqual(group.env, "breast_cancer")
 
-    def test_the_group_env_is_offline_only(self):
-        """Required by the paradigm, and the reason it may bind this env at all."""
-        env = self.tree.environments[self.tree.group("representation").env]
-        self.assertTrue(env.offline_only)
+    def test_the_group_env_is_breast_cancer(self):
+        self.assertEqual(self.tree.group("representation").env, "breast_cancer")
 
     def test_a_new_method_defaults_to_the_architecture_the_group_uses(self):
         group = self.tree.group("representation")

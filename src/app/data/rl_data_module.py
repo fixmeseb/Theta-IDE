@@ -63,10 +63,9 @@ class RLDataModule(L.LightningDataModule, BaseDataModule):
             full_reader = DatasetReader(self.cfg.dataset_path)
 
             # Determine if validation split should be enabled
-            is_offline_only = self.cfg.env.get("offline_only", False)
             val_split = self.cfg.get("val_split", None)
             if val_split is None:
-                val_split = 0.1 if is_offline_only else 0.0
+                val_split = 0.1
 
             if val_split > 0 and len(full_reader) > 10:
                 self.reader, self.val_reader = full_reader.split(val_ratio=val_split, seed=self.cfg.seed)

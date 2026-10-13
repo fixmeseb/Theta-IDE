@@ -140,7 +140,7 @@ def test_rl_data_module_dataloaders(tmp_path):
         "dataset_path": str(dataset_dir),
         "val_split": 0.0,
         "seed": 42,
-        "env": {"offline_only": False},
+        "env": {"name": "cartpole"},
         "agent": {"batch_size": 2},
     })
     dm_offline = RLDataModule(offline_cfg)

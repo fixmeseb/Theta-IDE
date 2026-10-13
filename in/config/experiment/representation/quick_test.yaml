@@ -10,4 +10,4 @@ tensorboard: true
 
 methods:
   ae_dense:
-    epochs_per_interval: 3
+    epochs: 3
