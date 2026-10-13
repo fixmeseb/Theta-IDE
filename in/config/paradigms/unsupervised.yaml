@@ -8,7 +8,6 @@ monitor_metric: val/loss
 # names through get_component, and no callback classes are registered yet.
 constraints:
   requires:
-    env.offline_only: true
     methods: non_empty
   forbids:
     eval_episodes: non_zero

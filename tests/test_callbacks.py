@@ -58,26 +58,24 @@ def test_build_trainer_callbacks_online_vs_offline(tmp_path, monkeypatch):
         "seed": 42,
         "paradigm": "online_rl",
         "total_timesteps": 1000,
-        "intervals_count": 5,
         "eval_episodes": 10,
         "agent": {"name": "ppo"},
-        "env": {"name": "cartpole", "offline_only": False, "num_envs": 1, "num_steps": 10},
+        "env": {"name": "cartpole", "num_envs": 1, "num_steps": 10},
     })
     trainer_online, _, _ = build_trainer(online_cfg)
     cb_types_online = [type(c) for c in trainer_online.callbacks]
     assert EnvironmentEvaluatorCallback in cb_types_online
 
-    # Offline RL paradigm on cartpole (offline_only is False, but paradigm is offline_rl)
+    # Offline RL paradigm on cartpole
     offline_cfg = OmegaConf.create({
         "group": "test_grp",
         "experiment_id": "test_exp",
         "seed": 42,
         "paradigm": "offline_rl",
         "total_timesteps": 1000,
-        "intervals_count": 1,
         "eval_episodes": 0,
-        "agent": {"name": "cql", "epochs_per_interval": 10},
-        "env": {"name": "cartpole", "offline_only": False, "monitor_metric": "val/loss"},
+        "agent": {"name": "cql", "epochs": 10},
+        "env": {"name": "cartpole", "monitor_metric": "val/loss"},
     })
     trainer_offline, _, _ = build_trainer(offline_cfg)
     cb_types_offline = [type(c) for c in trainer_offline.callbacks]

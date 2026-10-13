@@ -62,11 +62,8 @@ class SaveInitialCheckpointCallback(Callback):
             except Exception as e:
                 print(f"[Init Checkpoint] Warning: could not copy to {named_ckpt}: {e}")
 
-        # Also save interval_epoch_000.ckpt for interval tracking
-        interval_dir = os.path.join(self.ckpt_dir, "intervals")
-        os.makedirs(interval_dir, exist_ok=True)
-        init_interval = os.path.join(interval_dir, "interval_epoch_000.ckpt")
-        trainer.save_checkpoint(init_interval)
+        init_epoch = os.path.join(self.ckpt_dir, "epoch_000.ckpt")
+        trainer.save_checkpoint(init_epoch)
         print(f"[Init Checkpoint] Saved initial model checkpoint to: {init_ckpt}")
 
 
@@ -197,8 +194,7 @@ def build_trainer(cfg, model=None):
     except Exception as e:
         logger.debug("Unexpected error registering shutdown signal handlers: %s", e)
 
-    is_offline_only = cfg.env.get("offline_only", False)
-    is_online = (cfg.get("paradigm") == "online_rl") and not is_offline_only
+    is_online = (cfg.get("paradigm") == "online_rl")
     callbacks = [SaveInitialCheckpointCallback(ckpt_dir, cfg)]
 
     if not is_online:
@@ -215,14 +211,13 @@ def build_trainer(cfg, model=None):
                 enable_version_counter=False,
             )
         )
-        eval_interval_epochs = _agent_or_global(cfg, "eval_interval_epochs", 1)
-        if eval_interval_epochs:
-            interval_dir = os.path.join(ckpt_dir, "intervals")
+        eval_every_n_epochs = _agent_or_global(cfg, "eval_every_n_epochs", 1)
+        if eval_every_n_epochs:
             callbacks.append(
                 ModelCheckpoint(
-                    dirpath=interval_dir,
-                    filename="interval_epoch_{epoch:03d}",
-                    every_n_epochs=eval_interval_epochs,
+                    dirpath=ckpt_dir,
+                    filename="epoch_{epoch:03d}",
+                    every_n_epochs=eval_every_n_epochs,
                     save_top_k=-1,
                     save_on_train_epoch_end=False,
                 )
@@ -258,14 +253,10 @@ def build_trainer(cfg, model=None):
         limit_val_batches = 0
         check_val_every_n_epoch = 1000000
     else:
-        epochs_per_interval = _agent_or_global(cfg, "epochs_per_interval", 1)
-        intervals_count = (
-            1 if (is_offline_only or cfg.get("paradigm") == "offline_rl") else cfg.get("intervals_count", 1)
-        )
-        max_epochs = intervals_count * epochs_per_interval
-        eval_interval_epochs = _agent_or_global(cfg, "eval_interval_epochs", 1)
+        max_epochs = _agent_or_global(cfg, "epochs", 50)
+        eval_every_n_epochs = _agent_or_global(cfg, "eval_every_n_epochs", 1)
         limit_val_batches = 1.0
-        check_val_every_n_epoch = eval_interval_epochs if eval_interval_epochs else 1
+        check_val_every_n_epoch = eval_every_n_epochs if eval_every_n_epochs else 1
 
     trainer_kwargs = {
         "max_epochs": max_epochs,
@@ -462,7 +453,6 @@ def finalize_training(trainer, cfg, ckpt_dir, training_time, start_time, end_tim
         except Exception as e:
             logger.debug("Could not copy single-trial checkpoint to agent root: %s", e)
 
-    is_offline_only = cfg.env.get("offline_only", False)
     metric_name = cfg.env.get("monitor_metric", "eval/reward")
     if metric_name in trainer.callback_metrics:
         return trainer.callback_metrics[metric_name].item()

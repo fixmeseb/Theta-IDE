@@ -344,7 +344,7 @@ def parse_methods_dict(cfg) -> dict[str, dict]:
 
     Supports hierarchical parameter specification:
       1. Tier 2: Universal Experiment Method Parameters:
-         - Top-level shared scalars/dicts in `methods.params` (e.g. epochs_per_interval, gamma).
+         - Top-level shared scalars/dicts in `methods.params` (e.g. epochs, gamma).
          - Hierarchically grouped agent-specific overrides (`params.agent.<algo>`, e.g. `params.agent.cql`).
          - Hierarchically grouped model-specific overrides (`params.model.<arch>`, e.g. `params.model.dnn`).
          - Direct algorithm/architecture blocks (e.g. `params.cql`, `params.dnn`).

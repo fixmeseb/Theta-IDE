@@ -4,12 +4,8 @@ defaults:
 
 paradigm: offline_rl
 
-env:
-  offline_only: true
-
 # Offline CartPole Experiment on static transitions
 total_timesteps: 100000
-intervals_count: 1
 eval_episodes: 0
 
 plots:

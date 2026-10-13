@@ -35,8 +35,12 @@ class CEWSelfOrganizationCallback(L.Callback):
         return [m for m in walk_model_modules(pl_module) if isinstance(m, CEWModel)]
 
     def on_train_epoch_start(self, trainer: L.Trainer, pl_module: L.LightningModule) -> None:
-        epochs_per_interval = pl_module.get_cfg("epochs_per_interval", 1) if hasattr(pl_module, "get_cfg") else 1
-        if pl_module.current_epoch % epochs_per_interval != 0:
+        induction_freq = (
+            pl_module.get_cfg("induction_freq", pl_module.get_cfg("eval_every_n_epochs", 1))
+            if hasattr(pl_module, "get_cfg")
+            else 1
+        )
+        if pl_module.current_epoch % induction_freq != 0:
             return
 
         cew_models = self._collect_cew_models(pl_module)

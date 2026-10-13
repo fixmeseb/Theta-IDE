@@ -214,7 +214,7 @@ def test_cql_agent_instantiates_with_neural_models():
     cfg_mlp = OmegaConf.create({
         "agent": {"name": "cql_mlp", "algorithm": "cql", "lr": 1e-3, "cql_alpha": 1.0},
         "model": "mlp",
-        "env": {"name": "cartpole", "offline_only": True, "n_actions": 2, "obs_dim": 4},
+        "env": {"name": "cartpole", "n_actions": 2, "obs_dim": 4},
     })
     agent_mlp = CQLAgent(cfg_mlp)
     assert isinstance(agent_mlp.q_network, MLPQNetwork)
@@ -224,7 +224,7 @@ def test_cql_agent_instantiates_with_neural_models():
     cfg_resnet = OmegaConf.create({
         "agent": {"name": "cql_resnet", "algorithm": "cql", "lr": 1e-3, "cql_alpha": 1.0},
         "model": "dueling_resnet",
-        "env": {"name": "cartpole", "offline_only": True, "n_actions": 2, "obs_dim": 4},
+        "env": {"name": "cartpole", "n_actions": 2, "obs_dim": 4},
     })
     agent_resnet = CQLAgent(cfg_resnet)
     assert isinstance(agent_resnet.q_network, DuelingResNetMLP)
@@ -274,7 +274,7 @@ def test_paradigm_definition_and_data_modules():
     cfg_online = OmegaConf.create({
         "paradigm": "online_rl",
         "agent": {"name": "ppo", "batch_size": 32},
-        "env": {"name": "cartpole", "offline_only": False},
+        "env": {"name": "cartpole"},
         "seed": 42,
     })
     dm_online = online_def.data_module_cls(cfg_online)
@@ -289,7 +289,7 @@ def test_paradigm_definition_and_data_modules():
     assert supervised_def.data_module_cls is not None
     cfg_supervised = OmegaConf.create({
         "paradigm": "supervised",
-        "env": {"name": "test_env", "offline_only": True},
+        "env": {"name": "test_env"},
     })
     dm_supervised = supervised_def.data_module_cls(cfg_supervised)
     assert hasattr(dm_supervised, "setup")
@@ -306,7 +306,7 @@ def test_iql_agent_instantiates_with_neural_models():
     cfg_mlp = OmegaConf.create({
         "agent": {"name": "iql_mlp", "algorithm": "iql", "lr": 1e-3, "tau": 0.7, "beta": 3.0},
         "model": "mlp",
-        "env": {"name": "cartpole", "offline_only": True, "n_actions": 2, "obs_dim": 4},
+        "env": {"name": "cartpole", "n_actions": 2, "obs_dim": 4},
     })
     agent_mlp = IQLAgent(cfg_mlp)
     assert isinstance(agent_mlp.q_network, MLPQNetwork)
@@ -325,7 +325,7 @@ def test_iql_agent_instantiates_with_neural_models():
     cfg_resnet = OmegaConf.create({
         "agent": {"name": "iql_resnet", "algorithm": "iql", "lr": 1e-3, "tau": 0.7, "beta": 3.0},
         "model": "dueling_resnet",
-        "env": {"name": "cartpole", "offline_only": True, "n_actions": 2, "obs_dim": 4},
+        "env": {"name": "cartpole", "n_actions": 2, "obs_dim": 4},
     })
     agent_resnet = IQLAgent(cfg_resnet)
     assert isinstance(agent_resnet.q_network, DuelingResNetMLP)
@@ -391,7 +391,7 @@ def test_agent_initialization_with_plain_dicts():
     plain_ppo_cfg = {
         "agent": {"algorithm": "ppo", "lr": 1e-4, "batch_size": 32},
         "model": "mlp",
-        "env": {"name": "cartpole", "offline_only": False, "n_actions": 2, "obs_dim": 4},
+        "env": {"name": "cartpole", "n_actions": 2, "obs_dim": 4},
     }
     ppo = PPOAgent(plain_ppo_cfg)
     assert ppo.lr == 1e-4
@@ -400,7 +400,7 @@ def test_agent_initialization_with_plain_dicts():
     plain_cql_cfg = {
         "agent": {"algorithm": "cql", "lr": 2e-4, "gamma": 0.95},
         "model": "mlp",
-        "env": {"name": "cartpole", "offline_only": True, "n_actions": 2, "obs_dim": 4},
+        "env": {"name": "cartpole", "n_actions": 2, "obs_dim": 4},
     }
     cql = CQLAgent(plain_cql_cfg)
     assert cql.lr == 2e-4
@@ -409,7 +409,7 @@ def test_agent_initialization_with_plain_dicts():
     plain_iql_cfg = {
         "agent": {"algorithm": "iql", "lr": 3e-4, "tau": 0.7, "beta": 3.0},
         "model": "mlp",
-        "env": {"name": "cartpole", "offline_only": True, "n_actions": 2, "obs_dim": 4},
+        "env": {"name": "cartpole", "n_actions": 2, "obs_dim": 4},
     }
     iql = IQLAgent(plain_iql_cfg)
     assert iql.lr == 3e-4

@@ -8,7 +8,6 @@ default_callbacks:
   - BestCheckpointCallback
 constraints:
   requires:
-    env.offline_only: true
     methods: non_empty
   forbids:
     eval_episodes: non_zero

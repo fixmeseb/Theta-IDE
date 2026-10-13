@@ -7,8 +7,8 @@ consolidate: true
 methods:
   params:
     agent: cql
-    epochs_per_interval: 2
-    eval_interval_epochs: 1
+    epochs: 2
+    eval_every_n_epochs: 1
     batch_size: 1024
     cql_alpha: 2.0
     weight_decay: 1e-4

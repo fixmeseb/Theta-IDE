@@ -48,7 +48,7 @@ class TestParseMethodsDict:
             "methods": {
                 "params": {
                     "agent": "cql",
-                    "epochs_per_interval": 25,
+                    "epochs": 25,
                     "lr": 3e-4,
                 },
                 "cql_dnn": {"model": "dnn"},
@@ -61,12 +61,12 @@ class TestParseMethodsDict:
         # cql_dnn inherited agent and lr
         assert res["cql_dnn"]["agent"] == "cql"
         assert res["cql_dnn"]["model"] == "dnn"
-        assert res["cql_dnn"]["epochs_per_interval"] == 25
+        assert res["cql_dnn"]["epochs"] == 25
         assert res["cql_dnn"]["lr"] == 3e-4
         # cql_resnet overridden lr
         assert res["cql_resnet"]["agent"] == "cql"
         assert res["cql_resnet"]["model"] == "dueling_resnet"
-        assert res["cql_resnet"]["epochs_per_interval"] == 25
+        assert res["cql_resnet"]["epochs"] == 25
         assert res["cql_resnet"]["lr"] == 1e-4
 
     def test_top_level_params(self):
@@ -74,13 +74,13 @@ class TestParseMethodsDict:
         from src.app.pipeline.config import parse_methods_dict
 
         cfg = {
-            "params": {"epochs_per_interval": 50, "gamma": 0.95},
+            "params": {"epochs": 50, "gamma": 0.95},
             "methods": {
                 "ppo_dnn": {"agent": "ppo", "model": "dnn"},
             }
         }
         res = parse_methods_dict(cfg)
-        assert res["ppo_dnn"]["epochs_per_interval"] == 50
+        assert res["ppo_dnn"]["epochs"] == 50
         assert res["ppo_dnn"]["gamma"] == 0.95
 
     def test_nested_deep_merge(self):
@@ -129,8 +129,8 @@ class TestParseMethodsDict:
         cfg = {
             "methods": {
                 "params": {
-                    "epochs_per_interval": 25,
-                    "eval_interval_epochs": 2,
+                    "epochs": 25,
+                    "eval_every_n_epochs": 2,
                     "gamma": 0.95,
                     "agent": {
                         "cql": {
@@ -173,7 +173,7 @@ class TestParseMethodsDict:
         # cql_dnn gets universal globals + agent.cql + model.dnn
         assert res["cql_dnn"]["agent"] == "cql"
         assert res["cql_dnn"]["model"] == "dnn"
-        assert res["cql_dnn"]["epochs_per_interval"] == 25
+        assert res["cql_dnn"]["epochs"] == 25
         assert res["cql_dnn"]["gamma"] == 0.95
         assert res["cql_dnn"]["cql_alpha"] == 0.1
         assert res["cql_dnn"]["batch_size"] == 1024

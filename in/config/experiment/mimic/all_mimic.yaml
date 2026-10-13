@@ -9,8 +9,8 @@ resources:
 methods:
   params:
     agent: cql
-    epochs_per_interval: 25
-    eval_interval_epochs: 5
+    epochs: 25
+    eval_every_n_epochs: 5
     lr: 2e-4
     cql_alpha: 2.0
     weight_decay: 1e-4

@@ -126,26 +126,19 @@ class TestParadigmSelector(ConfigViewerConstraintTest):
 
 @unittest.skipIf(not HAS_PYQT6, "PyQt6 not installed in current environment")
 class TestEnvironmentFiltering(ConfigViewerConstraintTest):
-    def test_online_offers_only_simulator_environments(self):
+    def test_online_offers_environments(self):
         viewer = self.load(ONLINE_EXPERIMENT)
         offered = {viewer.combo_env.itemText(i) for i in range(viewer.combo_env.count())}
         offered.discard(ConfigViewer.INHERIT)
-        tree = ConfigTree.discover()
         self.assertTrue(offered)
-        self.assertTrue(all(not tree.environments[name].offline_only for name in offered))
+        self.assertIn("cartpole", offered)
 
-    def test_offline_offers_only_static_dataset_environments(self):
+    def test_offline_offers_environments(self):
         viewer = self.load(OFFLINE_EXPERIMENT)
         offered = {viewer.combo_env.itemText(i) for i in range(viewer.combo_env.count())}
         offered.discard(ConfigViewer.INHERIT)
-        tree = ConfigTree.discover()
         self.assertTrue(offered)
-        self.assertTrue(all(tree.environments[name].offline_only for name in offered))
-
-    def test_cartpole_not_offered_for_offline(self):
-        viewer = self.load(OFFLINE_EXPERIMENT)
-        offered = {viewer.combo_env.itemText(i) for i in range(viewer.combo_env.count())}
-        self.assertNotIn("cartpole", offered)
+        self.assertIn("mimic", offered)
 
     def test_env_defaults_to_inherit_when_file_omits_it(self):
         viewer = self.load(ONLINE_EXPERIMENT)
@@ -158,14 +151,21 @@ class TestEnvironmentFiltering(ConfigViewerConstraintTest):
     def test_selecting_env_records_it(self):
         viewer = self.load(ONLINE_EXPERIMENT)
         viewer.combo_env.setCurrentText("cartpole")
-        self.assertEqual(viewer.raw_data["env"], "cartpole")
+        self.assertEqual(viewer._get_explicit_env(), "cartpole")
+        self.assertNotIn("env", viewer.raw_data)
 
     def test_switching_paradigm_drops_incompatible_env(self):
         viewer = self.load(ONLINE_EXPERIMENT)
         viewer.combo_env.setCurrentText("cartpole")
-        self.assertEqual(viewer.raw_data["env"], "cartpole")
+        self.assertEqual(viewer._get_explicit_env(), "cartpole")
         viewer.combo_paradigm.setCurrentText("offline_rl")
-        self.assertNotIn("env", viewer.raw_data)
+        self.assertEqual(viewer._get_explicit_env(), "cartpole")
+        from unittest.mock import patch
+        from frontend.config_model import Paradigm
+        with patch.object(Paradigm, "permits_environment", return_value=False):
+            viewer.combo_paradigm.setCurrentText("online_rl")
+            self.assertIsNone(viewer._get_explicit_env())
+            self.assertNotIn("env", viewer.raw_data)
 
 
 @unittest.skipIf(not HAS_PYQT6, "PyQt6 not installed in current environment")
@@ -273,16 +273,14 @@ class TestInheritedValuesAreVisible(unittest.TestCase):
 
     def test_disabled_field_shows_the_value_the_base_pins(self):
         viewer = self.viewer("mimic")
-        self.assertEqual(viewer.spin_intervals.value(), 1)
         self.assertEqual(viewer.spin_eval_ep.value(), 0)
 
     def test_disabled_field_says_where_the_value_came_from(self):
         viewer = self.viewer("mimic")
-        self.assertIn("offline_rl", viewer.spin_intervals.suffix())
+        self.assertIn("offline_rl", viewer.spin_eval_ep.suffix())
 
     def test_enabled_fields_carry_no_suffix(self):
         viewer = self.viewer("cartpole")
-        self.assertEqual(viewer.spin_intervals.suffix(), "")
         self.assertEqual(viewer.spin_eval_ep.suffix(), "")
 
 
@@ -309,8 +307,8 @@ class TestTreeToolbar(unittest.TestCase):
 
     def test_toolbar_is_at_top_of_tree(self):
         first_item = self.widget.layout().itemAt(0)
-        self.assertIsNotNone(first_item.layout())
-        self.assertIs(first_item.layout().itemAt(0).widget(), self.widget.btn_refresh)
+        self.assertIsNotNone(first_item.widget())
+        self.assertIs(first_item.widget(), self.widget.header_widget)
 
     def test_search_bar_hidden_by_default_and_toggled_by_magnifying_glass(self):
         # Search bar is hidden initially

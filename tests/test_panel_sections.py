@@ -24,6 +24,7 @@ try:
     QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
     app = QApplication.instance() or QApplication(sys.argv[:1])
     from frontend.config_viewer import FIXED_BOX_KEYS, ConfigViewer, parse_list_field
+    from frontend.widgets import ToggleSlider
 
     HAS_PYQT6 = True
 except ImportError:
@@ -69,7 +70,7 @@ class TestParseListField(unittest.TestCase):
 @unittest.skipIf(not HAS_PYQT6, "PyQt6 not installed in current environment")
 class TestKeyPartition(unittest.TestCase):
     def test_the_standard_rl_keys_are_claimed_by_the_fixed_boxes(self):
-        for key in ("seed", "total_timesteps", "intervals_count", "eval_episodes", "methods", "env"):
+        for key in ("seed", "total_timesteps", "eval_episodes", "methods", "env"):
             self.assertIn(key, FIXED_BOX_KEYS)
 
     def test_paradigm_specific_keys_are_not_claimed(self):
@@ -123,10 +124,10 @@ class TestSupervisedConfigurationIsVisible(unittest.TestCase):
         texts = {w.text() for w in viewer.findChildren(QLineEdit)}
         self.assertIn("lstm_no_v", texts, "target_model should be in an editable field")
 
-    def test_a_boolean_setting_renders_as_a_checkbox(self):
-        """A spin box would write 0/1 back over true/false."""
+    def test_a_boolean_setting_renders_as_a_toggle_slider(self):
+        """A spin box would write 0/1 back over true/false; booleans render as toggle sliders."""
         viewer = _open(SUPERVISED / "quick_test.yaml")
-        self.assertTrue(viewer.findChildren(QCheckBox))
+        self.assertTrue(viewer.findChildren(ToggleSlider))
 
     def test_no_section_is_rendered_twice(self):
         """The fixed boxes and this pass must partition the keys between them."""
@@ -248,18 +249,18 @@ class TestParadigmChangeKeepsTheConfigValid(unittest.TestCase):
 
     def test_supervised_pins_the_fields_it_forbids(self):
         data = self._pick("supervised")
-        self.assertEqual(data["intervals_count"], 1)
+        self.assertNotIn("intervals_count", data)
         self.assertEqual(data["eval_episodes"], 0)
 
     def test_unsupervised_pins_them_too(self):
         data = self._pick("unsupervised")
-        self.assertEqual(data["intervals_count"], 1)
+        self.assertNotIn("intervals_count", data)
         self.assertEqual(data["eval_episodes"], 0)
 
     def test_offline_rl_pins_them_too(self):
         """offline_rl forbids both as well; mimic/_base.yaml is the reference."""
         data = self._pick("offline_rl")
-        self.assertEqual(data["intervals_count"], 1)
+        self.assertNotIn("intervals_count", data)
         self.assertEqual(data["eval_episodes"], 0)
 
     def test_online_rl_leaves_them_to_the_defaults(self):
@@ -271,16 +272,15 @@ class TestParadigmChangeKeepsTheConfigValid(unittest.TestCase):
     def test_switching_back_does_not_clobber_a_deliberate_value(self):
         """Only the pin this wrote is cleared, not a value the user chose."""
         self._pick("supervised")
-        self.viewer._on_field_edited("intervals_count", 7)
+        self.viewer._on_field_edited("eval_episodes", 7)
         data = self._pick("online_rl")
-        self.assertEqual(data["intervals_count"], 7)
+        self.assertEqual(data["eval_episodes"], 7)
 
     def test_a_group_pinned_this_way_satisfies_the_backend(self):
         """The pins are exactly what the shipped offline and supervised bases use."""
         data = self._pick("supervised")
         reference = yaml.safe_load((CONFIG / "experiment" / "early_prediction" / "_base.yaml").read_text())
-        for key in ("intervals_count", "eval_episodes"):
-            self.assertEqual(data[key], reference[key])
+        self.assertEqual(data["eval_episodes"], reference["eval_episodes"])
 
     def test_an_empty_methods_block_is_not_written(self):
         """`methods: {}` satisfies non_empty no better than having none, and an

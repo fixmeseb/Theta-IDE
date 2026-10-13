@@ -166,11 +166,14 @@ class Window(QMainWindow):
         self.compose_timer.setInterval(250)
         self.compose_timer.timeout.connect(self.request_compose)
         self.compose_valid = False
+        self.compose_error = None
         self.issued_ids = set()
         self.queue_running = False
         self.active_config_path = None
         self.active_config_rel_path = None
         self.current_experiment = None
+        self.state_label = None
+        self.backend_label = None
         self.fixed_fields = {}
         self.fields = {}
         step("Building the workspace…", 0.08)
@@ -243,7 +246,7 @@ class Window(QMainWindow):
         self.config_splitter = splitter
 
         # 1. Config Tree (mirrors in/config/experiment/) - extends to top!
-        self.config_tree = ConfigTreeWidget(mode="experiments")
+        self.config_tree = ConfigTreeWidget(mode="experiments", settings_manager=getattr(self, "settings_manager", None))
         self.config_tree.setMinimumWidth(350)
         self.tree = self.config_tree.tree  # backwards compatibility alias
         self.config_tree.file_selected.connect(self.on_config_file_selected)
@@ -512,20 +515,9 @@ class Window(QMainWindow):
         if norm_rel.startswith("experiment/") and not Path(rel_path).name.startswith("_"):
             exp_name = Path(norm_rel).relative_to("experiment").with_suffix("").as_posix()
             self.current_experiment = exp_name
-            if self.start_button is not None:
-                self.start_button.setEnabled(self.compose_valid)
-            if self.queue_button is not None:
-                self.queue_button.setEnabled(self.compose_valid)
-            if self.start_button is not None:
-                self.start_button.setToolTip(f"Train {exp_name} through the backend (F5)")
         else:
             self.current_experiment = None
-            if self.start_button is not None:
-                self.start_button.setEnabled(False)
-            if self.queue_button is not None:
-                self.queue_button.setEnabled(False)
-            if self.start_button is not None:
-                self.start_button.setToolTip("Select an experiment from experiment/ to launch training")
+        self.update_launch_state()
 
         if hasattr(self, "config_tree") and self.config_tree is not None:
             self.config_tree.select_file(rel_path, emit_signal=False)
@@ -1429,9 +1421,10 @@ class Window(QMainWindow):
     def compose_finished(self, serial, config, data, error):
         if serial != self.compose_serial:
             return  # superseded by a newer edit
-        self.compose_valid = bool(not error and isinstance(data, dict) and data.get("valid", False))
-        self.update_launch_state()
         if error or not isinstance(data, dict):
+            self.compose_error = str(error or "Invalid pipeline response")
+            self.compose_valid = False
+            self.update_launch_state()
             self.set_backend_state(False, error or "Invalid pipeline response")
             self.preview_status.setText("Pipeline unavailable • local recipe draft, not validated")
             self.preview_errors.hide()
@@ -1453,7 +1446,9 @@ class Window(QMainWindow):
         sections.append("# Full composed config — agent.* holds defaults that the method settings above override\n"
                         + data["config_yaml"])
         self.preview.setPlainText("\n\n".join(sections))
+        self.compose_valid = bool(data.get("valid", False))
         if data["valid"]:
+            self.compose_error = None
             self.preview_status.setText("Resolved config • ✓ valid for the training pipeline")
             self.preview_errors.hide()
             self.builder_status.setObjectName("configOk")
@@ -1465,11 +1460,13 @@ class Window(QMainWindow):
             self.builder_status.setText("✓ Config validated by the training pipeline" + detail)
         else:
             messages = [f"[{e['stage']}] {e['message']}" for e in data["errors"]]
+            self.compose_error = messages[0].splitlines()[0] if messages else "Configuration validation failed"
             self.preview_status.setText(f"Resolved config • ✗ {len(messages)} error(s)")
             self.preview_errors.setText("\n".join(messages))
             self.preview_errors.show()
             self.builder_status.setObjectName("configError")
             self.builder_status.setText("✗ " + messages[0].splitlines()[0])
+        self.update_launch_state()
         self.builder_status.setStyle(self.builder_status.style())
 
     def set_backend_state(self, connected, error=None):
@@ -1573,28 +1570,38 @@ class Window(QMainWindow):
 
     def update_launch_state(self):
         idle = self.active is None
-        ready = idle and self.compose_valid
+        has_experiment = bool(getattr(self, "current_experiment", None))
+        ready = idle and self.compose_valid and has_experiment
         if self.start_button is not None:
             self.start_button.setEnabled(ready)
         if self.queue_button is not None:
-            self.queue_button.setEnabled(self.compose_valid)
+            self.queue_button.setEnabled(self.compose_valid and has_experiment)
         if self.stop_button is not None:
             self.stop_button.setEnabled(not idle)
         if not idle:
-            tip = "A run is active. Stop it before launching another."
+            tip = "Cannot run: A run is currently active. Stop it before launching another."
+        elif not has_experiment:
+            rel = getattr(self, "active_config_rel_path", "") or ""
+            if rel and Path(rel).name.startswith("_"):
+                tip = "Cannot run: Base templates (_base.yaml) cannot be run directly. Select an experiment."
+            else:
+                tip = "Cannot run: Select an experiment configuration from the experiment tree."
         elif not self.compose_valid:
-            tip = "Launch needs a config the training pipeline has validated."
+            err = getattr(self, "compose_error", None) or "This configuration has not passed pipeline validation."
+            tip = f"Cannot run: {err}"
         else:
-            tip = "Train the builder's config on this machine (F5)"
+            exp_name = getattr(self, "current_experiment", "experiment")
+            tip = f"Train {exp_name} through the backend (F5)"
         if self.start_button is not None:
             self.start_button.setToolTip(tip)
-        run = self.active
-        if run is None:
-            self.state_label.setText("TRAINING   •   idle  ")
-        elif run["simulated"]:
-            self.state_label.setText(f"DEMO   •   {run['status']}  ")
-        else:
-            self.state_label.setText(f"TRAINING   •   {run['status']}   •   {run['backend']['experiment_id']}  ")
+        if getattr(self, "state_label", None) is not None:
+            run = self.active
+            if run is None:
+                self.state_label.setText("TRAINING   •   idle  ")
+            elif run.get("simulated"):
+                self.state_label.setText(f"DEMO   •   {run['status']}  ")
+            else:
+                self.state_label.setText(f"TRAINING   •   {run['status']}   •   {run.get('backend', {}).get('experiment_id', '')}  ")
 
     def activate(self, run):
         self.active = run

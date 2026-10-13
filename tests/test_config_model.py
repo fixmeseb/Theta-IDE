@@ -46,9 +46,9 @@ def test_models_expose_architecture(tree):
     assert "architecture" not in tree.models["dnn"].parameters
 
 
-def test_environments_carry_offline_only_flag(tree):
-    assert tree.environments["cartpole"].offline_only is False
-    assert tree.environments["mimic"].offline_only is True
+def test_environments_load(tree):
+    assert "cartpole" in tree.environments
+    assert "mimic" in tree.environments
 
 
 def test_experiments_load_with_groups(tree):
@@ -102,18 +102,12 @@ def test_agent_allow_and_forbid_lists_are_disjoint(tree):
 # ------------------------------------------------------- environment rules
 
 
-def test_online_rl_offers_only_simulator_environments(tree):
-    assert all(not e.offline_only for e in tree.environments_for("online_rl"))
+def test_online_rl_offers_environments(tree):
+    assert "cartpole" in {e.name for e in tree.environments_for("online_rl")}
 
 
-def test_offline_rl_offers_only_static_dataset_environments(tree):
-    assert all(e.offline_only for e in tree.environments_for("offline_rl"))
-
-
-def test_online_and_offline_environment_sets_are_disjoint(tree):
-    online = {e.name for e in tree.environments_for("online_rl")}
-    offline = {e.name for e in tree.environments_for("offline_rl")}
-    assert not online & offline
+def test_offline_rl_offers_environments(tree):
+    assert "mimic" in {e.name for e in tree.environments_for("offline_rl")}
 
 
 def test_every_environment_is_offered_by_some_paradigm(tree):
@@ -148,8 +142,8 @@ def test_mimic_is_available_for_offline_rl(tree):
 
 def test_paradigm_without_env_constraint_permits_everything():
     paradigm = Paradigm(name="anything", description="", allowed_agents=(), forbidden_agents=())
-    assert paradigm.permits_environment(Environment(name="x", offline_only=True))
-    assert paradigm.permits_environment(Environment(name="y", offline_only=False))
+    assert paradigm.permits_environment(Environment(name="x"))
+    assert paradigm.permits_environment(Environment(name="y"))
 
 
 # ---------------------------------------------------------- field enabling
@@ -162,17 +156,6 @@ def test_eval_episodes_enabled_for_online_rl(tree):
 @pytest.mark.parametrize("paradigm", ["offline_rl", "supervised"])
 def test_eval_episodes_disabled_without_rollouts(tree, paradigm):
     assert not tree.field_enabled(paradigm, "eval_episodes")
-
-
-def test_intervals_enabled_for_online_rl(tree):
-    assert tree.field_enabled("online_rl", "intervals_count")
-
-
-@pytest.mark.parametrize("paradigm", ["offline_rl", "supervised"])
-def test_intervals_disabled_without_progressive_slicing(tree, paradigm):
-    """validation.py reads allows_intervals with a default of False, so a
-    paradigm that stays silent forbids intervals_count > 1."""
-    assert not tree.field_enabled(paradigm, "intervals_count")
 
 
 def test_disabled_field_explains_itself(tree):

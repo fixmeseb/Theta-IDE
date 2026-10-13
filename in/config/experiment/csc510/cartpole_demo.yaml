@@ -3,7 +3,6 @@ defaults:
 - csc510/_base
 total_timesteps: 3000
 eval_episodes: 1
-intervals_count: 1
 plots:
   convergence:
     smoothing_window: 3

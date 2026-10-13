@@ -1,6 +1,12 @@
 """Vectorized Atari 2600 environment wrapper for NeSyRL / Theta-IDE."""
 from typing import Any, Sequence
+import ale_py
 import gymnasium as gym
+
+try:
+    gym.register_envs(ale_py)
+except Exception:
+    pass
 from gymnasium.wrappers import (
     AtariPreprocessing,
     FrameStackObservation,
@@ -52,7 +58,7 @@ class VectorizedEnv(VectorizedBaseEnv):
 
         def make_atari_env(rank: int):
             def _thunk():
-                env = gym.make(env_id, render_mode="rgb_array")
+                env = gym.make(env_id, frameskip=1, render_mode="rgb_array")
                 env = AtariPreprocessing(
                     env,
                     screen_size=screen_size,

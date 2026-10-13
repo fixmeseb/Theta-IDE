@@ -4,12 +4,10 @@ runner: OnlineRLRunner
 data_module: SimulatorDataModule
 eval_protocol: EpisodicRewardEvalProtocol
 allows_eval_episodes: true
-allows_intervals: true
 default_callbacks:
   - EnvironmentEvaluatorCallback
 constraints:
   requires:
-    env.offline_only: false
     methods: non_empty
 
 allowed_agents:

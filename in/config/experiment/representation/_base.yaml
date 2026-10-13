@@ -2,7 +2,6 @@
 defaults:
 - override /env: breast_cancer
 
-intervals_count: 1
 eval_episodes: 0
 paradigm: unsupervised
 consolidate: false

@@ -4,7 +4,6 @@ defaults:
 - override /hydra/sweeper: optuna_online
 total_timesteps: 99000
 eval_episodes: 100
-intervals_count: 10
 hydra:
   sweeper:
     sampler:

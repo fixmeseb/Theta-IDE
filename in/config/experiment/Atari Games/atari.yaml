@@ -1,0 +1,14 @@
+# @package _global_
+defaults:
+- Atari Games/_base
+- override /env: atari/pong
+seed: 42
+total_timesteps: 10000
+methods:
+  ppo_dnn:
+    agent: ppo
+    model: dnn
+  blendRL:
+    agent: sb3/sac
+    model: cew
+    fyd_top_k: 50

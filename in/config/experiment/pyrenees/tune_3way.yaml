@@ -22,18 +22,18 @@ methods:
   cql_blendrl_human_neural:
     agent: cql
     model: blendrl
-    epochs_per_interval: 50
-    eval_interval_epochs: 5
+    epochs: 50
+    eval_every_n_epochs: 5
     batch_size: 512
   cql_blendrl_human_neural_logic:
     agent: cql
     model: blendrl
-    epochs_per_interval: 50
-    eval_interval_epochs: 5
+    epochs: 50
+    eval_every_n_epochs: 5
     batch_size: 512
   cql_blendrl_human_dueling_resnet_logic:
     agent: cql
     model: blendrl
-    epochs_per_interval: 50
-    eval_interval_epochs: 5
+    epochs: 50
+    eval_every_n_epochs: 5
     batch_size: 512

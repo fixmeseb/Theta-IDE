@@ -11,4 +11,4 @@ tensorboard: true
 
 methods:
   clf:
-    epochs_per_interval: 5
+    epochs: 5

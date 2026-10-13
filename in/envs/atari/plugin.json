@@ -7,6 +7,6 @@
   "author": "Farama Foundation",
   "tags": ["atari", "ale", "reinforcement-learning", "benchmark"],
   "dependencies": {
-    "pip": ["gymnasium[atari]", "ale-py"]
+    "pip": ["gymnasium[atari]", "ale-py", "opencv-python"]
   }
 }

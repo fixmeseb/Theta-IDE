@@ -244,13 +244,13 @@ python -m frontend</code></pre>
     <td><b><code>online_rl</code></b></td>
     <td>Online RL algorithms (PPO; others via plugins)</td>
     <td>Fixed-episode live simulator rollouts via <code>EnvironmentEvaluatorCallback</code></td>
-    <td><code>offline_only: false</code>; generates transition datasets</td>
+    <td>Live simulator rollouts; generates transition datasets</td>
   </tr>
   <tr>
     <td><b><code>offline_rl</code></b></td>
     <td>Offline RL algorithms (CQL, IQL; others via plugins)</td>
     <td>Replay buffer data module; validation loss and Bellman error via Lightning</td>
-    <td><code>intervals_count: 1</code>, <code>eval_episodes: 0</code>; requires static transition dataset</td>
+    <td><code>eval_episodes: 0</code>; requires static transition dataset</td>
   </tr>
   <tr>
     <td><b><code>supervised</code></b></td>
@@ -454,7 +454,7 @@ python -m frontend</code></pre>
 <p>Universal scalars and hyperparameters applied across all methods in a single experiment:</p>
 <pre><code>methods:
   params:
-    epochs_per_interval: 25
+    epochs: 25
     gamma: 0.99
     lr: 3e-4
     agent:
@@ -485,7 +485,6 @@ python -m frontend</code></pre>
 <h3>Environment Keys</h3>
 <p>Environment YAMLs (<code>in/config/env/*.yaml</code>) define operational metadata declaratively:</p>
 <ul>
-  <li><code>offline_only: true | false</code> &mdash; drives paradigm verification</li>
   <li><code>monitor_metric: "eval/reward" | "val/loss"</code> &mdash; target metric for checkpointing and tuning</li>
   <li><code>preprocess_on_load: true | false</code> &mdash; whether dataset requires offline conversion</li>
   <li><code>default_plots: [...]</code> &mdash; default visualizers auto-run after training</li>
@@ -840,7 +839,6 @@ class DecisionTransformer(nn.Module, DynamicTopologyProtocol, ExtraStateProtocol
 <pre><code># @package _global_
 env:
   name: my_custom_env
-  offline_only: false          # Set true for static dataset-only environments
   monitor_metric: "eval/reward" # Target metric for early stopping and tuning
   preprocess_on_load: false
   obs_dim: 8

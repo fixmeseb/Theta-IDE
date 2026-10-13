@@ -4,7 +4,6 @@ defaults:
 
 paradigm: offline_rl
 
-intervals_count: 1
 eval_episodes: 0
 
 methods:

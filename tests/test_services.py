@@ -212,7 +212,7 @@ def test_metrics_tail_reads_only_appended_complete_rows(tmp_path):
 
 def test_metrics_tail_restarts_when_lightning_rewrites_the_file(tmp_path):
     csv_file = tmp_path / "metrics.csv"
-    csv_file.write_text("step,loss\n0,0.5\n1,0.4\n2,0.3\n", encoding="utf-8")
+    csv_file.write_text("step,loss\n0,0.5\n1,0.4\n2,0.3\n3,0.2\n", encoding="utf-8")
     tail = MetricsTail(csv_file)
     tail.read()
     csv_file.write_text("step,loss,entropy\n0,0.5,0.6\n", encoding="utf-8")  # new column: rewritten, shorter

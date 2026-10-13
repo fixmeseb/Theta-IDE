@@ -23,7 +23,7 @@ from omegaconf import DictConfig, OmegaConf
 from src.app.core.contract_logger import ContractLogger
 
 
-@hydra.main(version_base=None, config_path="../../in/config", config_name="config")
+@hydra.main(version_base=None, config_path="../../../../in/config", config_name="config")
 def main(cfg: DictConfig):
     try:
         import stable_baselines3 as sb3
@@ -53,7 +53,8 @@ def main(cfg: DictConfig):
 
     # Determine environment ID
     env_cfg = cfg.get("env", {})
-    env_id = env_cfg.get("env_id") or env_cfg.get("name", "CartPole-v1")
+    env_name = env_cfg.get("name")
+    env_id = env_cfg.get("env_id") or env_name or "CartPole-v1"
     if env_id == "cartpole":
         env_id = "CartPole-v1"
     elif env_id == "mountaincar":
@@ -112,7 +113,31 @@ def main(cfg: DictConfig):
     # Build environment with Monitor wrapper for episode stats
     from stable_baselines3.common.monitor import Monitor
 
-    env = Monitor(gym.make(env_id))
+    is_atari = (
+        (env_name and "atari" in str(env_name).lower())
+        or (env_id and ("ale/" in str(env_id).lower() or "atari" in str(env_id).lower()))
+    )
+
+    if is_atari:
+        import ale_py
+        from gymnasium.wrappers import AtariPreprocessing, FrameStackObservation
+
+        try:
+            gym.register_envs(ale_py)
+        except Exception:
+            pass
+        game_stem = (str(env_name).split("/")[-1] if "/" in str(env_name) else str(env_id)).lower()
+        if "ale/" not in game_stem:
+            game_stem = f"ALE/{game_stem.capitalize()}-v5"
+        else:
+            game_stem = env_id
+
+        atari_raw = gym.make(game_stem, frameskip=1, render_mode="rgb_array")
+        atari_pre = AtariPreprocessing(atari_raw, screen_size=84, grayscale_obs=True, frame_skip=4, scale_obs=False)
+        atari_stacked = FrameStackObservation(atari_pre, stack_size=4)
+        env = Monitor(atari_stacked)
+    else:
+        env = Monitor(gym.make(env_id))
 
     # Resolve algorithm class
     algo_map = {"PPO": PPO, "DQN": DQN, "A2C": A2C, "SAC": SAC}
@@ -126,6 +151,12 @@ def main(cfg: DictConfig):
         algo_kwargs["gamma"] = float(agent_cfg["gamma"])
     if "batch_size" in agent_cfg:
         algo_kwargs["batch_size"] = int(agent_cfg["batch_size"])
+    if "n_steps" in agent_cfg:
+        algo_kwargs["n_steps"] = int(agent_cfg["n_steps"])
+
+    model_arch = cfg.get("model", {}).get("architecture") if hasattr(cfg.get("model"), "get") else None
+    if model_arch == "cnn":
+        policy_type = "CnnPolicy"
 
     model = AlgoClass(policy_type, env, verbose=1, **algo_kwargs)
 

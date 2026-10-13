@@ -44,9 +44,8 @@ def test_forbids_the_rl_agents():
     assert {"cql", "iql", "ppo"} <= set(forbidden)
 
 
-def test_requires_an_offline_environment():
+def test_requires_methods():
     requires = load_paradigm(PARADIGM)["constraints"]["requires"]
-    assert requires["env.offline_only"] is True
     assert requires["methods"] == "non_empty"
 
 
@@ -54,10 +53,9 @@ def test_forbids_simulator_rollouts():
     assert load_paradigm(PARADIGM)["constraints"]["forbids"]["eval_episodes"] == "non_zero"
 
 
-def test_does_not_opt_into_intervals_or_eval_episodes():
-    """Both flags are opt-in; a paradigm reading a static dataset must not set them."""
+def test_does_not_opt_into_eval_episodes():
+    """Simulator rollouts are opt-in; a paradigm reading a static dataset must not set them."""
     defn = load_paradigm(PARADIGM)
-    assert defn.get("allows_intervals", False) is False
     assert defn.get("allows_eval_episodes", False) is False
 
 
@@ -415,8 +413,8 @@ def test_train_py_resolves_the_autoencoder_from_a_composed_config():
         "module",
         "lr",
         "type",
-        "epochs_per_interval",
-        "eval_interval_epochs",
+        "epochs",
+        "eval_every_n_epochs",
     }
     kwargs = {k: v for k, v in model_cfg.items() if k not in reserved and v is not None}
     module = cls(

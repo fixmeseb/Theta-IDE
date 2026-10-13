@@ -13,8 +13,8 @@ resources:
 methods:
   # Universal parameters applied across all methods in this experiment
   params:
-    epochs_per_interval: 25
-    eval_interval_epochs: 2
+    epochs: 25
+    eval_every_n_epochs: 2
 
     agent:
       cql:

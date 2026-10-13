@@ -12,55 +12,37 @@ class EnvironmentEvaluatorCallback(L.Callback):
         super().__init__()
         self.cfg = cfg
         self.eval_env = None
-        self.logged_intervals = set()
+        self.last_eval_step = -1
         self.train_start_time = None
         self.cumulative_eval_time = 0
 
     def on_train_start(self, trainer, pl_module):
         self.train_start_time = time.time()
-        if 0 not in self.logged_intervals:
+        if self.last_eval_step < 0:
             self.evaluate_and_log(trainer, pl_module, transitions=0)
-            self.logged_intervals.add(0)
+            self.last_eval_step = 0
 
     def on_train_epoch_end(self, trainer, pl_module):
-        interval_size = max(1, pl_module.cfg.total_timesteps // pl_module.cfg.intervals_count)
-        eval_interval_epochs = pl_module.cfg.agent.get("eval_interval_epochs")
+        total_timesteps = getattr(pl_module.cfg, "total_timesteps", 10000)
+        eval_freq = (
+            pl_module.cfg.get("eval_freq_steps", None)
+            or pl_module.cfg.get("eval_freq", None)
+            or (pl_module.cfg.agent.get("eval_freq_steps") if hasattr(pl_module.cfg, "agent") and hasattr(pl_module.cfg.agent, "get") else None)
+            or max(1, total_timesteps // 4)
+        )
+        current_transitions = getattr(pl_module, "global_step_count", 0)
 
         should_eval = False
-        target_transitions = 0
+        target_transitions = current_transitions
 
-        paradigm = (
-            pl_module.cfg.get("paradigm", "online_rl")
-            if hasattr(pl_module.cfg, "get")
-            else getattr(pl_module.cfg, "paradigm", "online_rl")
-        )
-
-        if paradigm == "online_rl":
-            current_transitions = pl_module.global_step_count
-            for i in range(1, pl_module.cfg.intervals_count + 1):
-                target_transitions = i * interval_size
-                if current_transitions >= target_transitions and i not in self.logged_intervals:
-                    if i == pl_module.cfg.intervals_count:
-                        target_transitions = pl_module.cfg.total_timesteps
-                    should_eval = True
-                    self.logged_intervals.add(i)
-                    break
-        else:
-            epochs_per_interval = pl_module.cfg.agent.get("epochs_per_interval", 1)
-            current_epoch = pl_module.current_epoch + 1
-
-            current_interval = current_epoch // epochs_per_interval
-            target_transitions = interval_size * current_interval
-
-            if current_interval > 0 and current_interval not in self.logged_intervals:
-                should_eval = True
-                self.logged_intervals.add(current_interval)
-
-            if eval_interval_epochs and current_epoch % eval_interval_epochs == 0:
-                should_eval = True
-                target_transitions = interval_size * max(1, current_interval)
+        if current_transitions - self.last_eval_step >= eval_freq:
+            should_eval = True
+        elif current_transitions >= total_timesteps and self.last_eval_step < total_timesteps:
+            should_eval = True
+            target_transitions = total_timesteps
 
         if should_eval:
+            self.last_eval_step = current_transitions
             self.evaluate_and_log(trainer, pl_module, transitions=target_transitions)
 
     def evaluate_and_log(self, trainer, pl_module, transitions):

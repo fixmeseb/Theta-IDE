@@ -3,7 +3,6 @@ defaults:
 - override /env: breast_cancer
 
 paradigm: supervised
-intervals_count: 1
 eval_episodes: 0
 consolidate: false
 partition: common

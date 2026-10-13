@@ -19,21 +19,21 @@ methods:
   cql_dueling_resnet:
     agent: cql
     model: dueling_resnet
-    epochs_per_interval: 15
-    eval_interval_epochs: 3
+    epochs: 15
+    eval_every_n_epochs: 3
     batch_size: 512
     soft_target_tau: 0.005
   cql_blendrl_human_dueling_resnet:
     agent: cql
     model: blendrl
-    epochs_per_interval: 15
-    eval_interval_epochs: 3
+    epochs: 15
+    eval_every_n_epochs: 3
     batch_size: 512
     soft_target_tau: 0.005
   cql_blendrl_cross_attention:
     agent: cql
     model: blendrl
-    epochs_per_interval: 15
-    eval_interval_epochs: 3
+    epochs: 15
+    eval_every_n_epochs: 3
     batch_size: 512
     soft_target_tau: 0.005

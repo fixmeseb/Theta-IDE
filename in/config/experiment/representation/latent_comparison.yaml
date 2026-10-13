@@ -16,8 +16,8 @@ tensorboard: true
 # does not also run as a third, one-epoch method.
 methods:
   ae_dense:
-    epochs_per_interval: 20
+    epochs: 20
   ae_wide:
     model: dense_autoencoder
     latent_dim: 48
-    epochs_per_interval: 20
+    epochs: 20

@@ -192,11 +192,11 @@ def test_prepare_rejects_an_unknown_dataset(tmp_path, monkeypatch):
 
 
 def test_agent_setting_wins_when_the_agent_declares_it():
-    """cql and iql declare epochs_per_interval: 50; that must keep winning."""
+    """cql and iql declare epochs: 50; that must keep winning."""
     from src.app.core.lightning_builder import _agent_or_global
 
-    cfg = _Cfg(epochs_per_interval=3, agent=_Cfg(epochs_per_interval=50))
-    assert _agent_or_global(cfg, "epochs_per_interval", 1) == 50
+    cfg = _Cfg(epochs=3, agent=_Cfg(epochs=50))
+    assert _agent_or_global(cfg, "epochs", 1) == 50
 
 
 def test_top_level_setting_is_used_when_the_agent_omits_it():
@@ -204,17 +204,17 @@ def test_top_level_setting_is_used_when_the_agent_omits_it():
     declares no schedule, so reading only the agent pinned every run to 1 epoch."""
     from src.app.core.lightning_builder import _agent_or_global
 
-    cfg = _Cfg(epochs_per_interval=20, agent=_Cfg(lr=1e-3))
-    assert _agent_or_global(cfg, "epochs_per_interval", 1) == 20
+    cfg = _Cfg(epochs=20, agent=_Cfg(lr=1e-3))
+    assert _agent_or_global(cfg, "epochs", 1) == 20
 
 
 def test_the_default_applies_when_nobody_declares_it():
     from src.app.core.lightning_builder import _agent_or_global
 
-    assert _agent_or_global(_Cfg(agent=_Cfg()), "epochs_per_interval", 1) == 1
+    assert _agent_or_global(_Cfg(agent=_Cfg()), "epochs", 1) == 1
 
 
 def test_a_config_without_an_agent_section_still_resolves():
     from src.app.core.lightning_builder import _agent_or_global
 
-    assert _agent_or_global(_Cfg(epochs_per_interval=7), "epochs_per_interval", 1) == 7
+    assert _agent_or_global(_Cfg(epochs=7), "epochs", 1) == 7

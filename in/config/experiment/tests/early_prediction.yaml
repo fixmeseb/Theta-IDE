@@ -19,8 +19,8 @@ trainer:
 
 methods:
   params:
-    epochs_per_interval: 1
-    eval_interval_epochs: 1
+    epochs: 1
+    eval_every_n_epochs: 1
     batch_size: 128
     lr: 1e-3
 

@@ -1,11 +1,13 @@
 """Tree widget mirroring in/config/ directory for Theta-IDE."""
+import json
 import shutil
 from pathlib import Path
 
 import yaml
-from PyQt6.QtCore import QSize, Qt, pyqtSignal
-from PyQt6.QtGui import QBrush, QColor, QFont, QIcon, QPainter, QPen
+from PyQt6.QtCore import QByteArray, QMimeData, QPoint, QRect, QSettings, QSize, Qt, pyqtSignal
+from PyQt6.QtGui import QBrush, QColor, QDrag, QFont, QIcon, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import (
+    QApplication,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -13,6 +15,7 @@ from PyQt6.QtWidgets import (
     QHBoxLayout,
     QInputDialog,
     QLabel,
+    QLayout,
     QLineEdit,
     QMenu,
     QMessageBox,
@@ -25,6 +28,7 @@ from PyQt6.QtWidgets import (
     QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
+    QWidgetItem,
 )
 
 from .config_model import (
@@ -37,6 +41,7 @@ from .config_model import (
     unique_method_name,
 )
 from .sidetabs import svg_icon
+from .theme import theme_color
 from .widgets import label
 
 TOOL_ICON_COLORS = {
@@ -280,6 +285,283 @@ class GroupItemDelegate(QStyledItemDelegate):
         return hint
 
 
+TREE_BUTTON_MIME = "application/x-theta-tree-button"
+
+
+class DraggableToolButton(QToolButton):
+    """Square header tool button with drag-and-drop reordering support."""
+
+    def __init__(self, button_id: str, parent=None):
+        super().__init__(parent)
+        self.button_id = button_id
+        self._drag_start_pos = None
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._drag_start_pos = event.pos()
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event):
+        if (event.buttons() & Qt.MouseButton.LeftButton) and self._drag_start_pos is not None:
+            dist = (event.pos() - self._drag_start_pos).manhattanLength()
+            if dist >= QApplication.startDragDistance():
+                self._start_drag()
+                self._drag_start_pos = None
+                return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        self._drag_start_pos = None
+        super().mouseReleaseEvent(event)
+
+    def contextMenuEvent(self, event):
+        p = self.parentWidget()
+        if p is not None and hasattr(p, "contextMenuEvent"):
+            p.contextMenuEvent(event)
+        else:
+            super().contextMenuEvent(event)
+
+    def _start_drag(self):
+        self.setDown(False)
+        drag = QDrag(self)
+        mime = QMimeData()
+        mime.setData(TREE_BUTTON_MIME, QByteArray(self.button_id.encode("utf-8")))
+        drag.setMimeData(mime)
+
+        pixmap = self.grab()
+        ghost = QPixmap(pixmap.size())
+        ghost.fill(Qt.GlobalColor.transparent)
+        painter = QPainter(ghost)
+        painter.setOpacity(0.75)
+        painter.drawPixmap(0, 0, pixmap)
+        painter.end()
+
+        drag.setPixmap(ghost)
+        drag.setHotSpot(self._drag_start_pos or QPoint(pixmap.width() // 2, pixmap.height() // 2))
+        drag.exec(Qt.DropAction.MoveAction)
+
+
+class TreeHeaderLayout(QLayout):
+    """Layout managing two rows of toolbar buttons with left and right groups per row."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._items: list[QWidgetItem] = []
+        self.groups: dict[str, list[DraggableToolButton]] = {
+            "row1_left": [],
+            "row1_right": [],
+            "row2_left": [],
+            "row2_right": [],
+        }
+
+    def addItem(self, item):
+        self._items.append(item)
+
+    def count(self) -> int:
+        return len(self._items)
+
+    def itemAt(self, index: int):
+        if 0 <= index < len(self._items):
+            return self._items[index]
+        return None
+
+    def takeAt(self, index: int):
+        if 0 <= index < len(self._items):
+            return self._items.pop(index)
+        return None
+
+    def sizeHint(self) -> QSize:
+        return QSize(200, 64)
+
+    def minimumSize(self) -> QSize:
+        return QSize(120, 64)
+
+    def setGeometry(self, rect: QRect):
+        super().setGeometry(rect)
+        btn_w, btn_h, spacing = 30, 30, 4
+        y1 = rect.top()
+        y2 = rect.top() + btn_h + spacing
+
+        # row1_left: left-aligned
+        x = rect.left()
+        for w in self.groups.get("row1_left", []):
+            w.setGeometry(QRect(x, y1, btn_w, btn_h))
+            x += btn_w + spacing
+
+        # row1_right: right-aligned, rendered left-to-right
+        r1_list = self.groups.get("row1_right", [])
+        if r1_list:
+            total_r1_w = len(r1_list) * btn_w + (len(r1_list) - 1) * spacing
+            rx = rect.right() - total_r1_w + 1
+            for w in r1_list:
+                w.setGeometry(QRect(rx, y1, btn_w, btn_h))
+                rx += btn_w + spacing
+
+        # row2_left: left-aligned
+        x = rect.left()
+        for w in self.groups.get("row2_left", []):
+            w.setGeometry(QRect(x, y2, btn_w, btn_h))
+            x += btn_w + spacing
+
+        # row2_right: right-aligned, rendered left-to-right
+        r2_list = self.groups.get("row2_right", [])
+        if r2_list:
+            total_r2_w = len(r2_list) * btn_w + (len(r2_list) - 1) * spacing
+            rx = rect.right() - total_r2_w + 1
+            for w in r2_list:
+                w.setGeometry(QRect(rx, y2, btn_w, btn_h))
+                rx += btn_w + spacing
+
+
+class TreeHeaderWidget(QWidget):
+    """Header toolbar widget with two rows and 4 draggable/reorderable button groups."""
+
+    layout_changed = pyqtSignal()
+
+    def __init__(self, tree_widget: "ConfigTreeWidget", parent=None):
+        super().__init__(parent)
+        self.tree_widget = tree_widget
+        self.setAcceptDrops(True)
+        self.header_layout = TreeHeaderLayout(self)
+        self._drop_info = None  # (group_key, target_index, (kind, rect))
+
+    def set_groups(self, groups: dict[str, list[DraggableToolButton]]):
+        self.header_layout.groups = {
+            "row1_left": list(groups.get("row1_left", [])),
+            "row1_right": list(groups.get("row1_right", [])),
+            "row2_left": list(groups.get("row2_left", [])),
+            "row2_right": list(groups.get("row2_right", [])),
+        }
+        self.header_layout._items.clear()
+        for g in ("row1_left", "row1_right", "row2_left", "row2_right"):
+            for b in self.header_layout.groups[g]:
+                self.header_layout.addWidget(b)
+        self.header_layout.setGeometry(self.contentsRect())
+        self.updateGeometry()
+        self.update()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self.header_layout.setGeometry(self.contentsRect())
+
+    def sizeHint(self) -> QSize:
+        return QSize(200, 64)
+
+    def minimumSizeHint(self) -> QSize:
+        return QSize(120, 64)
+
+    def _calc_drop_info(self, pos: QPoint):
+        w = self.width()
+        mid_x = w / 2.0
+        row_key = "row1" if pos.y() < 32 else "row2"
+        side_key = "left" if pos.x() <= mid_x else "right"
+        group_key = f"{row_key}_{side_key}"
+        buttons = self.header_layout.groups.get(group_key, [])
+
+        y = 0 if row_key == "row1" else 34
+        btn_w, btn_h = 30, 30
+
+        if not buttons:
+            if side_key == "left":
+                rect = QRect(0, y, btn_w, btn_h)
+            else:
+                rect = QRect(w - btn_w, y, btn_w, btn_h)
+            return (group_key, 0, ("box", rect))
+
+        for idx, btn in enumerate(buttons):
+            geom = btn.geometry()
+            if pos.x() < geom.center().x():
+                lx = max(0, geom.left() - 2)
+                return (group_key, idx, ("line", QRect(lx, geom.top() + 2, 2, 26)))
+
+        last_geom = buttons[-1].geometry()
+        lx = min(w - 2, last_geom.right() + 2)
+        return (group_key, len(buttons), ("line", QRect(lx, last_geom.top() + 2, 2, 26)))
+
+    def dragEnterEvent(self, event):
+        if event.mimeData().hasFormat(TREE_BUTTON_MIME):
+            event.acceptProposedAction()
+            self._drop_info = self._calc_drop_info(event.position().toPoint())
+            self.update()
+
+    def dragMoveEvent(self, event):
+        if event.mimeData().hasFormat(TREE_BUTTON_MIME):
+            event.acceptProposedAction()
+            self._drop_info = self._calc_drop_info(event.position().toPoint())
+            self.update()
+
+    def dragLeaveEvent(self, event):
+        self._drop_info = None
+        self.update()
+
+    def dropEvent(self, event):
+        if event.mimeData().hasFormat(TREE_BUTTON_MIME):
+            event.acceptProposedAction()
+            button_id = bytes(event.mimeData().data(TREE_BUTTON_MIME)).decode("utf-8")
+            if self._drop_info:
+                target_group, target_idx, _ = self._drop_info
+                self.move_button(button_id, target_group, target_idx)
+            self._drop_info = None
+            self.update()
+
+    def move_button(self, button_id: str, target_group: str, target_idx: int):
+        src_group = None
+        src_idx = None
+        target_btn = None
+        for g_name, b_list in self.header_layout.groups.items():
+            for idx, b in enumerate(b_list):
+                if b.button_id == button_id:
+                    src_group = g_name
+                    src_idx = idx
+                    target_btn = b
+                    break
+            if src_group:
+                break
+
+        if not target_btn or target_group not in self.header_layout.groups:
+            return
+
+        if src_group == target_group:
+            if src_idx == target_idx or target_idx == src_idx + 1:
+                return
+            self.header_layout.groups[src_group].pop(src_idx)
+            if target_idx > src_idx:
+                target_idx -= 1
+            self.header_layout.groups[target_group].insert(target_idx, target_btn)
+        else:
+            self.header_layout.groups[src_group].pop(src_idx)
+            self.header_layout.groups[target_group].insert(target_idx, target_btn)
+
+        self.set_groups(self.header_layout.groups)
+        self.layout_changed.emit()
+
+    def contextMenuEvent(self, event):
+        menu = QMenu(self)
+        reset_act = menu.addAction("Reset Toolbar Layout")
+        reset_act.triggered.connect(self.tree_widget.reset_toolbar_layout)
+        menu.exec(event.globalPos())
+
+    def paintEvent(self, event):
+        super().paintEvent(event)
+        if self._drop_info:
+            painter = QPainter(self)
+            try:
+                acc_color = QColor(theme_color("accent"))
+            except Exception:
+                acc_color = QColor("#fabd2f")
+            pen = QPen(acc_color, 2)
+            painter.setPen(pen)
+            kind, geom = self._drop_info[2]
+            if kind == "line":
+                painter.fillRect(geom, acc_color)
+            elif kind == "box":
+                pen.setStyle(Qt.PenStyle.DashLine)
+                painter.setPen(pen)
+                painter.drawRect(geom.adjusted(1, 1, -1, -1))
+            painter.end()
+
+
 class ConfigTreeWidget(QWidget):
     """File tree that mirrors in/config/ and allows selecting, duplicating,
 
@@ -294,10 +576,11 @@ class ConfigTreeWidget(QWidget):
     new_in_group_requested = pyqtSignal()
     save_requested = pyqtSignal()
 
-    def __init__(self, root_dir=None, parent=None, mode="all"):
+    def __init__(self, root_dir=None, parent=None, mode="all", settings_manager=None):
         super().__init__(parent)
         self.root_dir = Path(root_dir) if root_dir else find_config_root()
         self.mode = mode  # "all", "experiments", "components"
+        self.settings_manager = settings_manager
         self.current_rel_path = None
         self._dirty_paths = set()
         self.last_focused_group = None
@@ -306,127 +589,206 @@ class ConfigTreeWidget(QWidget):
         self._init_ui()
         self.populate()
 
+    def _default_toolbar_groups(self) -> dict[str, list[DraggableToolButton]]:
+        if self.mode == "components":
+            return {
+                "row1_left": [self.btn_refresh, self.btn_collapse, self.btn_expand, self.btn_search],
+                "row1_right": [self.btn_hub, self.btn_toggle_raw],
+                "row2_left": [self.btn_new, self.btn_duplicate],
+                "row2_right": [],
+            }
+        elif self.mode in ("experiments", "experiment"):
+            return {
+                "row1_left": [self.btn_refresh, self.btn_collapse, self.btn_expand, self.btn_search],
+                "row1_right": [self.btn_launch, self.btn_export, self.btn_toggle_yaml],
+                "row2_left": [self.btn_new_group, self.btn_new_subfolder, self.btn_new_experiment, self.btn_duplicate],
+                "row2_right": [],
+            }
+        else:
+            return {
+                "row1_left": [self.btn_refresh, self.btn_collapse, self.btn_expand, self.btn_search],
+                "row1_right": [],
+                "row2_left": [self.btn_new_group, self.btn_new_subfolder, self.btn_new_experiment, self.btn_duplicate],
+                "row2_right": [],
+            }
+
+    def _load_toolbar_groups(self) -> dict[str, list[DraggableToolButton]]:
+        defaults = self._default_toolbar_groups()
+        all_buttons = {b.button_id: b for g in defaults.values() for b in g}
+
+        saved_state = None
+        if self.settings_manager:
+            try:
+                saved_state = self.settings_manager.get("filetree", f"buttons_{self.mode}", default=None)
+            except Exception:
+                saved_state = None
+        if not saved_state:
+            settings = QSettings("ThetaIDE", "ThetaIDE")
+            raw = settings.value(f"filetree_buttons_{self.mode}", None)
+            if raw and isinstance(raw, str):
+                try:
+                    saved_state = json.loads(raw)
+                except Exception:
+                    saved_state = None
+
+        if not isinstance(saved_state, dict):
+            return defaults
+
+        loaded_groups = {
+            "row1_left": [],
+            "row1_right": [],
+            "row2_left": [],
+            "row2_right": [],
+        }
+        placed = set()
+        for g_name in ("row1_left", "row1_right", "row2_left", "row2_right"):
+            b_ids = saved_state.get(g_name, [])
+            if isinstance(b_ids, list):
+                for bid in b_ids:
+                    if bid in all_buttons and bid not in placed:
+                        loaded_groups[g_name].append(all_buttons[bid])
+                        placed.add(bid)
+
+        # Append any newly added / missing buttons to their default location
+        for g_name, b_list in defaults.items():
+            for b in b_list:
+                if b.button_id not in placed:
+                    loaded_groups[g_name].append(b)
+                    placed.add(b.button_id)
+
+        return loaded_groups
+
+    def _save_toolbar_layout(self):
+        state = {
+            g_name: [b.button_id for b in btn_list]
+            for g_name, btn_list in self.header_widget.header_layout.groups.items()
+        }
+        if self.settings_manager:
+            try:
+                self.settings_manager.set("filetree", f"buttons_{self.mode}", state)
+            except Exception:
+                pass
+        try:
+            settings = QSettings("ThetaIDE", "ThetaIDE")
+            settings.setValue(f"filetree_buttons_{self.mode}", json.dumps(state))
+        except Exception:
+            pass
+
+    def reset_toolbar_layout(self):
+        """Reset the header toolbar buttons to their default 2-row layout."""
+        self.header_widget.set_groups(self._default_toolbar_groups())
+        self._save_toolbar_layout()
+
     def _init_ui(self):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
 
-        header = QHBoxLayout()
-        header.setSpacing(4)
-
-        self.btn_refresh = self._tool_button("reload")
+        self.btn_refresh = self._tool_button("reload", button_id="reload")
         self.btn_refresh.setToolTip("Reload configuration files from disk")
         self.btn_refresh.clicked.connect(self.populate)
-        header.addWidget(self.btn_refresh)
 
-        self.btn_collapse = self._tool_button("collapse_all")
+        self.btn_collapse = self._tool_button("collapse_all", button_id="collapse_all")
         self.btn_collapse.setToolTip("Collapse all folders in the tree")
         self.btn_collapse.clicked.connect(self.collapse_all)
         self.btn_collapse_all = self.btn_collapse  # alias
-        header.addWidget(self.btn_collapse)
 
-        self.btn_expand = self._tool_button("expand_all")
+        self.btn_expand = self._tool_button("expand_all", button_id="expand_all")
         self.btn_expand.setToolTip("Expand all folders in the tree")
         self.btn_expand.clicked.connect(self.expand_all)
         self.btn_expand_all = self.btn_expand  # alias
-        header.addWidget(self.btn_expand)
 
-        self.btn_search = self._tool_button("search")
+        self.btn_search = self._tool_button("search", button_id="search")
         self.btn_search.setToolTip("Filter configurations")
         self.btn_search.setCheckable(True)
         self.btn_search.setChecked(False)
         self.btn_search.clicked.connect(self.toggle_search)
-        header.addWidget(self.btn_search)
-
-        header.addStretch()
 
         if self.mode == "components":
-            self.btn_new = self._tool_button("new_file", "New")
+            self.btn_new = self._tool_button("new_file", "New", button_id="new_file")
             self.btn_new.setToolTip("Create a new modular component (agent, env, model, etc.)")
             self.btn_new.clicked.connect(self.prompt_new_component)
             self.btn_new_group = self.btn_new  # backwards compatibility alias
             self.btn_new_subfolder = None
             self.btn_new_experiment = self.btn_new
-            header.addWidget(self.btn_new)
-        else:
-            self.btn_new_group = self._tool_button("new_folder", "New Group")
-            self.btn_new_group.setToolTip("Create a new experiment group")
-            self.btn_new_group.clicked.connect(self.create_new_group_inline)
-            header.addWidget(self.btn_new_group)
 
-            self.btn_new_subfolder = self._tool_button("new_subfolder", "New Subfolder")
-            self.btn_new_subfolder.setToolTip("Create a new subfolder in the active group")
-            self.btn_new_subfolder.clicked.connect(self.prompt_new_subfolder_in_active_group)
-            header.addWidget(self.btn_new_subfolder)
-
-            self.btn_new_experiment = self._tool_button("new_file", "New Experiment")
-            self.btn_new_experiment.setToolTip("Create a new default experiment in a group")
-            self.btn_new_experiment.clicked.connect(self.prompt_new_experiment_in_active_group)
-            header.addWidget(self.btn_new_experiment)
-
-            self.btn_new = self.btn_new_experiment
-
-        self.btn_duplicate = self._tool_button("copy", "Copy")
-        if self.mode in ("experiments", "experiment"):
-            self.btn_duplicate.setToolTip("Duplicate currently selected experiment")
-        elif self.mode == "components":
+            self.btn_duplicate = self._tool_button("copy", "Copy", button_id="copy")
             self.btn_duplicate.setToolTip("Duplicate currently selected component")
-        else:
-            self.btn_duplicate.setToolTip("Duplicate currently selected configuration")
-        self.btn_duplicate.clicked.connect(self.prompt_duplicate)
-        header.addWidget(self.btn_duplicate)
+            self.btn_duplicate.clicked.connect(self.prompt_duplicate)
 
-        self.btn_save = None
-
-        if self.mode == "components":
-            self.btn_hub = self._tool_button("hub", "Component Hub")
+            self.btn_hub = self._tool_button("hub", "Component Hub", button_id="hub")
             self.btn_hub.setCheckable(True)
             self.btn_hub.setChecked(False)
             self.btn_hub.setToolTip("Browse and install new RL methods, models, and environments from the Community Hub")
-            header.addWidget(self.btn_hub)
 
-            self.btn_toggle_raw = self._tool_button("raw_yaml", "View Raw YAML")
+            self.btn_toggle_raw = self._tool_button("raw_yaml", "View Raw YAML", button_id="raw_yaml")
             self.btn_toggle_raw.setCheckable(True)
             self.btn_toggle_raw.setChecked(False)
             self.btn_toggle_raw.setToolTip("Toggle side-by-side view of the raw YAML file content")
-            header.addWidget(self.btn_toggle_raw)
 
             self.btn_launch = None
             self.btn_start = None
             self.start_button = None
             self.btn_export = None
             self.btn_toggle_yaml = None
-        elif self.mode in ("experiments", "experiment"):
-            self.btn_hub = None
-            self.btn_toggle_raw = None
-
-            self.btn_launch = self._tool_button("launch", "Launch training")
-            self.btn_launch.setToolTip("Train the loaded experiment config through the backend (F5)")
-            self.btn_launch.setEnabled(False)
-            self.btn_start = self.btn_launch
-            self.start_button = self.btn_launch
-            header.addWidget(self.btn_launch)
-
-            self.btn_export = self._tool_button("export", "Export recipe YAML…")
-            self.btn_export.setToolTip("Export recipe YAML…")
-            header.addWidget(self.btn_export)
-
-            self.btn_toggle_yaml = self._tool_button("raw_yaml", "View Hydra YAML")
-            self.btn_toggle_yaml.setCheckable(True)
-            self.btn_toggle_yaml.setChecked(False)
-            self.btn_toggle_yaml.setToolTip("Toggle preview of the resolved Hydra YAML configuration")
-            header.addWidget(self.btn_toggle_yaml)
         else:
+            self.btn_new_group = self._tool_button("new_folder", "New Group", button_id="new_folder")
+            self.btn_new_group.setToolTip("Create a new experiment group")
+            self.btn_new_group.clicked.connect(self.create_new_group_inline)
+
+            self.btn_new_subfolder = self._tool_button("new_subfolder", "New Subfolder", button_id="new_subfolder")
+            self.btn_new_subfolder.setToolTip("Create a new subfolder in the active group")
+            self.btn_new_subfolder.clicked.connect(self.prompt_new_subfolder_in_active_group)
+
+            self.btn_new_experiment = self._tool_button("new_file", "New Experiment", button_id="new_file")
+            self.btn_new_experiment.setToolTip("Create a new default experiment in a group")
+            self.btn_new_experiment.clicked.connect(self.prompt_new_experiment_in_active_group)
+
+            self.btn_new = self.btn_new_experiment
+
+            self.btn_duplicate = self._tool_button("copy", "Copy", button_id="copy")
+            if self.mode in ("experiments", "experiment"):
+                self.btn_duplicate.setToolTip("Duplicate currently selected experiment")
+            elif self.mode == "components":
+                self.btn_duplicate.setToolTip("Duplicate currently selected component")
+            else:
+                self.btn_duplicate.setToolTip("Duplicate currently selected configuration")
+            self.btn_duplicate.clicked.connect(self.prompt_duplicate)
+
             self.btn_hub = None
             self.btn_toggle_raw = None
-            self.btn_launch = None
-            self.btn_start = None
-            self.start_button = None
-            self.btn_export = None
-            self.btn_toggle_yaml = None
 
-        self.header_layout = header
-        layout.addLayout(header)
+            if self.mode in ("experiments", "experiment"):
+                self.btn_launch = self._tool_button("launch", "Launch training", button_id="launch")
+                self.btn_launch.setToolTip("Train the loaded experiment config through the backend (F5)")
+                self.btn_launch.setEnabled(False)
+                self.btn_launch.setAttribute(Qt.WidgetAttribute.WA_AlwaysShowToolTips, True)
+                self.btn_start = self.btn_launch
+                self.start_button = self.btn_launch
+
+                self.btn_export = self._tool_button("export", "Export recipe YAML…", button_id="export")
+                self.btn_export.setToolTip("Export recipe YAML…")
+
+                self.btn_toggle_yaml = self._tool_button("raw_yaml", "View Hydra YAML", button_id="raw_yaml")
+                self.btn_toggle_yaml.setCheckable(True)
+                self.btn_toggle_yaml.setChecked(False)
+                self.btn_toggle_yaml.setToolTip("Toggle preview of the resolved Hydra YAML configuration")
+            else:
+                self.btn_launch = None
+                self.btn_start = None
+                self.start_button = None
+                self.btn_export = None
+                self.btn_toggle_yaml = None
+
+        self.btn_save = None
+
+        # Two-row header widget with draggable, reorderable button groups
+        self.header_widget = TreeHeaderWidget(self)
+        groups = self._load_toolbar_groups()
+        self.header_widget.set_groups(groups)
+        self.header_widget.layout_changed.connect(self._save_toolbar_layout)
+        self.header_layout = self.header_widget.header_layout
+        layout.addWidget(self.header_widget)
 
         # Search filter (hidden by default, toggled via magnifying glass button)
         self.search = QLineEdit()
@@ -549,9 +911,9 @@ class ConfigTreeWidget(QWidget):
         if self.current_rel_path:
             self.select_file(self.current_rel_path, emit_signal=False)
 
-    def _tool_button(self, icon_name, text=None):
+    def _tool_button(self, icon_name, text=None, button_id=None):
         """Square header button with a themed SVG icon; text, if any, becomes its accessible name."""
-        button = QToolButton()
+        button = DraggableToolButton(button_id or icon_name)
         button.setProperty("svg_icon", icon_name)
         button.setIcon(svg_icon(icon_name, TOOL_ICON_COLORS))
         button.setIconSize(QSize(16, 16))
@@ -567,6 +929,8 @@ class ConfigTreeWidget(QWidget):
             name = button.property("svg_icon")
             if name:
                 button.setIcon(svg_icon(name, TOOL_ICON_COLORS))
+        if hasattr(self, "header_widget"):
+            self.header_widget.update()
 
         def _update_tree(parent):
             count = parent.topLevelItemCount() if isinstance(parent, QTreeWidget) else parent.childCount()
@@ -1122,8 +1486,6 @@ class ConfigTreeWidget(QWidget):
             f"  - {group_name}/_base",
             "",
             f"experiment_id: {exp_id}",
-            "seed: 42",
-            "total_timesteps: 10000",
         ]
 
         # If group defaults do not specify paradigm, prompt it with empty value:
@@ -1134,14 +1496,8 @@ class ConfigTreeWidget(QWidget):
         if not group_env:
             lines.append("env: null")
 
-        if group_paradigm in ("offline_rl", "supervised"):
-            pass
-        else:
-            lines.append("intervals_count: 4")
-            lines.append("eval_episodes: 100")
-
-        # Methods block
-        if tree and group_paradigm:
+        # Methods block (only if group base does not already specify methods)
+        if not (group_obj and group_obj.base_methods) and tree and group_paradigm:
             permitted = [a.name for a in tree.agents_for(group_paradigm)]
             agent = permitted[0] if permitted else None
             model = (
