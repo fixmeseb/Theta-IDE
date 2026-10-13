@@ -323,3 +323,103 @@ def test_add_new_method_valid_empty_method(qapp, tmp_path):
     assert any(c.currentIndex() == -1 for c in model_combos)
 
 
+def test_blendrl_model_block_and_logic_module_rendering(qapp, tmp_path):
+    from frontend.widgets import ComboBox
+    from frontend.config_viewer import IndentedHierarchyBlock
+    from PyQt6.QtWidgets import QLabel
+
+    src_file = Path("in/config/experiment/cartpole/final_cartpole.yaml")
+    dest_file = tmp_path / "final_cartpole.yaml"
+    shutil.copy(src_file, dest_file)
+
+    viewer = ConfigViewer()
+    viewer.load_file(dest_file, "experiment/cartpole/final_cartpole.yaml")
+
+    # final_cartpole has ppo_blendrl_final_cp with model: blendrl
+    assert "ppo_blendrl_final_cp" in viewer.raw_data["methods"]
+    assert viewer.raw_data["methods"]["ppo_blendrl_final_cp"]["model"] == "blendrl"
+
+    # Find all labels and hierarchy blocks in viewer
+    labels = [l.text() for l in viewer.findChildren(QLabel)]
+    assert "Neural Architecture" in labels
+    assert "Logic Module (Symbolic)" in labels
+    assert "Blender Mode" in labels
+
+    # Find the ComboBox for Logic Module
+    combos = viewer.findChildren(ComboBox)
+    logic_combos = [c for c in combos if "Symbolic logic reasoner" in c.toolTip()]
+    assert len(logic_combos) >= 1, "Expected Logic Module ComboBox with symbolic reasoner tooltip"
+    logic_combo = logic_combos[0]
+
+    # Verify choices include nsfr, neumann, cew
+    combo_items = [logic_combo.itemText(i) for i in range(logic_combo.count())]
+    assert "nsfr" in combo_items
+    assert "neumann" in combo_items
+    assert "cew" in combo_items
+    assert logic_combo.currentText() == "nsfr"
+
+    # Change Logic Module to cew
+    logic_combo.setCurrentText("cew")
+    qapp.processEvents()
+
+    # Verify raw_data was updated
+    method_spec = viewer.raw_data["methods"]["ppo_blendrl_final_cp"]
+    assert method_spec.get("symbolic") == "cew" or (
+        isinstance(method_spec.get("symbolic"), dict) and method_spec["symbolic"].get("type") == "cew"
+    )
+
+    # Change Logic Module to neumann
+    logic_combo.setCurrentText("neumann")
+    qapp.processEvents()
+    method_spec = viewer.raw_data["methods"]["ppo_blendrl_final_cp"]
+    assert method_spec.get("symbolic") == "neumann" or (
+        isinstance(method_spec.get("symbolic"), dict) and method_spec["symbolic"].get("type") == "neumann"
+    )
+
+
+def test_blendrl_params_and_rules_editing(qapp, tmp_path):
+    src_file = Path("in/config/experiment/cartpole/final_cartpole.yaml")
+    dest_file = tmp_path / "final_cartpole.yaml"
+    shutil.copy(src_file, dest_file)
+
+    viewer = ConfigViewer()
+    viewer.load_file(dest_file, "experiment/cartpole/final_cartpole.yaml")
+
+    method_name = "ppo_blendrl_final_cp"
+
+    # 1. Add BlendRL top-level parameter (e.g. blend_q_values, logic_lr)
+    viewer._add_method_param(method_name, "blend_q_values", True)
+    assert viewer.raw_data["methods"][method_name]["blend_q_values"] is True
+
+    viewer._add_method_param(method_name, "logic_lr", 0.001)
+    assert viewer.raw_data["methods"][method_name]["logic_lr"] == 0.001
+
+    # 2. Add rule parameter to Logic Module (symbolic)
+    viewer._add_method_subcomponent_param(method_name, "symbolic", "rules", "variant1")
+    sym_spec = viewer.raw_data["methods"][method_name]["symbolic"]
+    if isinstance(sym_spec, dict):
+        assert sym_spec.get("rules") == "variant1"
+    else:
+        assert sym_spec == "variant1"
+
+    # Edit rule parameter
+    viewer._on_method_subcomponent_param_edited(method_name, "symbolic", "rules", "custom_rules")
+    sym_spec = viewer.raw_data["methods"][method_name]["symbolic"]
+    assert sym_spec["rules"] == "custom_rules"
+
+    # 3. Remove rule parameter
+    viewer._remove_method_subcomponent_param(method_name, "symbolic", "rules")
+    assert "rules" not in viewer.raw_data["methods"][method_name]["symbolic"]
+
+    # 4. Remove BlendRL parameter
+    viewer._remove_method_param(method_name, "blend_q_values")
+    assert "blend_q_values" not in viewer.raw_data["methods"][method_name]
+
+    # Save to disk and verify round-trip
+    viewer.save_to_disk()
+    saved = yaml.safe_load(dest_file.read_text(encoding="utf-8"))
+    assert "ppo_blendrl_final_cp" in saved["methods"]
+    assert saved["methods"]["ppo_blendrl_final_cp"]["logic_lr"] == 0.001
+
+
+

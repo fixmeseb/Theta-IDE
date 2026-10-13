@@ -1980,267 +1980,313 @@ class ConfigViewer(QWidget):
                 model_keys_present = set()
                 if model_name:
                     model_block = IndentedHierarchyBlock(level=1)
-                    is_composite_model = (
+                    is_composite_model = bool(
                         model_name == "blendrl"
                         or (tree and model_name in tree.models and tree.models[model_name].is_composite)
                     )
-                blend_param_keys = ["blend_q_values", "blend_ent_coef", "actor_mode", "logic_lr", "blender_lr"]
+                    blend_param_keys = ["blend_q_values", "blend_ent_coef", "actor_mode", "logic_lr", "blender_lr"]
 
-                if is_composite_model:
-                    for bk in blend_param_keys:
-                        val = None
-                        if isinstance(model_inner, dict) and bk in model_inner:
-                            val = model_inner[bk]
-                        elif bk in m_spec:
-                            val = m_spec[bk]
-                        if val is not None:
-                            model_keys_present.add(bk)
-                            row_bp = QHBoxLayout()
-                            if isinstance(val, bool):
-                                cb_bp = QCheckBox()
-                                cb_bp.setChecked(val)
-                                cb_bp.toggled.connect(lambda v, mn=m_name, pk=bk: self._on_method_param_edited(mn, pk, v))
-                                row_bp.addWidget(cb_bp)
-                            elif isinstance(val, (int, float)):
-                                spin_bp = number_field(val)
-                                spin_bp.setMaximumWidth(NUMBER_FIELD_WIDTH)
-                                spin_bp.valueChanged.connect(lambda v, mn=m_name, pk=bk: self._on_method_param_edited(mn, pk, v))
-                                row_bp.addWidget(spin_bp)
-                            else:
-                                line_bp = QLineEdit(str(val))
-                                line_bp.setMaximumWidth(TEXT_FIELD_WIDTH)
-                                line_bp.textChanged.connect(lambda v, mn=m_name, pk=bk: self._on_method_param_edited(mn, pk, v))
-                                row_bp.addWidget(line_bp)
-                            btn_del_bp = _make_subtle_tool_button("close", f"Remove '{bk}'", size=20, icon_size=12)
-                            btn_del_bp.clicked.connect(lambda _, mn=m_name, pk=bk: self._remove_method_param(mn, pk))
-                            row_bp.addWidget(btn_del_bp)
-                            row_bp.addStretch()
-                            model_block.addRow(str(bk), row_bp)
+                    if is_composite_model:
+                        for bk in blend_param_keys:
+                            val = None
+                            if isinstance(model_inner, dict) and bk in model_inner:
+                                val = model_inner[bk]
+                            elif bk in m_spec:
+                                val = m_spec[bk]
+                            if val is not None:
+                                model_keys_present.add(bk)
+                                row_bp = QHBoxLayout()
+                                if isinstance(val, bool):
+                                    cb_bp = QCheckBox()
+                                    cb_bp.setChecked(val)
+                                    cb_bp.toggled.connect(lambda v, mn=m_name, pk=bk: self._on_method_param_edited(mn, pk, v))
+                                    row_bp.addWidget(cb_bp)
+                                elif isinstance(val, (int, float)):
+                                    spin_bp = number_field(val)
+                                    spin_bp.setMaximumWidth(NUMBER_FIELD_WIDTH)
+                                    spin_bp.valueChanged.connect(lambda v, mn=m_name, pk=bk: self._on_method_param_edited(mn, pk, v))
+                                    row_bp.addWidget(spin_bp)
+                                else:
+                                    line_bp = QLineEdit(str(val))
+                                    line_bp.setMaximumWidth(TEXT_FIELD_WIDTH)
+                                    line_bp.textChanged.connect(lambda v, mn=m_name, pk=bk: self._on_method_param_edited(mn, pk, v))
+                                    row_bp.addWidget(line_bp)
+                                btn_del_bp = _make_subtle_tool_button("close", f"Remove '{bk}'", size=20, icon_size=12)
+                                btn_del_bp.clicked.connect(lambda _, mn=m_name, pk=bk: self._remove_method_param(mn, pk))
+                                row_bp.addWidget(btn_del_bp)
+                                row_bp.addStretch()
+                                model_block.addRow(str(bk), row_bp)
 
-                    curr_blend_keys = set()
-                    if isinstance(model_inner, dict):
-                        curr_blend_keys.update(model_inner.keys())
-                    curr_blend_keys.update(m_spec.keys())
-                    cand_blend = [k for k in blend_param_keys if k not in curr_blend_keys]
-                    row_add_bp = QHBoxLayout()
-                    row_add_bp.setSpacing(6)
-                    combo_add_bp = ComboBox()
-                    combo_add_bp.setEditable(True)
-                    combo_add_bp.setMaximumWidth(180)
-                    combo_add_bp.addItems(cand_blend)
-                    combo_add_bp.setEditText("")
-                    combo_add_bp.setPlaceholderText("Add blendrl param...")
-                    row_add_bp.addWidget(combo_add_bp)
-                    btn_add_bp = _make_subtle_tool_button("plus", "Add blendrl parameter", size=22, icon_size=12)
-                    btn_add_bp.clicked.connect(
-                        lambda _, mn=m_name, cb=combo_add_bp: self._add_method_param(mn, cb.currentText().strip())
-                    )
-                    row_add_bp.addWidget(btn_add_bp)
-                    row_add_bp.addStretch()
-                    model_block.addRow("Add blendrl param", row_add_bp)
+                        curr_blend_keys = set()
+                        if isinstance(model_inner, dict):
+                            curr_blend_keys.update(model_inner.keys())
+                        curr_blend_keys.update(m_spec.keys())
+                        cand_blend = [k for k in blend_param_keys if k not in curr_blend_keys]
+                        if cand_blend:
+                            row_add_bp = QHBoxLayout()
+                            row_add_bp.setSpacing(6)
+                            combo_add_bp = ComboBox()
+                            combo_add_bp.setEditable(True)
+                            combo_add_bp.setMaximumWidth(180)
+                            combo_add_bp.addItems(cand_blend)
+                            combo_add_bp.setEditText("")
+                            combo_add_bp.setPlaceholderText("Add blendrl param...")
+                            row_add_bp.addWidget(combo_add_bp)
+                            btn_add_bp = _make_subtle_tool_button("plus", "Add blendrl parameter", size=22, icon_size=12)
+                            btn_add_bp.clicked.connect(
+                                lambda _, mn=m_name, cb=combo_add_bp: self._add_method_param(mn, cb.currentText().strip())
+                            )
+                            row_add_bp.addWidget(btn_add_bp)
+                            row_add_bp.addStretch()
+                            model_block.addRow("Add blendrl param", row_add_bp)
 
-                    subcomps_present = {}
-                    if isinstance(model_inner, dict):
+                        subcomps_present = {}
+                        if isinstance(model_inner, dict):
+                            for sk in ("neural", "symbolic", "blender"):
+                                if sk in model_inner:
+                                    subcomps_present[sk] = model_inner[sk]
                         for sk in ("neural", "symbolic", "blender"):
-                            if sk in model_inner:
-                                subcomps_present[sk] = model_inner[sk]
-                    for sk in ("neural", "symbolic", "blender"):
-                        if sk in m_spec and sk not in subcomps_present:
-                            subcomps_present[sk] = m_spec[sk]
+                            if sk in m_spec and sk not in subcomps_present:
+                                subcomps_present[sk] = m_spec[sk]
 
-                    for s_name, s_val in list(subcomps_present.items()):
-                        if s_name == "neural":
-                            neural_choices = [
-                                m for m in (sorted(tree.models) if tree else ["dnn", "dueling_resnet", "transformer", "lstm", "cnn"])
-                                if m not in ("blendrl", "nsfr", "neumann", "cew")
-                            ]
-                            cur_arch = "dnn"
-                            if isinstance(s_val, str):
-                                cur_arch = s_val
-                            elif isinstance(s_val, dict):
-                                cur_arch = s_val.get("type") or next((k for k in s_val if k in neural_choices), "dnn")
-                            row_arch = QHBoxLayout()
-                            combo_arch = ComboBox()
-                            combo_arch.setMaximumWidth(TEXT_FIELD_WIDTH)
-                            combo_arch.addItems(neural_choices)
-                            if cur_arch not in neural_choices:
-                                combo_arch.insertItem(0, cur_arch)
-                            combo_arch.setCurrentText(cur_arch)
-                            combo_arch.currentTextChanged.connect(
-                                lambda v, mn=m_name, sn=s_name: self._on_method_subcomponent_type_changed(mn, sn, v)
+                        # For composite models (e.g. BlendRL), seed constituent subcomponents
+                        # so Neural, Logic Module, and Blender are immediately accessible
+                        base_subcomps = tree.model_subcomponents(model_name) if tree else {}
+                        if not base_subcomps and model_name == "blendrl":
+                            base_subcomps = {
+                                "neural": {"type": "dnn"},
+                                "symbolic": {"type": "nsfr"},
+                                "blender": {"mode": "neural"},
+                            }
+                        for sk in ("neural", "symbolic", "blender"):
+                            if sk not in subcomps_present and (sk in base_subcomps or model_name == "blendrl"):
+                                subcomps_present[sk] = base_subcomps.get(sk, {})
+
+                        for s_name, s_val in list(subcomps_present.items()):
+                            if s_name == "neural":
+                                neural_choices = [
+                                    m for m in (sorted(tree.models) if tree else ["dnn", "dueling_resnet", "transformer", "lstm", "cnn"])
+                                    if m not in ("blendrl", "nsfr", "neumann", "cew")
+                                ]
+                                cur_arch = "dnn"
+                                if isinstance(s_val, str):
+                                    cur_arch = s_val
+                                elif isinstance(s_val, dict):
+                                    cur_arch = s_val.get("type") or next((k for k in s_val if k in neural_choices), "dnn")
+                                row_arch = QHBoxLayout()
+                                combo_arch = ComboBox()
+                                combo_arch.setMaximumWidth(TEXT_FIELD_WIDTH)
+                                combo_arch.addItems(neural_choices)
+                                if cur_arch not in neural_choices:
+                                    combo_arch.insertItem(0, cur_arch)
+                                combo_arch.setCurrentText(cur_arch)
+                                combo_arch.currentTextChanged.connect(
+                                    lambda v, mn=m_name, sn=s_name: self._on_method_subcomponent_type_changed(mn, sn, v)
+                                )
+                                row_arch.addWidget(combo_arch)
+                                is_overridden = (
+                                    (isinstance(model_inner, dict) and s_name in model_inner)
+                                    or (s_name in m_spec)
+                                )
+                                if is_overridden:
+                                    btn_del_sc = _make_subtle_tool_button("close", f"Reset '{s_name}' to default", size=20, icon_size=12)
+                                    btn_del_sc.clicked.connect(lambda _, mn=m_name, sn=s_name: self._remove_method_subcomponent(mn, sn))
+                                    row_arch.addWidget(btn_del_sc)
+                                row_arch.addStretch()
+                                model_block.addRow("Neural Architecture", row_arch)
+
+                            elif s_name == "symbolic":
+                                symbolic_choices = ["nsfr", "neumann", "cew"]
+                                cur_reasoner = "nsfr"
+                                if isinstance(s_val, str):
+                                    cur_reasoner = s_val
+                                elif isinstance(s_val, dict):
+                                    cur_reasoner = next((k for k in ("cew", "nsfr", "neumann") if k in s_val), s_val.get("type", "nsfr"))
+                                row_sym = QHBoxLayout()
+                                combo_sym = ComboBox()
+                                combo_sym.setMaximumWidth(TEXT_FIELD_WIDTH)
+                                combo_sym.addItems(symbolic_choices)
+                                if cur_reasoner not in symbolic_choices:
+                                    combo_sym.insertItem(0, cur_reasoner)
+                                combo_sym.setCurrentText(cur_reasoner)
+                                combo_sym.setToolTip("Symbolic logic reasoner (nsfr, neumann, cew)")
+                                combo_sym.currentTextChanged.connect(
+                                    lambda v, mn=m_name, sn=s_name: self._on_method_subcomponent_type_changed(mn, sn, v)
+                                )
+                                row_sym.addWidget(combo_sym)
+                                is_overridden = (
+                                    (isinstance(model_inner, dict) and s_name in model_inner)
+                                    or (s_name in m_spec)
+                                )
+                                if is_overridden:
+                                    btn_del_sc = _make_subtle_tool_button("close", f"Reset '{s_name}' to default", size=20, icon_size=12)
+                                    btn_del_sc.clicked.connect(lambda _, mn=m_name, sn=s_name: self._remove_method_subcomponent(mn, sn))
+                                    row_sym.addWidget(btn_del_sc)
+                                row_sym.addStretch()
+                                model_block.addRow("Logic Module (Symbolic)", row_sym)
+
+                            elif s_name == "blender":
+                                row_blender = QHBoxLayout()
+                                combo_bmode = ComboBox()
+                                combo_bmode.setMaximumWidth(TEXT_FIELD_WIDTH)
+                                combo_bmode.addItems(["neural", "logic", "hybrid"])
+                                cur_mode = s_val.get("mode", "neural") if isinstance(s_val, dict) else "neural"
+                                combo_bmode.setCurrentText(cur_mode)
+                                combo_bmode.currentTextChanged.connect(
+                                    lambda v, mn=m_name: self._on_method_subcomponent_param_edited(mn, "blender", "mode", v)
+                                )
+                                row_blender.addWidget(combo_bmode)
+                                is_overridden = (
+                                    (isinstance(model_inner, dict) and s_name in model_inner)
+                                    or (s_name in m_spec)
+                                )
+                                if is_overridden:
+                                    btn_del_sc = _make_subtle_tool_button("close", f"Reset '{s_name}' to default", size=20, icon_size=12)
+                                    btn_del_sc.clicked.connect(lambda _, mn=m_name, sn=s_name: self._remove_method_subcomponent(mn, sn))
+                                    row_blender.addWidget(btn_del_sc)
+                                row_blender.addStretch()
+                                model_block.addRow("Blender Mode", row_blender)
+
+                            sub_block = IndentedHierarchyBlock(level=2)
+                            sub_params = {}
+                            if isinstance(s_val, dict):
+                                is_explicit_sub = (
+                                    (isinstance(model_inner, dict) and s_name in model_inner)
+                                    or (s_name in m_spec)
+                                )
+                                if is_explicit_sub:
+                                    if s_name == "symbolic" and any(k in ("cew", "nsfr", "neumann") for k in s_val):
+                                        inner_r = next(k for k in ("cew", "nsfr", "neumann") if k in s_val)
+                                        sub_params = s_val[inner_r] if isinstance(s_val[inner_r], dict) else {}
+                                    else:
+                                        sub_params = {k: v for k, v in s_val.items() if k not in ("type", "architecture", "reasoner", "mode")}
+
+                            for sp_k, sp_v in list(sub_params.items()):
+                                sp_row = QHBoxLayout()
+                                sp_line = QLineEdit(str(sp_v if sp_v is not None else ""))
+                                sp_line.setMaximumWidth(TEXT_FIELD_WIDTH)
+                                sp_line.textChanged.connect(
+                                    lambda v, mn=m_name, sn=s_name, pk=sp_k: self._on_method_subcomponent_param_edited(mn, sn, pk, v)
+                                )
+                                sp_row.addWidget(sp_line)
+                                btn_sp_del = _make_subtle_tool_button("close", f"Remove '{sp_k}'", size=20, icon_size=12)
+                                btn_sp_del.clicked.connect(
+                                    lambda _, mn=m_name, sn=s_name, pk=sp_k: self._remove_method_subcomponent_param(mn, sn, pk)
+                                )
+                                sp_row.addWidget(btn_sp_del)
+                                sp_row.addStretch()
+                                sub_block.addRow(f"{sp_k}", sp_row)
+
+                            sub_candidates = []
+                            if s_name == "neural":
+                                n_arch = cur_arch if "cur_arch" in locals() else "dnn"
+                                if tree:
+                                    sub_candidates = [k for k in tree.model_parameters(n_arch).keys() if k not in ("architecture", "type")]
+                                if not sub_candidates:
+                                    sub_candidates = ["hidden_sizes", "activation"]
+                            elif s_name == "symbolic":
+                                s_reas = cur_reasoner if "cur_reasoner" in locals() else "nsfr"
+                                if tree:
+                                    sub_candidates = [k for k in tree.model_parameters(s_reas).keys() if k not in ("reasoner", "type")]
+                                for standard_p in ("rules", "logic_lr", "valuation", "ecm_dthr", "fyd"):
+                                    if standard_p not in sub_candidates:
+                                        if s_reas == "cew" and standard_p in ("rules", "ecm_dthr", "fyd", "fyd_top_k"):
+                                            sub_candidates.append(standard_p)
+                                        elif s_reas in ("nsfr", "neumann") and standard_p in ("rules", "logic_lr", "valuation"):
+                                            sub_candidates.append(standard_p)
+                            elif s_name == "blender":
+                                sub_candidates = ["blend_function", "temperature"]
+
+                            filtered_sub_cand = [c for c in sub_candidates if c not in sub_params]
+                            if filtered_sub_cand:
+                                sub_add_row = QHBoxLayout()
+                                sub_add_row.setSpacing(6)
+                                combo_add_sub_p = ComboBox()
+                                combo_add_sub_p.setEditable(True)
+                                combo_add_sub_p.setMaximumWidth(180)
+                                combo_add_sub_p.addItems(filtered_sub_cand)
+                                combo_add_sub_p.setEditText("")
+                                combo_add_sub_p.setPlaceholderText(
+                                    "Add logic param..." if s_name == "symbolic" else f"Add {s_name} param..."
+                                )
+                                sub_add_row.addWidget(combo_add_sub_p)
+
+                                btn_do_add_sub_p = _make_subtle_tool_button("plus", f"Add parameter to {s_name}", size=22, icon_size=12)
+                                btn_do_add_sub_p.clicked.connect(
+                                    lambda _, mn=m_name, sn=s_name, cb=combo_add_sub_p: self._add_method_subcomponent_param(mn, sn, cb.currentText().strip())
+                                )
+                                sub_add_row.addWidget(btn_do_add_sub_p)
+                                sub_add_row.addStretch()
+                                sub_block.addRow(
+                                    "Add logic param" if s_name == "symbolic" else f"Add {s_name} param",
+                                    sub_add_row
+                                )
+
+                            model_block.addRow(sub_block)
+
+                        cand_subcomps = get_method_candidate_subcomponents(model_name, tree, set(subcomps_present.keys()))
+                        if cand_subcomps:
+                            add_sc_row = QHBoxLayout()
+                            add_sc_row.setSpacing(6)
+                            combo_new_sc = ComboBox()
+                            combo_new_sc.setMaximumWidth(180)
+                            combo_new_sc.addItems(cand_subcomps)
+                            add_sc_row.addWidget(combo_new_sc)
+                            btn_add_sc = _make_subtle_tool_button("plus", "Add subcomponent", size=22, icon_size=12)
+                            btn_add_sc.clicked.connect(
+                                lambda _, mn=m_name, cb=combo_new_sc: self._add_method_subcomponent(mn, cb.currentText().strip())
                             )
-                            row_arch.addWidget(combo_arch)
-                            btn_del_sc = _make_subtle_tool_button("close", f"Remove subcomponent '{s_name}'", size=20, icon_size=12)
-                            btn_del_sc.clicked.connect(lambda _, mn=m_name, sn=s_name: self._remove_method_subcomponent(mn, sn))
-                            row_arch.addWidget(btn_del_sc)
-                            row_arch.addStretch()
-                            model_block.addRow("Neural Architecture", row_arch)
+                            add_sc_row.addWidget(btn_add_sc)
+                            add_sc_row.addStretch()
+                            model_block.addRow("Add Subcomponent", add_sc_row)
 
-                        elif s_name == "symbolic":
-                            symbolic_choices = ["nsfr", "neumann", "cew"]
-                            cur_reasoner = "nsfr"
-                            if isinstance(s_val, str):
-                                cur_reasoner = s_val
-                            elif isinstance(s_val, dict):
-                                cur_reasoner = next((k for k in ("cew", "nsfr", "neumann") if k in s_val), s_val.get("type", "nsfr"))
-                            row_sym = QHBoxLayout()
-                            combo_sym = ComboBox()
-                            combo_sym.setMaximumWidth(TEXT_FIELD_WIDTH)
-                            combo_sym.addItems(symbolic_choices)
-                            combo_sym.setCurrentText(cur_reasoner)
-                            combo_sym.currentTextChanged.connect(
-                                lambda v, mn=m_name, sn=s_name: self._on_method_subcomponent_type_changed(mn, sn, v)
-                            )
-                            row_sym.addWidget(combo_sym)
-                            btn_del_sc = _make_subtle_tool_button("close", f"Remove subcomponent '{s_name}'", size=20, icon_size=12)
-                            btn_del_sc.clicked.connect(lambda _, mn=m_name, sn=s_name: self._remove_method_subcomponent(mn, sn))
-                            row_sym.addWidget(btn_del_sc)
-                            row_sym.addStretch()
-                            model_block.addRow("Symbolic Reasoner", row_sym)
+                    else:
+                        model_keys_raw = set(tree.model_parameters(model_name).keys()) if tree else set()
+                        model_keys = model_keys_raw - {"architecture", "type", "lightning_module"}
+                        if model_name == "dnn":
+                            model_keys.update(["hidden_sizes", "activation"])
 
-                        elif s_name == "blender":
-                            row_blender = QHBoxLayout()
-                            combo_bmode = ComboBox()
-                            combo_bmode.setMaximumWidth(TEXT_FIELD_WIDTH)
-                            combo_bmode.addItems(["neural", "logic", "hybrid"])
-                            cur_mode = s_val.get("mode", "neural") if isinstance(s_val, dict) else "neural"
-                            combo_bmode.setCurrentText(cur_mode)
-                            combo_bmode.currentTextChanged.connect(
-                                lambda v, mn=m_name: self._on_method_subcomponent_param_edited(mn, "blender", "mode", v)
-                            )
-                            row_blender.addWidget(combo_bmode)
-                            btn_del_sc = _make_subtle_tool_button("close", f"Remove subcomponent '{s_name}'", size=20, icon_size=12)
-                            btn_del_sc.clicked.connect(lambda _, mn=m_name, sn=s_name: self._remove_method_subcomponent(mn, sn))
-                            row_blender.addWidget(btn_del_sc)
-                            row_blender.addStretch()
-                            model_block.addRow("Blender Mode", row_blender)
+                        for mk in list(model_keys):
+                            val = None
+                            if mk in m_spec:
+                                val = m_spec[mk]
+                            elif isinstance(model_inner, dict) and mk in model_inner:
+                                val = model_inner[mk]
+                            if val is not None:
+                                model_keys_present.add(mk)
+                                row_mp = QHBoxLayout()
+                                line_mp = QLineEdit(str(val))
+                                line_mp.setMaximumWidth(TEXT_FIELD_WIDTH)
+                                line_mp.textChanged.connect(
+                                    lambda v, mn=m_name, pk=mk: self._on_method_param_edited(mn, pk, v)
+                                )
+                                row_mp.addWidget(line_mp)
+                                btn_del_mp = _make_subtle_tool_button("close", f"Remove '{mk}'", size=20, icon_size=12)
+                                btn_del_mp.clicked.connect(lambda _, mn=m_name, pk=mk: self._remove_method_param(mn, pk))
+                                row_mp.addWidget(btn_del_mp)
+                                row_mp.addStretch()
+                                model_block.addRow(str(mk), row_mp)
 
-                        sub_block = IndentedHierarchyBlock(level=2)
-                        sub_params = {}
-                        if isinstance(s_val, dict):
-                            if s_name == "symbolic" and any(k in ("cew", "nsfr", "neumann") for k in s_val):
-                                inner_r = next(k for k in ("cew", "nsfr", "neumann") if k in s_val)
-                                sub_params = s_val[inner_r] if isinstance(s_val[inner_r], dict) else {}
-                            else:
-                                sub_params = {k: v for k, v in s_val.items() if k not in ("type", "architecture", "reasoner", "mode")}
-
-                        for sp_k, sp_v in list(sub_params.items()):
-                            sp_row = QHBoxLayout()
-                            sp_line = QLineEdit(str(sp_v if sp_v is not None else ""))
-                            sp_line.setMaximumWidth(TEXT_FIELD_WIDTH)
-                            sp_line.textChanged.connect(
-                                lambda v, mn=m_name, sn=s_name, pk=sp_k: self._on_method_subcomponent_param_edited(mn, sn, pk, v)
-                            )
-                            sp_row.addWidget(sp_line)
-                            btn_sp_del = _make_subtle_tool_button("close", f"Remove '{sp_k}'", size=20, icon_size=12)
-                            btn_sp_del.clicked.connect(
-                                lambda _, mn=m_name, sn=s_name, pk=sp_k: self._remove_method_subcomponent_param(mn, sn, pk)
-                            )
-                            sp_row.addWidget(btn_sp_del)
-                            sp_row.addStretch()
-                            sub_block.addRow(f"{sp_k}", sp_row)
-
-                        sub_candidates = []
-                        if s_name == "neural":
-                            n_arch = cur_arch if "cur_arch" in locals() else "dnn"
-                            if tree:
-                                sub_candidates = [k for k in tree.model_parameters(n_arch).keys() if k not in ("architecture", "type")]
-                            if not sub_candidates:
-                                sub_candidates = ["hidden_sizes", "activation"]
-                        elif s_name == "symbolic":
-                            s_reas = cur_reasoner if "cur_reasoner" in locals() else "nsfr"
-                            if tree:
-                                sub_candidates = [k for k in tree.model_parameters(s_reas).keys() if k not in ("reasoner", "type")]
-                            if not sub_candidates:
-                                sub_candidates = ["rules", "ecm_dthr", "logic_lr", "valuation", "fyd"]
-                        elif s_name == "blender":
-                            sub_candidates = ["blend_function", "temperature"]
-
-                        filtered_sub_cand = [c for c in sub_candidates if c not in sub_params]
-                        if filtered_sub_cand:
-                            sub_add_row = QHBoxLayout()
-                            sub_add_row.setSpacing(6)
-                            combo_add_sub_p = ComboBox()
-                            combo_add_sub_p.setEditable(True)
-                            combo_add_sub_p.setMaximumWidth(180)
-                            combo_add_sub_p.addItems(filtered_sub_cand)
-                            combo_add_sub_p.setEditText("")
-                            combo_add_sub_p.setPlaceholderText(f"Add {s_name} param...")
-                            sub_add_row.addWidget(combo_add_sub_p)
-
-                            btn_do_add_sub_p = _make_subtle_tool_button("plus", f"Add parameter to {s_name}", size=22, icon_size=12)
-                            btn_do_add_sub_p.clicked.connect(
-                                lambda _, mn=m_name, sn=s_name, cb=combo_add_sub_p: self._add_method_subcomponent_param(mn, sn, cb.currentText().strip())
-                            )
-                            sub_add_row.addWidget(btn_do_add_sub_p)
-                            sub_add_row.addStretch()
-                            sub_block.addRow(f"Add {s_name} param", sub_add_row)
-
-                        model_block.addRow(sub_block)
-
-                    cand_subcomps = get_method_candidate_subcomponents(model_name, tree, set(subcomps_present.keys()))
-                    if cand_subcomps:
-                        add_sc_row = QHBoxLayout()
-                        add_sc_row.setSpacing(6)
-                        combo_new_sc = ComboBox()
-                        combo_new_sc.setMaximumWidth(180)
-                        combo_new_sc.addItems(cand_subcomps)
-                        add_sc_row.addWidget(combo_new_sc)
-                        btn_add_sc = _make_subtle_tool_button("plus", "Add subcomponent", size=22, icon_size=12)
-                        btn_add_sc.clicked.connect(
-                            lambda _, mn=m_name, cb=combo_new_sc: self._add_method_subcomponent(mn, cb.currentText().strip())
+                        curr_model_keys = set(m_spec.keys())
+                        if isinstance(model_inner, dict):
+                            curr_model_keys.update(model_inner.keys())
+                        cand_model = get_model_candidate_hyperparameters(model_name, tree, curr_model_keys)
+                        row_add_mp = QHBoxLayout()
+                        row_add_mp.setSpacing(6)
+                        combo_add_mp = ComboBox()
+                        combo_add_mp.setEditable(True)
+                        combo_add_mp.setMaximumWidth(180)
+                        combo_add_mp.addItems(cand_model)
+                        combo_add_mp.setEditText("")
+                        combo_add_mp.setPlaceholderText(f"Add {model_name} param...")
+                        row_add_mp.addWidget(combo_add_mp)
+                        btn_add_mp = _make_subtle_tool_button("plus", f"Add {model_name} parameter", size=22, icon_size=12)
+                        btn_add_mp.clicked.connect(
+                            lambda _, mn=m_name, cb=combo_add_mp: self._add_method_param(mn, cb.currentText().strip())
                         )
-                        add_sc_row.addWidget(btn_add_sc)
-                        add_sc_row.addStretch()
-                        model_block.addRow("Add Subcomponent", add_sc_row)
-
-                else:
-                    model_keys_raw = set(tree.model_parameters(model_name).keys()) if tree else set()
-                    model_keys = model_keys_raw - {"architecture", "type", "lightning_module"}
-                    if model_name == "dnn":
-                        model_keys.update(["hidden_sizes", "activation"])
-
-                    for mk in list(model_keys):
-                        val = None
-                        if mk in m_spec:
-                            val = m_spec[mk]
-                        elif isinstance(model_inner, dict) and mk in model_inner:
-                            val = model_inner[mk]
-                        if val is not None:
-                            model_keys_present.add(mk)
-                            row_mp = QHBoxLayout()
-                            line_mp = QLineEdit(str(val))
-                            line_mp.setMaximumWidth(TEXT_FIELD_WIDTH)
-                            line_mp.textChanged.connect(
-                                lambda v, mn=m_name, pk=mk: self._on_method_param_edited(mn, pk, v)
-                            )
-                            row_mp.addWidget(line_mp)
-                            btn_del_mp = _make_subtle_tool_button("close", f"Remove '{mk}'", size=20, icon_size=12)
-                            btn_del_mp.clicked.connect(lambda _, mn=m_name, pk=mk: self._remove_method_param(mn, pk))
-                            row_mp.addWidget(btn_del_mp)
-                            row_mp.addStretch()
-                            model_block.addRow(str(mk), row_mp)
-
-                    curr_model_keys = set(m_spec.keys())
-                    if isinstance(model_inner, dict):
-                        curr_model_keys.update(model_inner.keys())
-                    cand_model = get_model_candidate_hyperparameters(model_name, tree, curr_model_keys)
-                    row_add_mp = QHBoxLayout()
-                    row_add_mp.setSpacing(6)
-                    combo_add_mp = ComboBox()
-                    combo_add_mp.setEditable(True)
-                    combo_add_mp.setMaximumWidth(180)
-                    combo_add_mp.addItems(cand_model)
-                    combo_add_mp.setEditText("")
-                    combo_add_mp.setPlaceholderText(f"Add {model_name} param...")
-                    row_add_mp.addWidget(combo_add_mp)
-                    btn_add_mp = _make_subtle_tool_button("plus", f"Add {model_name} parameter", size=22, icon_size=12)
-                    btn_add_mp.clicked.connect(
-                        lambda _, mn=m_name, cb=combo_add_mp: self._add_method_param(mn, cb.currentText().strip())
-                    )
-                    row_add_mp.addWidget(btn_add_mp)
-                    row_add_mp.addStretch()
-                    model_block.addRow(f"Add {model_name} param", row_add_mp)
+                        row_add_mp.addWidget(btn_add_mp)
+                        row_add_mp.addStretch()
+                        model_block.addRow(f"Add {model_name} param", row_add_mp)
 
                     sc_layout.addRow(model_block)
 
@@ -3316,6 +3362,16 @@ class ConfigViewer(QWidget):
             sub_dict = m_spec[subcomp_name]
 
         sub_type = sub_dict.get("type") or sub_dict.get("architecture") or sub_dict.get("reasoner")
+        if not sub_type:
+            if isinstance(m_spec.get(subcomp_name), str):
+                sub_type = m_spec[subcomp_name]
+            elif subcomp_name == "symbolic":
+                sub_type = "nsfr"
+            elif subcomp_name == "neural":
+                sub_type = "dnn"
+            elif subcomp_name == "blender":
+                sub_type = "blender"
+
         if tree and sub_type and sub_type in tree.models:
             model_params = tree.model_parameters(sub_type)
             if param_key in model_params:
@@ -3326,6 +3382,8 @@ class ConfigViewer(QWidget):
             "activation": "relu",
             "ecm_dthr": 0.03,
             "rules": "default",
+            "logic_lr": 0.001,
+            "valuation": "default",
             "fyd": True,
             "fyd_top_k": 3,
             "mode": "neural",
