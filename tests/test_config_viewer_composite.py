@@ -98,3 +98,88 @@ def test_config_viewer_loads_cartpole_final(qapp, tmp_path):
     blend_cand = get_method_candidate_hyperparameters("ppo", "blendrl", tree)
     assert "blend_ent_coef" in blend_cand
     assert "logic_lr" in blend_cand
+
+
+def test_scoped_candidate_hyperparameters(qapp):
+    from frontend.config_viewer import (
+        config_tree,
+        get_agent_candidate_hyperparameters,
+        get_model_candidate_hyperparameters,
+        get_training_candidate_hyperparameters,
+    )
+    tree = config_tree()
+
+    # Agent candidates
+    cql_agent_cand = get_agent_candidate_hyperparameters("cql", tree)
+    assert "cql_alpha" in cql_agent_cand
+    assert "hidden_sizes" not in cql_agent_cand
+    assert "blend_ent_coef" not in cql_agent_cand
+    assert "lr" not in cql_agent_cand
+
+    ppo_agent_cand = get_agent_candidate_hyperparameters("ppo", tree)
+    assert "clip_coef" in ppo_agent_cand
+    assert "cql_alpha" not in ppo_agent_cand
+
+    # Model candidates
+    dnn_model_cand = get_model_candidate_hyperparameters("dnn", tree)
+    assert "hidden_sizes" in dnn_model_cand
+    assert "cql_alpha" not in dnn_model_cand
+    assert "blend_ent_coef" not in dnn_model_cand
+
+    blend_model_cand = get_model_candidate_hyperparameters("blendrl", tree)
+    assert "blend_ent_coef" in blend_model_cand
+    assert "blend_q_values" in blend_model_cand
+    assert "logic_lr" in blend_model_cand
+    assert "cql_alpha" not in blend_model_cand
+
+    # Training candidates
+    train_cand = get_training_candidate_hyperparameters()
+    assert "lr" in train_cand
+    assert "batch_size" in train_cand
+    assert "gamma" in train_cand
+    assert "epochs_per_interval" in train_cand
+
+
+def test_indented_hierarchy_blocks_in_gui(qapp, tmp_path):
+    from frontend.config_viewer import IndentedHierarchyBlock
+
+    src_file = Path("in/config/experiment/mimic/cql_benchmark.yaml")
+    dest_file = tmp_path / "cql_benchmark.yaml"
+    shutil.copy(src_file, dest_file)
+
+    viewer = ConfigViewer()
+    viewer.load_file(dest_file, "experiment/mimic/cql_benchmark.yaml")
+
+    # Find hierarchy blocks rendered in the widget tree
+    blocks = viewer.findChildren(IndentedHierarchyBlock)
+    assert len(blocks) > 0, "Expected IndentedHierarchyBlock instances in rendered GUI"
+
+    # Verify subtle vertical border is styled
+    first_block = blocks[0]
+    assert "border-left: 2px solid #504945" in first_block.styleSheet()
+
+
+def test_add_and_remove_parameters_in_hierarchy(qapp, tmp_path):
+    src_file = Path("in/config/experiment/mimic/cql_benchmark.yaml")
+    dest_file = tmp_path / "cql_benchmark.yaml"
+    shutil.copy(src_file, dest_file)
+
+    viewer = ConfigViewer()
+    viewer.load_file(dest_file, "experiment/mimic/cql_benchmark.yaml")
+
+    method_name = "cql_dnn"
+    # Add agent parameter
+    viewer._add_method_param(method_name, "cql_alpha", 2.5)
+    assert viewer.raw_data["methods"][method_name]["cql_alpha"] == 2.5
+
+    # Add model parameter
+    viewer._add_method_param(method_name, "hidden_sizes", [128, 128])
+    assert viewer.raw_data["methods"][method_name]["hidden_sizes"] == [128, 128]
+
+    # Remove parameters
+    viewer._remove_method_param(method_name, "cql_alpha")
+    assert "cql_alpha" not in viewer.raw_data["methods"][method_name]
+
+    viewer._remove_method_param(method_name, "hidden_sizes")
+    assert "hidden_sizes" not in viewer.raw_data["methods"][method_name]
+

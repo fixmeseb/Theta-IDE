@@ -98,6 +98,91 @@ def _parse_yaml_value(text: str):
     return stripped
 
 
+TRAINING_HYPERPARAMETERS = (
+    "lr",
+    "batch_size",
+    "gamma",
+    "epochs_per_interval",
+    "eval_interval_epochs",
+    "weight_decay",
+    "from_study",
+)
+
+
+def get_agent_candidate_hyperparameters(
+    agent_name: str | None,
+    tree: ConfigTree | None,
+    current_keys: set[str] | None = None,
+) -> list[str]:
+    """Candidate hyperparameters specific to an agent algorithm."""
+    if not agent_name:
+        return []
+    current_keys = current_keys or set()
+    candidates: list[str] = []
+    if tree:
+        agent_params = tree.agent_hyperparameters(agent_name)
+        for k in agent_params.keys():
+            if k not in ("algorithm", "name", "type") and k not in TRAINING_HYPERPARAMETERS:
+                if k not in current_keys and k not in candidates:
+                    candidates.append(k)
+    fallbacks = {
+        "cql": ["cql_alpha", "soft_target_tau", "use_actor", "target_entropy", "cql_weight"],
+        "ppo": [
+            "clip_coef",
+            "clip_range",
+            "ent_coef",
+            "vf_coef",
+            "gae_lambda",
+            "num_steps",
+            "num_envs",
+            "update_epochs",
+            "max_grad_norm",
+            "target_kl",
+        ],
+        "iql": ["expectile", "temperature", "soft_target_tau"],
+    }
+    for k in fallbacks.get(agent_name, []):
+        if k not in current_keys and k not in candidates:
+            candidates.append(k)
+    return candidates
+
+
+def get_model_candidate_hyperparameters(
+    model_name: str | None,
+    tree: ConfigTree | None,
+    current_keys: set[str] | None = None,
+) -> list[str]:
+    """Candidate hyperparameters specific to a model architecture (or blendrl top-level)."""
+    if not model_name:
+        return []
+    current_keys = current_keys or set()
+    if model_name == "blendrl":
+        blend_keys = ["blend_q_values", "blend_ent_coef", "actor_mode", "logic_lr", "blender_lr"]
+        return [k for k in blend_keys if k not in current_keys]
+    candidates: list[str] = []
+    if tree:
+        model_params = tree.model_parameters(model_name)
+        for k, v in model_params.items():
+            if k not in ("architecture", "type", "lightning_module", "name") and not isinstance(v, dict):
+                if k not in current_keys and k not in candidates:
+                    candidates.append(k)
+    if not candidates:
+        if model_name == "dnn":
+            candidates = ["hidden_sizes", "activation"]
+        elif model_name == "dueling_resnet":
+            candidates = ["hidden_sizes"]
+        elif model_name in ("dense_autoencoder", "autoencoder"):
+            candidates = ["hidden_dim", "latent_dim", "dropout"]
+        candidates = [k for k in candidates if k not in current_keys]
+    return candidates
+
+
+def get_training_candidate_hyperparameters(current_keys: set[str] | None = None) -> list[str]:
+    """Candidate general training hyperparameters for a method."""
+    current_keys = current_keys or set()
+    return [k for k in TRAINING_HYPERPARAMETERS if k not in current_keys]
+
+
 def get_method_candidate_hyperparameters(
     agent_name: str | None,
     model_name: str | None,
@@ -105,36 +190,23 @@ def get_method_candidate_hyperparameters(
     current_keys: set[str] | None = None,
 ) -> list[str]:
     """Dynamically determine valid hyperparameters for a method based on its agent and model."""
-    candidates: list[str] = []
     current_keys = current_keys or set()
+    candidates: list[str] = []
 
-    # 1. Base training parameters common to RL / supervised methods
-    universal_params = ["lr", "batch_size", "gamma", "weight_decay", "epochs_per_interval", "eval_interval_epochs"]
-    for p in universal_params:
-        if p not in current_keys:
+    # 1. Base training parameters
+    for p in get_training_candidate_hyperparameters(current_keys):
+        if p not in candidates:
             candidates.append(p)
 
-    # 2. Parameters from the selected agent YAML (e.g. ppo, cql, iql)
-    if tree and agent_name:
-        agent_params = tree.agent_hyperparameters(agent_name)
-        for k in agent_params.keys():
-            if k not in ("algorithm", "name", "type", "lr", "batch_size", "gamma") and k not in current_keys:
-                if k not in candidates:
-                    candidates.append(k)
+    # 2. Agent-specific parameters
+    for k in get_agent_candidate_hyperparameters(agent_name, tree, current_keys):
+        if k not in candidates:
+            candidates.append(k)
 
-    # 3. Parameters from the selected model YAML (e.g. dnn, transformer, blendrl)
-    if tree and model_name:
-        model_params = tree.model_parameters(model_name)
-        for k, v in model_params.items():
-            if k not in ("architecture", "type", "lightning_module", "name") and not isinstance(v, dict):
-                if k not in current_keys and k not in candidates:
-                    candidates.append(k)
-
-        # BlendRL specific training parameters
-        if model_name == "blendrl":
-            for bk in ("blend_ent_coef", "logic_lr", "blender_lr", "blend_q_values"):
-                if bk not in current_keys and bk not in candidates:
-                    candidates.append(bk)
+    # 3. Model-specific parameters
+    for k in get_model_candidate_hyperparameters(model_name, tree, current_keys):
+        if k not in candidates:
+            candidates.append(k)
 
     return candidates
 
@@ -191,6 +263,37 @@ def number_field(value):
     spin.setRange(0 if value >= 0 else -1000000, 100000000)
     spin.setValue(value)
     return spin
+
+
+class IndentedHierarchyBlock(QFrame):
+    """Indented container with a subtle vertical guide line denoting hierarchy in Theta-IDE."""
+
+    def __init__(self, parent=None, level: int = 1):
+        super().__init__(parent)
+        self.setObjectName(f"hierarchyBlock_lvl{level}")
+        left_margin = 12 if level == 1 else 14
+        self.setStyleSheet(f"""
+            QFrame#hierarchyBlock_lvl{level} {{
+                border-left: 2px solid #504945;
+                margin-left: {left_margin}px;
+                padding-left: 10px;
+                background: transparent;
+                border-top: none;
+                border-right: none;
+                border-bottom: none;
+            }}
+        """)
+        self.form_layout = QFormLayout(self)
+        self.form_layout.setContentsMargins(0, 4, 0, 6)
+        self.form_layout.setVerticalSpacing(6)
+        self.form_layout.setHorizontalSpacing(10)
+
+    def addRow(self, label_or_widget, widget=None):
+        if widget is not None:
+            self.form_layout.addRow(label_or_widget, widget)
+        else:
+            self.form_layout.addRow(label_or_widget)
+
 
 # Top-level experiment keys the five fixed boxes already render. Everything else
 # goes through _render_remaining_sections, so a paradigm's own settings are
@@ -1625,7 +1728,7 @@ class ConfigViewer(QWidget):
                 title_row.addWidget(btn_remove)
                 sc_layout.addRow(title_row)
 
-                # Agent picker
+                # --- AGENT SECTION ---
                 agent_raw = m_spec.get("agent")
                 if isinstance(agent_raw, dict):
                     agent_val = (agent_raw.get("algorithm") or agent_raw.get("name") or next((k for k in agent_raw if k != "name"), ""))
@@ -1658,10 +1761,69 @@ class ConfigViewer(QWidget):
                     txt_agent.textChanged.connect(
                         lambda v, mn=m_name: self._on_method_param_edited(mn, "agent", v)
                     )
+
+                agent_keys_present = set()
                 if txt_agent is not None:
                     sc_layout.addRow("Agent Algorithm", txt_agent)
 
-                # Model picker
+                    agent_block = IndentedHierarchyBlock(level=1)
+                    agent_param_keys = set(tree.agent_hyperparameters(agent_val).keys()) if (tree and agent_val) else set()
+                    agent_param_keys = agent_param_keys - set(TRAINING_HYPERPARAMETERS) - {"algorithm", "name", "type"}
+                    if agent_val == "cql":
+                        agent_param_keys.update(["cql_alpha", "soft_target_tau", "use_actor", "target_entropy", "cql_weight"])
+                    elif agent_val == "ppo":
+                        agent_param_keys.update(["clip_coef", "clip_range", "ent_coef", "vf_coef", "gae_lambda", "num_steps", "num_envs", "update_epochs", "max_grad_norm", "target_kl"])
+                    elif agent_val == "iql":
+                        agent_param_keys.update(["expectile", "temperature", "soft_target_tau"])
+
+                    for ak, av in list(m_spec.items()):
+                        if ak in ("agent", "model", "neural", "symbolic", "blender", "base"):
+                            continue
+                        if ak in agent_param_keys or (agent_val and ak.startswith(f"{agent_val}_")):
+                            agent_keys_present.add(ak)
+                            row_ap = QHBoxLayout()
+                            if isinstance(av, bool):
+                                cb_ap = QCheckBox()
+                                cb_ap.setChecked(av)
+                                cb_ap.toggled.connect(lambda v, mn=m_name, pk=ak: self._on_method_param_edited(mn, pk, v))
+                                row_ap.addWidget(cb_ap)
+                            elif isinstance(av, (int, float)):
+                                spin_ap = number_field(av)
+                                spin_ap.setMaximumWidth(NUMBER_FIELD_WIDTH)
+                                spin_ap.valueChanged.connect(lambda v, mn=m_name, pk=ak: self._on_method_param_edited(mn, pk, v))
+                                row_ap.addWidget(spin_ap)
+                            else:
+                                line_ap = QLineEdit(str(av if av is not None else ""))
+                                line_ap.setMaximumWidth(TEXT_FIELD_WIDTH)
+                                line_ap.textChanged.connect(lambda v, mn=m_name, pk=ak: self._on_method_param_edited(mn, pk, v))
+                                row_ap.addWidget(line_ap)
+                            btn_del_ap = _make_subtle_tool_button("close", f"Remove '{ak}'", size=20, icon_size=12)
+                            btn_del_ap.clicked.connect(lambda _, mn=m_name, pk=ak: self._remove_method_param(mn, pk))
+                            row_ap.addWidget(btn_del_ap)
+                            row_ap.addStretch()
+                            agent_block.addRow(str(ak), row_ap)
+
+                    cand_agent = get_agent_candidate_hyperparameters(agent_val, tree, set(m_spec.keys()))
+                    row_add_ap = QHBoxLayout()
+                    row_add_ap.setSpacing(6)
+                    combo_add_ap = ComboBox()
+                    combo_add_ap.setEditable(True)
+                    combo_add_ap.setMaximumWidth(180)
+                    combo_add_ap.addItems(cand_agent)
+                    combo_add_ap.setEditText("")
+                    combo_add_ap.setPlaceholderText(f"Add {agent_val or 'agent'} param...")
+                    row_add_ap.addWidget(combo_add_ap)
+                    btn_add_ap = _make_subtle_tool_button("plus", f"Add {agent_val or 'agent'} parameter", size=22, icon_size=12)
+                    btn_add_ap.clicked.connect(
+                        lambda _, mn=m_name, cb=combo_add_ap: self._add_method_param(mn, cb.currentText().strip())
+                    )
+                    row_add_ap.addWidget(btn_add_ap)
+                    row_add_ap.addStretch()
+                    agent_block.addRow(f"Add {agent_val or 'agent'} param", row_add_ap)
+
+                    sc_layout.addRow(agent_block)
+
+                # --- MODEL SECTION ---
                 model_raw = m_spec.get("model", "")
                 if isinstance(model_raw, dict):
                     model_name = next(iter(model_raw))
@@ -1704,109 +1866,78 @@ class ConfigViewer(QWidget):
                     )
                 sc_layout.addRow("Model Architecture", txt_model)
 
-                # Learning rate
-                if "lr" in m_spec:
-                    row_lr = QHBoxLayout()
-                    spin_lr = CompactDoubleSpinBox()
-                    spin_lr.setMaximumWidth(NUMBER_FIELD_WIDTH)
-                    spin_lr.setDecimals(6)
-                    spin_lr.setRange(0.000001, 1.0)
-                    spin_lr.setSingleStep(0.0001)
-                    spin_lr.setValue(float(m_spec["lr"]))
-                    spin_lr.valueChanged.connect(lambda v, mn=m_name: self._on_method_param_edited(mn, "lr", v))
-                    row_lr.addWidget(spin_lr)
-                    btn_del = _make_subtle_tool_button("close", "Remove lr parameter", size=20, icon_size=12)
-                    btn_del.clicked.connect(lambda _, mn=m_name: self._remove_method_param(mn, "lr"))
-                    row_lr.addWidget(btn_del)
-                    row_lr.addStretch()
-                    sc_layout.addRow("Learning Rate (lr)", row_lr)
-
-                # Batch size
-                if "batch_size" in m_spec:
-                    row_bs = QHBoxLayout()
-                    spin_bs = SpinBox()
-                    spin_bs.setMaximumWidth(NUMBER_FIELD_WIDTH)
-                    spin_bs.setRange(1, 131072)
-                    spin_bs.setValue(int(m_spec["batch_size"]))
-                    spin_bs.valueChanged.connect(lambda v, mn=m_name: self._on_method_param_edited(mn, "batch_size", v))
-                    row_bs.addWidget(spin_bs)
-                    btn_del = _make_subtle_tool_button("close", "Remove batch_size parameter", size=20, icon_size=12)
-                    btn_del.clicked.connect(lambda _, mn=m_name: self._remove_method_param(mn, "batch_size"))
-                    row_bs.addWidget(btn_del)
-                    row_bs.addStretch()
-                    sc_layout.addRow("Batch Size", row_bs)
-
-                # Gamma
-                if "gamma" in m_spec:
-                    row_g = QHBoxLayout()
-                    spin_g = DoubleSpinBox()
-                    spin_g.setMaximumWidth(NUMBER_FIELD_WIDTH)
-                    spin_g.setDecimals(4)
-                    spin_g.setRange(0.0, 1.0)
-                    spin_g.setValue(float(m_spec["gamma"]))
-                    spin_g.valueChanged.connect(lambda v, mn=m_name: self._on_method_param_edited(mn, "gamma", v))
-                    row_g.addWidget(spin_g)
-                    btn_del = _make_subtle_tool_button("close", "Remove gamma parameter", size=20, icon_size=12)
-                    btn_del.clicked.connect(lambda _, mn=m_name: self._remove_method_param(mn, "gamma"))
-                    row_g.addWidget(btn_del)
-                    row_g.addStretch()
-                    sc_layout.addRow("Discount Factor (γ)", row_g)
-
-                # Extra method-level hyperparameters
-                standard_skip = {"agent", "model", "lr", "batch_size", "gamma", "neural", "symbolic", "blender", "base"}
-                for extra_k, extra_v in list(m_spec.items()):
-                    if extra_k in standard_skip:
-                        continue
-                    if isinstance(extra_v, (int, float, str, bool)):
-                        row_extra = QHBoxLayout()
-                        line_extra = QLineEdit(str(extra_v))
-                        line_extra.setMaximumWidth(NUMBER_FIELD_WIDTH)
-                        line_extra.textChanged.connect(
-                            lambda v, mn=m_name, ek=extra_k: self._on_method_param_edited(mn, ek, v)
-                        )
-                        row_extra.addWidget(line_extra)
-                        btn_del = _make_subtle_tool_button("close", f"Remove hyperparameter '{extra_k}'", size=20, icon_size=12)
-                        btn_del.clicked.connect(lambda _, mn=m_name, ek=extra_k: self._remove_method_param(mn, ek))
-                        row_extra.addWidget(btn_del)
-                        row_extra.addStretch()
-                        sc_layout.addRow(str(extra_k), row_extra)
-
-                # Model-level scalar hyperparameters (inside model dict, e.g. blend_q_values: true)
-                if isinstance(model_inner, dict):
-                    for mk, mv in list(model_inner.items()):
-                        if mk in ("neural", "symbolic", "blender", "type", "architecture"):
-                            continue
-                        if isinstance(mv, (int, float, str, bool)):
-                            row_extra = QHBoxLayout()
-                            line_extra = QLineEdit(str(mv))
-                            line_extra.setMaximumWidth(NUMBER_FIELD_WIDTH)
-                            line_extra.textChanged.connect(
-                                lambda v, mn=m_name, ek=mk: self._on_method_param_edited(mn, ek, v)
-                            )
-                            row_extra.addWidget(line_extra)
-                            btn_del = _make_subtle_tool_button("close", f"Remove hyperparameter '{mk}'", size=20, icon_size=12)
-                            btn_del.clicked.connect(lambda _, mn=m_name, ek=mk: self._remove_method_param(mn, ek))
-                            row_extra.addWidget(btn_del)
-                            row_extra.addStretch()
-                            sc_layout.addRow(str(mk), row_extra)
-
-                # Composite Subcomponents
+                model_block = IndentedHierarchyBlock(level=1)
                 is_composite_model = (
                     model_name == "blendrl"
                     or (tree and model_name in tree.models and tree.models[model_name].is_composite)
                 )
-                subcomps_present = {}
-                if isinstance(model_inner, dict):
-                    for sk in ("neural", "symbolic", "blender"):
-                        if sk in model_inner:
-                            subcomps_present[sk] = model_inner[sk]
-                for sk in ("neural", "symbolic", "blender"):
-                    if sk in m_spec and sk not in subcomps_present:
-                        subcomps_present[sk] = m_spec[sk]
 
-                if is_composite_model or subcomps_present:
+                model_keys_present = set()
+                blend_param_keys = ["blend_q_values", "blend_ent_coef", "actor_mode", "logic_lr", "blender_lr"]
+
+                if is_composite_model:
+                    for bk in blend_param_keys:
+                        val = None
+                        if isinstance(model_inner, dict) and bk in model_inner:
+                            val = model_inner[bk]
+                        elif bk in m_spec:
+                            val = m_spec[bk]
+                        if val is not None:
+                            model_keys_present.add(bk)
+                            row_bp = QHBoxLayout()
+                            if isinstance(val, bool):
+                                cb_bp = QCheckBox()
+                                cb_bp.setChecked(val)
+                                cb_bp.toggled.connect(lambda v, mn=m_name, pk=bk: self._on_method_param_edited(mn, pk, v))
+                                row_bp.addWidget(cb_bp)
+                            elif isinstance(val, (int, float)):
+                                spin_bp = number_field(val)
+                                spin_bp.setMaximumWidth(NUMBER_FIELD_WIDTH)
+                                spin_bp.valueChanged.connect(lambda v, mn=m_name, pk=bk: self._on_method_param_edited(mn, pk, v))
+                                row_bp.addWidget(spin_bp)
+                            else:
+                                line_bp = QLineEdit(str(val))
+                                line_bp.setMaximumWidth(TEXT_FIELD_WIDTH)
+                                line_bp.textChanged.connect(lambda v, mn=m_name, pk=bk: self._on_method_param_edited(mn, pk, v))
+                                row_bp.addWidget(line_bp)
+                            btn_del_bp = _make_subtle_tool_button("close", f"Remove '{bk}'", size=20, icon_size=12)
+                            btn_del_bp.clicked.connect(lambda _, mn=m_name, pk=bk: self._remove_method_param(mn, pk))
+                            row_bp.addWidget(btn_del_bp)
+                            row_bp.addStretch()
+                            model_block.addRow(str(bk), row_bp)
+
+                    curr_blend_keys = set()
+                    if isinstance(model_inner, dict):
+                        curr_blend_keys.update(model_inner.keys())
+                    curr_blend_keys.update(m_spec.keys())
+                    cand_blend = [k for k in blend_param_keys if k not in curr_blend_keys]
+                    row_add_bp = QHBoxLayout()
+                    row_add_bp.setSpacing(6)
+                    combo_add_bp = ComboBox()
+                    combo_add_bp.setEditable(True)
+                    combo_add_bp.setMaximumWidth(180)
+                    combo_add_bp.addItems(cand_blend)
+                    combo_add_bp.setEditText("")
+                    combo_add_bp.setPlaceholderText("Add blendrl param...")
+                    row_add_bp.addWidget(combo_add_bp)
+                    btn_add_bp = _make_subtle_tool_button("plus", "Add blendrl parameter", size=22, icon_size=12)
+                    btn_add_bp.clicked.connect(
+                        lambda _, mn=m_name, cb=combo_add_bp: self._add_method_param(mn, cb.currentText().strip())
+                    )
+                    row_add_bp.addWidget(btn_add_bp)
+                    row_add_bp.addStretch()
+                    model_block.addRow("Add blendrl param", row_add_bp)
+
+                    subcomps_present = {}
+                    if isinstance(model_inner, dict):
+                        for sk in ("neural", "symbolic", "blender"):
+                            if sk in model_inner:
+                                subcomps_present[sk] = model_inner[sk]
+                    for sk in ("neural", "symbolic", "blender"):
+                        if sk in m_spec and sk not in subcomps_present:
+                            subcomps_present[sk] = m_spec[sk]
+
                     for s_name, s_val in list(subcomps_present.items()):
-                        # Type / Architecture selector row
                         if s_name == "neural":
                             neural_choices = [
                                 m for m in (sorted(tree.models) if tree else ["dnn", "dueling_resnet", "transformer", "lstm", "cnn"])
@@ -1832,7 +1963,7 @@ class ConfigViewer(QWidget):
                             btn_del_sc.clicked.connect(lambda _, mn=m_name, sn=s_name: self._remove_method_subcomponent(mn, sn))
                             row_arch.addWidget(btn_del_sc)
                             row_arch.addStretch()
-                            sc_layout.addRow("Neural Architecture", row_arch)
+                            model_block.addRow("Neural Architecture", row_arch)
 
                         elif s_name == "symbolic":
                             symbolic_choices = ["nsfr", "neumann", "cew"]
@@ -1854,7 +1985,7 @@ class ConfigViewer(QWidget):
                             btn_del_sc.clicked.connect(lambda _, mn=m_name, sn=s_name: self._remove_method_subcomponent(mn, sn))
                             row_sym.addWidget(btn_del_sc)
                             row_sym.addStretch()
-                            sc_layout.addRow("Symbolic Reasoner", row_sym)
+                            model_block.addRow("Symbolic Reasoner", row_sym)
 
                         elif s_name == "blender":
                             row_blender = QHBoxLayout()
@@ -1871,9 +2002,9 @@ class ConfigViewer(QWidget):
                             btn_del_sc.clicked.connect(lambda _, mn=m_name, sn=s_name: self._remove_method_subcomponent(mn, sn))
                             row_blender.addWidget(btn_del_sc)
                             row_blender.addStretch()
-                            sc_layout.addRow("Blender Mode", row_blender)
+                            model_block.addRow("Blender Mode", row_blender)
 
-                        # Inner parameters of this subcomponent
+                        sub_block = IndentedHierarchyBlock(level=2)
                         sub_params = {}
                         if isinstance(s_val, dict):
                             if s_name == "symbolic" and any(k in ("cew", "nsfr", "neumann") for k in s_val):
@@ -1896,9 +2027,8 @@ class ConfigViewer(QWidget):
                             )
                             sp_row.addWidget(btn_sp_del)
                             sp_row.addStretch()
-                            sc_layout.addRow(f"{s_name}.{sp_k}", sp_row)
+                            sub_block.addRow(f"{sp_k}", sp_row)
 
-                        # Row to add a parameter to this subcomponent
                         sub_candidates = []
                         if s_name == "neural":
                             n_arch = cur_arch if "cur_arch" in locals() else "dnn"
@@ -1924,17 +2054,19 @@ class ConfigViewer(QWidget):
                             combo_add_sub_p.setMaximumWidth(180)
                             combo_add_sub_p.addItems(filtered_sub_cand)
                             combo_add_sub_p.setEditText("")
+                            combo_add_sub_p.setPlaceholderText(f"Add {s_name} param...")
                             sub_add_row.addWidget(combo_add_sub_p)
 
-                            btn_do_add_sub_p = _make_subtle_tool_button("plus", f"Add parameter to {s_name}", size=24, icon_size=12)
+                            btn_do_add_sub_p = _make_subtle_tool_button("plus", f"Add parameter to {s_name}", size=22, icon_size=12)
                             btn_do_add_sub_p.clicked.connect(
                                 lambda _, mn=m_name, sn=s_name, cb=combo_add_sub_p: self._add_method_subcomponent_param(mn, sn, cb.currentText().strip())
                             )
                             sub_add_row.addWidget(btn_do_add_sub_p)
                             sub_add_row.addStretch()
-                            sc_layout.addRow(f"Add {s_name} param", sub_add_row)
+                            sub_block.addRow(f"Add {s_name} param", sub_add_row)
 
-                    # Row to add missing subcomponent (if composite model)
+                        model_block.addRow(sub_block)
+
                     cand_subcomps = get_method_candidate_subcomponents(model_name, tree, set(subcomps_present.keys()))
                     if cand_subcomps:
                         add_sc_row = QHBoxLayout()
@@ -1943,49 +2075,156 @@ class ConfigViewer(QWidget):
                         combo_new_sc.setMaximumWidth(180)
                         combo_new_sc.addItems(cand_subcomps)
                         add_sc_row.addWidget(combo_new_sc)
-                        btn_add_sc = _make_subtle_tool_button("plus", "Add subcomponent", size=24, icon_size=12)
+                        btn_add_sc = _make_subtle_tool_button("plus", "Add subcomponent", size=22, icon_size=12)
                         btn_add_sc.clicked.connect(
                             lambda _, mn=m_name, cb=combo_new_sc: self._add_method_subcomponent(mn, cb.currentText().strip())
                         )
                         add_sc_row.addWidget(btn_add_sc)
                         add_sc_row.addStretch()
-                        sc_layout.addRow("Add Subcomponent", add_sc_row)
+                        model_block.addRow("Add Subcomponent", add_sc_row)
 
-                # Row to add a new hyperparameter to this method
-                add_h_row = QHBoxLayout()
-                add_h_row.setSpacing(6)
-                combo_add_hk = ComboBox()
-                combo_add_hk.setEditable(True)
-                combo_add_hk.setMaximumWidth(200)
-                combo_add_hk.setPlaceholderText("Add hyperparameter (e.g. ent_coef)...")
+                else:
+                    model_keys_raw = set(tree.model_parameters(model_name).keys()) if tree else set()
+                    model_keys = model_keys_raw - {"architecture", "type", "lightning_module"}
+                    if model_name == "dnn":
+                        model_keys.update(["hidden_sizes", "activation"])
 
-                existing_keys = set(m_spec.keys())
-                if isinstance(model_inner, dict):
-                    existing_keys.update(model_inner.keys())
-                cand_hypers = get_method_candidate_hyperparameters(agent_val, model_name, tree, existing_keys)
-                combo_add_hk.addItems(cand_hypers)
-                combo_add_hk.setEditText("")
-                add_h_row.addWidget(combo_add_hk)
+                    for mk in list(model_keys):
+                        val = None
+                        if mk in m_spec:
+                            val = m_spec[mk]
+                        elif isinstance(model_inner, dict) and mk in model_inner:
+                            val = model_inner[mk]
+                        if val is not None:
+                            model_keys_present.add(mk)
+                            row_mp = QHBoxLayout()
+                            line_mp = QLineEdit(str(val))
+                            line_mp.setMaximumWidth(TEXT_FIELD_WIDTH)
+                            line_mp.textChanged.connect(
+                                lambda v, mn=m_name, pk=mk: self._on_method_param_edited(mn, pk, v)
+                            )
+                            row_mp.addWidget(line_mp)
+                            btn_del_mp = _make_subtle_tool_button("close", f"Remove '{mk}'", size=20, icon_size=12)
+                            btn_del_mp.clicked.connect(lambda _, mn=m_name, pk=mk: self._remove_method_param(mn, pk))
+                            row_mp.addWidget(btn_del_mp)
+                            row_mp.addStretch()
+                            model_block.addRow(str(mk), row_mp)
 
-                btn_do_add_h = _make_subtle_tool_button("plus", "Add hyperparameter with default value", size=26, icon_size=14)
-                btn_do_add_h.setStyleSheet("""
-                    QToolButton {
-                        background: #32302f;
-                        border: 1px solid #504945;
-                        border-radius: 4px;
-                        padding: 0;
-                    }
-                    QToolButton:hover {
-                        background: #3c3836;
-                        border-color: #a89984;
-                    }
-                """)
-                btn_do_add_h.clicked.connect(
-                    lambda _, mn=m_name, ck=combo_add_hk: self._add_method_param(mn, ck.currentText().strip())
+                    curr_model_keys = set(m_spec.keys())
+                    if isinstance(model_inner, dict):
+                        curr_model_keys.update(model_inner.keys())
+                    cand_model = get_model_candidate_hyperparameters(model_name, tree, curr_model_keys)
+                    row_add_mp = QHBoxLayout()
+                    row_add_mp.setSpacing(6)
+                    combo_add_mp = ComboBox()
+                    combo_add_mp.setEditable(True)
+                    combo_add_mp.setMaximumWidth(180)
+                    combo_add_mp.addItems(cand_model)
+                    combo_add_mp.setEditText("")
+                    combo_add_mp.setPlaceholderText(f"Add {model_name} param...")
+                    row_add_mp.addWidget(combo_add_mp)
+                    btn_add_mp = _make_subtle_tool_button("plus", f"Add {model_name} parameter", size=22, icon_size=12)
+                    btn_add_mp.clicked.connect(
+                        lambda _, mn=m_name, cb=combo_add_mp: self._add_method_param(mn, cb.currentText().strip())
+                    )
+                    row_add_mp.addWidget(btn_add_mp)
+                    row_add_mp.addStretch()
+                    model_block.addRow(f"Add {model_name} param", row_add_mp)
+
+                sc_layout.addRow(model_block)
+
+                # --- TRAINING SETTINGS SECTION ---
+                lbl_train_sec = QLabel("Training Settings")
+                lbl_train_sec.setStyleSheet("color: #a89984; font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; margin-top: 6px;")
+                sc_layout.addRow(lbl_train_sec)
+
+                train_block = IndentedHierarchyBlock(level=1)
+
+                if "lr" in m_spec:
+                    row_lr = QHBoxLayout()
+                    spin_lr = CompactDoubleSpinBox()
+                    spin_lr.setMaximumWidth(NUMBER_FIELD_WIDTH)
+                    spin_lr.setDecimals(6)
+                    spin_lr.setRange(0.000001, 1.0)
+                    spin_lr.setSingleStep(0.0001)
+                    spin_lr.setValue(float(m_spec["lr"]))
+                    spin_lr.valueChanged.connect(lambda v, mn=m_name: self._on_method_param_edited(mn, "lr", v))
+                    row_lr.addWidget(spin_lr)
+                    btn_del = _make_subtle_tool_button("close", "Remove lr parameter", size=20, icon_size=12)
+                    btn_del.clicked.connect(lambda _, mn=m_name: self._remove_method_param(mn, "lr"))
+                    row_lr.addWidget(btn_del)
+                    row_lr.addStretch()
+                    train_block.addRow("Learning Rate (lr)", row_lr)
+
+                if "batch_size" in m_spec:
+                    row_bs = QHBoxLayout()
+                    spin_bs = SpinBox()
+                    spin_bs.setMaximumWidth(NUMBER_FIELD_WIDTH)
+                    spin_bs.setRange(1, 131072)
+                    spin_bs.setValue(int(m_spec["batch_size"]))
+                    spin_bs.valueChanged.connect(lambda v, mn=m_name: self._on_method_param_edited(mn, "batch_size", v))
+                    row_bs.addWidget(spin_bs)
+                    btn_del = _make_subtle_tool_button("close", "Remove batch_size parameter", size=20, icon_size=12)
+                    btn_del.clicked.connect(lambda _, mn=m_name: self._remove_method_param(mn, "batch_size"))
+                    row_bs.addWidget(btn_del)
+                    row_bs.addStretch()
+                    train_block.addRow("Batch Size", row_bs)
+
+                if "gamma" in m_spec:
+                    row_g = QHBoxLayout()
+                    spin_g = DoubleSpinBox()
+                    spin_g.setMaximumWidth(NUMBER_FIELD_WIDTH)
+                    spin_g.setDecimals(4)
+                    spin_g.setRange(0.0, 1.0)
+                    spin_g.setValue(float(m_spec["gamma"]))
+                    spin_g.valueChanged.connect(lambda v, mn=m_name: self._on_method_param_edited(mn, "gamma", v))
+                    row_g.addWidget(spin_g)
+                    btn_del = _make_subtle_tool_button("close", "Remove gamma parameter", size=20, icon_size=12)
+                    btn_del.clicked.connect(lambda _, mn=m_name: self._remove_method_param(mn, "gamma"))
+                    row_g.addWidget(btn_del)
+                    row_g.addStretch()
+                    train_block.addRow("Discount Factor (γ)", row_g)
+
+                consumed_keys = {"agent", "model", "neural", "symbolic", "blender", "base", "lr", "batch_size", "gamma"}
+                consumed_keys.update(agent_keys_present)
+                consumed_keys.update(model_keys_present)
+
+                for extra_k, extra_v in list(m_spec.items()):
+                    if extra_k in consumed_keys:
+                        continue
+                    if isinstance(extra_v, (int, float, str, bool)):
+                        row_extra = QHBoxLayout()
+                        line_extra = QLineEdit(str(extra_v if extra_v is not None else ""))
+                        line_extra.setMaximumWidth(NUMBER_FIELD_WIDTH if isinstance(extra_v, (int, float)) else TEXT_FIELD_WIDTH)
+                        line_extra.textChanged.connect(
+                            lambda v, mn=m_name, ek=extra_k: self._on_method_param_edited(mn, ek, v)
+                        )
+                        row_extra.addWidget(line_extra)
+                        btn_del = _make_subtle_tool_button("close", f"Remove '{extra_k}'", size=20, icon_size=12)
+                        btn_del.clicked.connect(lambda _, mn=m_name, ek=extra_k: self._remove_method_param(mn, ek))
+                        row_extra.addWidget(btn_del)
+                        row_extra.addStretch()
+                        train_block.addRow(str(extra_k), row_extra)
+
+                cand_train = get_training_candidate_hyperparameters(set(m_spec.keys()))
+                row_add_tp = QHBoxLayout()
+                row_add_tp.setSpacing(6)
+                combo_add_tp = ComboBox()
+                combo_add_tp.setEditable(True)
+                combo_add_tp.setMaximumWidth(180)
+                combo_add_tp.addItems(cand_train)
+                combo_add_tp.setEditText("")
+                combo_add_tp.setPlaceholderText("Add training param...")
+                row_add_tp.addWidget(combo_add_tp)
+                btn_add_tp = _make_subtle_tool_button("plus", "Add training parameter", size=22, icon_size=12)
+                btn_add_tp.clicked.connect(
+                    lambda _, mn=m_name, cb=combo_add_tp: self._add_method_param(mn, cb.currentText().strip())
                 )
-                add_h_row.addWidget(btn_do_add_h)
-                add_h_row.addStretch()
-                sc_layout.addRow(add_h_row)
+                row_add_tp.addWidget(btn_add_tp)
+                row_add_tp.addStretch()
+                train_block.addRow("Add training param", row_add_tp)
+
+                sc_layout.addRow(train_block)
 
                 method_container.add_method_card(m_name, sub_card)
 
