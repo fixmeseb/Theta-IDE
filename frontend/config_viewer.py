@@ -1828,7 +1828,7 @@ class ConfigViewer(QWidget):
                     permitted = [a.name for a in tree.agents_for(paradigm)]
                     txt_agent = ComboBox()
                     txt_agent.setMaximumWidth(TEXT_FIELD_WIDTH)
-                    txt_agent.setPlaceholderText("Select agent...")
+                    txt_agent.setPlaceholderText("Select algorithm...")
                     txt_agent.addItems(permitted)
                     if agent_val:
                         if agent_val not in permitted:
@@ -1860,14 +1860,14 @@ class ConfigViewer(QWidget):
                 else:
                     txt_agent = QLineEdit(agent_val)
                     txt_agent.setMaximumWidth(TEXT_FIELD_WIDTH)
-                    txt_agent.setPlaceholderText("Agent algorithm...")
+                    txt_agent.setPlaceholderText("Algorithm...")
                     txt_agent.textChanged.connect(
                         lambda v, mn=m_name: self._on_method_param_edited(mn, "agent", v)
                     )
 
                 agent_keys_present = set()
                 if txt_agent is not None:
-                    sc_layout.addRow("Agent Algorithm", txt_agent)
+                    sc_layout.addRow("Algorithm", txt_agent)
 
                     if agent_val:
                         agent_block = IndentedHierarchyBlock(level=1)
@@ -1971,11 +1971,11 @@ class ConfigViewer(QWidget):
                 else:
                     txt_model = QLineEdit(model_name)
                     txt_model.setMaximumWidth(TEXT_FIELD_WIDTH)
-                    txt_model.setPlaceholderText("Model architecture...")
+                    txt_model.setPlaceholderText("Model...")
                     txt_model.textChanged.connect(
                         lambda v, mn=m_name: self._on_method_param_edited(mn, "model", v)
                     )
-                sc_layout.addRow("Model Architecture", txt_model)
+                sc_layout.addRow("Model", txt_model)
 
                 model_keys_present = set()
                 if model_name:
@@ -2431,15 +2431,15 @@ class ConfigViewer(QWidget):
                     p_permitted = [a.name for a in tree.agents_for(paradigm)]
                     p_txt_agent = ComboBox()
                     p_txt_agent.setMaximumWidth(TEXT_FIELD_WIDTH)
-                    p_txt_agent.setPlaceholderText("Select agent...")
+                    p_txt_agent.setPlaceholderText("Select algorithm...")
                     p_txt_agent.addItems(p_permitted)
                     p_txt_agent.setCurrentIndex(-1)
                     p_txt_agent.currentTextChanged.connect(
                         lambda v: self._pending_new_method_spec.__setitem__("agent", v) if v else self._pending_new_method_spec.pop("agent", None)
                     )
-                    pc_layout.addRow("Agent Algorithm", p_txt_agent)
+                    pc_layout.addRow("Algorithm", p_txt_agent)
 
-                # Model Architecture row
+                # Model row
                 if tree and tree.models:
                     p_txt_model = ComboBox()
                     p_txt_model.setMaximumWidth(TEXT_FIELD_WIDTH)
@@ -2449,7 +2449,7 @@ class ConfigViewer(QWidget):
                     p_txt_model.currentTextChanged.connect(
                         lambda v: self._pending_new_method_spec.__setitem__("model", v) if v else self._pending_new_method_spec.pop("model", None)
                     )
-                    pc_layout.addRow("Model Architecture", p_txt_model)
+                    pc_layout.addRow("Model", p_txt_model)
 
                 committing_p = [False]
 

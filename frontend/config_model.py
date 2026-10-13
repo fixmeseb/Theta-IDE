@@ -185,12 +185,19 @@ class Paradigm:
         )
 
     def permits_agent(self, agent: Agent | str) -> bool:
-        name = agent.algorithm if isinstance(agent, Agent) else agent
-        if name in self.forbidden_agents:
+        algo = (agent.algorithm if isinstance(agent, Agent) else str(agent)).lower()
+        name = (agent.name if isinstance(agent, Agent) else str(agent)).lower()
+        if any(f.lower() in (algo, name) or name.startswith(f.lower() + "/") for f in self.forbidden_agents):
             return False
         # An empty allow-list permits no agent at all. supervised declares one
         # deliberately: it has no policy, so its methods name a model only.
-        return name in self.allowed_agents
+        if not self.allowed_agents:
+            return False
+        for allowed in self.allowed_agents:
+            al = allowed.lower()
+            if al in (algo, name) or name.startswith(al + "/") or algo.startswith(al + "_") or name.endswith("/" + al):
+                return True
+        return False
 
     def permits_environment(self, environment: Environment) -> bool:
         required = self.requires.get("env.offline_only")

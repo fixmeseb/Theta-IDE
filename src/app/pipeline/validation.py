@@ -324,7 +324,14 @@ def _validate_methods_for_paradigm(cfg: Any, paradigm_name: str, paradigm_def: d
 
         # Forbidden agents check
         if forbidden_agents and agent_algo:
-            if any(agent_algo == f or agent_algo.startswith(f + "_") for f in forbidden_agents):
+            clean_algo = agent_algo.lower().replace("-", "_")
+            if any(
+                clean_algo == f.lower()
+                or clean_algo.startswith(f.lower() + "_")
+                or clean_algo.startswith(f.lower() + "/")
+                or clean_algo.endswith("/" + f.lower())
+                for f in forbidden_agents
+            ):
                 raise ConfigurationError(
                     f"[ConfigurationError] Method '{method_name}' uses agent '{agent_algo}', "
                     f"which is forbidden in paradigm '{paradigm_name}'. Forbidden agents: {forbidden_agents}."
@@ -337,7 +344,14 @@ def _validate_methods_for_paradigm(cfg: Any, paradigm_name: str, paradigm_def: d
                     f"[ConfigurationError] Paradigm '{paradigm_name}' requires an agent harness (allowed: {allowed_agents}), "
                     f"but method '{method_name}' has no 'agent' declared."
                 )
-            if not any(agent_algo == a or agent_algo.startswith(a + "_") for a in allowed_agents):
+            clean_algo = agent_algo.lower().replace("-", "_")
+            if not any(
+                clean_algo == a.lower()
+                or clean_algo.startswith(a.lower() + "_")
+                or clean_algo.startswith(a.lower() + "/")
+                or clean_algo.endswith("/" + a.lower())
+                for a in allowed_agents
+            ):
                 raise ConfigurationError(
                     f"[ConfigurationError] Method '{method_name}' uses agent '{agent_algo}', "
                     f"which is not allowed in paradigm '{paradigm_name}'. Allowed agents: {allowed_agents}."

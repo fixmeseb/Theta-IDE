@@ -14,6 +14,11 @@ constraints:
 
 allowed_agents:
   - ppo
+  - a2c
+  - dqn
+  - sac
+  - sb3
 forbidden_agents:
   - cql
   - iql
+

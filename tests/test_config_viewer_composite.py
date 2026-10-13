@@ -313,14 +313,45 @@ def test_add_new_method_valid_empty_method(qapp, tmp_path):
 
     # Inspect the rendered card for custom_empty_method
     combos = viewer.findChildren(ComboBox)
-    # Check that placeholders "Select agent..." and "Select model..." are used with -1 index
-    agent_combos = [c for c in combos if c.placeholderText() == "Select agent..."]
+    # Check that placeholders "Select algorithm..." and "Select model..." are used with -1 index
+    agent_combos = [c for c in combos if c.placeholderText() in ("Select algorithm...", "Select agent...")]
     model_combos = [c for c in combos if c.placeholderText() == "Select model..."]
     assert len(agent_combos) >= 1
     assert len(model_combos) >= 1
     # For custom_empty_method, nothing is selected
     assert any(c.currentIndex() == -1 for c in agent_combos)
     assert any(c.currentIndex() == -1 for c in model_combos)
+
+
+def test_sb3_algorithms_selectable_and_labels_renamed(qapp, tmp_path):
+    from PyQt6.QtWidgets import QLabel
+    from frontend.widgets import ComboBox
+    src_file = Path("in/config/experiment/cartpole/final_cartpole.yaml")
+    dest_file = tmp_path / "final_cartpole.yaml"
+    shutil.copy(src_file, dest_file)
+
+    viewer = ConfigViewer()
+    viewer.load_file(dest_file, "experiment/cartpole/final_cartpole.yaml")
+
+    # Verify labels renamed from "Agent Algorithm" -> "Algorithm" and "Model Architecture" -> "Model"
+    labels = [l.text() for l in viewer.findChildren(QLabel)]
+    assert "Algorithm" in labels
+    assert "Model" in labels
+    assert "Agent Algorithm" not in labels
+    assert "Model Architecture" not in labels
+
+    # Verify SB3 algorithms are available in algorithm dropdown
+    combos = viewer.findChildren(ComboBox)
+    algo_combos = [c for c in combos if c.placeholderText() == "Select algorithm..."]
+    assert len(algo_combos) >= 1
+    items = [algo_combos[0].itemText(i) for i in range(algo_combos[0].count())]
+    for sb3_algo in ("sb3/a2c", "sb3/dqn", "sb3/ppo", "sb3/sac"):
+        assert sb3_algo in items
+
+    # Select an SB3 algorithm and verify raw_data update
+    algo_combos[0].setCurrentText("sb3/dqn")
+    qapp.processEvents()
+    assert viewer.raw_data["methods"]["ppo_final_cp"]["agent"] == "sb3/dqn"
 
 
 def test_blendrl_model_block_and_logic_module_rendering(qapp, tmp_path):
