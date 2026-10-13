@@ -33,6 +33,29 @@ ENV_MAX_REWARD = {"cartpole": 500}
 _REWARD_KEYS = {"reward", "reward_std"}
 
 
+def measures_environment_steps(run):
+    """Whether this run's progress is counted in steps through an environment.
+
+    Asked of the paradigm rather than hardcoded. One that declares agents has a
+    policy acting in an environment, so a step budget is its real extent.
+    Supervised and unsupervised declare none and train by epochs: for them the
+    budget is a number the run never approaches, and using it as the chart's
+    x-extent squeezes the whole curve into the first few percent.
+
+    Runs recorded before the paradigm was stored, and those found on disk, keep
+    the previous behaviour.
+    """
+    paradigm = run.get("paradigm")
+    if not paradigm:
+        return True
+    from ..config_viewer import config_tree  # local import: keeps this module light
+
+    tree = config_tree()
+    if tree is None or paradigm not in tree.paradigms:
+        return True
+    return bool(tree.agents_for(paradigm))
+
+
 def run_setup_label(run, config):
     """The "environment / methods" half of a run's caption.
 
@@ -345,12 +368,20 @@ class MonitorPanel(QWidget):
         self.loss_card.title.setText(card_title)
         self.loss_card.value.setText("—" if second_value is None else format(second_value, fmt))
         self.loss_card.subtitle.setText(subtitle if live else "synthetic training loss")
+        env_steps = measures_environment_steps(run)
         self.steps_card.value.setText(f"{step:,}")
-        self.progress.setValue(min(100, round(100 * step / max(1, budget))))
+        if env_steps:
+            self.progress.setValue(min(100, round(100 * step / max(1, budget))))
+        else:
+            # Nothing to measure against: a step budget is not this run's extent.
+            self.progress.setValue(100 if run["status"] in FINAL_STATUSES else 0)
         if live:
             self.reward_card.subtitle.setText("evaluation / mean episode reward")
             rounding = f"\n{requested:,} requested, rounded up to whole PPO rollouts" if budget != requested else ""
-            self.steps_card.subtitle.setText(f"of {budget:,} environment steps{rounding}")
+            self.steps_card.subtitle.setText(
+                f"of {budget:,} environment steps{rounding}" if env_steps
+                else "optimizer steps · this paradigm trains by epochs"
+            )
             where = f"results/logs/{run['backend']['group']}/{run['backend']['experiment_id']}/"
             if run["status"] == "queued":
                 position = run.get("queue_position")
@@ -377,7 +408,9 @@ class MonitorPanel(QWidget):
             self.reward_card.subtitle.setText("synthetic evaluation / mean")
             self.steps_card.subtitle.setText("configured training budget")
             self.monitor_note.setText("●  Selected run     •     Synthetic metrics / frontend demonstration")
-        xmax = budget if live else None
+        # Fit the data when the budget is not what this run is measured against,
+        # or the curve lands in the leftmost few percent of the chart.
+        xmax = budget if (live and env_steps) else None
         has_spread = any(m.get("reward_std") is not None for m in metrics)
         self.reward_chart.set_metric("reward", "Episode reward  ·  mean ± 1 std over evaluation episodes"
                                      if has_spread else "Episode reward")

@@ -173,3 +173,81 @@ def test_the_simulated_demo_run_keeps_the_literal():
 
 def test_a_run_missing_its_details_degrades_rather_than_raising():
     assert run_setup_label({"simulated": False}, {}) == "?  /  ?"
+
+
+# ---------------------------------------------------------------------------
+# A run is described by the experiment, not by the builder's defaults
+# ---------------------------------------------------------------------------
+
+
+def test_the_builder_default_is_what_mislabelled_every_run():
+    """Config() is a CartPole PPO recipe. An experiment launched from the tree
+    never fills it in, which is why a breast-cancer run said CartPole."""
+    from frontend.model import Config
+
+    assert (Config().env, Config().total_timesteps) == ("cartpole", 10000)
+
+
+def test_composed_facts_replace_the_defaults():
+    from dataclasses import replace
+
+    from frontend.model import Config
+
+    class _Window:
+        composed_facts = {"env": "breast_cancer", "seed": 42, "total_timesteps": 10000, "paradigm": "supervised"}
+        config_for_run = __import__("frontend.app", fromlist=["Window"]).Window.config_for_run
+
+    out = _Window.config_for_run(_Window(), Config())
+    assert out.env == "breast_cancer"
+    assert out == replace(Config(), env="breast_cancer", seed=42, total_timesteps=10000)
+
+
+def test_a_run_launched_before_composing_keeps_its_config():
+    from frontend.model import Config
+
+    class _Window:
+        config_for_run = __import__("frontend.app", fromlist=["Window"]).Window.config_for_run
+
+    assert _Window.config_for_run(_Window(), Config()) == Config()
+
+
+def test_the_paradigm_is_not_written_into_the_config():
+    """Config has no paradigm field; it rides on the run record instead."""
+    from frontend.model import Config
+
+    class _Window:
+        composed_facts = {"env": "breast_cancer", "paradigm": "supervised", "seed": None, "total_timesteps": None}
+        config_for_run = __import__("frontend.app", fromlist=["Window"]).Window.config_for_run
+
+    out = _Window.config_for_run(_Window(), Config())
+    assert out.env == "breast_cancer"
+    assert not hasattr(out, "paradigm")
+    assert out.seed == Config().seed, "a missing fact must not overwrite a real value"
+
+
+# ---------------------------------------------------------------------------
+# The step budget belongs to paradigms that step an environment
+# ---------------------------------------------------------------------------
+
+
+def test_rl_runs_are_measured_in_environment_steps():
+    from frontend.monitor import measures_environment_steps
+
+    for paradigm in ("online_rl", "offline_rl"):
+        assert measures_environment_steps({"paradigm": paradigm}) is True
+
+
+def test_agentless_paradigms_are_not():
+    """They train by epochs, so a 10,000-step budget is a number they never reach."""
+    from frontend.monitor import measures_environment_steps
+
+    for paradigm in ("supervised", "unsupervised"):
+        assert measures_environment_steps({"paradigm": paradigm}) is False
+
+
+def test_a_run_without_a_recorded_paradigm_keeps_the_old_behaviour():
+    """Records written before the paradigm was stored, and runs found on disk."""
+    from frontend.monitor import measures_environment_steps
+
+    assert measures_environment_steps({}) is True
+    assert measures_environment_steps({"paradigm": "not_a_paradigm"}) is True

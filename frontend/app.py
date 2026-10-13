@@ -1430,6 +1430,18 @@ class Window(QMainWindow):
         if serial != self.compose_serial:
             return  # superseded by a newer edit
         self.compose_valid = bool(not error and isinstance(data, dict) and data.get("valid", False))
+        # The launched run is described by the experiment, not by the builder. Without
+        # this the run record keeps Config's defaults - env "cartpole", 10,000 steps -
+        # so every experiment launched from the tree was labelled as CartPole.
+        if isinstance(data, dict) and isinstance(data.get("config"), dict):
+            composed = data["config"]
+            env = composed.get("env")
+            self.composed_facts = {
+                "env": env.get("name") if isinstance(env, dict) else env,
+                "seed": composed.get("seed"),
+                "total_timesteps": composed.get("total_timesteps"),
+                "paradigm": composed.get("paradigm"),
+            }
         self.update_launch_state()
         if error or not isinstance(data, dict):
             self.set_backend_state(False, error or "Invalid pipeline response")
@@ -1632,13 +1644,28 @@ class Window(QMainWindow):
             return
         self.launch_finished(config, job, None)
 
+    def config_for_run(self, config):
+        """`config` with whatever the composed experiment actually declares.
+
+        self.config() is the experiment builder's record, and its defaults are a
+        CartPole PPO recipe. An experiment launched from the tree never fills it
+        in, so the run was described by those defaults rather than by itself.
+        """
+        from dataclasses import replace
+
+        facts = getattr(self, "composed_facts", None) or {}
+        known = {key: value for key, value in facts.items()
+                 if key != "paradigm" and value is not None}
+        return replace(config, **known) if known else config
+
     def launch_finished(self, config, job, error):
         if error:
             self.log(f"Launch failed: {error}")
             self.statusBar().showMessage("Launch failed; see the console.", 8000)
             self.update_launch_state()
             return
-        run = new_run(config, simulated=False)
+        run = new_run(self.config_for_run(config), simulated=False)
+        run["paradigm"] = (getattr(self, "composed_facts", None) or {}).get("paradigm")
         run.update(status="starting", log_since=0, metrics_since=0, metrics_byte=0, backend={
             key: job.get(key) for key in ("job_id", "experiment", "group", "experiment_id", "agents", "total_timesteps",
                                           "effective_timesteps")})
