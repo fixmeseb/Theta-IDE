@@ -99,8 +99,27 @@ def _number(value):
     return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
 
 
+def position_column(rows):
+    """The column that places a point on the x-axis, chosen once for the whole run.
+
+    `transitions` wherever a run logs it, which is every RL run. The choice is
+    made per run rather than per row on purpose: Lightning writes an epoch-level
+    duplicate of each row *without* transitions, and those duplicates have to
+    stay out of the chart, so falling back row by row would admit them and
+    double every RL curve.
+
+    A supervised or unsupervised run logs no transitions anywhere - there is no
+    environment to step through - so it falls back to step, then epoch, and its
+    curves become plottable without changing anything for RL.
+    """
+    for name in COUNTER_COLUMNS:
+        if any(_number(row.get(name)) is not None for row in rows):
+            return name
+    return None
+
+
 def metric_points(rows):
-    """Convert metrics.csv rows into chart points keyed by environment transitions.
+    """Convert metrics.csv rows into chart points keyed by the run's position column.
 
     Every numeric column is kept, whatever engine logged it: the METRIC_COLUMNS under their
     short run-record keys (which saved runs and the demo use), and any other column under its
@@ -108,17 +127,21 @@ def metric_points(rows):
     and training rows carry losses/*; a point keeps None for the short keys its row does not
     report and simply lacks other columns it does not report.
     """
+    rows = list(rows)
+    position = position_column(rows)
+    if position is None:
+        return []
     aliased = set(METRIC_COLUMNS.values())
     points = []
     for row in rows:
-        if _number(row.get("transitions")) is None:
+        if _number(row.get(position)) is None:
             continue
         point = {key: _number(row.get(column)) for key, column in METRIC_COLUMNS.items()}
         extra = {name: value for name, value in row.items()
                  if name not in aliased and name not in COUNTER_COLUMNS and _number(value) is not None}
         if all(value is None for value in point.values()) and not extra:
             continue
-        points.append({"step": round(row["transitions"]), **point, **extra})
+        points.append({"step": round(row[position]), **point, **extra})
     return points
 
 
