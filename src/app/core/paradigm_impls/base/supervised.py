@@ -25,6 +25,16 @@ from src.app.core.paradigm_loader import register_component
 log = logging.getLogger(__name__)
 
 
+def _names_a_dataset(cfg: Any) -> bool:
+    """Whether a config points at a dataset file (dataset_path, or the env's dataset_name)."""
+
+    def get(obj, key):
+        return obj.get(key) if hasattr(obj, "get") else getattr(obj, key, None)
+
+    env = get(cfg, "env")
+    return bool(get(cfg, "dataset_path") or (env is not None and get(env, "dataset_name")))
+
+
 # ---------------------------------------------------------------------------
 # 1. Generic Supervised Data Module
 # ---------------------------------------------------------------------------
@@ -104,7 +114,10 @@ class SupervisedDataModule(L.LightningDataModule, BaseDataModule):
 
                 delegate = get_component(self.npz_delegate)(self._cfg)
             except (FileNotFoundError, KeyError, ValueError) as exc:
-                log.debug("No labelled .npz dataset for this config: %s", exc)
+                # A dataset the config names but that cannot be loaded is worth saying out loud:
+                # the run would otherwise fail later with only "train_loader has not been set".
+                level = logging.WARNING if _names_a_dataset(self._cfg) else logging.DEBUG
+                log.log(level, "No .npz dataset for this config: %s", exc)
             else:
                 self._delegate = delegate
                 self.input_dim = getattr(delegate, "input_dim", 64)
