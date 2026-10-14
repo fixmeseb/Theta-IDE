@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING
 from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtWidgets import (
     QComboBox,
+    QFrame,
     QHBoxLayout,
     QProgressBar,
     QPushButton,
@@ -23,7 +24,7 @@ from PyQt6.QtWidgets import (
 from ..charts import Chart
 from ..model import FINAL_STATUSES, LIVE_STATUSES, available_metrics, latest
 from ..results.metrics_catalog import describe, group_sort_key, metric_group
-from ..widgets import MetricCard, label
+from ..widgets import MetricCard, SmoothScrollArea, label
 from .live_view import ChartsView, FeedView, FilesView, LogView, StatusStrip, SystemView
 from .runs_sidebar import RunsSidebar, run_label
 
@@ -41,6 +42,8 @@ SECOND_METRICS = {
 }
 # Highest possible evaluation reward per environment, drawn as the reward chart's ceiling.
 ENV_MAX_REWARD = {"cartpole": 500}
+OVERVIEW_REWARD_HEIGHT = 300  # px: the Overview's charts never shrink below these; the tab scrolls instead
+OVERVIEW_SECOND_HEIGHT = 240
 LIVE_REFRESH_MS = 400  # the live views redraw at most this often while records stream in
 # Shown in the reward chart, so not offered for the second one.
 _REWARD_KEYS = {"reward", "reward_std"}
@@ -213,9 +216,18 @@ class MonitorPanel(QWidget):
         self.metric_select.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
         self.metric_select.currentIndexChanged.connect(self.second_metric_changed)
         self.loss_chart.set_corner_widget(self.metric_select)
+        # Tall enough to read: on a short window the tab scrolls rather than squashing the charts.
+        self.reward_chart.setMinimumHeight(OVERVIEW_REWARD_HEIGHT)
+        self.loss_chart.setMinimumHeight(OVERVIEW_SECOND_HEIGHT)
         overview_layout.addWidget(self.reward_chart, 3)
         overview_layout.addWidget(self.loss_chart, 2)
-        self.views.addTab(overview, "Overview")
+        self.overview_scroll = SmoothScrollArea()
+        self.overview_scroll.setWidgetResizable(True)
+        self.overview_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self.overview_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.overview_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self.overview_scroll.setWidget(overview)
+        self.views.addTab(self.overview_scroll, "Overview")
         self.charts_view = ChartsView()
         self.system_view = SystemView()
         self.log_view = LogView()

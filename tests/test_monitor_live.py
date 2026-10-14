@@ -357,3 +357,18 @@ def test_the_inspected_step_stays_current_as_values_arrive():
     view.show_lives({"ppo": live})
     table = view.inspector.table
     assert [table.verticalHeaderItem(r).text() for r in range(table.rowCount())] == ["eval/reward", "val/f1"]
+
+
+def test_the_overview_scrolls_rather_than_squashing_its_charts(window):
+    from frontend.monitor.panel import OVERVIEW_REWARD_HEIGHT
+
+    monitor = window.monitor
+    assert monitor.views.widget(0) is monitor.overview_scroll
+    assert monitor.overview_scroll.verticalScrollBarPolicy() == Qt.ScrollBarPolicy.ScrollBarAsNeeded
+    window.resize(1200, 500)  # too short for the cards and both charts
+    window.tabs.setCurrentWidget(window.monitor_panel)
+    window.show()
+    for _ in range(5):
+        app.processEvents()
+    assert monitor.reward_chart.height() >= OVERVIEW_REWARD_HEIGHT
+    assert monitor.overview_scroll.verticalScrollBar().maximum() > 0
