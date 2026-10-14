@@ -11,7 +11,7 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QComboBox, QHBoxLayout, QProgressBar, QPushButton, QSlider, QVBoxLayout, QWidget
 
 from ..charts import Chart
-from ..model import FINAL_STATUSES, LIVE_STATUSES, available_metrics, latest
+from ..model import FINAL_STATUSES, LIVE_STATUSES, METRIC_COLUMNS, available_metrics, latest
 from ..results.metrics_catalog import describe, group_sort_key, metric_group
 from ..widgets import MetricCard, label
 
@@ -31,6 +31,38 @@ SECOND_METRICS = {
 ENV_MAX_REWARD = {"cartpole": 500}
 # Shown in the reward chart, so not offered for the second one.
 _REWARD_KEYS = {"reward", "reward_std"}
+
+
+#: Run-record key for each metrics.csv column, so a declared monitor_metric can be
+#: looked up in the points metric_points() builds (eval/reward is stored as "reward").
+_RECORD_KEY = {column: key for key, column in METRIC_COLUMNS.items()}
+
+
+def headline_metric(run, config):
+    """The metric this run is judged by, as a run-record key, and its description.
+
+    Taken from the environment's `monitor_metric`, which is already the number
+    the backend selects `best_model.ckpt` on. The headline card used to be
+    episode reward whatever the run was, so a supervised run - which has no
+    environment, no episodes and no reward - showed a dash above an empty chart
+    while the value it was actually scored by sat in the second slot.
+
+    Falls back to reward, so a run whose environment declares nothing, or whose
+    environment is no longer on disk, looks exactly as it did before.
+    """
+    declared = None
+    env_name = (config or {}).get("env")
+    if env_name:
+        from ..config_viewer import config_tree  # local import: keeps this module light
+
+        tree = config_tree()
+        env = tree.environments.get(env_name) if tree else None
+        if env is not None:
+            declared = env.raw.get("monitor_metric")
+    if not declared:
+        return "reward", describe("eval/reward")
+    key = _RECORD_KEY.get(str(declared), str(declared))
+    return key, describe(str(declared))
 
 
 def measures_environment_steps(run):
@@ -369,7 +401,12 @@ class MonitorPanel(QWidget):
         # PPO trains whole rollouts, so the real budget can exceed the requested one (10,000 -> 10,240).
         # Records from before the backend reported it fall back to the steps actually run.
         budget = (run["backend"].get("effective_timesteps") or max(step, requested)) if live else requested
-        self.reward_card.value.setText("—" if reward is None else f"{reward:.1f}")
+        head_key, head_info = headline_metric(run, config)
+        head_value = latest(run, head_key)
+        self.reward_card.title.setText(head_info.label.upper())
+        self.reward_card.value.setText(
+            "—" if head_value is None else format(head_value, head_info.fmt)
+        )
         self.loss_card.title.setText(card_title)
         self.loss_card.value.setText("—" if second_value is None else format(second_value, fmt))
         self.loss_card.subtitle.setText(subtitle if live else "synthetic training loss")
@@ -381,7 +418,9 @@ class MonitorPanel(QWidget):
             # Nothing to measure against: a step budget is not this run's extent.
             self.progress.setValue(100 if run["status"] in FINAL_STATUSES else 0)
         if live:
-            self.reward_card.subtitle.setText("evaluation / mean episode reward")
+            self.reward_card.subtitle.setText(
+                "evaluation / mean episode reward" if head_key == "reward" else head_info.name
+            )
             rounding = f"\n{requested:,} requested, rounded up to whole PPO rollouts" if budget != requested else ""
             self.steps_card.subtitle.setText(
                 f"of {budget:,} environment steps{rounding}" if env_steps
@@ -416,10 +455,15 @@ class MonitorPanel(QWidget):
         # Fit the data when the budget is not what this run is measured against,
         # or the curve lands in the leftmost few percent of the chart.
         xmax = budget if (live and env_steps) else None
-        has_spread = any(m.get("reward_std") is not None for m in metrics)
-        self.reward_chart.set_metric("reward", "Episode reward  ·  mean ± 1 std over evaluation episodes"
-                                     if has_spread else "Episode reward")
-        self.reward_chart.set_series([(title, metrics, "#b8bb26")], xmax, ENV_MAX_REWARD.get(config["env"]))
+        has_spread = head_key == "reward" and any(m.get("reward_std") is not None for m in metrics)
+        self.reward_chart.set_metric(
+            head_key,
+            "Episode reward  ·  mean ± 1 std over evaluation episodes" if has_spread else head_info.label,
+        )
+        # The ceiling is the environment's best possible return, which means nothing
+        # for a loss: let the chart fit what the run actually logged.
+        ceiling = ENV_MAX_REWARD.get(config["env"]) if head_key == "reward" else None
+        self.reward_chart.set_series([(title, metrics, "#b8bb26")], xmax, ceiling)
         self.loss_chart.set_metric(second, chart_title)
         self.loss_chart.set_series([(title, metrics, "#83a598")], xmax)
 

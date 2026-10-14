@@ -251,3 +251,69 @@ def test_a_run_without_a_recorded_paradigm_keeps_the_old_behaviour():
 
     assert measures_environment_steps({}) is True
     assert measures_environment_steps({"paradigm": "not_a_paradigm"}) is True
+
+
+# ---------------------------------------------------------------------------
+# The headline card follows the metric the run is judged by
+# ---------------------------------------------------------------------------
+
+
+def _headline(env):
+    from frontend.monitor import headline_metric
+
+    return headline_metric({}, {"env": env})
+
+
+def test_rl_environments_keep_episode_reward():
+    for env in ("cartpole", "seaquest"):
+        key, info = _headline(env)
+        assert (key, info.label) == ("reward", "Episode reward")
+
+
+def test_offline_environments_headline_validation_loss():
+    """breast_cancer and mimic declare monitor_metric: val/loss, which is already
+    the number build_trainer selects best_model.ckpt on."""
+    for env in ("breast_cancer", "mimic"):
+        key, info = _headline(env)
+        assert (key, info.label) == ("val/loss", "Validation loss")
+
+
+def test_the_declared_metric_is_mapped_to_its_run_record_key():
+    """Environments declare the metrics.csv column; the points carry eval/reward
+    under the short key `reward`, so the two have to be matched up."""
+    from frontend.model import METRIC_COLUMNS
+
+    assert METRIC_COLUMNS["reward"] == "eval/reward"
+    assert _headline("cartpole")[0] == "reward"
+
+
+def test_an_unknown_environment_falls_back_to_reward():
+    """A run whose environment is gone looks exactly as it did before."""
+    for env in ("not_an_environment", None, ""):
+        assert _headline(env)[0] == "reward"
+
+
+def test_every_environment_declares_what_it_is_judged_by():
+    """The fallback should stay a safety net, not the usual path."""
+    from frontend.config_model import ConfigTree
+
+    tree = ConfigTree.discover()
+    undeclared = [
+        name
+        for name, env in tree.environments.items()
+        if "/" not in name and not env.raw.get("monitor_metric")
+    ]
+    assert not undeclared, f"environments with no monitor_metric: {sorted(undeclared)}"
+
+
+def test_the_headline_value_comes_from_the_run():
+    from frontend.model import latest, metric_points
+    from frontend.monitor import headline_metric
+
+    run = {"metrics": metric_points([
+        {"epoch": 0.0, "step": 13.0, "train/loss": 0.55, "val/loss": 0.41},
+        {"epoch": 1.0, "step": 26.0, "train/loss": 0.04, "val/loss": 0.07},
+    ])}
+    key, info = headline_metric(run, {"env": "breast_cancer"})
+    assert latest(run, key) == 0.07, "the card must not show train/loss"
+    assert format(latest(run, key), info.fmt) == "0.0700"
