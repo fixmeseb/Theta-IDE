@@ -192,6 +192,19 @@ DEFAULT_MENU_SHORTCUTS = [
 ]
 
 
+# Sidebar panes the app always has, in their default order; plugin tabs follow them.
+BUILT_IN_PANES = (
+    ("components", "Components"),
+    ("config", "Experiment Builder"),
+    ("workflows", "Workflows"),
+    ("monitor", "Training Monitor"),
+    ("results", "Results Browser"),
+    ("plots", "Plot Viewer"),
+    ("queue", "Job Queue"),
+    ("terminal", "Terminal"),
+    ("console", "Console"),
+)
+
 SIDE_TAB_ICON = 20      # px
 SIDE_TAB_ICON_GAP = 8   # px of space between a settings tab's icon and its label
 
@@ -831,51 +844,16 @@ class SettingsView(QWidget):
         sb_sub.setWordWrap(True)
         sb_layout.addWidget(sb_sub)
 
-        panes_grid = QGridLayout()
-        panes_grid.setHorizontalSpacing(24)
-        panes_grid.setVerticalSpacing(8)
-
-        pane_metadata = [
-            ("components", "Components"),
-            ("config", "Experiment Builder"),
-            ("workflows", "Workflows"),
-            ("monitor", "Training Monitor"),
-            ("results", "Results Browser"),
-            ("plots", "Plot Viewer"),
-            ("queue", "Job Queue"),
-            ("terminal", "Terminal"),
-            ("console", "Console"),
-        ]
-        # Include any dynamically contributed tabs (e.g. from plugins)
-        if hasattr(self.window, "tabs") and self.window.tabs is not None:
-            existing_pids = {p[0] for p in pane_metadata}
-            for tid, entry in self.window.tabs.tabs.items():
-                if tid not in existing_pids:
-                    display_name = entry.get("text") or entry.get("short") or tid.capitalize()
-                    pane_metadata.append((tid, display_name))
-
-        self.window.pane_sliders = {}
-        for i, (pid, name) in enumerate(pane_metadata):
-            col = 0 if i < 5 else 1
-            row_idx = i if i < 5 else i - 5
-
-            item_row = QHBoxLayout()
-            item_row.setSpacing(8)
-            title_lbl = label(name)
-            title_lbl.setWordWrap(True)
-            title_lbl.setStyleSheet("font-weight: 500; font-size: 12px;")
-            item_row.addWidget(title_lbl, 1)
-
-            slider = ToggleSlider(checked=self.window.tabs.is_tab_visible(pid))
-            slider.setToolTip(f"Show or hide {name} in the sidebar")
-            slider.setAccessibleName(f"Toggle {name} visibility in sidebar")
-            slider.toggled.connect(lambda chk, p=pid: self.window.on_pane_slider_toggled(p, chk))
-            self.window.pane_sliders[pid] = slider
-            item_row.addWidget(slider)
-
-            panes_grid.addLayout(item_row, row_idx, col)
-
-        sb_layout.addLayout(panes_grid)
+        self.panes_grid = QGridLayout()
+        self.panes_grid.setHorizontalSpacing(24)
+        self.panes_grid.setVerticalSpacing(8)
+        sb_layout.addLayout(self.panes_grid)
+        self.rebuild_pane_switches()
+        if getattr(self.window, "tabs", None) is not None:
+            # Plugins add their tabs after this page is built, and can be enabled or disabled later:
+            # keep a switch for every tab, and each switch in step with its tab.
+            self.window.tabs.tabsChanged.connect(self.rebuild_pane_switches)
+            self.window.tabs.tabVisibilityChanged.connect(self._sync_pane_switch)
 
         auto_hide_row = QHBoxLayout()
         auto_hide_info = QVBoxLayout()
@@ -1028,6 +1006,58 @@ class SettingsView(QWidget):
         layout.addWidget(results_card)
         layout.addStretch()
         return container
+
+    def rebuild_pane_switches(self):
+        """One visibility switch per sidebar tab: the built-in panes first, then any a plugin added."""
+        grid = getattr(self, "panes_grid", None)
+        if grid is None:
+            return
+        while grid.count():
+            item = grid.takeAt(0)
+            row = item.layout()
+            while row is not None and row.count():
+                child = row.takeAt(0)
+                if child.widget() is not None:
+                    child.widget().deleteLater()
+            if item.widget() is not None:
+                item.widget().deleteLater()
+
+        tabs = getattr(self.window, "tabs", None)
+        present = tabs.tabs if tabs is not None else {}
+        pane_metadata = [(pid, name) for pid, name in BUILT_IN_PANES if pid in present]
+        known = {pid for pid, _ in pane_metadata}
+        for tid, entry in present.items():
+            if tid not in known:
+                pane_metadata.append((tid, entry.get("text") or entry.get("short") or tid.capitalize()))
+
+        self.window.pane_sliders = {}
+        per_column = (len(pane_metadata) + 1) // 2
+        for i, (pid, name) in enumerate(pane_metadata):
+            item_row = QHBoxLayout()
+            item_row.setSpacing(8)
+            title_lbl = label(name)
+            title_lbl.setWordWrap(True)
+            title_lbl.setStyleSheet("font-weight: 500; font-size: 12px;")
+            item_row.addWidget(title_lbl, 1)
+
+            slider = ToggleSlider(checked=tabs.is_tab_visible(pid))
+            slider.setToolTip(f"Show or hide {name} in the sidebar")
+            slider.setAccessibleName(f"Toggle {name} visibility in sidebar")
+            slider.toggled.connect(lambda chk, p=pid: self.window.on_pane_slider_toggled(p, chk))
+            self.window.pane_sliders[pid] = slider
+            item_row.addWidget(slider)
+
+            grid.addLayout(item_row, i % per_column, i // per_column)
+        if hasattr(self.window, "update_pane_sliders_state"):
+            self.window.update_pane_sliders_state()
+
+    def _sync_pane_switch(self, tab_id, visible):
+        """A tab was shown or hidden elsewhere (layout restore, plugin, hotkey): move its switch to match."""
+        slider = getattr(self.window, "pane_sliders", {}).get(tab_id)
+        if slider is not None and slider.isChecked() != visible:
+            slider.blockSignals(True)
+            slider.setChecked(visible)
+            slider.blockSignals(False)
 
     def _open_animation_settings_dialog(self):
         self.show_tab("animation")

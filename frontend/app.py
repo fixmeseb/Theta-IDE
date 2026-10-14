@@ -1049,12 +1049,14 @@ class Window(QMainWindow):
         ]
         self.tabs.clear_bins(emit=False)
         self.tabs.apply_tab_order(default_order)
-        for pid, slider in self.pane_sliders.items():
+        # Every tab, not only those with a switch: a plugin's tab must come back too.
+        for pid in list(self.tabs.tabs):
+            self.tabs.set_tab_visible(pid, True)
+        for slider in self.pane_sliders.values():
             slider.blockSignals(True)
             slider.setChecked(True)
             slider.setEnabled(True)
             slider.blockSignals(False)
-            self.tabs.set_tab_visible(pid, True)
         self.save_layout()
         self.statusBar().showMessage("Restored default sidebar panels and order.", 4000)
 
