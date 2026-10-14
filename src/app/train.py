@@ -173,6 +173,9 @@ def main(cfg: DictConfig):
     print(f"\n[Training Complete] Total execution time: {training_time:.2f} seconds ({training_time / 60:.2f} minutes)")
 
     metric = finalize_training(trainer, cfg, ckpt_dir, training_time, start_time, end_time)
+    from src.app.telemetry.lightning import finish_telemetry
+
+    finish_telemetry(trainer)  # after finalize_training, whose last values (training time, GPU) are streamed too
     return metric
 
 

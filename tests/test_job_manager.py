@@ -133,6 +133,44 @@ def test_output_is_also_written_to_the_job_log_file(jobs):
     assert "Evaluation at 512" in log
 
 
+STREAM_PIPELINE = '''
+import json, os, sys, time
+from pathlib import Path
+exp_id = next(a.split("=", 1)[1].strip("'") for a in sys.argv[1:] if a.startswith("++experiment_id="))
+version = Path(os.environ["FAKE_LOGS"]) / "thetaide" / exp_id / "ppo" / "version_0"
+version.mkdir(parents=True, exist_ok=True)
+records = [
+    {"v": 1, "t": time.time(), "type": "start", "run": {}, "config": {}},
+    {"v": 1, "t": time.time(), "type": "metrics", "step": 1, "data": {"eval/reward": 10.0, "transitions": 512}},
+    {"v": 1, "t": time.time(), "type": "system", "data": {"cpu_percent": 150.0, "rss_mb": 300.0, "children": 2}},
+    {"v": 1, "t": time.time(), "type": "event", "kind": "checkpoint", "level": "info", "message": "saved", "data": {}},
+]
+with open(version / "events.jsonl", "w", encoding="utf-8") as f:
+    f.write("".join(json.dumps(r) + "\\n" for r in records))
+print("streamed", flush=True)
+release = Path(os.environ["FAKE_CONTROL"]) / exp_id
+while not release.exists():
+    time.sleep(0.05)
+sys.exit(0)
+'''
+
+
+def test_runs_with_a_telemetry_stream_report_every_record_and_their_own_resource_use(jobs):
+    (jobs.root / "run_pipeline.py").write_text(STREAM_PIPELINE, encoding="utf-8")
+    records, hardware = [], []
+    jobs.manager.job_records.connect(lambda job_id, agent, new, reset: records.extend(new))
+    jobs.manager.job_hardware.connect(lambda job_id, sample: hardware.append(sample))
+    job = jobs.launch(f"streamed_{tag()}")
+    pump(lambda: len(records) >= 4)
+    assert [r["type"] for r in records] == ["start", "metrics", "system", "event"]
+    assert jobs.metrics[job["job_id"]] == [{"eval/reward": 10.0, "transitions": 512.0, "step": 1.0}]
+    # The training process measured itself (with its children): no outside sampling replaces it.
+    assert hardware and hardware[-1]["cpu_percent"] == 150.0 and hardware[-1]["memory_mb"] == 300.0
+    jobs.release(job)
+    pump(lambda: jobs.status(job) == "completed")
+    assert all(sample.get("children") == 2 for sample in hardware)
+
+
 def test_nonzero_exit_marks_the_job_failed(jobs):
     job = jobs.launch(f"fails_{tag()}")
     jobs.release(job, code=3)
@@ -301,9 +339,10 @@ def real_overrides(experiment_id, total_timesteps):
 @pytest.mark.slow
 def test_real_training_streams_logs_and_metrics_until_completed(tmp_path, experiment_ids):
     manager = JobManager(store_path=tmp_path / "jobs.db")
-    output, rows = [], []
+    output, rows, records = [], [], []
     manager.job_output.connect(lambda job_id, lines: output.extend(lines))
     manager.job_metrics.connect(lambda job_id, agent, new, reset: rows.extend(new))
+    manager.job_records.connect(lambda job_id, agent, new, reset: records.extend(new))
     experiment_id = experiment_ids()
     job = manager.launch(BASE_EXPERIMENT, real_overrides(experiment_id, 3000))
     assert (job["group"], job["experiment_id"], job["agents"]) == ("thetaide", experiment_id, ["ppo"])
@@ -318,6 +357,10 @@ def test_real_training_streams_logs_and_metrics_until_completed(tmp_path, experi
     assert [p["step"] for p in points if p["reward"] is not None][-1] >= 3000
     assert any(p["loss"] is not None for p in points)
     assert max(p["step"] for p in points) == job["effective_timesteps"]  # the prediction matches real training
+    # The live stream: started, sampled its own resource use, and finished with the run.
+    kinds = [r["type"] for r in records]
+    assert kinds[0] == "start" and "system" in kinds and records[-1]["type"] == "finish"
+    assert records[-1]["status"] == "completed"
 
 
 @pytest.mark.slow
@@ -328,20 +371,21 @@ def test_real_cancel_stops_pipeline_and_training_subprocesses(tmp_path, experime
     manager.job_metrics.connect(lambda job_id, agent, new, reset: rows.extend(new))
     experiment_id = experiment_ids()
     job = manager.launch(BASE_EXPERIMENT, real_overrides(experiment_id, 2000000))
-    # Wait for metrics on disk (Lightning flushes metrics.csv a little after the first evaluation line)
+    # Wait for the first metrics (from the live stream, which can arrive before Lightning flushes metrics.csv)
     pump(lambda: rows, timeout=240)
 
     assert manager.cancel(job["job_id"])["status"] == "cancelled"
     pump(lambda: manager.job(job["job_id"]).get("finished"), timeout=30)
     assert manager.job(job["job_id"])["status"] == "cancelled"
 
-    # train.py is a grandchild of the job; if it survived, its metrics file would keep growing.
-    metrics = next((LOGS_DIR / "thetaide" / experiment_id / "ppo").glob("version_*/metrics.csv"))
-    size = metrics.stat().st_size
+    # train.py is a grandchild of the job; if it survived, its telemetry stream would keep growing
+    # (its system sampler alone appends a record every two seconds).
+    stream = next((LOGS_DIR / "thetaide" / experiment_id / "ppo").glob("version_*/events.jsonl"))
+    size = stream.stat().st_size
     time.sleep(4)
-    assert metrics.stat().st_size == size
+    assert stream.stat().st_size == size
     pid = manager.job(job["job_id"])["pid"]
     if os.name == "nt":
         listing = subprocess.run(["tasklist", "/FI", f"PID eq {pid}"], capture_output=True, text=True)
         assert str(pid) not in listing.stdout
-    assert Path(metrics).exists()
+    assert Path(stream).exists()

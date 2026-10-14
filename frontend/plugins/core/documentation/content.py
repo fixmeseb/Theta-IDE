@@ -168,9 +168,15 @@ python -m frontend</code></pre>
 <h3>2. Training Monitor (<code>monitor</code>)</h3>
 <p>Real-time telemetry and telemetry replay for live and finished training runs:</p>
 <ul>
-  <li><b>Metric Cards:</b> Key scalars including Episode Reward, Minibatch Loss, and Timestep Budget.</li>
-  <li><b>Dynamic Curves:</b> Live matplotlib charts tracking reward and loss trajectories.</li>
-  <li><b>Smoothing Slider:</b> Exponential Moving Average (EMA) smoothing from 0% (raw points) up to 95% (smoothed trends).</li>
+  <li><b>Runs sidebar:</b> live and queued runs first, then recent ones, each with a status mark, a small reward curve and its latest reward. Click a run to show it; tick runs to overlay them on the shown run's <b>Charts</b> and <b>System</b> views, each in the color of its row. <b>Clear comparison</b> unticks them all.</li>
+  <li><b>Status strip:</b> the run's status, elapsed time, training speed (steps per second), time left, and how long ago it last reported. A running job that goes quiet for two minutes shows <b>STALLED</b>.</li>
+  <li><b>Overview:</b> key scalars (Episode Reward, a loss of your choice, Timestep Budget) and the reward and loss curves.</li>
+  <li><b>Charts:</b> every metric the run logs, one chart per metric in folding sections, one curve per agent. <b>Hide</b> a chart or <b>Show all plots</b>. Hover over any chart: the inspector below lists every metric of every curve at that step. Values marked &asymp; come from the nearest other logged step (hover the cell to see which).</li>
+  <li><b>System:</b> CPU, memory and GPU memory of the training process (and its child processes) over time, measured inside the training process itself.</li>
+  <li><b>Logs:</b> the pipeline's output with search, an <i>Errors and warnings only</i> filter, and <i>Follow</i> to keep the newest lines in view.</li>
+  <li><b>Feed:</b> what happened, newest first: run start and finish, checkpoints, new bests for <code>eval/</code> and <code>val/</code> metrics, NaN warnings and errors.</li>
+  <li><b>Files:</b> checkpoints and other files the run reported; double-click to open one, or <b>Open run folder</b>.</li>
+  <li><b>Smoothing Slider:</b> Exponential Moving Average (EMA) smoothing from 0% (raw points) up to 95% (smoothed trends), for the Overview and Charts curves.</li>
   <li><b>Multi-Run Navigation:</b> Previous/Next buttons and dropdown selector to compare against previous runs in history.</li>
   <li><b>Pin as Baseline:</b> Pin any historic run as a dashed reference curve overlay on top of active runs.</li>
   <li><b>Jump to Live:</b> Instant one-click camera focus back to the actively training experiment.</li>

@@ -140,7 +140,32 @@ def setup_loggers(cfg, base_root):
         tb_logger = TensorBoardLogger(tb_dir, name=method_name, default_hp_metric=False)
         _ = tb_logger.experiment
         loggers.append(tb_logger)
+    telemetry_logger = _telemetry_logger(cfg, loggers[0], method_name)
+    if telemetry_logger is not None:
+        loggers.append(telemetry_logger)
     return loggers
+
+
+def _telemetry_logger(cfg, csv_logger, method_name):
+    """A ThetaLogger writing the run's other telemetry sinks (events.jsonl by default) into the CSVLogger's
+    version folder. CSVLogger itself stays the metrics.csv writer, so the "csv" sink is left out here."""
+    from src.app.telemetry import settings_from_config
+    from src.app.telemetry.lightning import ThetaLogger
+
+    sinks, system_interval = settings_from_config(cfg)
+    sinks = [s for s in sinks if s != "csv"]
+    if not sinks:
+        return None
+    try:
+        config = OmegaConf.to_container(cfg, resolve=True)
+    except Exception:  # an interpolation that cannot resolve outside Hydra: keep it unresolved
+        config = OmegaConf.to_container(cfg, resolve=False)
+    meta = {
+        "group": str(cfg.get("group", "")),
+        "experiment_id": str(cfg.get("experiment_id", "")),
+        "agent": method_name,
+    }
+    return ThetaLogger(lambda: csv_logger.log_dir, sinks, config, meta, system_interval)
 
 
 def build_trainer(cfg, model=None):
@@ -278,6 +303,9 @@ def build_trainer(cfg, model=None):
         trainer_overrides = OmegaConf.to_container(cfg.trainer, resolve=True)
         trainer_kwargs.update(trainer_overrides)
 
+    from src.app.telemetry.lightning import TelemetryCallback, ThetaLogger
+
+    callbacks.extend(TelemetryCallback(lg) for lg in loggers if isinstance(lg, ThetaLogger))
     trainer = L.Trainer(**trainer_kwargs, logger=loggers, callbacks=callbacks)
 
     ckpt_path = None

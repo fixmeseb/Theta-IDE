@@ -1,7 +1,8 @@
 """Runs training jobs inside the desktop app: run_pipeline.py as a QProcess, reported through signals.
 
-Replaces the FastAPI job endpoints. Output arrives through readyReadStandardOutput, metrics through a
-QFileSystemWatcher on the run's metrics.csv, and status and queue changes are signals, so nothing polls.
+Replaces the FastAPI job endpoints. Output arrives through readyReadStandardOutput; telemetry through a
+QFileSystemWatcher on the run's events.jsonl (or metrics.csv, for engines that write only that), read by
+an AgentFeed per agent; status and queue changes are signals, so nothing polls.
 Jobs persist in results/jobs/jobs.db (JobStore), as before.
 """
 from __future__ import annotations
@@ -18,8 +19,9 @@ from PyQt6.QtCore import QFileSystemWatcher, QObject, QProcess, QProcessEnvironm
 from src.app.services import JOBS_DIR, LOGS_DIR, PROJECT_ROOT
 from src.app.services.config_service import LaunchError, prepare_launch
 from src.app.services.job_store import JobStore
-from src.app.services.metrics import MetricsTail, latest_metrics_csv
+from src.app.services.metrics import AgentFeed
 from src.app.services.processes import kill_process_tree, process_stats
+from src.app.telemetry.records import metrics_row
 
 ACTIVE_STATUSES = ("pending", "running")
 FINAL_STATUSES = ("completed", "failed", "cancelled", "error", "interrupted")
@@ -32,8 +34,9 @@ class JobManager(QObject):
 
     job_changed = pyqtSignal(dict)  # the job's public record after any status change
     job_output = pyqtSignal(str, list)  # job_id, new log lines
-    job_metrics = pyqtSignal(str, str, list, bool)  # job_id, agent, new metric rows, reset (file was rewritten)
-    job_hardware = pyqtSignal(str, dict)  # job_id, {"cpu_percent", "memory_mb"}
+    job_metrics = pyqtSignal(str, str, list, bool)  # job_id, agent, new metric rows, reset (start over)
+    job_records = pyqtSignal(str, str, list, bool)  # job_id, agent, new telemetry records of every type, reset
+    job_hardware = pyqtSignal(str, dict)  # job_id, {"cpu_percent", "memory_mb", ...}
     queue_changed = pyqtSignal(dict)  # {"running", "active", "queued", "finished"}
 
     def __init__(self, store_path: Path | None = None, python: str | None = None,
@@ -52,8 +55,9 @@ class JobManager(QObject):
         self._partial: dict[str, str] = {}
         self._logs: dict[str, list[str]] = {}
         self._log_files: dict[str, Any] = {}
-        self._tails: dict[tuple[str, str], MetricsTail] = {}
+        self._feeds: dict[tuple[str, str], AgentFeed] = {}
         self._last_hardware: dict[str, float] = {}
+        self._streamed_hardware: set[str] = set()  # jobs whose training process reports its own resource use
         self.watcher = QFileSystemWatcher(self)
         self.watcher.directoryChanged.connect(self._on_path_changed)
         self.watcher.fileChanged.connect(self._on_path_changed)
@@ -201,6 +205,9 @@ class JobManager(QObject):
         self.job_output.emit(job_id, lines)
 
     def _sample_hardware(self, job_id: str):
+        """Fallback for runs without a telemetry stream: sample the pipeline process from outside."""
+        if job_id in self._streamed_hardware:
+            return
         now = time.monotonic()
         if now - self._last_hardware.get(job_id, 0) < HARDWARE_SAMPLE_SECONDS:
             return
@@ -256,10 +263,8 @@ class JobManager(QObject):
         for agent in job.get("agents", []):
             agent_dir = run_dir / agent
             paths.append(agent_dir)
-            paths.extend(str(p) for p in agent_dir.glob("version_*"))
-            csv_path = latest_metrics_csv(agent_dir)
-            if csv_path:
-                paths.append(csv_path)
+            for version_dir in agent_dir.glob("version_*"):
+                paths.extend([version_dir, version_dir / "events.jsonl", version_dir / "metrics.csv"])
         existing = {str(p) for p in paths if Path(p).exists()}
         watched = set(self.watcher.directories()) | set(self.watcher.files())
         new = sorted(existing - watched)
@@ -271,8 +276,9 @@ class JobManager(QObject):
         stale = [p for p in self.watcher.directories() + self.watcher.files() if p.startswith(run_dir)]
         if stale:
             self.watcher.removePaths(stale)
-        for key in [k for k in self._tails if k[0] == job["job_id"]]:
-            del self._tails[key]
+        for key in [k for k in self._feeds if k[0] == job["job_id"]]:
+            del self._feeds[key]
+        self._streamed_hardware.discard(job["job_id"])
 
     def _on_path_changed(self, _path: str):
         for job_id, job in self.jobs.items():
@@ -281,22 +287,30 @@ class JobManager(QObject):
                 self._scan_metrics(job_id)
 
     def _scan_metrics(self, job_id: str):
+        """Read what each agent's run appended since the last scan and signal it."""
         job = self.jobs.get(job_id)
         if not job:
             return
         run_dir = self._run_dir(job)
         for agent in job.get("agents", []):
-            path = latest_metrics_csv(run_dir / agent)
-            if path is None:
+            feed = self._feeds.get((job_id, agent))
+            if feed is None:
+                feed = self._feeds[(job_id, agent)] = AgentFeed(run_dir / agent)
+            records, reset = feed.read()
+            if not records and not reset:
                 continue
-            tail = self._tails.get((job_id, agent))
-            reset = False
-            if tail is None or tail.path != path:
-                reset = tail is not None  # a newer version_N folder replaced the file being read
-                tail = self._tails[(job_id, agent)] = MetricsTail(path)
-            rows, rewritten = tail.read()
-            if rows or reset or rewritten:
-                self.job_metrics.emit(job_id, agent, rows, reset or rewritten)
+            self.job_records.emit(job_id, agent, records, reset)
+            rows = [metrics_row(r) for r in records if r.get("type") == "metrics"]
+            rows = [row for row in rows if row]
+            if rows or reset:
+                self.job_metrics.emit(job_id, agent, rows, reset)
+            samples = [r["data"] for r in records if r.get("type") == "system" and r.get("data")]
+            if samples:
+                self._streamed_hardware.add(job_id)
+                latest = dict(samples[-1])
+                if "rss_mb" in latest:
+                    latest["memory_mb"] = latest["rss_mb"]  # the name job_hardware has always used
+                self.job_hardware.emit(job_id, latest)
 
     # ── Stopping and the queue ───────────────────────────────────────────────
 
