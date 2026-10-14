@@ -55,7 +55,7 @@ from .config_viewer import ConfigViewer
 from .config_tab_manager import ConfigTabManager
 from .hub import HubClient, HubDialog
 from .job_manager import JobManager
-from .live_run import LiveRun
+from .live_run import LiveRun, LiveRunCache
 from src.app.services.config_service import LaunchError
 from .local_backend import LocalBackend
 from .monitor import ENV_MAX_REWARD, MonitorPanel
@@ -162,6 +162,7 @@ class Window(QMainWindow):
         # (job_id, agent) -> LiveRun: every record a training run reported, with its speed, ETA and events
         self.live_runs: dict[tuple[str, str], LiveRun] = {}
         self._persisted_at: dict[str, float] = {}  # job_id -> when its run was last saved while training
+        self.disk_lives = LiveRunCache()  # LiveRuns of runs not followed in this session, read from results/logs
         self.jobs.job_hardware.connect(self.on_job_hardware)
         self.jobs.queue_changed.connect(self.on_queue_changed)
         self.tray = None  # TrayController, set up by main(): closing while training hides to the tray
@@ -1714,6 +1715,8 @@ class Window(QMainWindow):
 
     def on_job_output(self, job_id, lines):
         run = self.run_for_job(job_id)
+        if run is not None and run is self.selected and hasattr(self, "monitor"):
+            self.monitor.append_log(run, lines)
         if run is None or run is not self.active:
             return
         for line in lines:
@@ -1731,6 +1734,8 @@ class Window(QMainWindow):
             run["metrics"].extend(metric_points(rows))
         if self.selected is run:
             self.render_run()
+        elif hasattr(self, "monitor"):
+            self.monitor.update_run_row(run)  # its sidebar sparkline
         # Rows now arrive as they are logged (the telemetry stream), not in CSV batches: save a training
         # run every few seconds rather than on every row. finish() saves it once more at the end.
         now = time.monotonic()
@@ -1747,6 +1752,8 @@ class Window(QMainWindow):
             live = self.live_runs[(job_id, agent)] = LiveRun(budget=budget)
         events = live.add(records, reset)
         run = self.run_for_job(job_id)
+        if run is not None and run is self.selected and hasattr(self, "monitor"):
+            self.monitor.live_changed()
         if run is not None and run is self.active:
             marks = {"warning": "⚠", "error": "✖"}
             for event in events:
@@ -1755,6 +1762,41 @@ class Window(QMainWindow):
     def live_runs_for_job(self, job_id) -> dict[str, LiveRun]:
         """agent -> LiveRun for one job."""
         return {agent: live for (job, agent), live in self.live_runs.items() if job == job_id}
+
+    def live_for_run(self, run, load=True) -> dict[str, LiveRun]:
+        """agent -> LiveRun for a run: followed in this session, or read from results/logs (when `load`)."""
+        if not run or run.get("simulated"):
+            return {}
+        backend = run.get("backend") or {}
+        followed = self.live_runs_for_job(backend.get("job_id"))
+        if followed or not (backend.get("group") and backend.get("experiment_id")):
+            return followed
+        agents = backend.get("agents") or []
+        if not load:
+            return self.disk_lives.cached(self.jobs.logs_dir, backend["group"], backend["experiment_id"], agents)
+        return self.disk_lives.load(self.jobs.logs_dir, backend["group"], backend["experiment_id"], agents)
+
+    def log_lines_for_run(self, run) -> tuple[list[str], str]:
+        """(the pipeline output of a run, what to say when there is none)."""
+        if not run or run.get("simulated"):
+            return [], "Simulated demo runs have no pipeline output."
+        job_id = (run.get("backend") or {}).get("job_id")
+        if not job_id:
+            return [], "This run was started outside ThetaIDE (command line or Slurm): its output was not captured."
+        lines = self.jobs.log_lines(job_id)
+        if lines:
+            return lines, ""
+        path = self.jobs.jobs_dir / f"{job_id}.log"
+        try:
+            return path.read_text(encoding="utf-8", errors="replace").splitlines(), ""
+        except OSError:
+            return [], f"No output was saved for this run ({path.name} is missing)."
+
+    def run_folder(self, run):
+        backend = (run or {}).get("backend") or {}
+        if not (backend.get("group") and backend.get("experiment_id")):
+            return None
+        return self.jobs.logs_dir / backend["group"] / backend["experiment_id"]
 
     def on_job_hardware(self, job_id, hardware):
         run = self.run_for_job(job_id)

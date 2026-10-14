@@ -7,13 +7,25 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING
 
-from PyQt6.QtCore import Qt
-from PyQt6.QtWidgets import QComboBox, QHBoxLayout, QProgressBar, QPushButton, QSlider, QVBoxLayout, QWidget
+from PyQt6.QtCore import Qt, QTimer
+from PyQt6.QtWidgets import (
+    QComboBox,
+    QHBoxLayout,
+    QProgressBar,
+    QPushButton,
+    QSlider,
+    QSplitter,
+    QTabWidget,
+    QVBoxLayout,
+    QWidget,
+)
 
 from ..charts import Chart
 from ..model import FINAL_STATUSES, LIVE_STATUSES, available_metrics, latest
 from ..results.metrics_catalog import describe, group_sort_key, metric_group
 from ..widgets import MetricCard, label
+from .live_view import ChartsView, FeedView, FilesView, LogView, StatusStrip, SystemView
+from .runs_sidebar import RunsSidebar, run_label
 
 if TYPE_CHECKING:
     from ..app import Window
@@ -29,6 +41,7 @@ SECOND_METRICS = {
 }
 # Highest possible evaluation reward per environment, drawn as the reward chart's ceiling.
 ENV_MAX_REWARD = {"cartpole": 500}
+LIVE_REFRESH_MS = 400  # the live views redraw at most this often while records stream in
 # Shown in the reward chart, so not offered for the second one.
 _REWARD_KEYS = {"reward", "reward_std"}
 
@@ -106,8 +119,13 @@ class MonitorPanel(QWidget):
         super().__init__()
         self.host = host
         self.second_metric = "loss"
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 18, 20, 14)
+        # Runs sidebar on the left; everything about the shown run on the right.
+        self.sidebar = RunsSidebar()
+        self.sidebar.run_chosen.connect(self._sidebar_chose)
+        self.sidebar.compare_changed.connect(lambda _ids: self.live_changed())
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        layout.setContentsMargins(12, 0, 0, 0)
         layout.setSpacing(14)
         # Eyebrow row with curve smoothing slider
         eyebrow_row = QHBoxLayout()
@@ -166,17 +184,26 @@ class MonitorPanel(QWidget):
         self.storage_label = label("results/logs/  ·  results/jobs/jobs.db", "muted")
         caption_row.addWidget(self.storage_label)
         layout.addLayout(caption_row)
+        self.status_strip = StatusStrip()
+        layout.addWidget(self.status_strip)
         row = QHBoxLayout()
         self.reward_card = MetricCard("EPISODE REWARD", "synthetic evaluation / mean")
         self.loss_card = MetricCard("TRAINING LOSS", "total loss across minibatches")
         self.steps_card = MetricCard("TIMESTEPS", "configured training budget")
         for card in (self.reward_card, self.loss_card, self.steps_card):
             row.addWidget(card)
-        layout.addLayout(row)
         self.progress = QProgressBar()
         self.progress.setTextVisible(False)
         self.progress.setFixedHeight(5)
         layout.addWidget(self.progress)
+        # Overview keeps the cards and the two headline charts; the other tabs are the live views.
+        self.views = QTabWidget()
+        self.views.setDocumentMode(True)
+        overview = QWidget()
+        overview_layout = QVBoxLayout(overview)
+        overview_layout.setContentsMargins(0, 8, 0, 0)
+        overview_layout.setSpacing(14)
+        overview_layout.addLayout(row)
         self.reward_chart = Chart("reward", "Episode reward  ·  mean ± 1 std over evaluation episodes",
                                   band="reward_std")
         self.loss_chart = Chart(self.second_metric, SECOND_METRICS[self.second_metric][1], zero_based=False)
@@ -186,8 +213,43 @@ class MonitorPanel(QWidget):
         self.metric_select.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
         self.metric_select.currentIndexChanged.connect(self.second_metric_changed)
         self.loss_chart.set_corner_widget(self.metric_select)
-        layout.addWidget(self.reward_chart, 3)
-        layout.addWidget(self.loss_chart, 2)
+        overview_layout.addWidget(self.reward_chart, 3)
+        overview_layout.addWidget(self.loss_chart, 2)
+        self.views.addTab(overview, "Overview")
+        self.charts_view = ChartsView()
+        self.system_view = SystemView()
+        self.log_view = LogView()
+        self.feed_view = FeedView()
+        self.files_view = FilesView()
+        for view, title in (
+            (self.charts_view, "Charts"),
+            (self.system_view, "System"),
+            (self.log_view, "Logs"),
+            (self.feed_view, "Feed"),
+            (self.files_view, "Files"),
+        ):
+            self.views.addTab(view, title)
+        self.views.currentChanged.connect(lambda _: self.refresh_live())
+        layout.addWidget(self.views, 1)
+        # Records can arrive many times a second: redraw the live views at most a few times a second,
+        # and tick the status strip ("updated 3 s ago") once a second.
+        self._refresh_timer = QTimer(self)
+        self._refresh_timer.setSingleShot(True)
+        self._refresh_timer.setInterval(LIVE_REFRESH_MS)
+        self._refresh_timer.timeout.connect(self.refresh_live)
+        self._clock = QTimer(self)
+        self._clock.setInterval(1000)
+        self._clock.timeout.connect(self._tick_status)
+        self._clock.start()
+        self._log_run_id = None
+        root = QVBoxLayout(self)
+        root.setContentsMargins(20, 18, 20, 14)
+        self.splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.splitter.addWidget(self.sidebar)
+        self.splitter.addWidget(content)
+        self.splitter.setStretchFactor(1, 1)
+        self.splitter.setSizes([300, 1100])
+        root.addWidget(self.splitter)
         self.monitor_note = label("", "muted")
         self.monitor_note.setWordWrap(True)
         monitor_footer = QHBoxLayout()
@@ -203,7 +265,8 @@ class MonitorPanel(QWidget):
     # ── Run navigation ───────────────────────────────────────────────────────
 
     def set_runs(self, runs, selected):
-        """Refill the run selector, keeping the selected run highlighted."""
+        """Refill the run selector and the runs sidebar, keeping the selected run highlighted."""
+        self.sidebar.set_runs(runs, selected)
         self.run_combo.blockSignals(True)
         self.run_combo.clear()
         for run in runs:
@@ -228,6 +291,10 @@ class MonitorPanel(QWidget):
 
     def show_selected(self, run):
         """Point the run selector at `run` without re-triggering a selection."""
+        if run and run.get("id") != self._log_run_id:
+            self._log_run_id = None  # its output may have grown while another run was shown: read it again
+        if run:
+            self.sidebar.select(run["id"])
         self.run_combo.blockSignals(True)
         self._highlight(run)
         self.run_combo.blockSignals(False)
@@ -264,6 +331,15 @@ class MonitorPanel(QWidget):
         if idx < self.run_combo.count() - 1:
             self.run_combo.setCurrentIndex(idx + 1)
 
+    def _sidebar_chose(self, run_id):
+        run = self.host.by_id(run_id)
+        if run is not None and run is not self.host.selected:
+            self.host.select_run(run)
+
+    def update_run_row(self, run):
+        """A run's metrics or status changed: refresh its sidebar row."""
+        self.sidebar.update_run(run)
+
     def jump_to_live_run(self):
         if self.host.active:
             self.host.select_run(self.host.active)
@@ -282,6 +358,7 @@ class MonitorPanel(QWidget):
         factor = value / 100.0
         self.reward_chart.set_smoothing(factor)
         self.loss_chart.set_smoothing(factor)
+        self.charts_view.set_smoothing(factor)
 
     def sync_metric_select(self, run):
         """Offer every second-chart metric this run has; keep the user's choice when available."""
@@ -439,3 +516,68 @@ class MonitorPanel(QWidget):
         else:
             self.reward_chart.set_baseline_series([])
             self.loss_chart.set_baseline_series([])
+        self.sidebar.update_run(run)
+        self.live_changed()
+
+    # ── Live views ───────────────────────────────────────────────────────────
+
+    def live_changed(self):
+        """New records (or another run selected): redraw the live views soon, once for many changes."""
+        if not self._refresh_timer.isActive():
+            self._refresh_timer.start()
+
+    def _run_is_live(self, run) -> bool:
+        return bool(run) and not run.get("simulated") and run.get("status") in LIVE_STATUSES
+
+    def refresh_live(self):
+        """Draw the status strip and the open live view for the selected run."""
+        run = self.host.selected
+        if not run:
+            return
+        view = self.views.currentWidget()
+        # A finished run's files are read only when a live view needs them, not just to show the Overview.
+        lives = self.host.live_for_run(run, load=view is not self.views.widget(0))
+        live = self._run_is_live(run)
+        self.status_strip.show_run(run.get("status", ""), lives, None, live)
+        if view is self.charts_view or view is self.system_view:
+            series, colors = self.compared_series(run, lives)
+            view.show_lives(series, colors)
+        elif view is self.feed_view:
+            self.feed_view.show_lives(lives)
+        elif view is self.files_view:
+            self.files_view.show_lives(lives, self.host.run_folder(run))
+        elif view is self.log_view and self._log_run_id != run["id"]:
+            self._log_run_id = run["id"]
+            lines, empty = self.host.log_lines_for_run(run)
+            self.log_view.set_lines(lines, empty)
+
+    def compared_series(self, run, lives):
+        """(label -> LiveRun, label -> color) for the shown run plus every run ticked in the sidebar.
+
+        With nothing ticked this is the shown run's agents, labelled by agent and colored by default.
+        """
+        others = [self.host.by_id(run_id) for run_id in self.sidebar.compared if run_id != run["id"]]
+        others = [other for other in others if other is not None]
+        if not others:
+            return lives, None
+        colors_by_run = self.sidebar.colors()
+        series, colors = {}, {}
+        for each in [run, *others]:
+            each_lives = lives if each is run else self.host.live_for_run(each, load=True)
+            for agent, live in each_lives.items():
+                name = run_label(each) if len(each_lives) == 1 else f"{run_label(each)} · {agent}"
+                if name in series:  # two runs with the same experiment name
+                    name = f"{name} ({each['id'][:4]})"
+                series[name] = live
+                colors[name] = colors_by_run.get(each["id"])
+        return series, colors
+
+    def append_log(self, run, lines):
+        """New output of `run`: shown at once if its log is the one loaded (otherwise read when opened)."""
+        if self._log_run_id == run.get("id"):
+            self.log_view.append(lines)
+
+    def _tick_status(self):
+        run = self.host.selected
+        if self.isVisible() and self._run_is_live(run):
+            self.status_strip.show_run(run.get("status", ""), self.host.live_for_run(run, load=False), None, True)
