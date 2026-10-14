@@ -247,21 +247,31 @@ def test_scoring_leaves_eval_mode_alone_when_it_started_there():
 # ---------------------------------------------------------------------------
 
 
-def _env_cfg(name="breast_cancer"):
-    return _Cfg(env=_Cfg(name=name, dataset_name=f"{name}.npz"), batch_size=32)
+def _env_cfg(tmp_path, name="breast_cancer"):
+    """A config carrying an env but no `data_module`, over a dataset written here.
+
+    in/datasets/ is gitignored - its contents are produced by
+    in/datasets/prepare_tabular.py - so a test that reads from it passes only on
+    a machine where someone has run that script, and fails in CI.
+    """
+    return _Cfg(
+        dataset_path=str(_write_npz(tmp_path / "d.npz")),
+        env=_Cfg(name=name, dataset_name=f"{name}.npz"),
+        batch_size=32,
+    )
 
 
-def test_supervised_finds_a_labelled_loader_with_no_data_module_key():
+def test_supervised_finds_a_labelled_loader_with_no_data_module_key(tmp_path):
     """`data_module` cannot be set from the configuration panel, so requiring it
     would mean supervised still only worked for MIMIC as far as the UI goes."""
-    dm = get_component("SupervisedDataModule")(_env_cfg())
+    dm = get_component("SupervisedDataModule")(_env_cfg(tmp_path))
     assert type(dm._delegate).__name__ == "SupervisedNpzDataModule"
     assert len(next(iter(dm.train_dataloader()))) == 2
 
 
-def test_unsupervised_resolves_the_unlabelled_loader_instead():
+def test_unsupervised_resolves_the_unlabelled_loader_instead(tmp_path):
     """Same dataset, same absent key, different paradigm: labels must not leak."""
-    dm = get_component("UnsupervisedDataModule")(_env_cfg())
+    dm = get_component("UnsupervisedDataModule")(_env_cfg(tmp_path))
     assert type(dm._delegate).__name__ == "TabularNpzDataModule"
     assert len(next(iter(dm.train_dataloader()))) == 1
 

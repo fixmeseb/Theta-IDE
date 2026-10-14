@@ -218,3 +218,24 @@ def test_a_config_without_an_agent_section_still_resolves():
     from src.app.core.lightning_builder import _agent_or_global
 
     assert _agent_or_global(_Cfg(epochs=7), "epochs", 1) == 7
+
+
+def test_no_test_here_depends_on_a_generated_dataset():
+    """in/datasets/ is gitignored, so anything read from it exists only where
+    someone has run prepare_tabular.py. Two tests once resolved breast_cancer.npz
+    from there and passed locally while failing in CI; this keeps that from
+    coming back unnoticed.
+    """
+    import re
+
+    offenders = []
+    for path in sorted(Path("tests").glob("test_*.py")):
+        text = path.read_text()
+        for number, line in enumerate(text.splitlines(), start=1):
+            if "in/datasets" not in line or line.lstrip().startswith("#"):
+                continue
+            # A prepare-script reference or a skip-guarded lookup is fine; reading a
+            # dataset file as a fixture is not.
+            if re.search(r"in/datasets/\w+/\w+\.npz|dataset_name=\"?\w+\.npz", line):
+                offenders.append(f"{path.name}:{number}: {line.strip()}")
+    assert not offenders, "tests must build their own dataset:\n" + "\n".join(offenders)
