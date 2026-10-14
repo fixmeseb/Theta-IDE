@@ -309,9 +309,7 @@ def test_an_existing_group_still_wins_over_the_paradigm_default():
     from frontend.config_model import ConfigTree, default_method_model
 
     tree = ConfigTree.discover()
-    chosen = default_method_model(
-        tree.group("early_prediction"), tree.models, paradigm=tree.paradigms["supervised"]
-    )
+    chosen = default_method_model(tree.group("early_prediction"), tree.models, paradigm=tree.paradigms["supervised"])
     assert chosen in {"lstm", "transformer"}
 
 
@@ -321,3 +319,27 @@ def test_rl_paradigms_keep_the_dnn_default():
     tree = ConfigTree.discover()
     for paradigm in ("online_rl", "offline_rl"):
         assert default_method_model(None, tree.models, paradigm=tree.paradigms[paradigm]) == "dnn"
+
+
+def test_a_named_dataset_that_is_missing_is_reported(tmp_path, monkeypatch, caplog):
+    """Missing data used to be logged at debug level, so a run only failed later with
+    "train_loader has not been set" and no word about the dataset."""
+    import logging
+
+    monkeypatch.chdir(tmp_path)  # no in/datasets here
+    with caplog.at_level(logging.WARNING, logger="src.app.core.paradigm_impls.base.supervised"):
+        # Named but never written: no dataset_path, so it is looked up under in/datasets/.
+        name = "breast_cancer"
+        named = _Cfg(env=_Cfg(name=name, dataset_name=f"{name}.npz"), batch_size=32)
+        dm = get_component("SupervisedDataModule")(named)
+    assert dm._delegate is None
+    assert "No dataset for 'breast_cancer' under in/datasets/" in caplog.text
+
+
+def test_a_config_naming_no_dataset_stays_quiet(caplog):
+    """Loaders may be supplied directly instead (cross-validation folds), so no warning."""
+    import logging
+
+    with caplog.at_level(logging.WARNING, logger="src.app.core.paradigm_impls.base.supervised"):
+        get_component("SupervisedDataModule")(_Cfg(batch_size=32))
+    assert caplog.text == ""

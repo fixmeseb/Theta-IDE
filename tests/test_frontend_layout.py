@@ -155,6 +155,30 @@ class TestWindowLayoutAndSliders(unittest.TestCase):
             # Sliders start in step with the default sidebar visibility in settings.toml
             self.assertEqual(slider.isChecked(), pane_id in self.window.settings_manager.sidebar_visible)
 
+    def test_every_tab_has_a_switch_including_plugin_tabs(self):
+        # Plugins add their tabs after Settings is built; TensorBoard is hidden by default,
+        # so without a switch Settings offered no way to show it.
+        self.assertEqual(set(self.window.pane_sliders), set(self.window.tabs.tabs))
+        self.assertIn("tensorboard", self.window.pane_sliders)
+        self.assertFalse(self.window.pane_sliders["tensorboard"].isChecked())
+        self.window.pane_sliders["tensorboard"].setChecked(True)
+        self.assertTrue(self.window.tabs.is_tab_visible("tensorboard"))
+
+    def test_a_plugin_switch_comes_and_goes_with_the_plugin(self):
+        self.assertTrue(self.window.plugin_manager.disable_plugin("tensorboard"))
+        self.assertNotIn("tensorboard", self.window.pane_sliders)
+        self.assertTrue(self.window.plugin_manager.enable_plugin("tensorboard"))
+        self.assertIn("tensorboard", self.window.pane_sliders)
+        self.assertEqual(
+            self.window.pane_sliders["tensorboard"].isChecked(), self.window.tabs.is_tab_visible("tensorboard")
+        )
+
+    def test_a_switch_follows_its_tab_when_shown_elsewhere(self):
+        self.window.tabs.set_tab_visible("plots", True)
+        self.assertTrue(self.window.pane_sliders["plots"].isChecked())
+        self.window.tabs.set_tab_visible("plots", False)
+        self.assertFalse(self.window.pane_sliders["plots"].isChecked())
+
     def test_toggle_slider_hides_pane(self):
         # Plots is hidden by default, so show it first
         self.window.pane_sliders["plots"].setChecked(True)
@@ -169,8 +193,10 @@ class TestWindowLayoutAndSliders(unittest.TestCase):
         self.assertTrue(self.window.tabs.is_tab_visible("plots"))
 
     def test_cannot_hide_all_panes(self):
-        # Turn off all panes except one
-        panes = BUILTIN_PANES
+        # Turn off every pane except one, plugin panes (TensorBoard, arXiv Papers) included
+        panes = list(self.window.pane_sliders)
+        panes.remove("console")
+        panes.append("console")
         for p in panes[:-1]:
             self.window.pane_sliders[p].setChecked(False)
 

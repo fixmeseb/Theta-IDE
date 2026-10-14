@@ -366,6 +366,7 @@ class SideTabs(QWidget):
     logoClicked = pyqtSignal()
     tabOrderChanged = pyqtSignal(list)  # also emitted when bins change, so the layout is saved
     tabVisibilityChanged = pyqtSignal(str, bool)
+    tabsChanged = pyqtSignal()  # a tab was added or removed (plugins add theirs after the window is built)
     autoHideChanged = pyqtSignal(bool)
 
     def __init__(self, parent=None):
@@ -477,6 +478,7 @@ class SideTabs(QWidget):
         self._rebuild(emit=False)
         if len(self.tab_order) == 1:
             button.setChecked(True)
+        self.tabsChanged.emit()
         return index
 
     def removeTab(self, tab_id):
@@ -502,6 +504,7 @@ class SideTabs(QWidget):
         entry["button"].deleteLater()
         self.stack.removeWidget(entry["widget"])
         self._rebuild()
+        self.tabsChanged.emit()
 
     # ── structure ────────────────────────────────────────────────────────────
 

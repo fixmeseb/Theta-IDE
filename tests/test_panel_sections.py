@@ -299,11 +299,12 @@ class TestParadigmChangeKeepsTheConfigValid(unittest.TestCase):
         self.viewer.raw_data["methods"] = {"params": {}}
         self.assertNotIn("methods", self._pick("supervised"))
 
-    def test_a_group_base_does_not_keep_concrete_methods(self):
-        """Group defaults carry what every experiment inherits; the experiments
-        choose the methods. _clean_redundant_params strips them for that reason."""
+    def test_a_group_base_keeps_its_default_method(self):
+        """A group base may declare one default method, which new experiments
+        inherit; picking the paradigm and saving must not strip it. (Bases used to
+        drop every concrete method, which deleted that default on the first save.)"""
         self.viewer.raw_data["methods"] = {"m1": {"model": "lstm"}}
-        self.assertNotIn("methods", self._pick("supervised"))
+        self.assertEqual(self._pick("supervised")["methods"], {"m1": {"model": "lstm"}})
 
     def test_an_experiment_keeps_its_concrete_methods(self):
         """The same save path must not strip a method from an experiment file."""
