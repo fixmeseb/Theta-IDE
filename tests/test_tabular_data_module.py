@@ -230,7 +230,7 @@ def test_no_test_here_depends_on_a_generated_dataset():
 
     offenders = []
     for path in sorted(Path("tests").glob("test_*.py")):
-        text = path.read_text()
+        text = path.read_text(encoding="utf-8")  # the default on Windows is cp1252, which some test files are not
         for number, line in enumerate(text.splitlines(), start=1):
             if "in/datasets" not in line or line.lstrip().startswith("#"):
                 continue
