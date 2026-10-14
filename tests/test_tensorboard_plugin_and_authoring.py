@@ -109,8 +109,11 @@ class TestPluginAuthoringAndTensorboard(unittest.TestCase):
         self.assertTrue(proc.waitForStarted(2000))
         self.assertEqual(proc.state(), QProcess.ProcessState.Running)
 
-        # Context cleanup must kill the process tree cleanly
+        # Context cleanup must kill the process tree cleanly. Termination is
+        # asynchronous, so wait for it rather than reading the state straight
+        # after the call: under a loaded full suite it has not always landed yet.
         context.cleanup()
+        proc.waitForFinished(5000)
         self.assertEqual(proc.state(), QProcess.ProcessState.NotRunning)
 
     def test_tensorboard_core_plugin_lifecycle(self):

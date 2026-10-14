@@ -303,14 +303,23 @@ class PluginContext:
         """Remove any remaining tabs, slots, commands, and safely terminate tracked processes."""
         # 1. Terminate tracked subprocesses
         for proc in list(self._tracked_processes):
+            if proc.state() == QProcess.ProcessState.NotRunning:
+                continue
+            pid = int(proc.processId())
+            if pid > 0:
+                try:
+                    kill_process_tree(pid)
+                except Exception as exc:
+                    # Its own failure must not skip the fallback below, which is
+                    # there precisely for when the tree kill does not land.
+                    self.log(f"Error terminating child process tree: {exc}")
             try:
+                # Finish through Qt as well. kill_process_tree signals the pid
+                # directly, and QProcess goes on reporting Running until it reaps
+                # the child itself, so the caller sees a process that is gone.
                 if proc.state() != QProcess.ProcessState.NotRunning:
-                    pid = int(proc.processId())
-                    if pid > 0:
-                        kill_process_tree(pid)
-                    if proc.state() != QProcess.ProcessState.NotRunning:
-                        proc.kill()
-                        proc.waitForFinished(1000)
+                    proc.kill()
+                proc.waitForFinished(3000)
             except Exception as exc:
                 self.log(f"Error terminating child process: {exc}")
         self._tracked_processes.clear()

@@ -116,6 +116,18 @@ class TestSideTabsDraggableAndVisibility(unittest.TestCase):
         self.assertEqual(self.side_tabs.tab_order, custom_order)
 
 
+# The panes the window builds itself, in their default order. TensorBoard has a tab
+# too, but it comes from the core plugin rather than the window, so it has no pane
+# slider and is not part of the built-in set.
+BUILTIN_PANES = [
+    "components", "config", "workflows", "monitor", "results", "plots", "queue", "terminal", "console",
+]
+DEFAULT_TAB_ORDER = [
+    "components", "config", "workflows", "monitor", "results", "plots", "tensorboard",
+    "queue", "terminal", "console",
+]
+
+
 @unittest.skipIf(not HAS_PYQT6, "PyQt6 not installed in current environment")
 class TestWindowLayoutAndSliders(unittest.TestCase):
     def setUp(self):
@@ -128,14 +140,14 @@ class TestWindowLayoutAndSliders(unittest.TestCase):
         self.temp_dir.cleanup()
 
     def test_default_tab_order(self):
-        expected_order = ["components", "config", "workflows", "monitor", "results", "plots", "tensorboard", "queue", "terminal", "console"]
+        expected_order = DEFAULT_TAB_ORDER
         order = self.window.tabs.tab_order
         self.assertEqual(order[:len(expected_order)], expected_order)
         # Tabs from enabled plugins (e.g. arXiv Papers) follow the built-in panes
         self.assertTrue(set(order[len(expected_order):]) <= set(self.window.plugin_manager.instances))
 
     def test_pane_sliders_registered(self):
-        expected_panes = ["components", "config", "workflows", "monitor", "results", "plots", "tensorboard", "queue", "terminal", "console"]
+        expected_panes = BUILTIN_PANES
         for pane_id in expected_panes:
             self.assertIn(pane_id, self.window.pane_sliders)
             slider = self.window.pane_sliders[pane_id]
@@ -158,7 +170,7 @@ class TestWindowLayoutAndSliders(unittest.TestCase):
 
     def test_cannot_hide_all_panes(self):
         # Turn off all panes except one
-        panes = ["components", "config", "workflows", "monitor", "results", "plots", "tensorboard", "queue", "terminal", "console"]
+        panes = BUILTIN_PANES
         for p in panes[:-1]:
             self.window.pane_sliders[p].setChecked(False)
 
@@ -178,9 +190,8 @@ class TestWindowLayoutAndSliders(unittest.TestCase):
 
         # Reset
         self.window.reset_sidebar_layout()
-        default_order = ["components", "config", "workflows", "monitor", "results", "plots", "tensorboard", "queue", "terminal", "console"]
-        self.assertEqual(self.window.tabs.tab_order[:len(default_order)], default_order)
-        for p in default_order:
+        self.assertEqual(self.window.tabs.tab_order[:len(DEFAULT_TAB_ORDER)], DEFAULT_TAB_ORDER)
+        for p in BUILTIN_PANES:
             self.assertTrue(self.window.tabs.is_tab_visible(p))
             self.assertTrue(self.window.pane_sliders[p].isChecked())
 

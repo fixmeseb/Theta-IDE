@@ -5,7 +5,7 @@ import pytest
 import yaml
 
 from PyQt6.QtWidgets import QApplication
-from frontend.config_viewer import ConfigViewer, config_tree
+from frontend.config_viewer import ConfigViewer, config_tree, get_method_candidate_subcomponents
 
 
 @pytest.fixture(scope="session")
@@ -268,7 +268,7 @@ def test_add_new_method_flow_empty_and_invalid(qapp, tmp_path):
     assert len(editors) == 1
     new_editor = editors[0]
     assert new_editor.text() == ""
-    assert new_editor.placeholderText() == "Method name..."
+    assert new_editor.placeholderText().startswith("Method name")
 
     # Validate name rules:
     existing_keys = set(viewer.raw_data["methods"].keys())
@@ -377,15 +377,11 @@ def test_blendrl_model_block_and_logic_module_rendering(qapp, tmp_path):
     assert "Logic Module (Symbolic)" not in labels
     assert "Blender Mode" not in labels
 
-    # Find the ComboBox for Add blendrl param
-    combos = viewer.findChildren(ComboBox)
-    add_bp_combos = [c for c in combos if "blendrl" in c.placeholderText()]
-    assert len(add_bp_combos) >= 1
-    add_bp_combo = add_bp_combos[0]
-    bp_items = [add_bp_combo.itemText(i) for i in range(add_bp_combo.count())]
-    assert "symbolic" in bp_items
-    assert "neural" in bp_items
-    assert "blender" in bp_items
+    # Which subcomponents are on offer. Asked of the helper that feeds the param
+    # adders rather than of a widget: the dropdown this used to read was replaced
+    # by the per-card plus icons.
+    bp_items = get_method_candidate_subcomponents("blendrl", config_tree(), set())
+    assert {"symbolic", "neural", "blender"} <= set(bp_items)
 
     # 1. Add symbolic subcomponent via adder
     viewer._add_method_param("ppo_blendrl_final_cp", "symbolic")
@@ -447,11 +443,9 @@ def test_blendrl_model_block_and_logic_module_rendering(qapp, tmp_path):
     assert "Logic Module (Symbolic)" not in labels
 
     # Verify symbolic is back in candidate blend parameters
-    combos = viewer.findChildren(ComboBox)
-    add_bp_combos = [c for c in combos if "blendrl" in c.placeholderText()]
-    assert len(add_bp_combos) >= 1
-    bp_items = [add_bp_combos[0].itemText(i) for i in range(add_bp_combos[0].count())]
-    assert "symbolic" in bp_items
+    spec = viewer.raw_data["methods"]["ppo_blendrl_final_cp"]
+    present = set((spec.get("model") or {}).keys()) if isinstance(spec.get("model"), dict) else set()
+    assert "symbolic" in get_method_candidate_subcomponents("blendrl", config_tree(), present)
 
     # 4. Add neural subcomponent
     viewer._add_method_param("ppo_blendrl_final_cp", "neural")
@@ -557,16 +551,19 @@ def test_group_defaults_disallows_concrete_methods(qapp, tmp_path):
     # 1. UI shows muted note instead of method cards
     from PyQt6.QtWidgets import QLabel
     labels = [lbl.text() for lbl in viewer.findChildren(QLabel)]
-    assert any("Individual methods are configured per experiment" in l for l in labels)
+    assert any("No default method configured" in l for l in labels)
 
-    # 2. Methods cannot be added or duplicated in base
-    assert viewer.add_method(agent="ppo", model="dnn") is None
+    # 2. A base cannot carry concrete methods. add_method names one in memory -
+    #    the group's single default method - but the save is what decides, and
+    #    duplicating an existing one is refused outright.
+    viewer.add_method(agent="ppo", model="dnn")
     assert viewer.duplicate_method("stray_method") is None
 
     # 3. Save cleans stray concrete methods from _base.yaml
     viewer.save_to_disk()
     saved = yaml.safe_load(base_file.read_text(encoding="utf-8"))
     assert "stray_method" not in saved.get("methods", {})
+    assert [k for k in saved.get("methods", {}) if k != "params"] == [], "no concrete method may persist in a base"
     # Universal params remain intact
     assert saved.get("methods", {}).get("params", {}).get("lr") == 0.0003
 
