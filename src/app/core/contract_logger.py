@@ -236,27 +236,41 @@ class ContractLogger:
         extra: Dict[str, Any] | None = None,
     ) -> Path:
         """Save runtime.json metadata compliant with NeSyRL/Theta-IDE conventions."""
-        end_time = time.time()
-        duration = training_time_seconds or (end_time - self._start_time)
-
-        meta = {
-            "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(self._start_time)),
-            "completed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(end_time)),
-            "training_time_seconds": round(duration, 3),
-            "total_steps": self._step_counter,
-            "version_dir": str(self.version_dir),
-        }
-        if config:
-            meta["config"] = config
-        if extra:
-            meta.update(extra)
-
-        meta_file = self.version_dir / "runtime.json"
-        meta_file.write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
-        return meta_file
+        return write_runtime_metadata(
+            self.version_dir, self._start_time, self._step_counter, config, training_time_seconds, extra
+        )
 
     def __enter__(self) -> ContractLogger:
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb) -> None:
         self.close()
+
+
+def write_runtime_metadata(
+    version_dir: Path,
+    start_time: float,
+    total_steps: int,
+    config: Dict[str, Any] | None = None,
+    training_time_seconds: float | None = None,
+    extra: Dict[str, Any] | None = None,
+) -> Path:
+    """Write <version_dir>/runtime.json: when the run started and ended, how long it trained, its config."""
+    end_time = time.time()
+    duration = training_time_seconds or (end_time - start_time)
+
+    meta = {
+        "timestamp": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(start_time)),
+        "completed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(end_time)),
+        "training_time_seconds": round(duration, 3),
+        "total_steps": total_steps,
+        "version_dir": str(version_dir),
+    }
+    if config:
+        meta["config"] = config
+    if extra:
+        meta.update(extra)
+
+    meta_file = Path(version_dir) / "runtime.json"
+    meta_file.write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
+    return meta_file

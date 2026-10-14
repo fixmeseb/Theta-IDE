@@ -1,8 +1,8 @@
 """Universal Stable-Baselines3 Runner for Theta-IDE.
 
 Executes SB3 algorithms (PPO, DQN, A2C, SAC) as a decoupled black-box engine,
-logging training telemetry to metrics.csv and saving checkpoints adhering to the
-Theta-IDE execution contract.
+logging training telemetry through src.app.telemetry (metrics.csv plus the events.jsonl live feed,
+by default) and saving checkpoints adhering to the Theta-IDE execution contract.
 """
 
 from __future__ import annotations
@@ -20,7 +20,7 @@ if str(PROJECT_ROOT) not in sys.path:
 import hydra
 from omegaconf import DictConfig, OmegaConf
 
-from src.app.core.contract_logger import ContractLogger
+from src.app import telemetry
 
 
 @hydra.main(version_base=None, config_path="../../../../in/config", config_name="config")
@@ -63,22 +63,25 @@ def main(cfg: DictConfig):
     print(f"\n=== [SB3 Engine] Initializing {algo_name} on {env_id} ===")
     print(f"Group: {group} | Experiment: {exp_id} | Total Timesteps: {total_timesteps}")
 
-    # Initialize ContractLogger
-    logger = ContractLogger(
-        group=group,
-        experiment_id=exp_id,
-        method_name=agent_name,
-        base_dir="results/logs",
+    # Telemetry: metrics.csv and the live feed by default; ++telemetry.sinks=[...] picks others
+    sinks, system_interval = telemetry.settings_from_config(cfg)
+    logger = telemetry.init(
+        group,
+        exp_id,
+        agent_name,
+        sinks=sinks,
+        config=OmegaConf.to_container(cfg, resolve=True),
+        system_interval=system_interval,
     )
 
     ckpt_dir = Path("results/checkpoints") / group / exp_id / agent_name.replace("/", "_")
     ckpt_dir.mkdir(parents=True, exist_ok=True)
 
-    # Custom SB3 Callback to bridge telemetry into Theta-IDE metrics.csv
+    # Custom SB3 Callback to bridge telemetry into the Theta-IDE telemetry run
     class ThetaMetricsCallback(BaseCallback):
-        def __init__(self, contract_logger: ContractLogger, eval_freq: int = 1000):
+        def __init__(self, run: telemetry.Run, eval_freq: int = 1000):
             super().__init__()
-            self.contract_logger = contract_logger
+            self.run = run
             self.eval_freq = eval_freq
             self.last_eval_step = 0
 
@@ -103,7 +106,7 @@ def main(cfg: DictConfig):
                         if "loss" in k:
                             metrics[f"losses/{k}"] = float(v)
 
-                self.contract_logger.log(
+                self.run.log(
                     metrics,
                     step=self.n_calls,
                     transitions=self.num_timesteps,
@@ -159,11 +162,17 @@ def main(cfg: DictConfig):
 
     model = AlgoClass(policy_type, env, verbose=1, **algo_kwargs)
 
-    cb = ThetaMetricsCallback(contract_logger=logger, eval_freq=1000)
+    cb = ThetaMetricsCallback(run=logger, eval_freq=1000)
 
     start_time = time.time()
+    status = "failed"
+    logger.event("stage", "Training started", stage="training")
     try:
         model.learn(total_timesteps=total_timesteps, callback=cb)
+        status = "completed"
+    except BaseException as exc:
+        logger.event("error", f"{type(exc).__name__}: {exc}", level="error")
+        raise
     finally:
         end_time = time.time()
         # Save final models
@@ -173,12 +182,14 @@ def main(cfg: DictConfig):
             config=OmegaConf.to_container(cfg, resolve=True),
             training_time_seconds=end_time - start_time,
         )
-        logger.close()
+        for name in ("best_model.zip", "latest_model.zip"):
+            logger.artifact(ckpt_dir / name, kind="checkpoint")
+        logger.finish(status=status)
         env.close()
 
     print(f"\n[SB3 Engine Complete] Total time: {end_time - start_time:.2f}s")
     print(f"Checkpoints saved to: {ckpt_dir}")
-    print(f"Telemetry logged to: {logger.metrics_csv_path}")
+    print(f"Telemetry logged to: {logger.version_dir}")
 
 
 if __name__ == "__main__":
