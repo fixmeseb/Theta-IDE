@@ -956,6 +956,28 @@ class SettingsView(QWidget):
         row_defaults.addWidget(self.defaults_toggle)
         ec_layout.addLayout(row_defaults)
 
+        row_agent_defs = QHBoxLayout()
+        row_agent_defs.addWidget(label("Show Defaults for Algorithms in Methods", "muted"), 1)
+        self.method_agent_defaults_toggle = ToggleSlider(checked=self.window.settings_manager.show_method_agent_defaults)
+        self.method_agent_defaults_toggle.toggled.connect(self._on_show_method_agent_defaults_toggled)
+        row_agent_defs.addWidget(self.method_agent_defaults_toggle)
+        ec_layout.addLayout(row_agent_defs)
+
+        row_model_defs = QHBoxLayout()
+        row_model_defs.addWidget(label("Show Defaults for Models in Methods", "muted"), 1)
+        self.method_model_defaults_toggle = ToggleSlider(checked=self.window.settings_manager.show_method_model_defaults)
+        self.method_model_defaults_toggle.toggled.connect(self._on_show_method_model_defaults_toggled)
+        row_model_defs.addWidget(self.method_model_defaults_toggle)
+        ec_layout.addLayout(row_model_defs)
+
+        row_all_defs = QHBoxLayout()
+        row_all_defs.addWidget(label("Show All Default Parameters", "muted"), 1)
+        self.all_defaults_toggle = ToggleSlider(checked=self.window.settings_manager.show_all_default_params)
+        self.all_defaults_toggle.toggled.connect(self._on_show_all_default_params_toggled)
+        row_all_defs.addWidget(self.all_defaults_toggle)
+        ec_layout.addLayout(row_all_defs)
+
+
         layout.addWidget(exp_card)
 
         # Card 5: Results Panel Layout
@@ -1013,6 +1035,19 @@ class SettingsView(QWidget):
     def _on_show_resolved_defaults_toggled(self, checked: bool):
         if hasattr(self.window, "settings_manager") and self.window.settings_manager:
             self.window.settings_manager.show_resolved_defaults = checked
+
+    def _on_show_method_agent_defaults_toggled(self, checked: bool):
+        if hasattr(self.window, "settings_manager") and self.window.settings_manager:
+            self.window.settings_manager.show_method_agent_defaults = checked
+
+    def _on_show_method_model_defaults_toggled(self, checked: bool):
+        if hasattr(self.window, "settings_manager") and self.window.settings_manager:
+            self.window.settings_manager.show_method_model_defaults = checked
+
+    def _on_show_all_default_params_toggled(self, checked: bool):
+        if hasattr(self.window, "settings_manager") and self.window.settings_manager:
+            self.window.settings_manager.show_all_default_params = checked
+
 
     def _on_ascii_setting_toggled(self, checked: bool):
         if hasattr(self.window, "settings_manager") and self.window.settings_manager:
@@ -1768,6 +1803,25 @@ class SettingsView(QWidget):
             self.defaults_toggle.blockSignals(True)
             self.defaults_toggle.setChecked(is_def)
             self.defaults_toggle.blockSignals(False)
+
+        if hasattr(self, "method_agent_defaults_toggle") and self.method_agent_defaults_toggle:
+            is_ag = bool(sm.get("appearance", "show_method_agent_defaults", default=False))
+            self.method_agent_defaults_toggle.blockSignals(True)
+            self.method_agent_defaults_toggle.setChecked(is_ag)
+            self.method_agent_defaults_toggle.blockSignals(False)
+
+        if hasattr(self, "method_model_defaults_toggle") and self.method_model_defaults_toggle:
+            is_mo = bool(sm.get("appearance", "show_method_model_defaults", default=False))
+            self.method_model_defaults_toggle.blockSignals(True)
+            self.method_model_defaults_toggle.setChecked(is_mo)
+            self.method_model_defaults_toggle.blockSignals(False)
+
+        if hasattr(self, "all_defaults_toggle") and self.all_defaults_toggle:
+            is_all = bool(sm.get("appearance", "show_all_default_params", default=False))
+            self.all_defaults_toggle.blockSignals(True)
+            self.all_defaults_toggle.setChecked(is_all)
+            self.all_defaults_toggle.blockSignals(False)
+
 
     def _build_terminal_page(self) -> QWidget:
         """Shell, start folder and venv for the Terminal pane, saved to [terminal] in settings.toml."""

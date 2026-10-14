@@ -67,6 +67,16 @@ ascii_distance = 4.8
 # When disabled (false), only explicit overrides and configured methods are shown.
 show_resolved_defaults = false
 
+# Show default hyperparameters for algorithms in experiment methods
+show_method_agent_defaults = false
+
+# Show default architecture parameters for models in experiment methods
+show_method_model_defaults = false
+
+# Show all default parameters across methods and experiments
+show_all_default_params = false
+
+
 [sidebar]
 # Canonical panel IDs, in left-to-right display order.
 order = [
@@ -448,6 +458,31 @@ class SettingsManager(QObject):
     @show_resolved_defaults.setter
     def show_resolved_defaults(self, val: bool) -> None:
         self.set("appearance", "show_resolved_defaults", bool(val))
+
+    @property
+    def show_method_agent_defaults(self) -> bool:
+        return bool(self.get("appearance", "show_method_agent_defaults", default=False))
+
+    @show_method_agent_defaults.setter
+    def show_method_agent_defaults(self, val: bool) -> None:
+        self.set("appearance", "show_method_agent_defaults", bool(val))
+
+    @property
+    def show_method_model_defaults(self) -> bool:
+        return bool(self.get("appearance", "show_method_model_defaults", default=False))
+
+    @show_method_model_defaults.setter
+    def show_method_model_defaults(self, val: bool) -> None:
+        self.set("appearance", "show_method_model_defaults", bool(val))
+
+    @property
+    def show_all_default_params(self) -> bool:
+        return bool(self.get("appearance", "show_all_default_params", default=False))
+
+    @show_all_default_params.setter
+    def show_all_default_params(self, val: bool) -> None:
+        self.set("appearance", "show_all_default_params", bool(val))
+
 
     @property
     def sidebar_order(self) -> list[str]:

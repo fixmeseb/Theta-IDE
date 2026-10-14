@@ -12,8 +12,6 @@ trainer:
   max_epochs: 1
   check_val_every_n_epoch: 3
 methods:
-  params:
-    lr: 0.0003
   ppo_blendrl_human_neural:
     agent: ppo
     model: blendrl

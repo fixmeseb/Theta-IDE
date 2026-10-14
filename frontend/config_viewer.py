@@ -76,6 +76,74 @@ def _make_subtle_tool_button(icon_name: str, tooltip: str, size: int = 24, icon_
     return btn
 
 
+def _make_param_adder_button(
+    tooltip: str,
+    candidates: list[str],
+    on_chosen,
+    parent_widget: QWidget | None = None,
+    allow_custom: bool = True,
+) -> QToolButton:
+    """Create a subtle plus button that opens a focused dropdown menu for selecting a parameter."""
+    btn = _make_subtle_tool_button("plus", tooltip, size=22, icon_size=12)
+    btn.setStyleSheet("""
+        QToolButton {
+            background: transparent;
+            border: 1px dashed #504945;
+            border-radius: 3px;
+            padding: 0px;
+        }
+        QToolButton:hover {
+            background: #3c3836;
+            border-color: #a89984;
+        }
+        QToolButton::menu-indicator {
+            image: none;
+            width: 0px;
+        }
+    """)
+    menu = QMenu(btn)
+    menu.setStyleSheet("""
+        QMenu {
+            background-color: #282828;
+            border: 1px solid #504945;
+            border-radius: 4px;
+            padding: 4px 0px;
+        }
+        QMenu::item {
+            padding: 5px 18px 5px 12px;
+            color: #ebdbb2;
+            font-size: 12px;
+        }
+        QMenu::item:selected {
+            background-color: #3c3836;
+            color: #fbf1c7;
+        }
+        QMenu::separator {
+            height: 1px;
+            background: #3c3836;
+            margin: 4px 6px;
+        }
+    """)
+    for cand in candidates:
+        act = menu.addAction(cand)
+        act.triggered.connect(lambda _, c=cand: on_chosen(c))
+
+    if allow_custom:
+        if candidates:
+            menu.addSeparator()
+        act_custom = menu.addAction("+ Custom...")
+        def _prompt_custom():
+            val, ok = QInputDialog.getText(parent_widget or btn, "Add Parameter", "Parameter name:")
+            if ok and val.strip():
+                on_chosen(val.strip())
+        act_custom.triggered.connect(_prompt_custom)
+
+    btn.setMenu(menu)
+    btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+    return btn
+
+
+
 def _parse_yaml_value(text: str):
     """Convert text representation to typed YAML scalar, list, or dict."""
     if not isinstance(text, str):
@@ -418,7 +486,8 @@ class ConfigBox(QFrame):
 
 
 class TitleLabel(QLabel):
-    """Clickable heading label that emits double_clicked on double-click."""
+    """Clickable heading label that emits clicked and double_clicked on click."""
+    clicked = pyqtSignal()
     double_clicked = pyqtSignal()
 
     def __init__(self, text="", parent=None):
@@ -426,12 +495,22 @@ class TitleLabel(QLabel):
         self.setObjectName("heading")
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton and self.rect().contains(event.position().toPoint()):
+            self.clicked.emit()
+            self.double_clicked.emit()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
     def mouseDoubleClickEvent(self, event):
         if event.button() == Qt.MouseButton.LeftButton:
+            self.clicked.emit()
             self.double_clicked.emit()
             event.accept()
             return
         super().mouseDoubleClickEvent(event)
+
 
 
 class InlineTitleEditor(QLineEdit):
@@ -663,7 +742,7 @@ class ConfigViewer(QWidget):
                 self.chk_view_mode.blockSignals(True)
                 self.chk_view_mode.setChecked(new_mode == "resolved")
                 self.chk_view_mode.blockSignals(False)
-                self._render_boxes()
+            self._render_boxes()
 
     def _init_ui(self):
         root_layout = QVBoxLayout(self)
@@ -678,7 +757,8 @@ class ConfigViewer(QWidget):
 
         self.group_badge = TitleLabel("")
         self.group_badge.setObjectName("heading")
-        self.group_badge.setToolTip("Group (double-click to rename)")
+        self.group_badge.setToolTip("Group (click to rename)")
+        self.group_badge.clicked.connect(self._start_group_edit)
         self.group_badge.double_clicked.connect(self._start_group_edit)
         self.group_badge.hide()
         hb_layout.addWidget(self.group_badge)
@@ -704,7 +784,9 @@ class ConfigViewer(QWidget):
         hb_layout.addWidget(self.breadcrumb_sep)
 
         self.file_title = TitleLabel("No config loaded")
+        self.file_title.clicked.connect(self._start_title_edit)
         self.file_title.double_clicked.connect(self._start_title_edit)
+
         hb_layout.addWidget(self.file_title)
 
         self.title_editor = QLineEdit()
@@ -1020,8 +1102,9 @@ class ConfigViewer(QWidget):
             self._is_editing_title = False
             self.title_editor.hide()
             self.file_title.setText(new_title)
-            self.file_title.setToolTip(f"{new_rel}\n(Double-click to rename)")
+            self.file_title.setToolTip(f"{new_rel}\n(Click to rename)")
             self.file_title.show()
+
 
             self._render_boxes()
 
@@ -1106,16 +1189,17 @@ class ConfigViewer(QWidget):
                 self.group_badge.setText(f"{group} / {sub_crumbs}")
             else:
                 self.group_badge.setText(str(group))
-            self.group_badge.setToolTip(f"Group: {group}\n(Double-click to rename group)")
+            self.group_badge.setToolTip(f"Group: {group}\n(Click to rename group)")
             self.group_badge.show()
             self.breadcrumb_sep.show()
             self.file_title.setText(self.current_path.stem)
-            self.file_title.setToolTip(f"{self.current_rel_path}\n(Double-click to rename)")
+            self.file_title.setToolTip(f"{self.current_rel_path}\n(Click to rename)")
         else:
             self.group_badge.hide()
             self.breadcrumb_sep.hide()
             self.file_title.setText(self.current_path.stem if self.current_path else "")
-            self.file_title.setToolTip(f"{self.current_rel_path}\n(Double-click to rename)")
+            self.file_title.setToolTip(f"{self.current_rel_path}\n(Click to rename)")
+
 
         is_experiment = (
             (self.current_rel_path and self.current_rel_path.startswith("experiment/") and "/methods/" not in self.current_rel_path) or
@@ -1465,8 +1549,8 @@ class ConfigViewer(QWidget):
         box_budget = ConfigBox(f"{budget_num}. Training Budget & Schedule", "Timesteps, evaluation frequency, and random seeds")
 
         # Prompt rows if experiment requires paradigm or env (not provided by group defaults)
-        needs_paradigm_prompt = not is_base and (self._inherited_paradigm() is None or "paradigm" in data)
-        needs_env_prompt = not is_base and (self._inherited_env() is None or self._get_explicit_env() is not None or "env" in data)
+        needs_paradigm_prompt = not is_base and "paradigm" in data
+        needs_env_prompt = not is_base and (self._get_explicit_env() is not None or "env" in data)
         if needs_paradigm_prompt or needs_env_prompt:
             prompt_grid = QGridLayout()
             prompt_grid.setVerticalSpacing(8)
@@ -1727,24 +1811,27 @@ class ConfigViewer(QWidget):
 
         # Option adder button for any unadded experiment parameter or flag
         if self.view_mode != "resolved":
-            btn_add_opt = QPushButton("+ Add Option ▾")
+            btn_add_opt = _make_subtle_tool_button("plus", "Add option", size=24, icon_size=14)
             btn_add_opt.setObjectName("addOptionButton")
             btn_add_opt.setStyleSheet("""
-                QPushButton#addOptionButton {
+                QToolButton#addOptionButton {
                     background: transparent;
-                    color: #a89984;
                     border: 1px dashed #504945;
                     border-radius: 4px;
-                    padding: 3px 8px;
-                    font-size: 12px;
+                    padding: 0px;
                 }
-                QPushButton#addOptionButton:hover {
+                QToolButton#addOptionButton:hover {
                     background: #32302f;
-                    color: #ebdbb2;
                     border-color: #a89984;
                 }
+                QToolButton#addOptionButton::menu-indicator {
+                    image: none;
+                    width: 0px;
+                }
             """)
-            opt_menu = QMenu(self)
+            btn_add_opt.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+            opt_menu = QMenu(btn_add_opt)
+
 
             # 1. Budget & Timing Candidates
             budget_cands = []
@@ -1815,6 +1902,17 @@ class ConfigViewer(QWidget):
 
             curr_params = methods_dict.get("params", {}) if has_params else resolved_params
 
+            common_universal = ["lr", "gamma", "epochs", "eval_every_n_epochs", "cql_alpha", "weight_decay", "batch_size", "ent_coef"]
+            if tree:
+                for a in sorted(tree.agents):
+                    common_universal.append(f"agent.{a}")
+                for m in sorted(tree.models):
+                    common_universal.append(f"model.{m}")
+            cand_u = [u for u in common_universal if u not in curr_params]
+            btn_add_u = _make_param_adder_button("Add universal parameter", cand_u, lambda pk: self._add_universal_param(pk), parent_widget=self)
+
+            rendered_u_rows = []
+
             def _render_param_item(k_path: str, val: Any, indent: int = 0):
                 if isinstance(val, dict):
                     grp_hdr = QHBoxLayout()
@@ -1860,48 +1958,22 @@ class ConfigViewer(QWidget):
                         btn_del_p = _make_subtle_tool_button("close", f"Remove universal parameter '{k_path}'", size=20, icon_size=12)
                         btn_del_p.clicked.connect(lambda _, kp=k_path: self._remove_universal_param(kp))
                         p_row.addWidget(btn_del_p)
-                    p_row.addStretch()
-                    p_layout.addLayout(p_row)
+                    rendered_u_rows.append(p_row)
 
             for pk, pv in list(curr_params.items()):
                 _render_param_item(pk, pv, indent=0)
 
-            # Row to add a new universal parameter
-            add_p_row = QHBoxLayout()
-            add_p_row.setSpacing(6)
-            combo_add_pk = ComboBox()
-            combo_add_pk.setEditable(True)
-            combo_add_pk.setMaximumWidth(240)
-            combo_add_pk.setPlaceholderText("Add universal parameter (e.g. lr, gamma)...")
-            common_universal = ["lr", "gamma", "epochs", "eval_every_n_epochs", "cql_alpha", "weight_decay", "batch_size", "ent_coef"]
-            if tree:
-                for a in sorted(tree.agents):
-                    common_universal.append(f"agent.{a}")
-                for m in sorted(tree.models):
-                    common_universal.append(f"model.{m}")
-            combo_add_pk.addItems(common_universal)
-            combo_add_pk.setEditText("")
-            add_p_row.addWidget(combo_add_pk)
-
-            btn_do_add_p = _make_subtle_tool_button("plus", "Add universal parameter with default value", size=26, icon_size=14)
-            btn_do_add_p.setStyleSheet("""
-                QToolButton {
-                    background: #32302f;
-                    border: 1px solid #504945;
-                    border-radius: 4px;
-                    padding: 0;
-                }
-                QToolButton:hover {
-                    background: #3c3836;
-                    border-color: #a89984;
-                }
-            """)
-            btn_do_add_p.clicked.connect(
-                lambda: self._add_universal_param(combo_add_pk.currentText().strip())
-            )
-            add_p_row.addWidget(btn_do_add_p)
-            add_p_row.addStretch()
-            p_layout.addLayout(add_p_row)
+            if rendered_u_rows:
+                rendered_u_rows[-1].addWidget(btn_add_u)
+                for r in rendered_u_rows:
+                    r.addStretch()
+                    p_layout.addLayout(r)
+            else:
+                row_empty_p = QHBoxLayout()
+                row_empty_p.addWidget(label("No universal parameters configured.", "muted"))
+                row_empty_p.addWidget(btn_add_u)
+                row_empty_p.addStretch()
+                p_layout.addLayout(row_empty_p)
 
             m_layout.addWidget(p_card)
         else:
@@ -1912,12 +1984,15 @@ class ConfigViewer(QWidget):
         has_methods = any(k != "params" and isinstance(v, dict) for k, v in methods_dict.items()) if methods_dict else False
         pending_new = getattr(self, "_pending_new_method", False)
 
-        if is_base:
+        if is_base and not has_methods and not pending_new:
             note_row = QHBoxLayout()
-            note_row.addWidget(label("Individual methods are configured per experiment, not in group defaults.", "muted"))
+            note_row.addWidget(label("No default method configured for this group.", "muted"))
             note_row.addStretch()
+            btn_add_base_m = _make_subtle_tool_button("plus", "Add default method for this group", size=24, icon_size=14)
+            btn_add_base_m.clicked.connect(lambda: self._start_add_new_method())
+            note_row.addWidget(btn_add_base_m)
             m_layout.addLayout(note_row)
-        elif not has_methods and not pending_new:
+        elif not is_base and not has_methods and not pending_new:
             empty_row = QHBoxLayout()
             empty_row.addWidget(label("Inherits default method from base template.", "muted"))
             empty_row.addStretch()
@@ -1928,6 +2003,11 @@ class ConfigViewer(QWidget):
         else:
             # Sub-cards for each method wrapped in MethodCardsContainer for drag reordering
             method_container = MethodCardsContainer(self)
+
+            show_ag_defs = bool(self.settings_manager and (self.settings_manager.show_method_agent_defaults or self.settings_manager.show_all_default_params)) or (self.view_mode == "resolved")
+            show_mo_defs = bool(self.settings_manager and (self.settings_manager.show_method_model_defaults or self.settings_manager.show_all_default_params)) or (self.view_mode == "resolved")
+            show_all_defs = bool(self.settings_manager and self.settings_manager.show_all_default_params) or (self.view_mode == "resolved")
+
             for m_name, m_spec in methods_dict.items():
                 if m_name == "params" or not isinstance(m_spec, dict):
                     continue
@@ -1949,7 +2029,7 @@ class ConfigViewer(QWidget):
 
                 m_title = TitleLabel(m_name)
                 m_title.setObjectName("cardTitle")
-                m_title.setToolTip(f"{m_name}\n(Double-click to rename)")
+                m_title.setToolTip(f"{m_name}\n(Click to rename)")
                 title_row.addWidget(m_title)
 
                 m_edit = InlineTitleEditor(m_name)
@@ -1991,6 +2071,7 @@ class ConfigViewer(QWidget):
                         return
                     self.rename_method(name, new_val)
 
+                m_title.clicked.connect(_start_m_rename)
                 m_title.double_clicked.connect(_start_m_rename)
                 m_edit.returnPressed.connect(_commit_m_rename)
                 m_edit.escape_pressed.connect(_cancel_m_rename)
@@ -2056,11 +2137,19 @@ class ConfigViewer(QWidget):
 
                 agent_keys_present = set()
                 if txt_agent is not None:
-                    sc_layout.addRow("Algorithm", txt_agent)
-
+                    agent_rows = []
+                    btn_add_ap = None
                     if agent_val:
-                        agent_block = IndentedHierarchyBlock(level=1)
-                        agent_param_keys = set(tree.agent_hyperparameters(agent_val).keys()) if (tree and agent_val) else set()
+                        cand_agent = get_agent_candidate_hyperparameters(agent_val, tree, set(m_spec.keys()))
+                        btn_add_ap = _make_param_adder_button(
+                            f"Add {agent_val or 'agent'} parameter",
+                            cand_agent,
+                            lambda p, mn=m_name: self._add_method_param(mn, p),
+                            parent_widget=sub_card
+                        )
+
+                        agent_defaults = dict(tree.agent_hyperparameters(agent_val)) if (tree and agent_val) else {}
+                        agent_param_keys = set(agent_defaults.keys())
                         agent_param_keys = agent_param_keys - set(TRAINING_HYPERPARAMETERS) - {"algorithm", "name", "type"}
                         if agent_val == "cql":
                             agent_param_keys.update(["cql_alpha", "soft_target_tau", "use_actor", "target_entropy", "cql_weight"])
@@ -2069,6 +2158,7 @@ class ConfigViewer(QWidget):
                         elif agent_val == "iql":
                             agent_param_keys.update(["expectile", "temperature", "soft_target_tau"])
 
+                        # 1. Overridden keys in m_spec
                         for ak, av in list(m_spec.items()):
                             if ak in ("agent", "model", "neural", "symbolic", "blender", "base"):
                                 continue
@@ -2092,25 +2182,47 @@ class ConfigViewer(QWidget):
                                 btn_del_ap = _make_subtle_tool_button("close", f"Remove '{ak}'", size=20, icon_size=12)
                                 btn_del_ap.clicked.connect(lambda _, mn=m_name, pk=ak: self._remove_method_param(mn, pk))
                                 row_ap.addWidget(btn_del_ap)
-                                row_ap.addStretch()
-                                agent_block.addRow(str(ak), row_ap)
+                                agent_rows.append((str(ak), row_ap))
 
-                        cand_agent = get_agent_candidate_hyperparameters(agent_val, tree, set(m_spec.keys()))
-                        if cand_agent:
-                            combo_add_ap = ComboBox()
-                            combo_add_ap.setEditable(True)
-                            combo_add_ap.setMaximumWidth(TEXT_FIELD_WIDTH)
-                            combo_add_ap.addItems(cand_agent)
-                            combo_add_ap.setPlaceholderText(f"+ Add {agent_val or 'agent'} parameter...")
-                            combo_add_ap.setCurrentIndex(-1)
-                            def _on_agent_p_chosen(txt: str, mn=m_name):
-                                if txt.strip():
-                                    self._add_method_param(mn, txt.strip())
-                            combo_add_ap.textActivated.connect(_on_agent_p_chosen)
-                            if combo_add_ap.lineEdit():
-                                combo_add_ap.lineEdit().returnPressed.connect(lambda cb=combo_add_ap: _on_agent_p_chosen(cb.currentText()))
-                            agent_block.addRow(combo_add_ap)
+                        # 2. Defaults if show_ag_defs enabled
+                        if show_ag_defs:
+                            for ak in sorted(agent_param_keys):
+                                if ak not in agent_keys_present:
+                                    def_val = agent_defaults.get(ak)
+                                    if def_val is None:
+                                        continue
+                                    row_ap = QHBoxLayout()
+                                    if isinstance(def_val, bool):
+                                        cb_ap = ToggleSlider(checked=def_val)
+                                        cb_ap.toggled.connect(lambda v, mn=m_name, pk=ak: self._on_method_param_edited(mn, pk, v))
+                                        row_ap.addWidget(cb_ap)
+                                    elif isinstance(def_val, (int, float)):
+                                        spin_ap = number_field(def_val)
+                                        spin_ap.setMaximumWidth(NUMBER_FIELD_WIDTH)
+                                        spin_ap.valueChanged.connect(lambda v, mn=m_name, pk=ak: self._on_method_param_edited(mn, pk, v))
+                                        row_ap.addWidget(spin_ap)
+                                    else:
+                                        line_ap = QLineEdit(str(def_val if def_val is not None else ""))
+                                        line_ap.setMaximumWidth(TEXT_FIELD_WIDTH)
+                                        line_ap.textChanged.connect(lambda v, mn=m_name, pk=ak: self._on_method_param_edited(mn, pk, v))
+                                        row_ap.addWidget(line_ap)
+                                    lbl_def = QLabel("(default)")
+                                    lbl_def.setStyleSheet("color: #928374; font-size: 11px; font-style: italic;")
+                                    row_ap.addWidget(lbl_def)
+                                    agent_rows.append((str(ak), row_ap))
 
+                    row_ag = QHBoxLayout()
+                    row_ag.addWidget(txt_agent)
+                    if btn_add_ap:
+                        row_ag.addWidget(btn_add_ap)
+                    row_ag.addStretch()
+                    sc_layout.addRow("Algorithm", row_ag)
+
+                    if agent_rows:
+                        agent_block = IndentedHierarchyBlock(level=1)
+                        for r_lbl, r_box in agent_rows:
+                            r_box.addStretch()
+                            agent_block.addRow(r_lbl, r_box)
                         sc_layout.addRow(agent_block)
 
                 # --- MODEL SECTION ---
@@ -2161,11 +2273,12 @@ class ConfigViewer(QWidget):
                     txt_model.textChanged.connect(
                         lambda v, mn=m_name: self._on_method_param_edited(mn, "model", v)
                     )
-                sc_layout.addRow("Model", txt_model)
 
                 model_keys_present = set()
+                model_rows = []
+                btn_add_mp = None
+
                 if model_name:
-                    model_block = IndentedHierarchyBlock(level=1)
                     is_composite_model = bool(
                         model_name == "blendrl"
                         or (tree and model_name in tree.models and tree.models[model_name].is_composite)
@@ -2199,8 +2312,7 @@ class ConfigViewer(QWidget):
                                 btn_del_bp = _make_subtle_tool_button("close", f"Remove '{bk}'", size=20, icon_size=12)
                                 btn_del_bp.clicked.connect(lambda _, mn=m_name, pk=bk: self._remove_method_param(mn, pk))
                                 row_bp.addWidget(btn_del_bp)
-                                row_bp.addStretch()
-                                model_block.addRow(str(bk), row_bp)
+                                model_rows.append((str(bk), row_bp))
 
                         subcomps_present = {}
                         if isinstance(model_inner, dict):
@@ -2212,6 +2324,14 @@ class ConfigViewer(QWidget):
                                 subcomps_present[sk] = m_spec[sk]
 
                         for s_name, s_val in list(subcomps_present.items()):
+                            sub_params = {}
+                            if isinstance(s_val, dict):
+                                if s_name == "symbolic" and any(k in ("cew", "nsfr", "neumann") for k in s_val):
+                                    inner_r = next(k for k in ("cew", "nsfr", "neumann") if k in s_val)
+                                    sub_params = s_val[inner_r] if isinstance(s_val[inner_r], dict) else {}
+                                else:
+                                    sub_params = {k: v for k, v in s_val.items() if k not in ("type", "architecture", "reasoner", "mode")}
+
                             if s_name == "neural":
                                 neural_choices = [
                                     m for m in (sorted(tree.models) if tree else ["dnn", "dueling_resnet", "transformer", "lstm", "cnn"])
@@ -2222,6 +2342,22 @@ class ConfigViewer(QWidget):
                                     cur_arch = s_val
                                 elif isinstance(s_val, dict):
                                     cur_arch = s_val.get("type") or next((k for k in s_val if k in neural_choices), "dnn")
+
+                                sub_candidates = []
+                                if tree:
+                                    sub_candidates = [k for k in tree.model_parameters(cur_arch).keys() if k not in ("architecture", "type")]
+                                if not sub_candidates:
+                                    sub_candidates = ["hidden_sizes", "activation"]
+                                filtered_sub_cand = [c for c in sub_candidates if c not in sub_params]
+                                btn_add_sub_p = None
+                                if filtered_sub_cand:
+                                    btn_add_sub_p = _make_param_adder_button(
+                                        f"Add {s_name} parameter",
+                                        filtered_sub_cand,
+                                        lambda p, mn=m_name, sn=s_name: self._add_method_subcomponent_param(mn, sn, p),
+                                        parent_widget=sub_card
+                                    )
+
                                 row_arch = QHBoxLayout()
                                 combo_arch = ComboBox()
                                 combo_arch.setMaximumWidth(TEXT_FIELD_WIDTH)
@@ -2236,8 +2372,9 @@ class ConfigViewer(QWidget):
                                 btn_del_sc = _make_subtle_tool_button("close", f"Remove '{s_name}' subcomponent", size=20, icon_size=12)
                                 btn_del_sc.clicked.connect(lambda _, mn=m_name, sn=s_name: self._remove_method_subcomponent(mn, sn))
                                 row_arch.addWidget(btn_del_sc)
-                                row_arch.addStretch()
-                                model_block.addRow("Neural Architecture", row_arch)
+                                if btn_add_sub_p:
+                                    row_arch.addWidget(btn_add_sub_p)
+                                model_rows.append(("Neural Architecture", row_arch))
 
                             elif s_name == "symbolic":
                                 symbolic_choices = ["nsfr", "neumann", "cew"]
@@ -2246,6 +2383,26 @@ class ConfigViewer(QWidget):
                                     cur_reasoner = s_val
                                 elif isinstance(s_val, dict):
                                     cur_reasoner = next((k for k in ("cew", "nsfr", "neumann") if k in s_val), s_val.get("type", "nsfr"))
+
+                                sub_candidates = []
+                                if tree:
+                                    sub_candidates = [k for k in tree.model_parameters(cur_reasoner).keys() if k not in ("reasoner", "type")]
+                                for standard_p in ("rules", "logic_lr", "valuation", "ecm_dthr", "fyd"):
+                                    if standard_p not in sub_candidates:
+                                        if cur_reasoner == "cew" and standard_p in ("rules", "ecm_dthr", "fyd", "fyd_top_k"):
+                                            sub_candidates.append(standard_p)
+                                        elif cur_reasoner in ("nsfr", "neumann") and standard_p in ("rules", "logic_lr", "valuation"):
+                                            sub_candidates.append(standard_p)
+                                filtered_sub_cand = [c for c in sub_candidates if c not in sub_params]
+                                btn_add_sub_p = None
+                                if filtered_sub_cand:
+                                    btn_add_sub_p = _make_param_adder_button(
+                                        f"Add {s_name} parameter",
+                                        filtered_sub_cand,
+                                        lambda p, mn=m_name, sn=s_name: self._add_method_subcomponent_param(mn, sn, p),
+                                        parent_widget=sub_card
+                                    )
+
                                 row_sym = QHBoxLayout()
                                 combo_sym = ComboBox()
                                 combo_sym.setMaximumWidth(TEXT_FIELD_WIDTH)
@@ -2261,10 +2418,22 @@ class ConfigViewer(QWidget):
                                 btn_del_sc = _make_subtle_tool_button("close", f"Remove '{s_name}' subcomponent", size=20, icon_size=12)
                                 btn_del_sc.clicked.connect(lambda _, mn=m_name, sn=s_name: self._remove_method_subcomponent(mn, sn))
                                 row_sym.addWidget(btn_del_sc)
-                                row_sym.addStretch()
-                                model_block.addRow("Logic Module (Symbolic)", row_sym)
+                                if btn_add_sub_p:
+                                    row_sym.addWidget(btn_add_sub_p)
+                                model_rows.append(("Logic Module (Symbolic)", row_sym))
 
                             elif s_name == "blender":
+                                sub_candidates = ["blend_function", "temperature"]
+                                filtered_sub_cand = [c for c in sub_candidates if c not in sub_params]
+                                btn_add_sub_p = None
+                                if filtered_sub_cand:
+                                    btn_add_sub_p = _make_param_adder_button(
+                                        f"Add {s_name} parameter",
+                                        filtered_sub_cand,
+                                        lambda p, mn=m_name, sn=s_name: self._add_method_subcomponent_param(mn, sn, p),
+                                        parent_widget=sub_card
+                                    )
+
                                 row_blender = QHBoxLayout()
                                 combo_bmode = ComboBox()
                                 combo_bmode.setMaximumWidth(TEXT_FIELD_WIDTH)
@@ -2278,18 +2447,12 @@ class ConfigViewer(QWidget):
                                 btn_del_sc = _make_subtle_tool_button("close", f"Remove '{s_name}' subcomponent", size=20, icon_size=12)
                                 btn_del_sc.clicked.connect(lambda _, mn=m_name, sn=s_name: self._remove_method_subcomponent(mn, sn))
                                 row_blender.addWidget(btn_del_sc)
-                                row_blender.addStretch()
-                                model_block.addRow("Blender Mode", row_blender)
+                                if btn_add_sub_p:
+                                    row_blender.addWidget(btn_add_sub_p)
+                                model_rows.append(("Blender Mode", row_blender))
 
                             sub_block = IndentedHierarchyBlock(level=2)
-                            sub_params = {}
-                            if isinstance(s_val, dict):
-                                if s_name == "symbolic" and any(k in ("cew", "nsfr", "neumann") for k in s_val):
-                                    inner_r = next(k for k in ("cew", "nsfr", "neumann") if k in s_val)
-                                    sub_params = s_val[inner_r] if isinstance(s_val[inner_r], dict) else {}
-                                else:
-                                    sub_params = {k: v for k, v in s_val.items() if k not in ("type", "architecture", "reasoner", "mode")}
-
+                            sub_rows = []
                             for sp_k, sp_v in list(sub_params.items()):
                                 sp_row = QHBoxLayout()
                                 sp_line = QLineEdit(str(sp_v if sp_v is not None else ""))
@@ -2303,51 +2466,33 @@ class ConfigViewer(QWidget):
                                     lambda _, mn=m_name, sn=s_name, pk=sp_k: self._remove_method_subcomponent_param(mn, sn, pk)
                                 )
                                 sp_row.addWidget(btn_sp_del)
-                                sp_row.addStretch()
-                                sub_block.addRow(f"{sp_k}", sp_row)
+                                sub_rows.append((str(sp_k), sp_row))
 
-                            sub_candidates = []
-                            if s_name == "neural":
-                                n_arch = cur_arch if "cur_arch" in locals() else "dnn"
-                                if tree:
-                                    sub_candidates = [k for k in tree.model_parameters(n_arch).keys() if k not in ("architecture", "type")]
-                                if not sub_candidates:
-                                    sub_candidates = ["hidden_sizes", "activation"]
-                            elif s_name == "symbolic":
-                                s_reas = cur_reasoner if "cur_reasoner" in locals() else "nsfr"
-                                if tree:
-                                    sub_candidates = [k for k in tree.model_parameters(s_reas).keys() if k not in ("reasoner", "type")]
-                                for standard_p in ("rules", "logic_lr", "valuation", "ecm_dthr", "fyd"):
-                                    if standard_p not in sub_candidates:
-                                        if s_reas == "cew" and standard_p in ("rules", "ecm_dthr", "fyd", "fyd_top_k"):
-                                            sub_candidates.append(standard_p)
-                                        elif s_reas in ("nsfr", "neumann") and standard_p in ("rules", "logic_lr", "valuation"):
-                                            sub_candidates.append(standard_p)
-                            elif s_name == "blender":
-                                sub_candidates = ["blend_function", "temperature"]
+                            if show_mo_defs:
+                                def_sub_dict = {}
+                                if s_name == "neural" and tree:
+                                    def_sub_dict = dict(tree.model_parameters(cur_arch if "cur_arch" in locals() else "dnn"))
+                                elif s_name == "symbolic" and tree:
+                                    def_sub_dict = dict(tree.model_parameters(cur_reasoner if "cur_reasoner" in locals() else "nsfr"))
+                                for dp_k, dp_v in def_sub_dict.items():
+                                    if dp_k not in sub_params and dp_k not in ("architecture", "type", "reasoner", "mode"):
+                                        dp_row = QHBoxLayout()
+                                        dp_line = QLineEdit(str(dp_v if dp_v is not None else ""))
+                                        dp_line.setMaximumWidth(TEXT_FIELD_WIDTH)
+                                        dp_line.textChanged.connect(
+                                            lambda v, mn=m_name, sn=s_name, pk=dp_k: self._on_method_subcomponent_param_edited(mn, sn, pk, v)
+                                        )
+                                        dp_row.addWidget(dp_line)
+                                        lbl_def = QLabel("(default)")
+                                        lbl_def.setStyleSheet("color: #928374; font-size: 11px; font-style: italic;")
+                                        dp_row.addWidget(lbl_def)
+                                        sub_rows.append((str(dp_k), dp_row))
 
-                            filtered_sub_cand = [c for c in sub_candidates if c not in sub_params]
-                            if filtered_sub_cand:
-                                combo_add_sub_p = ComboBox()
-                                combo_add_sub_p.setEditable(True)
-                                combo_add_sub_p.setMaximumWidth(TEXT_FIELD_WIDTH)
-                                combo_add_sub_p.addItems(filtered_sub_cand)
-                                combo_add_sub_p.setPlaceholderText(
-                                    "+ Add logic parameter..." if s_name == "symbolic" else f"+ Add {s_name} parameter..."
-                                )
-                                combo_add_sub_p.setCurrentIndex(-1)
-                                def _on_sub_p_chosen(txt: str, mn=m_name, sn=s_name):
-                                    if txt.strip():
-                                        self._add_method_subcomponent_param(mn, sn, txt.strip())
-                                combo_add_sub_p.textActivated.connect(_on_sub_p_chosen)
-                                if combo_add_sub_p.lineEdit():
-                                    combo_add_sub_p.lineEdit().returnPressed.connect(
-                                        lambda cb=combo_add_sub_p, mn=m_name, sn=s_name: _on_sub_p_chosen(cb.currentText(), mn, sn)
-                                    )
-                                sub_block.addRow(combo_add_sub_p)
-
-                            if sub_params or filtered_sub_cand:
-                                model_block.addRow(sub_block)
+                            if sub_rows:
+                                for sr_lbl, sr_box in sub_rows:
+                                    sr_box.addStretch()
+                                    sub_block.addRow(sr_lbl, sr_box)
+                                model_rows.append(("", sub_block))
 
                         curr_blend_keys = set()
                         if isinstance(model_inner, dict):
@@ -2357,24 +2502,16 @@ class ConfigViewer(QWidget):
                         cand_subcomps = get_method_candidate_subcomponents(model_name, tree, set(subcomps_present.keys()))
                         cand_blend = cand_subcomps + [k for k in blend_param_keys if k not in curr_blend_keys]
                         if cand_blend:
-                            combo_add_bp = ComboBox()
-                            combo_add_bp.setEditable(True)
-                            combo_add_bp.setMaximumWidth(TEXT_FIELD_WIDTH)
-                            combo_add_bp.addItems(cand_blend)
-                            combo_add_bp.setPlaceholderText("+ Add blendrl parameter...")
-                            combo_add_bp.setCurrentIndex(-1)
-                            def _on_blend_p_chosen(txt: str, mn=m_name):
-                                if txt.strip():
-                                    self._add_method_param(mn, txt.strip())
-                            combo_add_bp.textActivated.connect(_on_blend_p_chosen)
-                            if combo_add_bp.lineEdit():
-                                combo_add_bp.lineEdit().returnPressed.connect(
-                                    lambda cb=combo_add_bp, mn=m_name: _on_blend_p_chosen(cb.currentText(), mn)
-                                )
-                            model_block.addRow(combo_add_bp)
+                            btn_add_mp = _make_param_adder_button(
+                                "Add blendrl parameter",
+                                cand_blend,
+                                lambda p, mn=m_name: self._add_method_param(mn, p),
+                                parent_widget=sub_card
+                            )
 
                     else:
-                        model_keys_raw = set(tree.model_parameters(model_name).keys()) if tree else set()
+                        model_defs = dict(tree.model_parameters(model_name)) if tree else {}
+                        model_keys_raw = set(model_defs.keys())
                         model_keys = model_keys_raw - {"architecture", "type", "lightning_module"}
                         if model_name == "dnn":
                             model_keys.update(["hidden_sizes", "activation"])
@@ -2407,160 +2544,234 @@ class ConfigViewer(QWidget):
                                 btn_del_mp = _make_subtle_tool_button("close", f"Remove '{mk}'", size=20, icon_size=12)
                                 btn_del_mp.clicked.connect(lambda _, mn=m_name, pk=mk: self._remove_method_param(mn, pk))
                                 row_mp.addWidget(btn_del_mp)
-                                row_mp.addStretch()
-                                model_block.addRow(str(mk), row_mp)
+                                model_rows.append((str(mk), row_mp))
+
+                        if show_mo_defs:
+                            for mk in sorted(model_keys):
+                                if mk not in model_keys_present:
+                                    def_val = model_defs.get(mk)
+                                    if def_val is None:
+                                        if mk == "hidden_sizes" and model_name == "dnn":
+                                            def_val = "[64, 64]"
+                                        elif mk == "activation" and model_name == "dnn":
+                                            def_val = "relu"
+                                        else:
+                                            continue
+                                    row_mp = QHBoxLayout()
+                                    if isinstance(def_val, bool):
+                                        cb_mp = ToggleSlider(checked=def_val)
+                                        cb_mp.toggled.connect(lambda v, mn=m_name, pk=mk: self._on_method_param_edited(mn, pk, v))
+                                        row_mp.addWidget(cb_mp)
+                                    elif isinstance(def_val, (int, float)):
+                                        spin_mp = number_field(def_val)
+                                        spin_mp.setMaximumWidth(NUMBER_FIELD_WIDTH)
+                                        spin_mp.valueChanged.connect(lambda v, mn=m_name, pk=mk: self._on_method_param_edited(mn, pk, v))
+                                        row_mp.addWidget(spin_mp)
+                                    else:
+                                        line_mp = QLineEdit(str(def_val if def_val is not None else ""))
+                                        line_mp.setMaximumWidth(TEXT_FIELD_WIDTH)
+                                        line_mp.textChanged.connect(
+                                            lambda v, mn=m_name, pk=mk: self._on_method_param_edited(mn, pk, v)
+                                        )
+                                        row_mp.addWidget(line_mp)
+                                    lbl_def = QLabel("(default)")
+                                    lbl_def.setStyleSheet("color: #928374; font-size: 11px; font-style: italic;")
+                                    row_mp.addWidget(lbl_def)
+                                    model_rows.append((str(mk), row_mp))
 
                         curr_model_keys = set(m_spec.keys())
                         if isinstance(model_inner, dict):
                             curr_model_keys.update(model_inner.keys())
                         cand_model = get_model_candidate_hyperparameters(model_name, tree, curr_model_keys)
                         if cand_model:
-                            combo_add_mp = ComboBox()
-                            combo_add_mp.setEditable(True)
-                            combo_add_mp.setMaximumWidth(TEXT_FIELD_WIDTH)
-                            combo_add_mp.addItems(cand_model)
-                            combo_add_mp.setPlaceholderText(f"+ Add {model_name} parameter...")
-                            combo_add_mp.setCurrentIndex(-1)
-                            def _on_model_p_chosen(txt: str, mn=m_name):
-                                if txt.strip():
-                                    self._add_method_param(mn, txt.strip())
-                            combo_add_mp.textActivated.connect(_on_model_p_chosen)
-                            if combo_add_mp.lineEdit():
-                                combo_add_mp.lineEdit().returnPressed.connect(
-                                    lambda cb=combo_add_mp, mn=m_name: _on_model_p_chosen(cb.currentText(), mn)
-                                )
-                            model_block.addRow(combo_add_mp)
-
-                    sc_layout.addRow(model_block)
-
-                # --- TRAINING SETTINGS SECTION ---
-                has_train_settings = bool(
-                    agent_val
-                    or model_name
-                    or any(k in m_spec for k in TRAINING_HYPERPARAMETERS)
-                    or any(k not in {"agent", "model", "neural", "symbolic", "blender", "base"} for k in m_spec)
-                )
-                if has_train_settings:
-                    lbl_train_sec = QLabel("Training Settings")
-                    lbl_train_sec.setStyleSheet("color: #a89984; font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; margin-top: 6px;")
-                    sc_layout.addRow(lbl_train_sec)
-
-                    train_block = IndentedHierarchyBlock(level=1)
-
-                    if "lr" in m_spec:
-                        row_lr = QHBoxLayout()
-                        spin_lr = CompactDoubleSpinBox()
-                        spin_lr.setMaximumWidth(NUMBER_FIELD_WIDTH)
-                        spin_lr.setDecimals(6)
-                        spin_lr.setRange(0.000001, 1.0)
-                        spin_lr.setSingleStep(0.0001)
-                        spin_lr.setValue(float(m_spec["lr"]))
-                        spin_lr.valueChanged.connect(lambda v, mn=m_name: self._on_method_param_edited(mn, "lr", v))
-                        row_lr.addWidget(spin_lr)
-                        btn_del = _make_subtle_tool_button("close", "Remove lr parameter", size=20, icon_size=12)
-                        btn_del.clicked.connect(lambda _, mn=m_name: self._remove_method_param(mn, "lr"))
-                        row_lr.addWidget(btn_del)
-                        row_lr.addStretch()
-                        train_block.addRow("Learning Rate (lr)", row_lr)
-
-                    if "batch_size" in m_spec:
-                        row_bs = QHBoxLayout()
-                        spin_bs = SpinBox()
-                        spin_bs.setMaximumWidth(NUMBER_FIELD_WIDTH)
-                        spin_bs.setRange(1, 131072)
-                        spin_bs.setValue(int(m_spec["batch_size"]))
-                        spin_bs.valueChanged.connect(lambda v, mn=m_name: self._on_method_param_edited(mn, "batch_size", v))
-                        row_bs.addWidget(spin_bs)
-                        btn_del = _make_subtle_tool_button("close", "Remove batch_size parameter", size=20, icon_size=12)
-                        btn_del.clicked.connect(lambda _, mn=m_name: self._remove_method_param(mn, "batch_size"))
-                        row_bs.addWidget(btn_del)
-                        row_bs.addStretch()
-                        train_block.addRow("Batch Size", row_bs)
-
-                    if "gamma" in m_spec:
-                        row_g = QHBoxLayout()
-                        spin_g = DoubleSpinBox()
-                        spin_g.setMaximumWidth(NUMBER_FIELD_WIDTH)
-                        spin_g.setDecimals(4)
-                        spin_g.setRange(0.0, 1.0)
-                        spin_g.setValue(float(m_spec["gamma"]))
-                        spin_g.valueChanged.connect(lambda v, mn=m_name: self._on_method_param_edited(mn, "gamma", v))
-                        row_g.addWidget(spin_g)
-                        btn_del = _make_subtle_tool_button("close", "Remove gamma parameter", size=20, icon_size=12)
-                        btn_del.clicked.connect(lambda _, mn=m_name: self._remove_method_param(mn, "gamma"))
-                        row_g.addWidget(btn_del)
-                        row_g.addStretch()
-                        train_block.addRow("Discount Factor (γ)", row_g)
-
-                    consumed_keys = {"agent", "model", "neural", "symbolic", "blender", "base", "lr", "batch_size", "gamma"}
-                    consumed_keys.update(agent_keys_present)
-                    consumed_keys.update(model_keys_present)
-
-                    for extra_k, extra_v in list(m_spec.items()):
-                        if extra_k in consumed_keys:
-                            continue
-                        if isinstance(extra_v, (int, float, str, bool)):
-                            row_extra = QHBoxLayout()
-                            if isinstance(extra_v, bool):
-                                slider_extra = ToggleSlider(checked=extra_v)
-                                slider_extra.toggled.connect(
-                                    lambda v, mn=m_name, ek=extra_k: self._on_method_param_edited(mn, ek, v)
-                                )
-                                row_extra.addWidget(slider_extra)
-                            elif isinstance(extra_v, (int, float)):
-                                spin_extra = number_field(extra_v)
-                                spin_extra.setMaximumWidth(NUMBER_FIELD_WIDTH)
-                                spin_extra.valueChanged.connect(
-                                    lambda v, mn=m_name, ek=extra_k: self._on_method_param_edited(mn, ek, v)
-                                )
-                                row_extra.addWidget(spin_extra)
-                            else:
-                                line_extra = QLineEdit(str(extra_v if extra_v is not None else ""))
-                                line_extra.setMaximumWidth(TEXT_FIELD_WIDTH)
-                                line_extra.textChanged.connect(
-                                    lambda v, mn=m_name, ek=extra_k: self._on_method_param_edited(mn, ek, v)
-                                )
-                                row_extra.addWidget(line_extra)
-                            btn_del = _make_subtle_tool_button("close", f"Remove '{extra_k}'", size=20, icon_size=12)
-                            btn_del.clicked.connect(lambda _, mn=m_name, ek=extra_k: self._remove_method_param(mn, ek))
-                            row_extra.addWidget(btn_del)
-                            row_extra.addStretch()
-                            train_block.addRow(str(extra_k), row_extra)
-
-                    cand_train = get_training_candidate_hyperparameters(set(m_spec.keys()))
-                    if cand_train:
-                        combo_add_tp = ComboBox()
-                        combo_add_tp.setEditable(True)
-                        combo_add_tp.setMaximumWidth(TEXT_FIELD_WIDTH)
-                        combo_add_tp.addItems(cand_train)
-                        combo_add_tp.setPlaceholderText("+ Add training parameter...")
-                        combo_add_tp.setCurrentIndex(-1)
-                        def _on_train_p_chosen(txt: str, mn=m_name):
-                            if txt.strip():
-                                self._add_method_param(mn, txt.strip())
-                        combo_add_tp.textActivated.connect(_on_train_p_chosen)
-                        if combo_add_tp.lineEdit():
-                            combo_add_tp.lineEdit().returnPressed.connect(
-                                lambda cb=combo_add_tp, mn=m_name: _on_train_p_chosen(cb.currentText(), mn)
+                            btn_add_mp = _make_param_adder_button(
+                                f"Add {model_name} parameter",
+                                cand_model,
+                                lambda p, mn=m_name: self._add_method_param(mn, p),
+                                parent_widget=sub_card
                             )
-                        train_block.addRow(combo_add_tp)
 
-                    sc_layout.addRow(train_block)
+                    row_mo = QHBoxLayout()
+                    row_mo.addWidget(txt_model)
+                    if btn_add_mp:
+                        row_mo.addWidget(btn_add_mp)
+                    row_mo.addStretch()
+                    sc_layout.addRow("Model", row_mo)
+
+                    if model_rows:
+                        model_block = IndentedHierarchyBlock(level=1)
+                        for r_lbl, r_box in model_rows:
+                            if isinstance(r_box, QWidget):
+                                model_block.addRow(r_box)
+                            else:
+                                r_box.addStretch()
+                                model_block.addRow(r_lbl, r_box)
+                        sc_layout.addRow(model_block)
+                else:
+                    sc_layout.addRow("Model", txt_model)
+
+                # --- TRAINING PARAMETERS SECTION (UNINDENTED, NO HEADER) ---
+                train_rows = []
+                u_params = self.raw_data.get("methods", {}).get("params", {})
+                base_def_name, base_def_spec = self._get_group_default_method()
+                base_def_spec = base_def_spec or {}
+
+                if "lr" in m_spec:
+                    row_lr = QHBoxLayout()
+                    spin_lr = CompactDoubleSpinBox()
+                    spin_lr.setMaximumWidth(NUMBER_FIELD_WIDTH)
+                    spin_lr.setDecimals(6)
+                    spin_lr.setRange(0.000001, 1.0)
+                    spin_lr.setSingleStep(0.0001)
+                    spin_lr.setValue(float(m_spec["lr"]))
+                    spin_lr.valueChanged.connect(lambda v, mn=m_name: self._on_method_param_edited(mn, "lr", v))
+                    row_lr.addWidget(spin_lr)
+                    btn_del = _make_subtle_tool_button("close", "Remove lr parameter", size=20, icon_size=12)
+                    btn_del.clicked.connect(lambda _, mn=m_name: self._remove_method_param(mn, "lr"))
+                    row_lr.addWidget(btn_del)
+                    train_rows.append(("Learning Rate (lr)", row_lr))
+                elif show_all_defs:
+                    def_lr = float(u_params.get("lr") or base_def_spec.get("lr") or 0.0003)
+                    row_lr = QHBoxLayout()
+                    spin_lr = CompactDoubleSpinBox()
+                    spin_lr.setMaximumWidth(NUMBER_FIELD_WIDTH)
+                    spin_lr.setDecimals(6)
+                    spin_lr.setRange(0.000001, 1.0)
+                    spin_lr.setSingleStep(0.0001)
+                    spin_lr.setValue(def_lr)
+                    spin_lr.valueChanged.connect(lambda v, mn=m_name: self._on_method_param_edited(mn, "lr", v))
+                    row_lr.addWidget(spin_lr)
+                    lbl_def = QLabel("(default)")
+                    lbl_def.setStyleSheet("color: #928374; font-size: 11px; font-style: italic;")
+                    row_lr.addWidget(lbl_def)
+                    train_rows.append(("Learning Rate (lr)", row_lr))
+
+                if "batch_size" in m_spec:
+                    row_bs = QHBoxLayout()
+                    spin_bs = SpinBox()
+                    spin_bs.setMaximumWidth(NUMBER_FIELD_WIDTH)
+                    spin_bs.setRange(1, 131072)
+                    spin_bs.setValue(int(m_spec["batch_size"]))
+                    spin_bs.valueChanged.connect(lambda v, mn=m_name: self._on_method_param_edited(mn, "batch_size", v))
+                    row_bs.addWidget(spin_bs)
+                    btn_del = _make_subtle_tool_button("close", "Remove batch_size parameter", size=20, icon_size=12)
+                    btn_del.clicked.connect(lambda _, mn=m_name: self._remove_method_param(mn, "batch_size"))
+                    row_bs.addWidget(btn_del)
+                    train_rows.append(("Batch Size", row_bs))
+                elif show_all_defs:
+                    def_bs = int(u_params.get("batch_size") or base_def_spec.get("batch_size") or 64)
+                    row_bs = QHBoxLayout()
+                    spin_bs = SpinBox()
+                    spin_bs.setMaximumWidth(NUMBER_FIELD_WIDTH)
+                    spin_bs.setRange(1, 131072)
+                    spin_bs.setValue(def_bs)
+                    spin_bs.valueChanged.connect(lambda v, mn=m_name: self._on_method_param_edited(mn, "batch_size", v))
+                    row_bs.addWidget(spin_bs)
+                    lbl_def = QLabel("(default)")
+                    lbl_def.setStyleSheet("color: #928374; font-size: 11px; font-style: italic;")
+                    row_bs.addWidget(lbl_def)
+                    train_rows.append(("Batch Size", row_bs))
+
+                if "gamma" in m_spec:
+                    row_g = QHBoxLayout()
+                    spin_g = DoubleSpinBox()
+                    spin_g.setMaximumWidth(NUMBER_FIELD_WIDTH)
+                    spin_g.setDecimals(4)
+                    spin_g.setRange(0.0, 1.0)
+                    spin_g.setValue(float(m_spec["gamma"]))
+                    spin_g.valueChanged.connect(lambda v, mn=m_name: self._on_method_param_edited(mn, "gamma", v))
+                    row_g.addWidget(spin_g)
+                    btn_del = _make_subtle_tool_button("close", "Remove gamma parameter", size=20, icon_size=12)
+                    btn_del.clicked.connect(lambda _, mn=m_name: self._remove_method_param(mn, "gamma"))
+                    row_g.addWidget(btn_del)
+                    train_rows.append(("Discount Factor (γ)", row_g))
+                elif show_all_defs:
+                    def_gamma = float(u_params.get("gamma") or base_def_spec.get("gamma") or 0.99)
+                    row_g = QHBoxLayout()
+                    spin_g = DoubleSpinBox()
+                    spin_g.setMaximumWidth(NUMBER_FIELD_WIDTH)
+                    spin_g.setDecimals(4)
+                    spin_g.setRange(0.0, 1.0)
+                    spin_g.setValue(def_gamma)
+                    spin_g.valueChanged.connect(lambda v, mn=m_name: self._on_method_param_edited(mn, "gamma", v))
+                    row_g.addWidget(spin_g)
+                    lbl_def = QLabel("(default)")
+                    lbl_def.setStyleSheet("color: #928374; font-size: 11px; font-style: italic;")
+                    row_g.addWidget(lbl_def)
+                    train_rows.append(("Discount Factor (γ)", row_g))
+
+                consumed_keys = {"agent", "model", "neural", "symbolic", "blender", "base", "lr", "batch_size", "gamma"}
+                consumed_keys.update(agent_keys_present)
+                consumed_keys.update(model_keys_present)
+
+                for extra_k, extra_v in list(m_spec.items()):
+                    if extra_k in consumed_keys:
+                        continue
+                    if isinstance(extra_v, (int, float, str, bool)):
+                        row_extra = QHBoxLayout()
+                        if isinstance(extra_v, bool):
+                            slider_extra = ToggleSlider(checked=extra_v)
+                            slider_extra.toggled.connect(
+                                lambda v, mn=m_name, ek=extra_k: self._on_method_param_edited(mn, ek, v)
+                            )
+                            row_extra.addWidget(slider_extra)
+                        elif isinstance(extra_v, (int, float)):
+                            spin_extra = number_field(extra_v)
+                            spin_extra.setMaximumWidth(NUMBER_FIELD_WIDTH)
+                            spin_extra.valueChanged.connect(
+                                lambda v, mn=m_name, ek=extra_k: self._on_method_param_edited(mn, ek, v)
+                            )
+                            row_extra.addWidget(spin_extra)
+                        else:
+                            line_extra = QLineEdit(str(extra_v if extra_v is not None else ""))
+                            line_extra.setMaximumWidth(TEXT_FIELD_WIDTH)
+                            line_extra.textChanged.connect(
+                                lambda v, mn=m_name, ek=extra_k: self._on_method_param_edited(mn, ek, v)
+                            )
+                            row_extra.addWidget(line_extra)
+                        btn_del = _make_subtle_tool_button("close", f"Remove '{extra_k}'", size=20, icon_size=12)
+                        btn_del.clicked.connect(lambda _, mn=m_name, ek=extra_k: self._remove_method_param(mn, ek))
+                        row_extra.addWidget(btn_del)
+                        train_rows.append((str(extra_k), row_extra))
+
+                cand_train = get_training_candidate_hyperparameters(set(m_spec.keys()))
+                btn_add_tp = None
+                if cand_train:
+                    btn_add_tp = _make_param_adder_button(
+                        "Add training parameter",
+                        cand_train,
+                        lambda p, mn=m_name: self._add_method_param(mn, p),
+                        parent_widget=sub_card
+                    )
+
+                if train_rows:
+                    if btn_add_tp:
+                        train_rows[-1][1].addWidget(btn_add_tp)
+                    for t_lbl, t_row in train_rows:
+                        t_row.addStretch()
+                        sc_layout.addRow(t_lbl, t_row)
+                elif btn_add_tp:
+                    row_tr = QHBoxLayout()
+                    row_tr.addWidget(btn_add_tp)
+                    row_tr.addStretch()
+                    sc_layout.addRow("Training", row_tr)
 
                 # Bottom actions row: duplicate and plus icons in the bottom right
-                bottom_row = QHBoxLayout()
-                bottom_row.addStretch()
-                btn_dup = _make_subtle_tool_button("copy", f"Duplicate method '{m_name}'", size=24, icon_size=14)
-                btn_dup.clicked.connect(lambda _, mn=m_name: self.duplicate_method(mn))
-                bottom_row.addWidget(btn_dup)
+                if not is_base:
+                    bottom_row = QHBoxLayout()
+                    bottom_row.addStretch()
+                    btn_dup = _make_subtle_tool_button("copy", f"Duplicate method '{m_name}'", size=24, icon_size=14)
+                    btn_dup.clicked.connect(lambda _, mn=m_name: self.duplicate_method(mn))
+                    bottom_row.addWidget(btn_dup)
 
-                btn_plus = _make_subtle_tool_button("plus", "Add new method", size=24, icon_size=14)
-                btn_plus.clicked.connect(lambda _: self._start_add_new_method())
-                bottom_row.addWidget(btn_plus)
+                    btn_plus = _make_subtle_tool_button("plus", "Add new method", size=24, icon_size=14)
+                    btn_plus.clicked.connect(lambda _: self._start_add_new_method())
+                    bottom_row.addWidget(btn_plus)
 
                 card_vbox.addLayout(sc_layout)
                 card_vbox.addStretch()
-                card_vbox.addLayout(bottom_row)
+                if not is_base:
+                    card_vbox.addLayout(bottom_row)
 
                 method_container.add_method_card(m_name, sub_card)
 
@@ -2580,7 +2791,11 @@ class ConfigViewer(QWidget):
 
                 p_edit = InlineTitleEditor()
                 p_edit.setObjectName("newMethodEditor")
-                p_edit.setPlaceholderText("Method name...")
+                def_name, _ = self._get_group_default_method()
+                if def_name:
+                    p_edit.setPlaceholderText(f"Method name (e.g. {def_name})...")
+                else:
+                    p_edit.setPlaceholderText("Method name (e.g. ppo_baseline)...")
                 p_edit.setStyleSheet("font-size: 16px; font-weight: 600; padding: 2px 6px; border-radius: 4px;")
                 p_title_row.addWidget(p_edit)
                 p_title_row.addStretch()
@@ -2597,7 +2812,11 @@ class ConfigViewer(QWidget):
                     p_txt_agent.setMaximumWidth(TEXT_FIELD_WIDTH)
                     p_txt_agent.setPlaceholderText("Select algorithm...")
                     p_txt_agent.addItems(p_permitted)
-                    p_txt_agent.setCurrentIndex(-1)
+                    init_agent = self._pending_new_method_spec.get("agent")
+                    if init_agent and init_agent in p_permitted:
+                        p_txt_agent.setCurrentText(str(init_agent))
+                    else:
+                        p_txt_agent.setCurrentIndex(-1)
                     p_txt_agent.currentTextChanged.connect(
                         lambda v: self._pending_new_method_spec.__setitem__("agent", v) if v else self._pending_new_method_spec.pop("agent", None)
                     )
@@ -2609,11 +2828,16 @@ class ConfigViewer(QWidget):
                     p_txt_model.setMaximumWidth(TEXT_FIELD_WIDTH)
                     p_txt_model.setPlaceholderText("Select model...")
                     p_txt_model.addItems(sorted(tree.models))
-                    p_txt_model.setCurrentIndex(-1)
+                    init_model = self._pending_new_method_spec.get("model")
+                    if init_model and init_model in tree.models:
+                        p_txt_model.setCurrentText(str(init_model))
+                    else:
+                        p_txt_model.setCurrentIndex(-1)
                     p_txt_model.currentTextChanged.connect(
                         lambda v: self._pending_new_method_spec.__setitem__("model", v) if v else self._pending_new_method_spec.pop("model", None)
                     )
                     pc_layout.addRow("Model", p_txt_model)
+
 
                 committing_p = [False]
 
@@ -2943,10 +3167,26 @@ class ConfigViewer(QWidget):
 
         # --- ADD CONFIGURATION BLOCK DROPDOWN BUTTON ---
         btn_add_block_row = QHBoxLayout()
-        self.btn_add_block = QPushButton("+ Add Overrides ▾")
+        self.btn_add_block = _make_subtle_tool_button("plus", "Add override", size=26, icon_size=14)
         self.btn_add_block.setObjectName("addBlockButton")
-        self.btn_add_block.setStyleSheet("padding: 6px 14px; font-weight: 500;")
-        add_menu = QMenu(self)
+        self.btn_add_block.setStyleSheet("""
+            QToolButton#addBlockButton {
+                background: transparent;
+                border: 1px dashed #504945;
+                border-radius: 4px;
+                padding: 0px;
+            }
+            QToolButton#addBlockButton:hover {
+                background: #32302f;
+                border-color: #a89984;
+            }
+            QToolButton#addBlockButton::menu-indicator {
+                image: none;
+                width: 0px;
+            }
+        """)
+        self.btn_add_block.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        add_menu = QMenu(self.btn_add_block)
         act_res = add_menu.addAction("Compute & Slurm Resources")
         act_res.triggered.connect(lambda: self.add_block("resources"))
         act_res.setEnabled("resources" not in data)
@@ -2969,6 +3209,7 @@ class ConfigViewer(QWidget):
 
         self.btn_add_block.setMenu(add_menu)
         btn_add_block_row.addWidget(self.btn_add_block)
+
         btn_add_block_row.addStretch()
         self.boxes_layout.addLayout(btn_add_block_row)
 
@@ -3167,12 +3408,43 @@ class ConfigViewer(QWidget):
         self._render_boxes()
         return dup_name
 
+    def _get_group_default_method(self) -> tuple[str | None, dict | None]:
+        """Return (method_name, method_spec) for the default method declared in group's _base.yaml."""
+        base_data = None
+        if self.current_path:
+            local_base = self.current_path.parent / "_base.yaml"
+            if local_base.is_file():
+                try:
+                    base_data = yaml.safe_load(local_base.read_text(encoding="utf-8")) or {}
+                except Exception:
+                    pass
+        if not base_data:
+            tree = config_tree()
+            group = self._group_name()
+            if tree and group:
+                base_data = _read_group_base(tree, group)
+        if base_data:
+            base_methods = base_data.get("methods", {})
+            if isinstance(base_methods, dict):
+                for k, v in base_methods.items():
+                    if k != "params" and isinstance(v, dict):
+                        return k, copy.deepcopy(v)
+        return None, None
+
     def _start_add_new_method(self):
-        """Initiate adding a new empty method card with focus on the name editor."""
+        """Initiate adding a new method card with focus on the name editor."""
         if self._is_base_config():
+            methods = self.raw_data.get("methods", {})
+            if any(k != "params" and isinstance(v, dict) for k, v in methods.items()):
+                return
+            self._pending_new_method = True
+            self._pending_new_method_spec = {}
+            self._render_boxes()
             return
+
+        def_name, def_spec = self._get_group_default_method()
         self._pending_new_method = True
-        self._pending_new_method_spec = {}
+        self._pending_new_method_spec = copy.deepcopy(def_spec) if def_spec else {}
         self._render_boxes()
 
     def _cancel_new_method(self):
@@ -3182,15 +3454,31 @@ class ConfigViewer(QWidget):
         self._render_boxes()
 
     def add_method(self, agent=None, model=None, name=None):
-        """Add a method to the open experiment. Returns its name, or None."""
+        """Add a method to the open experiment or base defaults. Returns its name, or None."""
         if self._is_base_config():
-            return None
+            methods = self.raw_data.setdefault("methods", {})
+            if any(k != "params" and isinstance(v, dict) for k, v in methods.items()):
+                return None
+            meth_name = name or "default_method"
+            spec = {}
+            if agent:
+                spec["agent"] = agent
+            if model:
+                spec["model"] = model
+            methods[meth_name] = spec
+            self._mark_dirty()
+            self._render_boxes()
+            return meth_name
+
+        def_name, def_spec = self._get_group_default_method()
         methods = self.raw_data.setdefault("methods", {})
         if name:
             meth_name = name
         elif agent or model:
             from .config_model import unique_method_name
             meth_name = unique_method_name(methods, agent, model or "dnn")
+        elif def_name and def_name not in methods:
+            meth_name = def_name
         else:
             base = "method"
             if base not in methods:
@@ -3200,7 +3488,8 @@ class ConfigViewer(QWidget):
                 while f"{base}_{n}" in methods:
                     n += 1
                 meth_name = f"{base}_{n}"
-        spec = {}
+
+        spec = copy.deepcopy(def_spec) if def_spec else {}
         if agent:
             spec["agent"] = agent
         if model:
@@ -3209,6 +3498,7 @@ class ConfigViewer(QWidget):
         self._mark_dirty()
         self._render_boxes()
         return meth_name
+
 
     def _on_experiment_env_changed(self, value):
         if self._block_updates:

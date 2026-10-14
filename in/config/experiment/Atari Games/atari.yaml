@@ -10,5 +10,14 @@ methods:
     model: dnn
   blendRL:
     agent: sb3/sac
-    model: cew
+    model: blendrl
     fyd_top_k: 50
+    neural:
+      type: dnn
+      activation: relu
+    symbolic:
+      type: nsfr
+    logic_lr: 0.001
+    actor_mode: hybrid
+    blender:
+      mode: neural

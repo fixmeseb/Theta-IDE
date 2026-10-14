@@ -52,7 +52,7 @@ class TestSettingsViewStructureAndNavigation(unittest.TestCase):
         self.assertIsNotNone(self.window.settings_runs_count_label)
         self.assertIsNotNone(self.window.settings_ascii)
         self.assertIsNotNone(self.window.anim_toggle_btn)
-        self.assertEqual(len(self.window.pane_sliders), 10)
+        self.assertEqual(len(self.window.pane_sliders), 9)
 
     def test_initial_state_shows_ascii_and_not_settings(self):
         """On entering settings, content stack is at index 0 (ASCII Theta)."""

@@ -77,17 +77,24 @@ class TestUIAdjustments(unittest.TestCase):
         cards = [w for w in self.viewer.findChildren(QVBoxLayout) if w.parent() and w.parent().objectName() == "card"]
         self.assertTrue(len(cards) >= 1, "Expected method card to use QVBoxLayout")
 
-    def test_item4_hierarchical_parameter_combobox_direct_add(self):
-        """Hierarchical parameter adder combobox is added directly without separate plus button."""
+    def test_item4_hierarchical_parameter_plus_button_menu_add(self):
+        """Hierarchical parameters use a plus button next to the row that opens a menu."""
+        from PyQt6.QtWidgets import QToolButton
+        # No empty + Add comboboxes waiting around
         combos = [cb for cb in self.viewer.findChildren(ComboBox) if cb.placeholderText().startswith("+ Add")]
-        self.assertTrue(len(combos) >= 1, "Expected hierarchical parameter adder combobox with + Add placeholder")
-        # Ensure that selecting an item from the combobox triggers _add_method_param directly
-        target_cb = combos[0]
+        self.assertEqual(len(combos), 0, "Expected empty comboboxes to be replaced by plus button menu adders")
+
+        # Plus button with menu exists on method card
+        plus_buttons = [btn for btn in self.viewer.findChildren(QToolButton) if btn.menu() is not None]
+        self.assertTrue(len(plus_buttons) >= 1, "Expected at least one plus button with parameter menu")
+        target_btn = next((b for b in plus_buttons if "parameter" in b.toolTip().lower()), plus_buttons[0])
         initial_keys = set(self.viewer.raw_data.get("methods", {}).get("ppo_dnn", {}).keys())
-        # Simulate textActivated signal
-        target_cb.textActivated.emit("clip_range")
+        actions = target_btn.menu().actions()
+        self.assertTrue(len(actions) >= 1)
+        chosen_action = next((a for a in actions if a.text() and not a.text().startswith("+")), actions[0])
+        chosen_action.trigger()
         updated_keys = set(self.viewer.raw_data.get("methods", {}).get("ppo_dnn", {}).keys())
-        self.assertIn("clip_range", updated_keys)
+        self.assertIn(chosen_action.text(), updated_keys)
 
     def test_item5_minimal_experiment_creation(self):
         """Creating an experiment should not write redundant seed/total_timesteps/eval_episodes."""
@@ -144,6 +151,182 @@ class TestUIAdjustments(unittest.TestCase):
         Window.update_launch_state(app_mock)
         self.assertIn("A run is currently active", app_mock.start_button.toolTip())
 
+    def test_single_click_title_editing(self):
+        """Single click triggers inline editing for experiment title, group badge, and method title."""
+        # 1. Experiment title
+        self.assertFalse(self.viewer.file_title.isHidden())
+        self.assertTrue(self.viewer.title_editor.isHidden())
+        self.viewer.file_title.clicked.emit()
+        self.assertTrue(self.viewer.file_title.isHidden())
+        self.assertFalse(self.viewer.title_editor.isHidden())
+        self.viewer._cancel_title_edit()
+
+        # 2. Group badge
+        self.assertFalse(self.viewer.group_badge.isHidden())
+        self.assertTrue(self.viewer.group_editor.isHidden())
+        self.viewer.group_badge.clicked.emit()
+        self.assertTrue(self.viewer.group_badge.isHidden())
+        self.assertFalse(self.viewer.group_editor.isHidden())
+        self.viewer._cancel_group_edit()
+
+        # 3. Method card title
+        from frontend.config_viewer import TitleLabel, InlineTitleEditor
+        m_titles = [w for w in self.viewer.findChildren(TitleLabel) if w.objectName() == "cardTitle"]
+        self.assertTrue(len(m_titles) >= 1)
+        m_title = m_titles[0]
+        m_card = m_title.parentWidget()
+        m_edit = m_card.findChild(InlineTitleEditor, "methodEditor")
+        self.assertIsNotNone(m_edit)
+        self.assertFalse(m_title.isHidden())
+        self.assertTrue(m_edit.isHidden())
+        m_title.clicked.emit()
+        self.assertTrue(m_title.isHidden())
+        self.assertFalse(m_edit.isHidden())
+
+    def test_group_defaults_one_default_method_and_inheritance(self):
+        """Group defaults allow at most 1 method, and experiments inherit from it."""
+        # Create a group base with a default method
+        group_dir = self.tmp_root / "experiment" / "cartpole"
+        group_dir.mkdir(parents=True, exist_ok=True)
+        base_file = group_dir / "_base.yaml"
+        base_file.write_text(
+            "paradigm: online_rl\n"
+            "env: CartPole-v1\n"
+            "methods:\n"
+            "  ppo_default:\n"
+            "    agent: ppo\n"
+            "    model: dnn\n"
+            "    lr: 0.0003\n",
+            encoding="utf-8"
+        )
+        base_viewer = ConfigViewer()
+        base_viewer.load_file(base_file, "experiment/cartpole/_base.yaml")
+        # In base, duplicate and add-new buttons are not shown on method cards
+        tool_btns = [b for b in base_viewer.findChildren(QToolButton) if "duplicate" in b.toolTip().lower()]
+        self.assertEqual(len(tool_btns), 0, "Duplicate method button should not be present in _base.yaml")
+
+        # Now load an experiment in the same group and add a method
+        exp_file = group_dir / "child_exp.yaml"
+        exp_file.write_text("experiment_id: child_exp\n", encoding="utf-8")
+        exp_viewer = ConfigViewer()
+        exp_viewer.load_file(exp_file, "experiment/cartpole/child_exp.yaml")
+        meth_name = exp_viewer.add_method()
+        self.assertEqual(meth_name, "ppo_default")
+        self.assertEqual(exp_viewer.raw_data["methods"]["ppo_default"]["agent"], "ppo")
+        self.assertEqual(exp_viewer.raw_data["methods"]["ppo_default"]["model"], "dnn")
+        self.assertEqual(exp_viewer.raw_data["methods"]["ppo_default"]["lr"], 0.0003)
+        base_viewer.close()
+        exp_viewer.close()
+
+    def test_param_view_appearance_settings_and_defaults_rendering(self):
+        """Appearance settings toggle display of defaults for agents, models, and training params."""
+        from frontend.settings import SettingsManager
+        sm = SettingsManager(self.tmp_root)
+        viewer = ConfigViewer(settings_manager=sm)
+        viewer.load_file(self.exp_file, "experiment/cartpole/test_exp.yaml")
+
+        # Initially, default hyperparameters are hidden in overrides view mode
+        labels_initial = [lbl.text() for lbl in viewer.findChildren(QLabel)]
+        self.assertNotIn("(default)", labels_initial)
+
+        # 1. Enable show_method_agent_defaults
+        sm.show_method_agent_defaults = True
+        labels_after_ag = [lbl.text() for lbl in viewer.findChildren(QLabel)]
+        self.assertIn("(default)", labels_after_ag)
+
+        # 2. Reset and enable show_all_default_params
+        sm.show_method_agent_defaults = False
+        sm.show_all_default_params = True
+        labels_after_all = [lbl.text() for lbl in viewer.findChildren(QLabel)]
+        self.assertIn("(default)", labels_after_all)
+        self.assertIn("Learning Rate (lr)", labels_after_all)
+        self.assertIn("Batch Size", labels_after_all)
+        self.assertIn("Discount Factor (γ)", labels_after_all)
+        viewer.close()
+
+    def test_training_parameters_unindented_and_no_header(self):
+        """Training settings header is removed and training parameters are unindented."""
+        labels = [lbl.text() for lbl in self.viewer.findChildren(QLabel)]
+        self.assertNotIn("Training Settings", labels, "Training Settings header label should be removed")
+
+        # Check that plus buttons for add override and add option are simple icon buttons
+        self.assertFalse(self.viewer.btn_add_block.icon().isNull())
+        self.assertEqual(self.viewer.btn_add_block.objectName(), "addBlockButton")
+
+    def test_blendrl_param_adder_fixed_next_to_model(self):
+        """Add blendrl parameter button stays anchored next to Model: blendrl when params are added or removed."""
+        from PyQt6.QtWidgets import QFormLayout, QHBoxLayout
+        from frontend.config_viewer import IndentedHierarchyBlock
+
+        blend_file = self.tmp_root / "blend_exp.yaml"
+        blend_file.write_text(
+            "experiment_id: blend_exp\n"
+            "paradigm: online_rl\n"
+            "env: CartPole-v1\n"
+            "methods:\n"
+            "  blend_method:\n"
+            "    agent: ppo\n"
+            "    model: blendrl\n",
+            encoding="utf-8"
+        )
+        viewer = ConfigViewer()
+        viewer.load_file(blend_file, "experiment/cartpole/blend_exp.yaml")
+
+        def get_model_row_and_adder():
+            # Find the QFormLayout in the method card
+            form_layouts = [l for l in viewer.findChildren(QFormLayout)]
+            for fl in form_layouts:
+                for row_idx in range(fl.rowCount()):
+                    lbl_item = fl.itemAt(row_idx, QFormLayout.ItemRole.LabelRole)
+                    if lbl_item and lbl_item.widget() and isinstance(lbl_item.widget(), QLabel):
+                        if lbl_item.widget().text() == "Model":
+                            field_item = fl.itemAt(row_idx, QFormLayout.ItemRole.FieldRole)
+                            layout = field_item.layout() if field_item else None
+                            adder = None
+                            if layout:
+                                for i in range(layout.count()):
+                                    w = layout.itemAt(i).widget()
+                                    if isinstance(w, QToolButton) and "blendrl" in w.toolTip().lower():
+                                        adder = w
+                            return layout, adder
+            return None, None
+
+        # 1. Before adding any parameter:
+        layout_before, adder_before = get_model_row_and_adder()
+        self.assertIsNotNone(layout_before, "Model row layout should exist")
+        self.assertIsNotNone(adder_before, "Add blendrl parameter button should exist in Model row layout")
+
+        # 2. Add a blendrl parameter via the adder button
+        actions = adder_before.menu().actions()
+        action_q = next((a for a in actions if a.text() == "blend_q_values"), actions[0])
+        action_q.trigger()
+
+        # Check parameter added to data
+        self.assertIn("blend_q_values", viewer.raw_data["methods"]["blend_method"])
+
+        # 3. After adding parameter: adder button should STILL be in the Model row layout!
+        layout_after, adder_after = get_model_row_and_adder()
+        self.assertIsNotNone(layout_after, "Model row layout should still exist")
+        self.assertIsNotNone(adder_after, "Add blendrl parameter button must remain in Model row layout next to Model")
+
+        # Check that adder is NOT pushed into the IndentedHierarchyBlock
+        blocks = viewer.findChildren(IndentedHierarchyBlock)
+        self.assertTrue(len(blocks) >= 1, "Expected IndentedHierarchyBlock for child params")
+        for b in blocks:
+            for child_btn in b.findChildren(QToolButton):
+                self.assertNotIn("add blendrl parameter", child_btn.toolTip().lower(),
+                                 "Add blendrl parameter button should not be inside child hierarchy block")
+
+        # 4. Remove the parameter: adder button should STILL be in Model row layout
+        viewer._remove_method_param("blend_method", "blend_q_values")
+        layout_removed, adder_removed = get_model_row_and_adder()
+        self.assertIsNotNone(layout_removed)
+        self.assertIsNotNone(adder_removed, "Add blendrl parameter button must remain in Model row layout after removal")
+
+        viewer.close()
+
 
 if __name__ == "__main__":
     unittest.main()
+
+

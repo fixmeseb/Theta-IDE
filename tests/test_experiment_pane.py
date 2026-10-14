@@ -622,7 +622,8 @@ class TestConfigViewer(unittest.TestCase):
         self.assertEqual(self.viewer.raw_data["methods"]["params"]["lr"], 0.0003)
 
     def test_add_overrides_button_and_labels(self):
-        self.assertEqual(self.viewer.btn_add_block.text(), "+ Add Overrides ▾")
+        self.assertFalse(self.viewer.btn_add_block.icon().isNull())
+        self.assertEqual(self.viewer.btn_add_block.toolTip(), "Add override")
 
     def test_group_double_click_rename(self):
         root = Path(self.temp_dir.name)
