@@ -303,8 +303,16 @@ class MonitorPanel(QWidget):
             self.render()
 
     def show_hardware(self, hw):
-        """Live CPU and memory use of the training process, in the footer."""
-        self.monitor_note.setText(f"System: CPU {hw['cpu_percent']:.1f}%  •  Process RAM {hw.get('memory_mb', 0):.0f} MB")
+        """Live CPU and memory use of the training process (and its children, when reported), in the footer."""
+        children = int(hw.get("children") or 0)
+        processes = f" across {children + 1} processes" if children else ""
+        parts = [f"CPU {hw['cpu_percent']:.1f}%{processes}", f"Process RAM {hw.get('memory_mb', 0):.0f} MB"]
+        gpu = sum(v for k, v in hw.items() if k.startswith("gpu") and k.endswith("_mem_allocated_mb"))
+        if gpu:
+            parts.append(f"GPU memory {gpu:.0f} MB")
+        if hw.get("host_cpu_percent") is not None:
+            parts.append(f"Machine CPU {hw['host_cpu_percent']:.0f}%")
+        self.monitor_note.setText("System: " + "  •  ".join(parts))
 
     def show_comparison(self, series):
         """Overlay several runs' reward curves (the Results browser's multi-selection)."""

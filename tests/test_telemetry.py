@@ -1,6 +1,7 @@
-"""Telemetry: the run API, its sinks, system sampling and the Lightning bridge."""
+"""Telemetry: the run API, its sinks, the readers that follow it, and the Lightning bridge."""
 
 import json
+import math
 import sys
 import time
 import types
@@ -10,7 +11,7 @@ import pytest
 
 from src.app import telemetry
 from src.app.core.contract_logger import ContractLogger
-from src.app.services.metrics import MetricsTail
+from src.app.services.metrics import AgentFeed, MetricsTail, StreamTail
 from src.app.telemetry import system as system_module
 from src.app.telemetry.records import decode, encode, metrics_row, record
 from src.app.telemetry.sinks import MemorySink, resolve_sink
@@ -199,6 +200,56 @@ def test_the_sampler_reports_into_the_run_until_it_finishes(tmp_path):
     assert len(of_type(sink, "system")) == count  # stopped with the run
 
 
+# ── Readers ──────────────────────────────────────────────────────────────────
+
+
+def test_stream_tail_reads_only_complete_new_lines(tmp_path):
+    path = tmp_path / "events.jsonl"
+    first = encode(record("metrics", step=1, data={"a": 1.0}))
+    second = encode(record("metrics", step=2, data={"a": 2.0}))
+    path.write_text(first + "\n" + second[:10], encoding="utf-8")
+    tail = StreamTail(path)
+    records, reset = tail.read()
+    assert [r["step"] for r in records] == [1] and not reset
+    with open(path, "a", encoding="utf-8") as f:
+        f.write(second[10:] + "\n")
+    assert [r["step"] for r in tail.read()[0]] == [2]
+    assert tail.read() == ([], False)
+    path.write_text("", encoding="utf-8")  # started over
+    assert tail.read() == ([], True)
+
+
+def test_agent_feed_follows_the_stream_falls_back_to_csv_and_resets_on_a_new_version(tmp_path):
+    agent = tmp_path / "ppo"
+    v0 = agent / "version_0"
+    v0.mkdir(parents=True)
+    feed = AgentFeed(agent)
+    assert feed.read() == ([], False)
+    (v0 / "metrics.csv").write_text("step,eval/reward\n1,10.0\n", encoding="utf-8")
+    records, reset = feed.read()
+    assert feed.kind == "csv" and not reset
+    assert [metrics_row(r) for r in records] == [{"step": 1.0, "eval/reward": 10.0}]
+    run = telemetry.Run(v0, ["stream"], system_interval=0)  # the stream appears beside the CSV
+    run.log({"eval/reward": 10.0}, step=1)
+    records, reset = feed.read()
+    assert feed.kind == "stream" and reset and [r["type"] for r in records] == ["start", "metrics"]
+    run.finish()
+    later = telemetry.Run(agent / "version_1", ["stream"], system_interval=0)
+    records, reset = feed.read()
+    assert feed.version_dir.name == "version_1" and reset
+    later.finish()
+
+
+def test_stream_and_csv_agree_on_every_row(tmp_path):
+    run = telemetry.Run(tmp_path / "version_0", ["csv", "stream"], system_interval=0)
+    for i in range(5):
+        run.log({"eval/reward": float(i), "losses/total_loss": 1.0 / (i + 1)}, step=i * 10, transitions=i * 100)
+    run.finish()
+    csv_rows, _ = MetricsTail(tmp_path / "version_0" / "metrics.csv").read()
+    stream, _ = StreamTail(tmp_path / "version_0" / "events.jsonl").read()
+    assert [metrics_row(r) for r in stream if r["type"] == "metrics"] == csv_rows
+
+
 # ── Lightning ────────────────────────────────────────────────────────────────
 
 
@@ -287,3 +338,95 @@ def test_the_lightning_builder_adds_the_stream_beside_csvlogger(tmp_path):
     assert loggers[1].version == "version_0"
     cfg.telemetry = {"sinks": ["csv"]}  # CSV only: CSVLogger already writes it, so no bridge
     assert [type(lg) for lg in setup_loggers(cfg, str(tmp_path))] == [CSVLogger]
+
+
+# ── LiveRun ──────────────────────────────────────────────────────────────────
+
+
+def test_live_run_derives_speed_eta_new_bests_and_stalls():
+    from frontend.live_run import LiveRun
+
+    live = LiveRun(budget=10000, stall_seconds=30)
+    start = 1000.0
+    rows = [
+        record("metrics", step=i, data={"eval/reward": r, "losses/total_loss": 1.0 / (i + 1), "transitions": i * 1000})
+        for i, r in enumerate([5.0, 12.0, 9.0, 20.0])
+    ]
+    for i, rec in enumerate(rows):
+        rec["t"] = start + 10 * i
+    events = live.add(rows, now=start + 30)
+    assert [e["data"]["value"] for e in events] == [12.0, 20.0]  # the first value and a dip are not news
+    assert all(e["source"] == "derived" for e in events)
+    assert live.progress() == 3000 and live.rate() == pytest.approx(100.0)
+    assert live.eta_seconds() == pytest.approx(70.0)
+    assert live.latest("eval/reward") == 20.0
+    assert not live.stalled(now=start + 50) and live.stalled(now=start + 61)
+    live.add([record("system", data={"cpu_percent": 90.0})], now=start + 62)
+    assert live.latest_system() == {"cpu_percent": 90.0}
+    live.add([record("finish", status="completed", summary={})], now=start + 63)
+    assert live.is_finished() and not live.stalled(now=start + 1000)
+    live.add([], reset=True)
+    assert live.rows == [] and live.progress() is None and not live.is_finished()
+
+
+def test_live_run_reads_csv_records_without_timestamps():
+    from frontend.live_run import LiveRun
+
+    live = LiveRun()
+    live.add([{"type": "metrics", "step": 1.0, "data": {"eval/reward": 3.0}, "source": "csv"}], now=50.0)
+    assert live.rows == [{"eval/reward": 3.0, "step": 1.0}] and live.last_update == 50.0
+    assert math.isclose(live.latest("eval/reward"), 3.0)
+
+
+# ── The app's handlers ───────────────────────────────────────────────────────
+
+
+def _window_stub(run, active=True):
+    pytest.importorskip("PyQt6")
+    logged, saved = [], []
+    stub = types.SimpleNamespace(
+        live_runs={},
+        _persisted_at={},
+        jobs=types.SimpleNamespace(job=lambda job_id: {"effective_timesteps": 3072}),
+        run_for_job=lambda job_id: run,
+        active=run if active else None,
+        selected=None,
+        log=logged.append,
+        persist=lambda r: saved.append(len(r["metrics"])) or True,
+        render_run=lambda: None,
+    )
+    return stub, logged, saved
+
+
+def test_the_app_keeps_a_live_run_per_agent_and_echoes_the_active_runs_events():
+    from frontend.app import Window
+
+    run = {"status": "running", "metrics": []}
+    stub, logged, _ = _window_stub(run)
+    records = [
+        record("metrics", step=1, data={"eval/reward": 5.0}),
+        record("metrics", step=2, data={"eval/reward": 9.0}),
+        record("event", kind="non_finite", level="warning", message="losses/x is nan at step 2"),
+    ]
+    Window.on_job_records(stub, "job1", "ppo", records, False)
+    live = Window.live_runs_for_job(stub, "job1")["ppo"]
+    assert live.budget == 3072 and live.latest("eval/reward") == 9.0
+    assert logged == ["◆ ppo: New best eval/reward 9 (was 5)", "⚠ ppo: losses/x is nan at step 2"]
+    stub.active = None  # a run that is not followed keeps its LiveRun but stays out of the console
+    Window.on_job_records(stub, "job1", "ppo", [record("event", kind="stage", message="x")], False)
+    assert len(logged) == 2 and len(live.events) == 3
+
+
+def test_a_training_run_is_saved_every_few_seconds_not_on_every_row(monkeypatch):
+    from frontend import app as app_module
+
+    run = {"status": "running", "metrics": []}
+    stub, _, saved = _window_stub(run)
+    clock = [100.0]
+    monkeypatch.setattr(app_module.time, "monotonic", lambda: clock[0])
+    row = {"eval/reward": 1.0, "transitions": 512.0}
+    for _ in range(3):
+        app_module.Window.on_job_metrics(stub, "job1", "ppo", [row], False)
+    clock[0] += app_module.PERSIST_SECONDS
+    app_module.Window.on_job_metrics(stub, "job1", "ppo", [row], False)
+    assert saved == [1, 4]  # the first rows, then all four once the interval passed

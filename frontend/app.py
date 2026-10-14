@@ -2,6 +2,7 @@
 import argparse
 import os
 import sys
+import time
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
@@ -54,6 +55,7 @@ from .config_viewer import ConfigViewer
 from .config_tab_manager import ConfigTabManager
 from .hub import HubClient, HubDialog
 from .job_manager import JobManager
+from .live_run import LiveRun
 from src.app.services.config_service import LaunchError
 from .local_backend import LocalBackend
 from .monitor import ENV_MAX_REWARD, MonitorPanel
@@ -67,6 +69,7 @@ from .titlebar import apply_title_bar
 from .workflows import WorkflowsPanel
 
 REPO_ROOT = Path(__file__).resolve().parent.parent  # holds venv/, in/, results/
+PERSIST_SECONDS = 5.0  # how often a training run's growing record is saved to the run store
 
 # Metrics the monitor's second chart can show: key -> (card title, chart title, subtitle, value format)
 
@@ -155,6 +158,10 @@ class Window(QMainWindow):
         self.jobs.job_changed.connect(self.on_job_changed)
         self.jobs.job_output.connect(self.on_job_output)
         self.jobs.job_metrics.connect(self.on_job_metrics)
+        self.jobs.job_records.connect(self.on_job_records)
+        # (job_id, agent) -> LiveRun: every record a training run reported, with its speed, ETA and events
+        self.live_runs: dict[tuple[str, str], LiveRun] = {}
+        self._persisted_at: dict[str, float] = {}  # job_id -> when its run was last saved while training
         self.jobs.job_hardware.connect(self.on_job_hardware)
         self.jobs.queue_changed.connect(self.on_queue_changed)
         self.tray = None  # TrayController, set up by main(): closing while training hides to the tray
@@ -1724,8 +1731,30 @@ class Window(QMainWindow):
             run["metrics"].extend(metric_points(rows))
         if self.selected is run:
             self.render_run()
-        if rows and run["status"] == "running":
+        # Rows now arrive as they are logged (the telemetry stream), not in CSV batches: save a training
+        # run every few seconds rather than on every row. finish() saves it once more at the end.
+        now = time.monotonic()
+        if rows and run["status"] == "running" and now - self._persisted_at.get(job_id, 0) >= PERSIST_SECONDS:
+            self._persisted_at[job_id] = now
             self.persist(run)
+
+    def on_job_records(self, job_id, agent, records, reset):
+        """Keep each agent's LiveRun current, and echo the active run's events to the console."""
+        live = self.live_runs.get((job_id, agent))
+        if live is None:
+            job = self.jobs.job(job_id) or {}
+            budget = job.get("effective_timesteps") or job.get("total_timesteps")
+            live = self.live_runs[(job_id, agent)] = LiveRun(budget=budget)
+        events = live.add(records, reset)
+        run = self.run_for_job(job_id)
+        if run is not None and run is self.active:
+            marks = {"warning": "⚠", "error": "✖"}
+            for event in events:
+                self.log(f"{marks.get(event.get('level'), '◆')} {agent}: {event.get('message', '')}")
+
+    def live_runs_for_job(self, job_id) -> dict[str, LiveRun]:
+        """agent -> LiveRun for one job."""
+        return {agent: live for (job, agent), live in self.live_runs.items() if job == job_id}
 
     def on_job_hardware(self, job_id, hardware):
         run = self.run_for_job(job_id)
