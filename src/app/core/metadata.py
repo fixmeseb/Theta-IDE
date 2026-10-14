@@ -59,7 +59,7 @@ def save_git_diff(output_dir, git_dirty=None):
                 "utf-8"
             )
             diff_path = os.path.join(output_dir, "git_patch.diff")
-            with open(diff_path, "w") as f:
+            with open(diff_path, "w", encoding="utf-8") as f:  # diffs hold any character; Windows defaults to cp1252
                 f.write(diff)
             return "git_patch.diff"
     except (subprocess.SubprocessError, FileNotFoundError, OSError) as e:
