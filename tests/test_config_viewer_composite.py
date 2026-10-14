@@ -268,7 +268,8 @@ def test_add_new_method_flow_empty_and_invalid(qapp, tmp_path):
     assert len(editors) == 1
     new_editor = editors[0]
     assert new_editor.text() == ""
-    assert new_editor.placeholderText().startswith("Method name")
+    # Suggests a name: the group's default method when it has one, else ppo_baseline.
+    assert new_editor.placeholderText() == "Method name (e.g. ppo_baseline)..."
 
     # Validate name rules:
     existing_keys = set(viewer.raw_data["methods"].keys())
@@ -377,11 +378,11 @@ def test_blendrl_model_block_and_logic_module_rendering(qapp, tmp_path):
     assert "Logic Module (Symbolic)" not in labels
     assert "Blender Mode" not in labels
 
-    # Which subcomponents are on offer. Asked of the helper that feeds the param
-    # adders rather than of a widget: the dropdown this used to read was replaced
-    # by the per-card plus icons.
+    # The blendrl adder offers the subcomponents (what feeds its + button's menu)
     bp_items = get_method_candidate_subcomponents("blendrl", config_tree(), set())
-    assert {"symbolic", "neural", "blender"} <= set(bp_items)
+    assert "symbolic" in bp_items
+    assert "neural" in bp_items
+    assert "blender" in bp_items
 
     # 1. Add symbolic subcomponent via adder
     viewer._add_method_param("ppo_blendrl_final_cp", "symbolic")
@@ -528,44 +529,66 @@ def test_blendrl_params_and_rules_editing(qapp, tmp_path):
     assert saved["methods"]["ppo_blendrl_final_cp"]["logic_lr"] == 0.001
 
 
-def test_group_defaults_disallows_concrete_methods(qapp, tmp_path):
+_GROUP_BASE_HEAD = (
+    "# @package _global_\n"
+    "defaults:\n"
+    "  - override /env: cartpole\n"
+    "paradigm: online_rl\n"
+    "seed: 42\n"
+    "methods:\n"
+    "  params:\n"
+    "    lr: 0.0003\n"
+)
+
+
+def test_group_defaults_keep_their_one_default_method(qapp, tmp_path):
+    """A group's _base.yaml may declare one default method, which new experiments inherit.
+
+    Opening the base used to strip it in memory and saving then deleted it from disk."""
+    from PyQt6.QtWidgets import QLabel, QToolButton
+
     base_file = tmp_path / "_base.yaml"
-    base_file.write_text(
-        "# @package _global_\n"
-        "defaults:\n"
-        "  - override /env: cartpole\n"
-        "paradigm: online_rl\n"
-        "seed: 42\n"
-        "methods:\n"
-        "  params:\n"
-        "    lr: 0.0003\n"
-        "  stray_method:\n"
-        "    agent: ppo\n"
-        "    model: dnn\n",
-        encoding="utf-8"
-    )
+    base_file.write_text(_GROUP_BASE_HEAD + "  default_ppo:\n    agent: ppo\n    model: dnn\n", encoding="utf-8")
 
     viewer = ConfigViewer()
     viewer.load_file(base_file, "experiment/test_group/_base.yaml")
 
-    # 1. UI shows muted note instead of method cards
-    from PyQt6.QtWidgets import QLabel
+    # 1. Shown as the group's default method, not as "none configured"
+    assert "default_ppo" in viewer.raw_data["methods"]
     labels = [lbl.text() for lbl in viewer.findChildren(QLabel)]
-    assert any("No default method configured" in l for l in labels)
+    assert not any("No default method configured" in text for text in labels)
 
-    # 2. A base cannot carry concrete methods. add_method names one in memory -
-    #    the group's single default method - but the save is what decides, and
-    #    duplicating an existing one is refused outright.
-    viewer.add_method(agent="ppo", model="dnn")
-    assert viewer.duplicate_method("stray_method") is None
+    # 2. At most one: a second cannot be added, nor this one duplicated
+    assert viewer.add_method(agent="ppo", model="dnn") is None
+    assert viewer.duplicate_method("default_ppo") is None
+    assert not [b for b in viewer.findChildren(QToolButton) if "duplicate" in b.toolTip().lower()]
 
-    # 3. Save cleans stray concrete methods from _base.yaml
+    # 3. Saving keeps it, and the universal params beside it
     viewer.save_to_disk()
     saved = yaml.safe_load(base_file.read_text(encoding="utf-8"))
-    assert "stray_method" not in saved.get("methods", {})
-    assert [k for k in saved.get("methods", {}) if k != "params"] == [], "no concrete method may persist in a base"
-    # Universal params remain intact
-    assert saved.get("methods", {}).get("params", {}).get("lr") == 0.0003
+    assert saved["methods"]["default_ppo"] == {"agent": "ppo", "model": "dnn"}
+    assert saved["methods"]["params"]["lr"] == 0.0003
+
+
+def test_a_default_method_added_to_a_group_base_survives_saving(qapp, tmp_path):
+    from PyQt6.QtWidgets import QLabel
+
+    base_file = tmp_path / "_base.yaml"
+    base_file.write_text(_GROUP_BASE_HEAD, encoding="utf-8")
+
+    viewer = ConfigViewer()
+    viewer.load_file(base_file, "experiment/test_group/_base.yaml")
+    labels = [lbl.text() for lbl in viewer.findChildren(QLabel)]
+    assert any("No default method configured" in text for text in labels)
+
+    name = viewer.add_method(agent="ppo", model="dnn")
+    assert name is not None
+    viewer.save_to_disk()
+
+    reopened = ConfigViewer()
+    reopened.load_file(base_file, "experiment/test_group/_base.yaml")
+    assert reopened.raw_data["methods"][name]["agent"] == "ppo"
+    assert reopened.raw_data["methods"]["params"]["lr"] == 0.0003
 
 
 def test_experiment_environment_saved_to_defaults_override(qapp, tmp_path):
@@ -608,5 +631,46 @@ def test_experiment_environment_saved_to_defaults_override(qapp, tmp_path):
     assert "override /env" not in saved_text_cleared
 
 
+def test_experiment_methods_start_from_the_group_default_method(qapp, tmp_path):
+    """A group base may name one default method; a method made in an experiment of that
+    group, by add_method or through the + button's name box, starts with its parameters
+    and keeps them on save. Without a default, a new method starts empty."""
+    from frontend.config_viewer import InlineTitleEditor
 
+    group = tmp_path / "experiment" / "probe_group"
+    group.mkdir(parents=True)
+    base = group / "_base.yaml"
+    default = {"agent": "ppo", "model": "dnn", "lr": 0.0003, "clip_coef": 0.1}
+    base.write_text(
+        "# @package _global_\nparadigm: online_rl\nseed: 1\nmethods:\n  ppo_default:\n"
+        "    agent: ppo\n    model: dnn\n    lr: 0.0003\n    clip_coef: 0.1\n",
+        encoding="utf-8",
+    )
+    experiment = group / "child.yaml"
+    experiment.write_text(
+        "# @package _global_\ndefaults:\n  - probe_group/_base\nexperiment_id: child\n", encoding="utf-8"
+    )
 
+    viewer = ConfigViewer()
+    viewer.load_file(experiment, "experiment/probe_group/child.yaml")
+    added = viewer.add_method()
+    assert viewer.raw_data["methods"][added] == default
+
+    viewer._start_add_new_method()
+    editor = next(e for e in viewer.findChildren(InlineTitleEditor) if e.objectName() == "newMethodEditor")
+    assert editor.placeholderText() == "Method name (e.g. ppo_default)..."
+    editor.setText("my_variant")
+    editor.returnPressed.emit()
+    assert viewer.raw_data["methods"]["my_variant"] == default
+
+    viewer.save_to_disk()
+    saved = yaml.safe_load(experiment.read_text(encoding="utf-8"))["methods"]
+    assert saved["my_variant"] == default and saved["ppo_default"] == default
+    assert yaml.safe_load(base.read_text(encoding="utf-8"))["methods"] == {"ppo_default": default}
+
+    # A base without a default method: new methods start empty
+    base.write_text("# @package _global_\nparadigm: online_rl\nseed: 1\n", encoding="utf-8")
+    fresh = ConfigViewer()
+    fresh.load_file(experiment, "experiment/probe_group/child.yaml")
+    added = fresh.add_method()
+    assert fresh.raw_data["methods"][added] == {}

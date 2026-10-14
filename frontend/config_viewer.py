@@ -1335,10 +1335,11 @@ class ConfigViewer(QWidget):
         if is_base:
             self.raw_data.pop("group", None)
             self.raw_data.pop("experiment_id", None)
+            # A group base may declare one default method, which new experiments inherit, so its
+            # concrete methods are kept. (They used to be stripped here, on load and on save, which
+            # deleted the default method from disk the first time the base was opened and saved.)
+            # The one-method limit is enforced where methods are added.
             if "methods" in self.raw_data and isinstance(self.raw_data["methods"], dict):
-                concrete = [k for k in self.raw_data["methods"] if k != "params"]
-                for k in concrete:
-                    self.raw_data["methods"].pop(k, None)
                 if not self.raw_data["methods"]:
                     self.raw_data.pop("methods", None)
             return
