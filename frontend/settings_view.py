@@ -5,8 +5,8 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Dict, List, Optional
 
-from PyQt6.QtCore import QByteArray, QEvent, QRectF, QSize, Qt, pyqtSignal
-from PyQt6.QtGui import QColor, QFont, QIcon, QKeySequence, QPainter, QPixmap
+from PyQt6.QtCore import QByteArray, QEvent, QKeyCombination, QRectF, QSize, Qt, pyqtSignal
+from PyQt6.QtGui import QColor, QFont, QIcon, QKeyEvent, QKeySequence, QPainter, QPixmap
 from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtWidgets import (
     QApplication,
@@ -539,6 +539,7 @@ class HotkeyComboEdit(QLineEdit):
     """
 
     comboChanged = pyqtSignal(str)
+    _is_hotkey_editor = True
 
     def __init__(self, canonical_combo: str = "", parent=None):
         super().__init__(parent)
@@ -601,6 +602,149 @@ class HotkeyComboEdit(QLineEdit):
             self.set_canonical_combo(normalized)
             self.comboChanged.emit(normalized)
 
+class MenuShortcutEdit(QLineEdit):
+    """Interactive hotkey input field for application menu shortcuts.
+
+    When clicked or focused, enters listening mode to capture a single key combo,
+    overwriting whatever was there previously. Backspace/Delete clears the shortcut,
+    Escape cancels and restores the previous shortcut.
+    """
+
+    keySequenceChanged = pyqtSignal(QKeySequence)
+    comboChanged = pyqtSignal(str)
+    _is_hotkey_editor = True
+
+    def __init__(self, key_sequence: QKeySequence | str = "", parent=None):
+        super().__init__(parent)
+        self._is_recording = False
+        self._canonical_sc = ""
+        self._has_conflict = False
+        self.setReadOnly(True)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self.setPlaceholderText("Unassigned (click to record)")
+        if key_sequence:
+            self.setKeySequence(key_sequence)
+        else:
+            self._update_appearance()
+
+    def keySequence(self) -> QKeySequence:
+        return QKeySequence(self._canonical_sc) if self._canonical_sc else QKeySequence()
+
+    def setKeySequence(self, seq: QKeySequence | str):
+        if isinstance(seq, QKeySequence):
+            sc_str = seq.toString(QKeySequence.SequenceFormat.PortableText)
+        else:
+            sc_str = str(seq or "")
+        norm = normalize_menu_shortcut(sc_str)
+        self._canonical_sc = norm
+        self._is_recording = False
+        self.setText(norm)
+        if not norm:
+            self.setPlaceholderText("Unassigned (click to record)")
+        self._update_appearance()
+        if not self.signalsBlocked():
+            self.keySequenceChanged.emit(self.keySequence())
+            self.comboChanged.emit(norm)
+
+    def set_conflict_style(self, has_conflict: bool):
+        self._has_conflict = has_conflict
+        self._update_appearance()
+
+    def _update_appearance(self):
+        if self._is_recording:
+            self.setStyleSheet(
+                "font-family: Menlo, Monaco, 'Consolas', monospace; font-size: 12px; font-weight: 600; "
+                "border: 1.5px solid #8aadf4; background: rgba(138, 173, 244, 0.15); "
+                "color: #b7bdf8; border-radius: 4px; padding: 4px 8px;"
+            )
+        elif self._has_conflict:
+            self.setStyleSheet(
+                "font-family: Menlo, Monaco, 'Consolas', monospace; font-size: 12px; font-weight: 700; "
+                "border: 1.5px solid #fb4934; background: rgba(251, 73, 52, 0.15); "
+                "color: #ff9999; border-radius: 4px; padding: 4px 8px;"
+            )
+        else:
+            self.setStyleSheet(
+                "font-family: Menlo, Monaco, 'Consolas', monospace; font-size: 12px; font-weight: 600; "
+                "border: 1px solid rgba(255, 255, 255, 0.15); border-radius: 4px; padding: 4px 8px;"
+            )
+
+    def mousePressEvent(self, event):
+        super().mousePressEvent(event)
+        self._start_recording()
+
+    def focusInEvent(self, event):
+        super().focusInEvent(event)
+        self._start_recording()
+
+    def focusOutEvent(self, event):
+        super().focusOutEvent(event)
+        if self._is_recording:
+            self._stop_recording(revert=True)
+
+    def _start_recording(self):
+        self._is_recording = True
+        self.setPlaceholderText("Press key combination… (Esc to cancel)")
+        self.setText("")
+        self._update_appearance()
+
+    def _stop_recording(self, revert: bool = False):
+        self._is_recording = False
+        if revert:
+            self.setText(self._canonical_sc)
+        if not self._canonical_sc:
+            self.setPlaceholderText("Unassigned (click to record)")
+        self._update_appearance()
+
+    def keyPressEvent(self, event: QKeyEvent):
+        key = event.key()
+        mods = event.modifiers()
+
+        # 1. Escape cancels recording
+        if key == Qt.Key.Key_Escape:
+            self._stop_recording(revert=True)
+            self.clearFocus()
+            event.accept()
+            return
+
+        # 2. Backspace or Delete without modifiers clears the shortcut
+        if key in (Qt.Key.Key_Backspace, Qt.Key.Key_Delete) and not (mods & ~Qt.KeyboardModifier.KeypadModifier):
+            self.setKeySequence("")
+            self.clearFocus()
+            event.accept()
+            return
+
+        # 3. Pure modifier keys: show live modifier feedback while waiting for combination key
+        if key in (Qt.Key.Key_Control, Qt.Key.Key_Shift, Qt.Key.Key_Alt, Qt.Key.Key_Meta):
+            parts = []
+            if mods & Qt.KeyboardModifier.ControlModifier:
+                parts.append("Ctrl")
+            if mods & Qt.KeyboardModifier.AltModifier:
+                parts.append("Alt")
+            if mods & Qt.KeyboardModifier.ShiftModifier:
+                parts.append("Shift")
+            if mods & Qt.KeyboardModifier.MetaModifier:
+                parts.append("Meta")
+            if parts:
+                self.setText(" + ".join(parts) + " + …")
+            event.accept()
+            return
+
+        # 4. Main key pressed with or without modifiers
+        comb = event.keyCombination()
+        seq = QKeySequence(comb)
+        sc_str = seq.toString(QKeySequence.SequenceFormat.PortableText)
+        norm = normalize_menu_shortcut(sc_str)
+
+        if norm:
+            self.setKeySequence(norm)
+            self.clearFocus()
+            event.accept()
+            return
+
+        super().keyPressEvent(event)
+
 
 class SettingsView(QWidget):
     """Complete, organized settings view with left side-tab and overlay on ASCII Theta."""
@@ -612,10 +756,13 @@ class SettingsView(QWidget):
         self.tab_buttons: Dict[str, SettingsSideTabButton] = {}
         self.pane_hotkey_edits: Dict[str, HotkeyComboEdit] = {}
         self.pane_conflict_labels: Dict[str, QLabel] = {}
-        self.menu_shortcut_edits: Dict[str, QKeySequenceEdit] = {}
+        self.menu_shortcut_edits: Dict[str, MenuShortcutEdit] = {}
+        self.menu_conflict_labels: Dict[str, QLabel] = {}
         self.slider_term: ToggleSlider | None = None
         self.conflict_banner: QFrame | None = None
         self.conflict_banner_label: QLabel | None = None
+        self.menu_conflict_banner: QFrame | None = None
+        self.menu_conflict_banner_label: QLabel | None = None
 
         # Main horizontal layout: Side-tab on the left, Content stack on the right
         layout = QHBoxLayout(self)
@@ -1426,11 +1573,32 @@ class SettingsView(QWidget):
         )
         mc_layout.addWidget(mc_sub)
 
+        # Conflict Banner for Card 3
+        self.menu_conflict_banner = QFrame()
+        self.menu_conflict_banner.setObjectName("menuConflictBanner")
+        self.menu_conflict_banner.setStyleSheet(
+            "QFrame#menuConflictBanner {"
+            "  background-color: rgba(251, 73, 52, 0.12);"
+            "  border: 1.5px solid #fb4934;"
+            "  border-radius: 6px;"
+            "  padding: 8px 12px;"
+            "}"
+        )
+        m_banner_layout = QHBoxLayout(self.menu_conflict_banner)
+        m_banner_layout.setContentsMargins(8, 4, 8, 4)
+        self.menu_conflict_banner_label = label("", "danger")
+        self.menu_conflict_banner_label.setWordWrap(True)
+        self.menu_conflict_banner_label.setStyleSheet("color: #ff9999; font-size: 12px; line-height: 1.4;")
+        m_banner_layout.addWidget(self.menu_conflict_banner_label, 1)
+        self.menu_conflict_banner.setVisible(False)
+        mc_layout.addWidget(self.menu_conflict_banner)
+
         m_grid = QGridLayout()
         m_grid.setHorizontalSpacing(16)
         m_grid.setVerticalSpacing(10)
 
         self.menu_shortcut_edits = {}
+        self.menu_conflict_labels = {}
         half = (len(DEFAULT_MENU_SHORTCUTS) + 1) // 2
         for i, (aid, title, default_sc) in enumerate(DEFAULT_MENU_SHORTCUTS):
             col_offset = 0 if i < half else 2
@@ -1439,15 +1607,44 @@ class SettingsView(QWidget):
             t_lbl = label(title)
             t_lbl.setStyleSheet("font-weight: 500; font-size: 12px;")
 
-            current_sc = self.window.settings_manager.get("shortcuts", aid, default=default_sc) or default_sc
-            seq_edit = QKeySequenceEdit(QKeySequence(normalize_menu_shortcut(current_sc)))
+            current_sc = self.window.settings_manager.get("shortcuts", aid, default=default_sc)
+            if current_sc is None:
+                current_sc = default_sc
+            seq_edit = MenuShortcutEdit(normalize_menu_shortcut(current_sc))
             seq_edit.setProperty("_action_id", aid)
             seq_edit.setProperty("_default_sc", default_sc)
+            seq_edit.setToolTip("Click to record shortcut (e.g. Ctrl+Space, F5), or Backspace to clear")
             seq_edit.keySequenceChanged.connect(lambda seq, a=aid: self._on_menu_shortcut_changed(a, seq))
             self.menu_shortcut_edits[aid] = seq_edit
 
+            btn_clear = QToolButton()
+            btn_clear.setText("✕")
+            btn_clear.setToolTip(f"Clear shortcut for {title}")
+            btn_clear.setFixedSize(26, 26)
+            btn_clear.setCursor(Qt.CursorShape.PointingHandCursor)
+            btn_clear.setStyleSheet(
+                "QToolButton { border: 1px solid rgba(255, 255, 255, 0.12); border-radius: 4px; color: #a5adcb; } "
+                "QToolButton:hover { border-color: #ed8796; color: #ed8796; }"
+            )
+            btn_clear.clicked.connect(lambda _, e=seq_edit: e.setKeySequence(""))
+
+            edit_box = QHBoxLayout()
+            edit_box.setSpacing(6)
+            edit_box.addWidget(seq_edit, 1)
+            edit_box.addWidget(btn_clear)
+
+            warn_lbl = label("", "danger")
+            warn_lbl.setStyleSheet("font-size: 11px; font-weight: 600; color: #fb4934; margin-top: 1px;")
+            warn_lbl.setVisible(False)
+            self.menu_conflict_labels[aid] = warn_lbl
+
+            cell_layout = QVBoxLayout()
+            cell_layout.setSpacing(2)
+            cell_layout.addLayout(edit_box)
+            cell_layout.addWidget(warn_lbl)
+
             m_grid.addWidget(t_lbl, row, col_offset)
-            m_grid.addWidget(seq_edit, row, col_offset + 1)
+            m_grid.addLayout(cell_layout, row, col_offset + 1)
 
         mc_layout.addLayout(m_grid)
 
@@ -1589,46 +1786,100 @@ class SettingsView(QWidget):
 
         return tracked
 
+    def _get_menu_action_title(self, action_id: str) -> str:
+        """Resolve a human-readable title for a menu action ID."""
+        for aid, title, _ in DEFAULT_MENU_SHORTCUTS:
+            if aid == action_id:
+                return title
+        return action_id.replace("_", " ").title()
+
     def _validate_hotkey_conflicts(self) -> bool:
-        """Scan all pane hotkey assignments for duplicates, update warning banner and per-row alerts.
+        """Scan all pane hotkey assignments and application menu shortcuts for duplicates/conflicts,
+        updating warning banners, per-row alerts, and highlighting conflicting fields.
 
         Returns True if any conflicts are detected, False otherwise.
         """
-        combo_map: Dict[str, List[tuple[str, str]]] = {}
+        # combo_key -> list of (category, identifier, title)
+        combo_map: Dict[str, List[tuple[str, str, str]]] = {}
+        combo_display: Dict[str, str] = {}
+
+        # 1. Pane hotkeys
         for pid, edit in self.pane_hotkey_edits.items():
             raw_text = edit.text().strip()
             combo = normalize_hotkey_combo(raw_text)
             if combo:
                 title = self._get_pane_title(pid)
-                combo_map.setdefault(combo, []).append((pid, title))
+                key = combo.upper()
+                if key not in combo_display:
+                    combo_display[key] = combo
+                combo_map.setdefault(key, []).append(("pane", pid, title))
 
-        conflicts = {c: p_list for c, p_list in combo_map.items() if len(p_list) > 1}
+        # 2. Action key (e.g. "CTRL+B")
+        sm = getattr(self.window, "settings_manager", None)
+        if sm and getattr(sm, "action_key", None):
+            action_key_str = sm.action_key.strip().upper().replace("_", "+")
+            if action_key_str in ("CTRL+B", "ALT", "CTRL", "META", "CAPS+LOCK"):
+                if action_key_str not in combo_display:
+                    combo_display[action_key_str] = action_key_str
+                combo_map.setdefault(action_key_str, []).append(("action_key", "action_key", f"Action Key ({action_key_str})"))
+
+        # 3. Application menu shortcuts
+        for aid, edit in self.menu_shortcut_edits.items():
+            seq = edit.keySequence()
+            sc_str = seq.toString(QKeySequence.SequenceFormat.PortableText).strip()
+            norm = normalize_menu_shortcut(sc_str)
+            if norm:
+                title = self._get_menu_action_title(aid)
+                key = norm.upper()
+                if key not in combo_display:
+                    combo_display[key] = norm
+                combo_map.setdefault(key, []).append(("menu", aid, title))
+
+        conflicts = {c: items for c, items in combo_map.items() if len(items) > 1}
         has_conflicts = len(conflicts) > 0
 
-        # Update the top conflict warning banner
+        # Update Top Pane Conflict Banner (Card 2)
         if hasattr(self, "conflict_banner") and self.conflict_banner:
             if has_conflicts:
                 conflict_details = []
-                for combo, p_list in sorted(conflicts.items()):
-                    names = " and ".join(t for _, t in p_list)
-                    conflict_details.append(f"• <b>{combo}</b> is assigned to <b>{names}</b>")
+                for combo_key, items in sorted(conflicts.items()):
+                    disp = combo_display.get(combo_key, combo_key)
+                    names = " and ".join(title for _, _, title in items)
+                    conflict_details.append(f"• <b>{disp}</b> is assigned to <b>{names}</b>")
                 self.conflict_banner_label.setText(
-                    "<b>Hotkey conflict:</b> Multiple panels share the same shortcut:<br>"
+                    "<b>Hotkey conflict:</b> Multiple actions or panels share the same shortcut:<br>"
                     + "<br>".join(conflict_details)
-                    + "<br><span style='font-size: 11px; opacity: 0.8;'>Conflicting shortcuts will only navigate to the first matching panel.</span>"
+                    + "<br><span style='font-size: 11px; opacity: 0.8;'>Conflicting shortcuts will only navigate to the first matching target.</span>"
                 )
                 self.conflict_banner.setVisible(True)
             else:
                 self.conflict_banner.setVisible(False)
 
-        # Update per-row styling and inline warning labels
-        conflicting_pids = {pid for p_list in conflicts.values() for pid, _ in p_list}
+        # Update Menu Conflict Banner (Card 3)
+        menu_conflicts = {c: items for c, items in conflicts.items() if any(cat == "menu" for cat, _, _ in items)}
+        if hasattr(self, "menu_conflict_banner") and self.menu_conflict_banner:
+            if menu_conflicts:
+                menu_details = []
+                for combo_key, items in sorted(menu_conflicts.items()):
+                    disp = combo_display.get(combo_key, combo_key)
+                    names = " and ".join(title for _, _, title in items)
+                    menu_details.append(f"• <b>{disp}</b> is assigned to <b>{names}</b>")
+                self.menu_conflict_banner_label.setText(
+                    "<b>Shortcut conflict:</b> Multiple actions share the same shortcut:<br>"
+                    + "<br>".join(menu_details)
+                )
+                self.menu_conflict_banner.setVisible(True)
+            else:
+                self.menu_conflict_banner.setVisible(False)
+
+        # Update Pane hotkey per-row styling and warnings
+        conflicting_pids = {target_id for items in conflicts.values() for cat, target_id, _ in items if cat == "pane"}
         for pid, edit in self.pane_hotkey_edits.items():
             warn_lbl = self.pane_conflict_labels.get(pid)
             if pid in conflicting_pids:
                 raw_text = edit.text().strip()
-                combo = normalize_hotkey_combo(raw_text)
-                other_titles = [t for p, t in combo_map.get(combo, []) if p != pid]
+                combo = normalize_hotkey_combo(raw_text).upper()
+                other_titles = [t for cat, target_id, t in combo_map.get(combo, []) if target_id != pid]
                 other_str = ", ".join(other_titles)
 
                 edit.setStyleSheet(
@@ -1648,6 +1899,26 @@ class SettingsView(QWidget):
                     warn_lbl.setText("")
                     warn_lbl.setVisible(False)
 
+        # Update Menu shortcut per-row styling and warnings
+        conflicting_aids = {target_id for items in conflicts.values() for cat, target_id, _ in items if cat == "menu"}
+        for aid, edit in self.menu_shortcut_edits.items():
+            warn_lbl = self.menu_conflict_labels.get(aid)
+            if aid in conflicting_aids:
+                seq = edit.keySequence()
+                sc_str = seq.toString(QKeySequence.SequenceFormat.PortableText).strip()
+                norm = normalize_menu_shortcut(sc_str).upper()
+                other_titles = [t for cat, target_id, t in combo_map.get(norm, []) if target_id != aid]
+                other_str = ", ".join(other_titles)
+                edit.set_conflict_style(True)
+                if warn_lbl:
+                    warn_lbl.setText(f"Conflict: also assigned to {other_str}")
+                    warn_lbl.setVisible(True)
+            else:
+                edit.set_conflict_style(False)
+                if warn_lbl:
+                    warn_lbl.setText("")
+                    warn_lbl.setVisible(False)
+
         return has_conflicts
 
     def _on_action_preset_changed(self, index: int):
@@ -1656,6 +1927,7 @@ class SettingsView(QWidget):
         val = self.window.settings_action_key_combo.itemData(index)
         if val and hasattr(self.window, "settings_manager"):
             self.window.settings_manager.set("hotkeys", "action_key", val)
+            self._validate_hotkey_conflicts()
             if hasattr(self.window, "statusBar") and self.window.statusBar():
                 self.window.statusBar().showMessage(f"Action Key set to {val.replace('_', '+').upper()}", 3000)
 
@@ -1734,8 +2006,19 @@ class SettingsView(QWidget):
                     action.setShortcut(seq)
             else:
                 action.setShortcut(QKeySequence())
+
+        # Validate conflicts across all inputs
+        has_conflicts = self._validate_hotkey_conflicts()
+
         if hasattr(self.window, "statusBar") and self.window.statusBar():
-            self.window.statusBar().showMessage(f"Shortcut for {action_id} set to {seq_str or 'None'}", 3000)
+            title = self._get_menu_action_title(action_id)
+            warn_lbl = self.menu_conflict_labels.get(action_id)
+            if has_conflicts and warn_lbl and warn_lbl.isVisible():
+                self.window.statusBar().showMessage(f"Warning for {title}: {warn_lbl.text()}", 4000)
+            elif seq_str:
+                self.window.statusBar().showMessage(f"Shortcut for {title} set to {seq_str}", 3000)
+            else:
+                self.window.statusBar().showMessage(f"Shortcut for {title} cleared", 3000)
 
     def _reset_menu_shortcuts_to_default(self):
         for aid, _, default_sc in DEFAULT_MENU_SHORTCUTS:
@@ -1758,6 +2041,7 @@ class SettingsView(QWidget):
                     action.setShortcuts(shortcuts)
                 else:
                     action.setShortcut(seq)
+        self._validate_hotkey_conflicts()
         if hasattr(self.window, "statusBar") and self.window.statusBar():
             self.window.statusBar().showMessage("Restored default application menu shortcuts.", 3000)
 
@@ -1800,13 +2084,16 @@ class SettingsView(QWidget):
         if hasattr(self, "menu_shortcut_edits") and self.menu_shortcut_edits:
             for aid, edit in self.menu_shortcut_edits.items():
                 default_sc = edit.property("_default_sc") or ""
-                sc = sm.get("shortcuts", aid, default=default_sc) or default_sc
+                sc = sm.get("shortcuts", aid, default=default_sc)
+                if sc is None:
+                    sc = default_sc
                 norm = normalize_menu_shortcut(sc)
                 seq = QKeySequence(norm)
                 if edit.keySequence() != seq:
                     edit.blockSignals(True)
                     edit.setKeySequence(seq)
                     edit.blockSignals(False)
+            self._validate_hotkey_conflicts()
 
         # 5. Zoom controls sync
         zoom_val = getattr(self.window, "zoom_factor", sm.zoom)

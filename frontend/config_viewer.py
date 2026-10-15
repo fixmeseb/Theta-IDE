@@ -1875,14 +1875,29 @@ class ConfigViewer(QWidget):
         # --- BOX 2 / 3: METHODS & AGENT ARCHITECTURES ---
         methods_dict = data.get("methods", {})
         methods_num = "3" if is_base else "2"
-        box_methods = ConfigBox(f"{methods_num}. Methods & Algorithms", "Configured agents, policies, and hyperparameter overrides")
+        box_methods = ConfigBox("Methods", "Configured agents, policies, and hyperparameter overrides")
         m_layout = QVBoxLayout()
         m_layout.setSpacing(10)
 
-        # Universal Parameters (methods.params)
+        # Universal / Shared Parameters (methods.params)
         has_params = "params" in methods_dict and isinstance(methods_dict["params"], dict)
         resolved_params = resolved.get("methods", {}).get("params", {}) if isinstance(resolved.get("methods"), dict) else {}
         show_params = has_params or (self.view_mode == "resolved" and bool(resolved_params))
+
+        # Top-left Methods header with title and subtle plus button to add shared parameters
+        methods_header = QHBoxLayout()
+        methods_header.setSpacing(8)
+        lbl_methods_title = label("Methods", "heading")
+        lbl_methods_title.setStyleSheet("font-size: 23px; font-weight: 600;")
+        methods_header.addWidget(lbl_methods_title)
+
+        if not show_params:
+            btn_create_params = _make_subtle_tool_button("plus", "Add Shared Parameters (params)", size=24, icon_size=14)
+            btn_create_params.clicked.connect(lambda: self.add_block("params"))
+            methods_header.addWidget(btn_create_params)
+
+        methods_header.addStretch()
+        m_layout.addLayout(methods_header)
 
         if show_params:
             p_card = QFrame()
@@ -1892,11 +1907,16 @@ class ConfigViewer(QWidget):
             p_layout.setSpacing(8)
 
             p_header = QHBoxLayout()
+            p_header.setSpacing(8)
+            lbl_shared = label("Shared Parameters", "cardTitle")
+            lbl_shared.setStyleSheet("font-size: 16px; font-weight: 600;")
+            p_header.addWidget(lbl_shared)
+
             if not has_params:
                 p_header.addWidget(label("(inherited from base)", "muted"))
             p_header.addStretch()
             if has_params:
-                btn_rm_params = _make_subtle_tool_button("trash", "Remove universal parameters block", size=24, icon_size=14)
+                btn_rm_params = _make_subtle_tool_button("trash", "Remove Shared Parameters block", size=24, icon_size=14)
                 btn_rm_params.clicked.connect(lambda: self.remove_block("params"))
                 p_header.addWidget(btn_rm_params)
             p_layout.addLayout(p_header)
@@ -1910,7 +1930,7 @@ class ConfigViewer(QWidget):
                 for m in sorted(tree.models):
                     common_universal.append(f"model.{m}")
             cand_u = [u for u in common_universal if u not in curr_params]
-            btn_add_u = _make_param_adder_button("Add universal parameter", cand_u, lambda pk: self._add_universal_param(pk), parent_widget=self)
+            btn_add_u = _make_param_adder_button("Add shared parameter", cand_u, lambda pk: self._add_universal_param(pk), parent_widget=self)
 
             rendered_u_rows = []
 
@@ -1956,7 +1976,7 @@ class ConfigViewer(QWidget):
                         p_row.addWidget(line_v)
 
                     if has_params:
-                        btn_del_p = _make_subtle_tool_button("close", f"Remove universal parameter '{k_path}'", size=20, icon_size=12)
+                        btn_del_p = _make_subtle_tool_button("close", f"Remove parameter '{k_path}'", size=20, icon_size=12)
                         btn_del_p.clicked.connect(lambda _, kp=k_path: self._remove_universal_param(kp))
                         p_row.addWidget(btn_del_p)
                     rendered_u_rows.append(p_row)
@@ -1971,16 +1991,12 @@ class ConfigViewer(QWidget):
                     p_layout.addLayout(r)
             else:
                 row_empty_p = QHBoxLayout()
-                row_empty_p.addWidget(label("No universal parameters configured.", "muted"))
+                row_empty_p.addWidget(label("No shared parameters configured.", "muted"))
                 row_empty_p.addWidget(btn_add_u)
                 row_empty_p.addStretch()
                 p_layout.addLayout(row_empty_p)
 
             m_layout.addWidget(p_card)
-        else:
-            btn_create_params = QPushButton("+ Add Universal Parameters (params)")
-            btn_create_params.clicked.connect(lambda: self.add_block("params"))
-            m_layout.addWidget(btn_create_params)
 
         has_methods = any(k != "params" and isinstance(v, dict) for k, v in methods_dict.items()) if methods_dict else False
         pending_new = getattr(self, "_pending_new_method", False)

@@ -702,7 +702,9 @@ class Window(QMainWindow):
         if hasattr(self, "menu_actions"):
             for aid, action in self.menu_actions.items():
                 default_sc = action.property("_default_sc") or ""
-                sc = self.settings_manager.get("shortcuts", aid, default=default_sc) or default_sc
+                sc = self.settings_manager.get("shortcuts", aid, default=default_sc)
+                if sc is None:
+                    sc = default_sc
                 norm = normalize_menu_shortcut(sc)
                 if norm:
                     seq = QKeySequence(norm)
