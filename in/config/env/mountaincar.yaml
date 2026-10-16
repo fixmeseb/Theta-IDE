@@ -1,4 +1,5 @@
 name: mountaincar
+compatible_paradigms: [online_rl, offline_rl]
 monitor_metric: "eval/reward"
 preprocess_on_load: false
 env_id: MountainCar-v0

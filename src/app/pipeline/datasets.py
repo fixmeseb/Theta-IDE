@@ -178,7 +178,7 @@ def resolve_mimic_npz_path(filename_or_path: str | None = None, site_cfg=None) -
         PROJECT_ROOT / "in/datasets/mimic",
         PROJECT_ROOT / "in/datasets",
     ]
-    # Add site-specific search dirs (replaces hardcoded /hpc/home/cegbert1/... paths)
+    # Add site-specific search dirs from site config
     if site_cfg:
         for d in getattr(site_cfg, "dataset_search_dirs", []) or []:
             candidate_dirs.append(Path(str(d)))

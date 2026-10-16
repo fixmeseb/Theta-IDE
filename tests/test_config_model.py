@@ -244,6 +244,31 @@ def test_command_line_is_a_string():
     assert "run_pipeline.py tests/cartpole" in line
 
 
+def test_command_line_quotes_arguments_with_spaces():
+    import shlex
+    sel = Selection(experiment="tests/cartpole", extra=["++description=hello world"])
+    cmd = sel.command_line()
+    split = shlex.split(cmd)
+    assert "++description=hello world" in split
+
+
+def test_compatible_paradigms_filter_environments(tree):
+    online_envs = {e.name for e in tree.environments_for("online_rl")}
+    assert "cartpole" in online_envs
+    assert "pyrenees" not in online_envs
+    assert "breast_cancer" not in online_envs
+
+    supervised_envs = {e.name for e in tree.environments_for("supervised")}
+    assert "breast_cancer" in supervised_envs
+    assert "cartpole" not in supervised_envs
+    assert "pyrenees" not in supervised_envs
+
+    offline_envs = {e.name for e in tree.environments_for("offline_rl")}
+    assert "pyrenees" in offline_envs
+    assert "mimic" in offline_envs
+    assert "breast_cancer" not in offline_envs
+
+
 # ------------------------------------------------ composite & dynamic parameters
 
 def test_composite_model_properties(tree):

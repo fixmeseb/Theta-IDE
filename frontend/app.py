@@ -527,6 +527,26 @@ class Window(QMainWindow):
         if hasattr(self, "config_tree") and self.config_tree is not None:
             self.config_tree.select_file(rel_path, emit_signal=False)
 
+        if Path(rel_path).name.startswith("_") or not norm_rel.startswith("experiment/"):
+            self.compose_valid = False
+            self.update_launch_state()
+            if getattr(self, "preview_status", None) is not None:
+                self.preview_status.setText("Template configuration • not directly executable")
+            if getattr(self, "preview_errors", None) is not None:
+                self.preview_errors.hide()
+            if getattr(self, "builder_status", None) is not None:
+                self.builder_status.setObjectName("muted")
+                self.builder_status.setText("Base template: provides group defaults inherited by experiments in this directory.")
+                self.builder_status.setStyle(self.builder_status.style())
+            if getattr(self, "preview", None) is not None:
+                if getattr(viewer, "current_path", None) and viewer.current_path.is_file():
+                    self.preview.setPlainText(f"# {viewer.current_path.name} (Base Template)\n# Experiments in this group inherit these settings:\n\n" + viewer.current_path.read_text(encoding="utf-8"))
+                else:
+                    self.preview.setPlainText("# Base Template\n# Group defaults inherited by experiments.")
+            if hasattr(self, "plugin_manager"):
+                self.plugin_manager.notify_experiment_changed(self.current_experiment, self.active_config_path)
+            return
+
         self.request_compose()
         if hasattr(self, "plugin_manager"):
             self.plugin_manager.notify_experiment_changed(self.current_experiment, self.active_config_path)
@@ -1521,53 +1541,29 @@ class Window(QMainWindow):
                      'pip install -e ".[gui]" then python -m frontend')
             return
         self.schema = data
-        env = data["environment"]
-        method = data["method"]
-        for title, text in (("Environment", env.get("env_id") or env["name"]),
-                            ("Method", f"{method['agent'].upper()} · {method['model']}"),
-                            ("Training mode", f"Online · {data['paradigm']}")):
-            if title in self.fixed_fields:
-                self.fixed_fields[title].setItemText(0, text)
-        for field in data["fields"]:
-            widget = self.fields.get(field["key"])
-            if widget is None:
-                continue
-            widget.setToolTip(f"{field['help']}\nOverride: {field['key']}")
-            if "choices" in field:
-                current = widget.currentText()
-                widget.blockSignals(True)
-                widget.clear()
-                widget.addItems([str(choice) for choice in field["choices"]])
-                widget.setCurrentText(current)
-                widget.blockSignals(False)
-            elif "min" in field:
-                widget.setRange(field["min"], field["max"])
-                if "step" in field:
-                    widget.setSingleStep(field["step"])
-            if apply_defaults and field["key"] != "experiment_id" and field.get("default") is not None:
-                if "choices" in field:
-                    widget.setCurrentText(str(field["default"]))
-                elif field["type"] == "bool":
-                    widget.setChecked(bool(field["default"]))
-                else:
-                    widget.setValue(field["default"])
-        self.log(f"Experiment builder loaded: {env['name']} / {method['agent']} ({data['base_experiment']}).")
         self.update_config()
 
     def set_config(self, config):
         if hasattr(self, "config_viewer"):
             d = self.config_viewer.raw_data
-            d["experiment_id"] = config.name
-            d["seed"] = config.seed
-            d["total_timesteps"] = config.total_timesteps
-            d["tensorboard"] = config.tensorboard
-            methods = d.setdefault("methods", {})
-            if isinstance(methods, dict):
-                ppo_spec = methods.setdefault("ppo", {})
-                if isinstance(ppo_spec, dict):
-                    ppo_spec["lr"] = config.lr
-                    ppo_spec["batch_size"] = config.batch_size
-                    ppo_spec["gamma"] = config.gamma
+            if isinstance(config, dict):
+                d.clear()
+                d.update(config)
+            else:
+                d["experiment_id"] = getattr(config, "name", "experiment")
+                d["seed"] = getattr(config, "seed", 42)
+                d["total_timesteps"] = getattr(config, "total_timesteps", 10000)
+                d["tensorboard"] = getattr(config, "tensorboard", False)
+                methods = d.setdefault("methods", {})
+                if isinstance(methods, dict) and ("ppo" in methods or not methods):
+                    ppo_spec = methods.setdefault("ppo", {})
+                    if isinstance(ppo_spec, dict):
+                        if hasattr(config, "lr"):
+                            ppo_spec["lr"] = config.lr
+                        if hasattr(config, "batch_size"):
+                            ppo_spec["batch_size"] = config.batch_size
+                        if hasattr(config, "gamma"):
+                            ppo_spec["gamma"] = config.gamma
             self.config_viewer._render_boxes()
         self.update_config()
 
@@ -1650,7 +1646,10 @@ class Window(QMainWindow):
 
         config = self.config()
         exp_target = getattr(self, "current_experiment", None) or BASE_EXPERIMENT
-        experiment_id = self.unique_experiment_id(config.name)
+        is_recover = False
+        if hasattr(self, "config_viewer") and getattr(self.config_viewer, "raw_data", None):
+            is_recover = bool(self.config_viewer.raw_data.get("recover", False))
+        experiment_id = self.unique_experiment_id(config.name, is_recover=is_recover)
         overrides = self.config_viewer.get_overrides() if hasattr(self, "config_viewer") else config.overrides()
         overrides = [o for o in overrides if not o.startswith("++experiment_id=")] + [f"++experiment_id='{experiment_id}'"]
         if self.start_button is not None:
@@ -1838,14 +1837,26 @@ class Window(QMainWindow):
 
     # ── Job queue ────────────────────────────────────────────────────────────
 
-    def unique_experiment_id(self, name):
-        """<name>_<date>-<time>, with a counter if several jobs are created within the same second."""
-        base = f"{name}_{datetime.now():%Y%m%d-%H%M%S}"
-        experiment_id, n = base, 2
-        while experiment_id in self.issued_ids:
-            experiment_id, n = f"{base}-{n}", n + 1
-        self.issued_ids.add(experiment_id)
-        return experiment_id
+    def unique_experiment_id(self, name, is_recover=False):
+        """<name>_<date>-<time>, with a counter if several jobs are created within the same second.
+        When recovering a checkpoint (is_recover=True), preserves the exact experiment name."""
+        if is_recover:
+            return name
+        group = getattr(self, "current_experiment", "").split("/")[0] if getattr(self, "current_experiment", None) else None
+        exists_on_disk = False
+        if group:
+            from src.app.services import LOGS_DIR
+            if (LOGS_DIR / group / name).exists():
+                exists_on_disk = True
+        if name in self.issued_ids or exists_on_disk:
+            base = f"{name}_{datetime.now():%Y%m%d-%H%M%S}"
+            experiment_id, n = base, 2
+            while experiment_id in self.issued_ids:
+                experiment_id, n = f"{base}-{n}", n + 1
+            self.issued_ids.add(experiment_id)
+            return experiment_id
+        self.issued_ids.add(name)
+        return name
 
     def add_to_queue(self):
         if not self.compose_valid:
@@ -1856,7 +1867,10 @@ class Window(QMainWindow):
 
         config = self.config()
         exp_target = getattr(self, "current_experiment", None) or BASE_EXPERIMENT
-        experiment_id = self.unique_experiment_id(config.name)
+        is_recover = False
+        if hasattr(self, "config_viewer") and getattr(self.config_viewer, "raw_data", None):
+            is_recover = bool(self.config_viewer.raw_data.get("recover", False))
+        experiment_id = self.unique_experiment_id(config.name, is_recover=is_recover)
         overrides = self.config_viewer.get_overrides() if hasattr(self, "config_viewer") else config.overrides()
         overrides = [o for o in overrides if not o.startswith("++experiment_id=")] + [f"++experiment_id='{experiment_id}'"]
         if self.queue_button is not None:
@@ -2206,13 +2220,38 @@ class Window(QMainWindow):
 
     def load_run_config(self, run):
         """Put a run record's builder config into the experiment builder; return why not, or None."""
-        if run.get("origin") == "cli" and not run.get("builder_compatible"):
-            return ("The experiment builder only edits single-method CartPole/PPO runs; "
-                    "this run's config is in its results/logs folder.")
-        self.set_config(Config(**run["config"]))
-        self.tabs.setCurrentWidget(self.config_panel)
-        self.log(f"Loaded exact configuration from {run['id']}. Launch to create a new run.")
-        return None
+        cfg_dict = None
+        group = run.get("backend", {}).get("group")
+        exp_id = run.get("backend", {}).get("experiment_id")
+        if group and exp_id:
+            from src.app.services import LOGS_DIR
+            saved_cfg = LOGS_DIR / group / exp_id / "config.yaml"
+            if saved_cfg.is_file():
+                try:
+                    cfg_dict = yaml.safe_load(saved_cfg.read_text(encoding="utf-8"))
+                except Exception:
+                    cfg_dict = None
+        if cfg_dict is None and hasattr(self, "store"):
+            store_cfg = self.store.root / run.get("id", "") / "config.yaml"
+            if store_cfg.is_file():
+                try:
+                    cfg_dict = yaml.safe_load(store_cfg.read_text(encoding="utf-8"))
+                except Exception:
+                    cfg_dict = None
+
+        if isinstance(cfg_dict, dict):
+            self.set_config(cfg_dict)
+            self.tabs.setCurrentWidget(self.config_panel)
+            self.log(f"Loaded exact configuration from {run['id']}. Launch to create a new run.")
+            return None
+
+        if "config" in run and isinstance(run["config"], dict):
+            self.set_config(Config(**run["config"]))
+            self.tabs.setCurrentWidget(self.config_panel)
+            self.log(f"Loaded configuration from {run['id']}. Launch to create a new run.")
+            return None
+
+        return "Could not load saved configuration for this run."
 
     def load_results_config(self, run_key):
         """The Results panel's Load in experiment builder: find the run record for a results/logs folder."""

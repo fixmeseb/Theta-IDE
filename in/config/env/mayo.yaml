@@ -1,4 +1,5 @@
 name: mayo
+compatible_paradigms: [offline_rl]
 monitor_metric: "val/loss"
 env_id: mayo
 preprocess_on_load: false

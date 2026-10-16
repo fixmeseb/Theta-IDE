@@ -166,7 +166,7 @@ def find_checkpoint(problem_id: str, ckpt_root: Path = None) -> Path:
 
 def export_all_models(output_dir: Path = None, ckpt_root: Path = None):
     if output_dir is None:
-        output_dir = Path("/Users/cameronegbert/Research/Pyrenees/Pyrenees-python/app/models/policies/Blend-RL")
+        output_dir = Path(os.environ.get("PYRENEES_POLICY_DIR", Path.home() / "Pyrenees-python/app/models/policies/Blend-RL"))
 
     onnx_dir = output_dir / "onnx"
     minmax_dir = output_dir / "minmax"
@@ -264,7 +264,7 @@ def export_all_models(output_dir: Path = None, ckpt_root: Path = None):
 
 
 def run_verification_tests():
-    tutor_dir = Path("/Users/cameronegbert/Research/Pyrenees/Pyrenees-python")
+    tutor_dir = Path(os.environ.get("PYRENEES_DIR", Path.home() / "Pyrenees-python"))
     if not tutor_dir.exists():
         print(f"Tutor directory {tutor_dir} not found; skipping verification.")
         return

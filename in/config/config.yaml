@@ -11,7 +11,7 @@ experiment_name: "ungrouped/default_exp"
 group: "ungrouped"
 seed: 1
 total_timesteps: 10000
-eval_episodes: 100
+eval_episodes: 0
 save_dataset: false
 recover: false
 paradigm: null

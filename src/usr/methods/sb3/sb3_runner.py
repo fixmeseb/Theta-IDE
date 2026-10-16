@@ -147,8 +147,9 @@ def main(cfg: DictConfig):
 
     # Hyperparameters
     algo_kwargs = {}
-    if "learning_rate" in agent_cfg:
-        algo_kwargs["learning_rate"] = float(agent_cfg["learning_rate"])
+    lr_val = agent_cfg.get("learning_rate", agent_cfg.get("lr"))
+    if lr_val is not None:
+        algo_kwargs["learning_rate"] = float(lr_val)
     if "gamma" in agent_cfg:
         algo_kwargs["gamma"] = float(agent_cfg["gamma"])
     if "batch_size" in agent_cfg:

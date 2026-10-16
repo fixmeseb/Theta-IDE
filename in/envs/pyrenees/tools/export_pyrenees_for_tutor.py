@@ -97,7 +97,7 @@ def export_models_and_scalers(ckpt_path=None, output_dir=None):
     std_123 = scaler_npz["std"].astype(np.float64)
     std_123[std_123 == 0.0] = 1.0
 
-    target_policy_dir = Path("/Users/cameronegbert/Research/Pyrenees/Pyrenees-python/app/models/policies/Blend-RL")
+    target_policy_dir = Path(os.environ.get("PYRENEES_POLICY_DIR", Path.home() / "Pyrenees-python/app/models/policies/Blend-RL"))
     onnx_dir = target_policy_dir / "onnx"
     minmax_dir = target_policy_dir / "minmax"
     onnx_dir.mkdir(parents=True, exist_ok=True)

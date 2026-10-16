@@ -11,6 +11,7 @@ selection turns into.
 from __future__ import annotations
 
 import re
+import shlex
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping
@@ -46,6 +47,7 @@ def _yaml_files(directory: Path) -> list[Path]:
 @dataclass(frozen=True)
 class Environment:
     name: str
+    compatible_paradigms: tuple[str, ...] = ()
     raw: Mapping[str, Any] = field(default_factory=dict, repr=False)
 
     @classmethod
@@ -66,8 +68,17 @@ class Environment:
         else:
             chosen_name = env_name or rel_name
 
+        paradigms = raw.get("compatible_paradigms")
+        if isinstance(paradigms, list):
+            cp = tuple(str(p) for p in paradigms)
+        elif isinstance(paradigms, str):
+            cp = (paradigms,)
+        else:
+            cp = ()
+
         return cls(
             name=chosen_name,
+            compatible_paradigms=cp,
             raw=raw,
         )
 
@@ -197,7 +208,9 @@ class Paradigm:
         return False
 
     def permits_environment(self, environment: Environment) -> bool:
-        return True
+        if not environment.compatible_paradigms:
+            return True
+        return self.name in environment.compatible_paradigms
 
     def field_enabled(self, name: str) -> bool:
         if name in self.forbids:
@@ -547,7 +560,7 @@ class Selection:
         return argv
 
     def command_line(self, **kwargs: Any) -> str:
-        return " ".join(self.command(**kwargs))
+        return shlex.join(self.command(**kwargs))
 
 
 def unique_method_name(existing: Any, agent: str | None, model: str) -> str:
@@ -568,12 +581,19 @@ def unique_method_name(existing: Any, agent: str | None, model: str) -> str:
     return f"{base}_{n}"
 
 
-def add_method(data: dict[str, Any], agent: str | None = None, model: str = "dnn") -> str:
+def add_method(
+    data: dict[str, Any],
+    agent: str | None = None,
+    model: str | None = None,
+    paradigm: Paradigm | None = None,
+) -> str:
     """Add a method to an experiment's `methods` block. Returns its name.
 
     `agent` is omitted for paradigms that declare none: supervised learning has
     no policy to choose actions with, so its methods name an architecture only.
     """
+    if model is None:
+        model = (paradigm.raw.get("default_model") if paradigm else None) or "dnn"
     methods = data.setdefault("methods", {})
     name = unique_method_name(methods, agent, model)
     methods[name] = {"agent": agent, "model": model} if agent else {"model": model}

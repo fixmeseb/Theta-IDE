@@ -22,7 +22,6 @@ methods:
   cql_dnn:
     agent: cql
     model: dnn
-    logic_lr: 0.001
     target_entropy: -1.0
     tau: 0.005
     clip_range: 0.2

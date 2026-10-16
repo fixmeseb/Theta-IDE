@@ -2,7 +2,7 @@
 # Boilerplate — edit partition names, GRES syntax, and paths as needed.
 python_executable: auto
 venv_dir: venv
-mail_user: cegbert@arc.csc.ncsu.edu
+mail_user: null  # Set your own email for Slurm notifications
 mail_type: "END,FAIL"
 gres_format: "gpu:{gpus}"              # ARC may differ from ncshare; edit as needed
 resources:

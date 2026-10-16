@@ -1,4 +1,5 @@
 name: mimic
+compatible_paradigms: [offline_rl, supervised]
 monitor_metric: "val/loss"
 env_id: mimic
 preprocess_on_load: false

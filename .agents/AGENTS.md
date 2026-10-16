@@ -135,7 +135,7 @@ Priority: CLI flags > experiment `resources:` > site config > hardcoded fallback
     - `site=ncshare` / `site=arc`: Generates and submits Slurm batch scripts.
     - **Cluster Push Mandate:** Push all changes to GitHub before submitting cluster jobs.
 - **Filesystem:**
-    - All datasets and training workloads must use repository paths (`in/datasets/`) or local user storage (`/hpc/home/`).
+    - All datasets and training workloads must use repository paths (`in/datasets/`) or local user storage.
 - **State Recovery:** Use `recover=true` to resume from the latest checkpoint. States saved in `results/checkpoints/[GROUP]/[EXP_ID]/[AGENT]/`.
 
 ---
@@ -216,7 +216,7 @@ See `pipeline-crud` skill for adding new plotters.
 - **`src/app/pipeline/workflow/model.py`**: `WorkflowGraph`, `WorkflowNode`, `WorkflowString`, `PortType` — string diagram data model.
 - **`src/app/pipeline/config.py`**: Name normalization, method list parsing, CLI arg sanitization.
 - **`src/app/pipeline/datasets.py`**: Dataset path resolution, online symlinking, plotting dispatch.
-- **`src/app/pipeline/slurm.py`**: Slurm header builder (`generate_sbatch_header`), job submission (`submit_sbatch`). Mail: `--mail-type=END,FAIL`, `--mail-user=egbertcm23@gmail.com`.
+- **`src/app/pipeline/slurm.py`**: Slurm header builder (`generate_sbatch_header`), job submission (`submit_sbatch`). Mail: configurable via site config (`--mail-type`, `--mail-user`).
 - **`src/app/pipeline/local_runner.py`**: Local sequential phase execution (`_setup_output_dirs` → `run_methods` → `run_plotting_phase`).
 - **`src/app/pipeline/slurm_runner.py`**: Cluster batch script generation and job dependency orchestration.
 - **`src/app/pipeline/shape_rewards.py`**: Offline ETL utility — `run_shape_rewards(cfg, context=None)`. Not a registered task; called as a library function from workflow transform nodes.
@@ -238,7 +238,7 @@ See `pipeline-crud` skill for adding new plotters.
 
 ## 15. Maintenance & Evolution
 - **Update this document** when new standard paths, evaluation standards, or core algorithms are introduced.
-- **Workflow reference:** [`docs/WORKFLOW_GUIDE.md`](file:///Users/cameronegbert/Research/NeSyRL/docs/WORKFLOW_GUIDE.md).
+- **Workflow reference:** [`docs/WORKFLOW_GUIDE.md`](docs/WORKFLOW_GUIDE.md).
 
 ---
 *Last Updated: 2026-09-16*

@@ -378,8 +378,11 @@ FIXED_BOX_KEYS = frozenset(
         "seed",
         "total_timesteps",
         "eval_episodes",
+        "epochs",
+        "eval_every_n_epochs",
         "methods",
         "env",
+        "site",
         "trainer",
         "resources",
         "tensorboard",
@@ -391,7 +394,6 @@ FIXED_BOX_KEYS = frozenset(
         # the same setting twice.
         "hydra",
         "dataset_path",
-        "offline_datasets",
         "description",
         "eval_freq_steps",
         "eval_freq",
@@ -1055,22 +1057,6 @@ class ConfigViewer(QWidget):
                 else:
                     self.raw_data["architecture"] = new_title
 
-            # Recursive string replacement for any exact matches of old_title
-            def _replace_matching(d):
-                if isinstance(d, dict):
-                    for k, v in list(d.items()):
-                        if isinstance(v, str) and v.lower() == old_title.lower():
-                            d[k] = new_title
-                        elif isinstance(v, (dict, list)):
-                            _replace_matching(v)
-                elif isinstance(d, list):
-                    for idx, item in enumerate(d):
-                        if isinstance(item, str) and item.lower() == old_title.lower():
-                            d[idx] = new_title
-                        elif isinstance(item, (dict, list)):
-                            _replace_matching(item)
-
-            _replace_matching(self.raw_data)
 
             # Check if methods dict has a method named after old_title
             if "methods" in self.raw_data and isinstance(self.raw_data["methods"], dict):
@@ -1625,6 +1611,7 @@ class ConfigViewer(QWidget):
         self.field_widgets["eval_episodes"] = self.spin_eval_ep
 
         eval_ep_enabled = True
+        is_online = (paradigm == "online_rl")
         if tree and paradigm in tree.paradigms:
             rules = tree.paradigms[paradigm]
             base = _read_group_base(tree, self._group_name())
@@ -1638,10 +1625,50 @@ class ConfigViewer(QWidget):
                     self.spin_eval_ep.setSuffix(f"   (not used by {paradigm})")
                 self.spin_eval_ep.setToolTip(rules.disabled_reason("eval_episodes"))
 
-        show_timesteps = ("total_timesteps" in data or self.view_mode == "resolved")
+        show_timesteps = is_online and ("total_timesteps" in data or self.view_mode == "resolved")
         show_seed = ("seed" in data or self.view_mode == "resolved")
-        show_eval_ep = ("eval_episodes" in data or not eval_ep_enabled or self.view_mode == "resolved")
-        show_eval_freq = ("eval_freq_steps" in data or "eval_freq" in data or (self.view_mode == "resolved" and ("eval_freq_steps" in resolved or "eval_freq" in resolved)))
+        show_eval_ep = is_online and ("eval_episodes" in data or not eval_ep_enabled or self.view_mode == "resolved")
+        show_eval_freq = is_online and ("eval_freq_steps" in data or "eval_freq" in data or (self.view_mode == "resolved" and ("eval_freq_steps" in resolved or "eval_freq" in resolved)))
+        show_epochs = not is_online and ("epochs" in data or self.view_mode == "resolved" or "epochs" in resolved)
+        show_eval_every = not is_online and ("eval_every_n_epochs" in data or self.view_mode == "resolved" or "eval_every_n_epochs" in resolved)
+
+        # Row layout for epochs
+        self.spin_epochs = SpinBox()
+        self.spin_epochs.setMaximumWidth(NUMBER_FIELD_WIDTH)
+        self.spin_epochs.setRange(1, 100000)
+        self.spin_epochs.setValue(int(data.get("epochs") or resolved.get("epochs") or 10))
+        self.spin_epochs.valueChanged.connect(lambda v: self._on_field_edited("epochs", v))
+        self.field_widgets["epochs"] = self.spin_epochs
+
+        row_epochs = QHBoxLayout()
+        row_epochs.setSpacing(6)
+        row_epochs.addWidget(self.spin_epochs)
+        if "epochs" in data:
+            btn_del_ep = _make_subtle_tool_button("close", "Remove epochs override to rely on group default", size=20, icon_size=12)
+            btn_del_ep.clicked.connect(lambda: (self.raw_data.pop("epochs", None), self._mark_dirty(), self._render_boxes()))
+            row_epochs.addWidget(btn_del_ep)
+        else:
+            row_epochs.addWidget(label("(inherited)", "muted"))
+        row_epochs.addStretch()
+
+        # Row layout for eval_every_n_epochs
+        self.spin_eval_every = SpinBox()
+        self.spin_eval_every.setMaximumWidth(NUMBER_FIELD_WIDTH)
+        self.spin_eval_every.setRange(1, 1000)
+        self.spin_eval_every.setValue(int(data.get("eval_every_n_epochs") or resolved.get("eval_every_n_epochs") or 1))
+        self.spin_eval_every.valueChanged.connect(lambda v: self._on_field_edited("eval_every_n_epochs", v))
+        self.field_widgets["eval_every_n_epochs"] = self.spin_eval_every
+
+        row_eval_every = QHBoxLayout()
+        row_eval_every.setSpacing(6)
+        row_eval_every.addWidget(self.spin_eval_every)
+        if "eval_every_n_epochs" in data:
+            btn_del_ee = _make_subtle_tool_button("close", "Remove eval_every_n_epochs override to rely on group default", size=20, icon_size=12)
+            btn_del_ee.clicked.connect(lambda: (self.raw_data.pop("eval_every_n_epochs", None), self._mark_dirty(), self._render_boxes()))
+            row_eval_every.addWidget(btn_del_ee)
+        else:
+            row_eval_every.addWidget(label("(inherited)", "muted"))
+        row_eval_every.addStretch()
 
         # Row layout for timesteps
         row_timesteps = QHBoxLayout()
@@ -1710,8 +1737,9 @@ class ConfigViewer(QWidget):
         standard_top_level_keys = {
             "defaults", "paradigm", "experiment_id", "description",
             "seed", "total_timesteps", "eval_episodes", "eval_freq_steps", "eval_freq",
-            "methods", "env", "trainer", "resources", "dataset", "dataset_path",
-            "offline_datasets", "tensorboard", "no_plot", "save_dataset", "recover",
+            "epochs", "eval_every_n_epochs",
+            "methods", "env", "site", "trainer", "resources", "dataset", "dataset_path",
+            "tensorboard", "no_plot", "save_dataset", "recover",
             "hydra", "plots", "tuning", "sweeper"
         }
         extra_experiment_items = []
@@ -1742,14 +1770,22 @@ class ConfigViewer(QWidget):
                 extra_experiment_items.append((label(str(extra_k)), row_extra))
 
         grid_items = []
-        if show_timesteps:
-            grid_items.append((label("Total Timesteps"), row_timesteps))
-        if show_seed:
-            grid_items.append((label("Random Seed"), row_seed))
-        if show_eval_ep:
-            grid_items.append((label("Eval Episodes"), row_eval_ep))
-        if show_eval_freq and row_eval_freq:
-            grid_items.append((label("Eval Frequency"), row_eval_freq))
+        if is_online:
+            if show_timesteps:
+                grid_items.append((label("Total Timesteps"), row_timesteps))
+            if show_seed:
+                grid_items.append((label("Random Seed"), row_seed))
+            if show_eval_ep:
+                grid_items.append((label("Eval Episodes"), row_eval_ep))
+            if show_eval_freq and row_eval_freq:
+                grid_items.append((label("Eval Frequency"), row_eval_freq))
+        else:
+            if show_epochs:
+                grid_items.append((label("Epochs"), row_epochs))
+            if show_seed:
+                grid_items.append((label("Random Seed"), row_seed))
+            if show_eval_every:
+                grid_items.append((label("Eval Frequency (Epochs)"), row_eval_every))
         for extra_lbl, extra_row in extra_experiment_items:
             grid_items.append((extra_lbl, extra_row))
 
@@ -1836,14 +1872,22 @@ class ConfigViewer(QWidget):
 
             # 1. Budget & Timing Candidates
             budget_cands = []
-            if "total_timesteps" not in data:
-                budget_cands.append(("total_timesteps", "Total Timesteps", int(resolved.get("total_timesteps") or 10000)))
-            if "seed" not in data:
-                budget_cands.append(("seed", "Random Seed", int(resolved.get("seed") if resolved.get("seed") is not None else 42)))
-            if eval_ep_enabled and "eval_episodes" not in data:
-                budget_cands.append(("eval_episodes", "Eval Episodes", int(resolved.get("eval_episodes") or 100)))
-            if "eval_freq_steps" not in data and "eval_freq" not in data:
-                budget_cands.append(("eval_freq_steps", "Eval Frequency (Steps)", int(resolved.get("eval_freq_steps") or 10000)))
+            if is_online:
+                if "total_timesteps" not in data:
+                    budget_cands.append(("total_timesteps", "Total Timesteps", int(resolved.get("total_timesteps") or 10000)))
+                if "seed" not in data:
+                    budget_cands.append(("seed", "Random Seed", int(resolved.get("seed") if resolved.get("seed") is not None else 42)))
+                if eval_ep_enabled and "eval_episodes" not in data:
+                    budget_cands.append(("eval_episodes", "Eval Episodes", int(resolved.get("eval_episodes") or 100)))
+                if "eval_freq_steps" not in data and "eval_freq" not in data:
+                    budget_cands.append(("eval_freq_steps", "Eval Frequency (Steps)", int(resolved.get("eval_freq_steps") or 10000)))
+            else:
+                if "epochs" not in data:
+                    budget_cands.append(("epochs", "Epochs", int(resolved.get("epochs") or 10)))
+                if "seed" not in data:
+                    budget_cands.append(("seed", "Random Seed", int(resolved.get("seed") if resolved.get("seed") is not None else 42)))
+                if "eval_every_n_epochs" not in data:
+                    budget_cands.append(("eval_every_n_epochs", "Eval Frequency (Epochs)", int(resolved.get("eval_every_n_epochs") or 1)))
 
             for bk, blbl, bdef in budget_cands:
                 act = opt_menu.addAction(blbl)
@@ -2992,7 +3036,7 @@ class ConfigViewer(QWidget):
             self.boxes_layout.addWidget(box_tr)
 
         # --- MODULAR BOX: DATASET SPECIFICATION ---
-        has_dataset = "dataset_path" in data or "offline_datasets" in data
+        has_dataset = "dataset_path" in data
         is_offline_req = paradigm in ("offline_rl", "supervised")
         show_dataset = has_dataset or is_offline_req or (self.view_mode == "resolved" and "dataset_path" in resolved)
 
@@ -3053,22 +3097,6 @@ class ConfigViewer(QWidget):
             ds_path_row.addStretch()
             ds_form.addRow("Dataset Path", ds_path_row)
 
-            # offline_datasets text line
-            self.txt_offline_ds = QLineEdit()
-            self.txt_offline_ds.setMaximumWidth(320)
-            off_val = data.get("offline_datasets") or resolved.get("offline_datasets") or ""
-            if isinstance(off_val, list):
-                off_val = ", ".join(str(x) for x in off_val)
-            self.txt_offline_ds.setText(str(off_val))
-            self.txt_offline_ds.setPlaceholderText("Comma-separated list of dataset names (optional)...")
-            self.txt_offline_ds.textChanged.connect(
-                lambda v: self._on_field_edited("offline_datasets", [x.strip() for x in v.split(",") if x.strip()] if "," in v else v.strip())
-            )
-            off_row = QHBoxLayout()
-            off_row.addWidget(self.txt_offline_ds)
-            off_row.addStretch()
-            ds_form.addRow("Offline Datasets", off_row)
-
             box_ds.add_layout(ds_form)
             self.boxes_layout.addWidget(box_ds)
 
@@ -3093,29 +3121,47 @@ class ConfigViewer(QWidget):
             grid_res.setVerticalSpacing(8)
             res_dict = data.get("resources", {}) if has_res else resolved.get("resources", {})
 
-            grid_res.addWidget(label("Time Limit"), 0, 0)
+            # Site Profile Dropdown
+            grid_res.addWidget(label("Site Profile"), 0, 0)
+            combo_site = ComboBox()
+            combo_site.setMaximumWidth(NUMBER_FIELD_WIDTH)
+            sites = list(tree.sites) if tree and hasattr(tree, "sites") else ["local", "ncshare", "arc"]
+            if "local" not in sites:
+                sites.insert(0, "local")
+            current_site = str(data.get("site") or resolved.get("site") or "local")
+            for s in sites:
+                combo_site.addItem(s)
+            s_idx = combo_site.findText(current_site)
+            if s_idx != -1:
+                combo_site.setCurrentIndex(s_idx)
+            combo_site.currentTextChanged.connect(
+                lambda v: self._on_field_edited("site", v)
+            )
+            grid_res.addWidget(combo_site, 0, 1)
+
+            grid_res.addWidget(label("Time Limit"), 0, 2)
             txt_time = QLineEdit(str(res_dict.get("time") or "02:00:00"))
             txt_time.setMaximumWidth(NUMBER_FIELD_WIDTH)
             txt_time.textChanged.connect(lambda v: self._on_nested_edited("resources", "time", v))
-            grid_res.addWidget(txt_time, 0, 1)
+            grid_res.addWidget(txt_time, 0, 3)
 
-            grid_res.addWidget(label("GPUs"), 0, 2)
+            grid_res.addWidget(label("GPUs"), 1, 0)
             txt_gpus = QLineEdit(str(res_dict.get("gpus") if res_dict.get("gpus") is not None else 0))
             txt_gpus.setMaximumWidth(NUMBER_FIELD_WIDTH)
             txt_gpus.textChanged.connect(lambda v: self._on_nested_edited("resources", "gpus", v))
-            grid_res.addWidget(txt_gpus, 0, 3)
+            grid_res.addWidget(txt_gpus, 1, 1)
 
-            grid_res.addWidget(label("CPU Cores"), 1, 0)
+            grid_res.addWidget(label("CPU Cores"), 1, 2)
             txt_cores = QLineEdit(str(res_dict.get("cores") if res_dict.get("cores") is not None else 4))
             txt_cores.setMaximumWidth(NUMBER_FIELD_WIDTH)
             txt_cores.textChanged.connect(lambda v: self._on_nested_edited("resources", "cores", v))
-            grid_res.addWidget(txt_cores, 1, 1)
+            grid_res.addWidget(txt_cores, 1, 3)
 
-            grid_res.addWidget(label("Memory"), 1, 2)
+            grid_res.addWidget(label("Memory"), 2, 0)
             txt_mem = QLineEdit(str(res_dict.get("memory") or "16G"))
             txt_mem.setMaximumWidth(NUMBER_FIELD_WIDTH)
             txt_mem.textChanged.connect(lambda v: self._on_nested_edited("resources", "memory", v))
-            grid_res.addWidget(txt_mem, 1, 3)
+            grid_res.addWidget(txt_mem, 2, 1)
 
             box_res.add_layout(grid_res)
             self.boxes_layout.addWidget(box_res)
@@ -3488,12 +3534,21 @@ class ConfigViewer(QWidget):
             return meth_name
 
         def_name, def_spec = self._get_group_default_method()
+        paradigm = self.raw_data.get("paradigm") or self._inherited_paradigm() or "online_rl"
+        tree = config_tree()
+        p_obj = tree.paradigms.get(paradigm) if tree and paradigm in tree.paradigms else None
+        default_model = (
+            (def_spec.get("model") if def_spec else None)
+            or (p_obj.raw.get("default_model") if p_obj else None)
+            or "dnn"
+        )
+
         methods = self.raw_data.setdefault("methods", {})
         if name:
             meth_name = name
         elif agent or model:
             from .config_model import unique_method_name
-            meth_name = unique_method_name(methods, agent, model or "dnn")
+            meth_name = unique_method_name(methods, agent, model or default_model)
         elif def_name and def_name not in methods:
             meth_name = def_name
         else:
@@ -4200,7 +4255,7 @@ class ConfigViewer(QWidget):
             overrides.append(f"++description='{data['description']}'")
 
         # Hydra config-group selections (defaults in in/config/config.yaml)
-        for group in ("paradigm", "env"):
+        for group in ("paradigm", "env", "site"):
             value = self._get_explicit_env() if group == "env" else data.get(group)
             if isinstance(value, str) and value and value != self.INHERIT:
                 overrides.append(f"{group}={value}")
@@ -4209,6 +4264,10 @@ class ConfigViewer(QWidget):
             overrides.append(f"seed={data['seed']}")
         if "total_timesteps" in data:
             overrides.append(f"total_timesteps={data['total_timesteps']}")
+        if "epochs" in data:
+            overrides.append(f"epochs={data['epochs']}")
+        if "eval_every_n_epochs" in data:
+            overrides.append(f"eval_every_n_epochs={data['eval_every_n_epochs']}")
         if "tensorboard" in data:
             overrides.append(f"tensorboard={str(data['tensorboard']).lower()}")
         if "save_dataset" in data and data["save_dataset"]:

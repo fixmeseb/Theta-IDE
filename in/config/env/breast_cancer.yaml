@@ -1,5 +1,6 @@
 name: breast_cancer
 env_id: breast_cancer
+compatible_paradigms: [supervised, unsupervised]
 monitor_metric: "val/loss"
 dataset_name: breast_cancer.npz
 

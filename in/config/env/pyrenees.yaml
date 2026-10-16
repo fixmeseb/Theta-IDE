@@ -1,4 +1,5 @@
 name: pyrenees
+compatible_paradigms: [offline_rl]
 monitor_metric: "val/loss"
 preprocess_on_load: true
 env_id: pyrenees
