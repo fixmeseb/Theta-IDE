@@ -591,4 +591,6 @@ class HubDialog(QDialog):
         return self.hub_view._apply_filters()
 
     def __getattr__(self, name):
+        if name == "hub_view" or "hub_view" not in self.__dict__:
+            raise AttributeError(name)
         return getattr(self.hub_view, name)

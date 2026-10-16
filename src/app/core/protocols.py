@@ -182,3 +182,91 @@ def walk_model_modules(root: Any) -> list[Any]:
 
     _traverse(root)
     return modules
+
+
+@runtime_checkable
+class DataModulePluginProtocol(Protocol):
+    """Protocol for pluggable DataModules providing PyTorch datasets and DataLoaders."""
+
+    def setup(self, stage: str | None = None) -> None:
+        """Prepare datasets and splits."""
+        ...
+
+    def train_dataloader(self) -> Any:
+        """Return PyTorch DataLoader for training batches."""
+        ...
+
+    def val_dataloader(self) -> Any:
+        """Return PyTorch DataLoader for validation batches."""
+        ...
+
+
+@runtime_checkable
+class TrajectorySamplerProtocol(Protocol):
+    """Protocol for trajectory sequence and window samplers (e.g. Decision Transformers, RNNs)."""
+
+    def sample_trajectory_window(
+        self, batch_size: int, context_len: int
+    ) -> dict[str, torch.Tensor]:
+        """Return a batch of variable- or fixed-length trajectory slices."""
+        ...
+
+
+@runtime_checkable
+class EnvironmentPluginProtocol(Protocol):
+    """Protocol for domain environment providers and custom Gym environments."""
+
+    @classmethod
+    def make_env(cls, env_id: str, **kwargs: Any) -> Any:
+        """Instantiate and return the Gymnasium environment."""
+        ...
+
+    @classmethod
+    def get_default_wrappers(cls) -> list[Callable[[Any], Any]]:
+        """Return list of default wrapper callables to wrap the environment."""
+        ...
+
+    @classmethod
+    def get_reward_shaping_hook(cls) -> Callable[..., Any] | None:
+        """Return optional reward shaping callable."""
+        ...
+
+    @classmethod
+    def get_logic_valuation_hook(cls) -> Callable[..., Any] | None:
+        """Return optional logic valuation callable."""
+        ...
+
+
+@runtime_checkable
+class AgentPluginProtocol(Protocol):
+    """Protocol for RL agent training algorithms extending PyTorch Lightning."""
+
+    def training_step(self, batch: Any, batch_idx: int) -> Any:
+        """Execute one training step and return loss dictionary."""
+        ...
+
+    def validation_step(self, batch: Any, batch_idx: int) -> Any:
+        """Execute one validation step."""
+        ...
+
+    def configure_optimizers(self) -> Any:
+        """Configure and return optimizers."""
+        ...
+
+
+@runtime_checkable
+class EvaluationHookProtocol(Protocol):
+    """Protocol for custom evaluation metrics (formal verification, safety bounds, saliency, OOD)."""
+
+    def on_eval_start(self, agent: Any, env: Any, stage: str = "val") -> None:
+        """Called before evaluation rollouts begin."""
+        ...
+
+    def evaluate_step(self, agent: Any, batch_or_transition: Any) -> dict[str, float]:
+        """Return step-level evaluation metrics."""
+        ...
+
+    def on_eval_end(self) -> dict[str, float]:
+        """Return aggregated epoch-level evaluation metrics."""
+        ...
+

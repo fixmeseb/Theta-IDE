@@ -1,159 +1,328 @@
 # Theta-IDE Component Plugin Authoring Guide
 
-This guide describes how to author, register, and distribute model architecture plugins for **Theta-IDE**. It details the protocols that allow complex, composite, and hybrid model architectures to integrate seamlessly with the IDE, pipeline, algorithms, and configuration viewer without modifying core code.
+This guide describes how to author, register, package, and distribute research components and plugins for **Theta-IDE**. It details the protocols that allow complex model architectures, reinforcement learning algorithms, custom environments, trajectory samplers, safety evaluators, and complete experiments to integrate seamlessly with the IDE, execution engine, and Community Hub without modifying core code.
 
 ---
 
 ## 1. Overview & Architectural Principles
 
-In Theta-IDE, learning algorithms (such as PPO, CQL, and IQL) are decoupled from model architectures:
-- **Agents / Algorithms** manage the reinforcement learning or supervised loss functions, replay buffers, and environment interactions.
-- **Models** define policy neural networks, Q-networks, feature extractors, and reasoners.
-- **Plugins** introduce new model architectures, subcomponents, auxiliary losses, optimizer parameter groups, and environment wrappers through standard Python runtime protocols.
-
-A user who installs Theta-IDE without specialized plugins can run standard RL algorithms with neural models (such as `NatureCNN`, `StandardMLP`, `DuelingResNet`, or `Transformer`). When a component plugin (such as `BlendRL` or `CEW`) is installed, it provides its metadata, hierarchical parameter slots, auxiliary losses, and custom optimizer configurations declaratively.
+In Theta-IDE, all components are cleanly decoupled through declarative runtime protocols:
+- **Models & Composite Architectures**: Define policy networks, Q-functions, feature extractors, and symbolic reasoners.
+- **Agents & Algorithms**: Implement RL or supervised loss functions, update steps, and optimization procedures.
+- **Environments & Groundings**: Define simulators, observation wrappers, potential-based reward shaping, and logic valuations.
+- **DataModules & Samplers**: Manage trajectory sequence windows, offline datasets, and replay buffer sampling.
+- **Evaluators & Verification**: Compute formal verification bounds, safety metrics, and policy attributions.
+- **Experiment Recipes**: Bundle complete reproducible benchmarks (configs, envs, models, rules, weights) for 1-click sharing.
 
 ```
-                    ┌──────────────────────────────┐
-                    │      Theta-IDE Core          │
-                    │ (PPO, CQL, IQL, Train Loop)  │
-                    └──────────────┬───────────────┘
-                                   │
-              implements runtime protocols via duck-typing
-                                   │
-                    ┌──────────────▼───────────────┐
-                    │      Component Plugin        │
-                    │  (e.g., BlendRL Model Arch)  │
-                    └──────────────┬───────────────┘
-                                   │
-       ┌───────────────────────────┼───────────────────────────┐
-       ▼                           ▼                           ▼
-[ModelSlot / Composite]   [AuxiliaryLossProtocol]   [OptimizerGroupsProtocol]
-Declares submodel slots   Dynamic loss terms &      Custom param groups &
-for GUI & Pipeline        auxiliary metric logs     per-module learning rates
+                    ┌──────────────────────────────────────────────┐
+                    │               Theta-IDE Core                 │
+                    │   (Pipeline, GUI Viewer, Slurm, Lightning)   │
+                    └──────────────────────┬───────────────────────┘
+                                           │
+                        Discovers via standard protocols & entry points
+                                           │
+         ┌─────────────────────────────────┼─────────────────────────────────┐
+         ▼                                 ▼                                 ▼
+   [Model Plugins]                 [Agent Plugins]                 [Env & Data Plugins]
+• CompositeModelProtocol        • AgentPluginProtocol           • EnvironmentPluginProtocol
+• AuxiliaryLossProtocol         • Dynamic loss steps            • DataModulePluginProtocol
+• OptimizerGroupsProtocol       • Paradigm validation           • TrajectorySamplerProtocol
 ```
 
 ---
 
-## 2. Core Protocols Reference
+## 2. Component Plugin Archetypes & Protocols Reference
 
-All plugin protocols are defined in [`src/app/core/protocols.py`](file:///Users/cameronegbert/Research/Theta-IDE/src/app/core/protocols.py).
+All plugin contracts are defined in [`src/app/core/protocols.py`](file:///Users/cameronegbert/Research/Theta-IDE/src/app/core/protocols.py).
 
-### 2.1 ModelSlot & CompositeModelProtocol
+### 2.1 Model Architectures & Composite Models
 
-A **composite model** is composed of multiple submodules (e.g. an encoder and a decoder, or a neural policy and a symbolic reasoner).
-
-```python
-@dataclass(frozen=True)
-class ModelSlot:
-    name: str                           # Slot key, e.g. "neural", "symbolic", "encoder"
-    description: str = ""               # Human-readable description shown in GUI
-    candidate_types: tuple[str, ...] = ()  # Recommended candidate models (empty = all models)
-    default_type: str | None = None     # Default model identifier
-    required: bool = True               # Whether this slot is required
-```
-
-To declare composite subcomponents, implement `CompositeModelProtocol`:
+#### `ModelSlot` & `CompositeModelProtocol`
+Composite models assemble multiple submodules (e.g. an encoder and a decoder, or a neural policy and a symbolic reasoner).
 
 ```python
-class CompositeModelProtocol(Protocol):
+from dataclasses import dataclass, field
+from src.app.core.protocols import ModelSlot, CompositeModelProtocol
+
+class MyCompositePolicy(nn.Module):
     @classmethod
-    def get_model_slots(cls) -> tuple[ModelSlot, ...]:
-        """Return the submodel slots required or supported by this model architecture."""
-        ...
+    def get_model_slots(cls) -> list[ModelSlot]:
+        return [
+            ModelSlot(
+                name="neural",
+                required=True,
+                default="dnn",
+                tags=["neural", "actor"],
+                description="Neural feature extractor & policy head",
+            ),
+            ModelSlot(
+                name="symbolic",
+                required=False,
+                default="nsfr",
+                tags=["symbolic", "logic"],
+                description="Symbolic logic reasoning module",
+            ),
+        ]
 ```
 
 When implemented:
 1. **Pipeline Resolver (`src/app/pipeline/config.py`)**: Automatically resolves each declared slot against Tier 1 defaults (`in/config/model/<candidate>.yaml`) and Tier 2 overrides.
-2. **GUI ConfigViewer (`frontend/config_viewer.py`)**: Automatically renders dynamic slot cards, candidate dropdown selectors, and subcomponent parameter adders.
+2. **GUI ConfigViewer (`frontend/config_viewer.py`)**: Automatically renders dynamic slot cards, candidate dropdown selectors, and subcomponent parameter editors.
 
----
-
-### 2.2 AuxiliaryLossProtocol
-
-Certain model architectures require auxiliary objectives during training (e.g., entropy regularization over blending weights, sparsity constraints, or representation consistency):
+#### `AuxiliaryLossProtocol`
+Models can declare auxiliary objectives (e.g., entropy regularization over blending weights, sparsity constraints, or representation consistency):
 
 ```python
 class AuxiliaryLossProtocol(Protocol):
-    def compute_auxiliary_losses(
-        self,
-        batch: Any,
-        policy_output: Any,
-        step: int = 0,
-    ) -> dict[str, torch.Tensor]:
-        """Return auxiliary loss terms added to the total algorithm loss.
-        
-        Returns:
-            Dictionary of loss name -> scalar tensor.
-            Example: {"blend_entropy": 0.05 * loss}
-        """
+    def compute_auxiliary_losses(self, batch: Any, output: Any) -> dict[str, torch.Tensor]:
+        """Return dictionary of named auxiliary losses added to the algorithm loss."""
         ...
 ```
 
-Any registered agent (e.g., `PPOAgent`, `CQLAgent`) calls `compute_auxiliary_losses` during each training step and logs all returned auxiliary terms to CSV metrics automatically.
-
----
-
-### 2.3 OptimizerGroupsProtocol
-
-Complex models often require different learning rates or weight decays for different subcomponents (e.g., slower learning rate for symbolic logic rules, faster for neural heads):
+#### `OptimizerGroupsProtocol`
+Models configure custom parameter groups with per-module learning rates (e.g., slower learning rate for symbolic logic rules, faster for neural heads):
 
 ```python
 class OptimizerGroupsProtocol(Protocol):
-    def configure_optimizer_groups(self, default_lr: float) -> list[dict[str, Any]]:
-        """Return parameter groups for the PyTorch optimizer.
-        
-        Returns:
-            List of param group dictionaries, e.g.:
-            [
-                {"params": self.neural.parameters(), "lr": default_lr},
-                {"params": self.logic.parameters(), "lr": self.logic_lr},
-            ]
-        """
+    def configure_optimizer_groups(self, base_lr: float, weight_decay: float, cfg: Any = None) -> list[dict[str, Any]]:
+        """Return parameter group dictionaries for the PyTorch optimizer."""
         ...
 ```
 
----
-
-### 2.4 EnvironmentWrapperProtocol
-
-If a model architecture requires specific observation formats, symbolic state extraction, or frame wrapping, it can declare required environment wrappers:
+#### `EnvironmentWrapperProtocol`
+Models declare required observation wrappers or predicate extractors needed by the simulator:
 
 ```python
 class EnvironmentWrapperProtocol(Protocol):
     @classmethod
-    def get_required_env_wrappers(cls, env_name: str) -> list[Callable[[Any], Any]]:
-        """Return wrapper callables to wrap Gymnasium environments on instantiation."""
+    def get_env_wrappers(cls, env: Any, cfg: dict[str, Any]) -> list[Any]:
+        """Return Gymnasium wrappers to wrap the environment upon initialization."""
         ...
 ```
 
 ---
 
-## 3. Reference Case Study: BlendRL as a Component Plugin
+### 2.2 Agent & RL Algorithm Plugins
 
-**BlendRL** is a reference implementation of a composite, hybrid neural-symbolic component plugin located in `src/usr/models/blendrl/`.
+Agents implement RL algorithms (e.g., SAC, TD3, AWAC, Offline Multi-Agent) as PyTorch Lightning Modules:
 
-### 3.1 Plugin Manifest (`.theta_component.json`)
+```python
+from src.usr.methods.agent_registry import register_agent
+from src.app.core.protocols import AgentPluginProtocol
+
+@register_agent("my_algorithm", "my_algo")
+class MyCustomAgent(L.LightningModule):
+    """Custom reinforcement learning agent."""
+
+    def training_step(self, batch, batch_idx):
+        loss_dict = self.compute_algorithm_loss(batch)
+        # Auxiliary losses from models are automatically collected and added
+        return loss_dict["loss"]
+
+    def validation_step(self, batch, batch_idx):
+        ...
+
+    def configure_optimizers(self):
+        # Queries model.configure_optimizer_groups() if implemented
+        ...
+```
+
+---
+
+### 2.3 Environment & Grounding Plugins
+
+Environment plugins package Gymnasium simulators, vectorization hooks, domain logic rules, and potential-based reward shaping:
+
+```python
+from src.app.core.protocols import EnvironmentPluginProtocol
+
+class RoboticsSimulatorPlugin:
+    @classmethod
+    def make_env(cls, env_id: str, **kwargs):
+        import gymnasium as gym
+        return gym.make(f"Robotics/{env_id}", **kwargs)
+
+    @classmethod
+    def get_default_wrappers(cls):
+        return [NormalizeObservationWrapper, StateExtractionWrapper]
+
+    @classmethod
+    def get_reward_shaping_hook(cls):
+        return potential_based_shaping_function
+
+    @classmethod
+    def get_logic_valuation_hook(cls):
+        return predicate_valuation_function
+```
+
+---
+
+### 2.4 DataModule & Trajectory Sampler Plugins
+
+DataModules manage offline datasets, clinical cohorts, and sequence window sampling:
+
+```python
+from src.app.core.paradigm_loader import register_component
+from src.app.core.protocols import DataModulePluginProtocol, TrajectorySamplerProtocol
+
+@register_component("DecisionTransformerDataModule", "TrajectoryDataModule")
+class TrajectorySequenceDataModule:
+    def setup(self, stage=None):
+        self.dataset = load_trajectory_npz(...)
+
+    def train_dataloader(self):
+        return DataLoader(self.dataset, batch_size=64, shuffle=True)
+
+    def sample_trajectory_window(self, batch_size: int, context_len: int) -> dict[str, torch.Tensor]:
+        """Returns sequence batches (s_t, a_t, r_t, s_{t+1}) of length context_len."""
+        return self.dataset.sample_slices(batch_size, context_len)
+```
+
+---
+
+### 2.5 Evaluator, Safety & Verification Plugins
+
+Evaluator plugins log formal safety bounds, barrier certificates, and explainability attributions without altering the training loop:
+
+```python
+from src.app.core.protocols import EvaluationHookProtocol
+
+class SafetyVerificationEvaluator:
+    def on_eval_start(self, agent, env, stage="val"):
+        self.violations = 0
+
+    def evaluate_step(self, agent, batch_or_transition) -> dict[str, float]:
+        obs = batch_or_transition["obs"]
+        action = agent.act(obs)
+        is_safe = self.check_barrier_certificate(obs, action)
+        return {"eval/barrier_safety": float(is_safe)}
+
+    def on_eval_end(self) -> dict[str, float]:
+        return {"eval/safety_violation_rate": self.violations / self.total_steps}
+```
+
+All metrics returned by evaluation hooks automatically log into `metrics.csv` and render in the Theta-IDE Results Browser.
+
+---
+
+## 3. Universal Python Packaging via `pyproject.toml` Entry Points
+
+Any component can be packaged as a standard Python library and published to PyPI (`pip install my-theta-plugin`). Theta-IDE discovers and registers them automatically at startup via [`src/app/core/plugin_discovery.py`](file:///Users/cameronegbert/Research/Theta-IDE/src/app/core/plugin_discovery.py).
+
+Declare standard entry-point groups in your `pyproject.toml`:
+
+```toml
+[project]
+name = "my-theta-plugin"
+version = "1.0.0"
+dependencies = [
+    "torch>=2.0.0",
+    "gymnasium>=0.29.0",
+]
+
+[project.entry-points."theta.models"]
+my_composite_model = "my_plugin.models:MyCompositePolicy"
+
+[project.entry-points."theta.agents"]
+my_rl_algorithm = "my_plugin.agents:MyCustomAgent"
+
+[project.entry-points."theta.environments"]
+my_custom_env = "my_plugin.env:RoboticsSimulatorPlugin"
+
+[project.entry-points."theta.datamodules"]
+my_trajectory_dm = "my_plugin.data:TrajectorySequenceDataModule"
+
+[project.entry-points."theta.evaluators"]
+safety_verifier = "my_plugin.eval:SafetyVerificationEvaluator"
+
+[project.entry-points."theta.plugins"]
+custom_gui_panel = "my_plugin.ui:MyCustomPanelPlugin"
+```
+
+Once installed, your components appear immediately in:
+- The Config Viewer dropdown selectors in the GUI.
+- The pipeline execution engine (`python run_pipeline.py <group>/<exp>`).
+- Built-in registries (`MODEL_REGISTRY`, `AGENT_REGISTRY`, `_COMPONENT_REGISTRY`).
+
+---
+
+## 4. 1-Click Experiment-to-Plugin Exporter
+
+Researchers can package any experiment into a self-contained, shareable, installable Theta Hub component archive (`.zip`) with one click.
+
+### 4.1 Exporting from the GUI
+
+1. Open Theta-IDE and select any experiment recipe in the Config Tree.
+2. Click the **Export** button on the Action Bar (or press `Ctrl+Shift+S`):
+   - **Theta Hub Component Archive (`.zip`)** (Recommended): Packages the recipe YAML, base templates, referenced environment definitions, valuation rules, custom model architectures, and optional checkpoint weights.
+   - **Standalone Recipe YAML (`.yaml`)**: Exports only the composed recipe YAML for manual reproduction.
+3. Configure packaging options (include rules, models, weights) and click **Export**.
+
+### 4.2 Exporting from the CLI
+
+Export any experiment directly from the command line:
+
+```bash
+# Export experiment with all dependencies
+python run_pipeline.py export cartpole/quick_test
+
+# Include trained model checkpoints & specify output archive
+python run_pipeline.py export cartpole/quick_test --include-weights --out results/exports/cartpole_release.zip
+
+# Or via Hydra override during execution
+python run_pipeline.py cartpole/quick_test export=true
+```
+
+### 4.3 What Gets Packaged
+
+The [`ExperimentExporter`](file:///Users/cameronegbert/Research/Theta-IDE/src/app/services/experiment_exporter.py) automatically resolves the full dependency closure:
+```
+cartpole_quick_test_v1.0.0.zip
+├── .theta_component.json                      # Hub component manifest
+├── README.md                                  # Auto-generated reproduction guide
+├── in/config/experiment/cartpole/
+│   ├── quick_test.yaml                        # Experiment recipe
+│   └── _base.yaml                             # Group base template
+├── in/config/env/cartpole.yaml                # Environment configuration
+├── in/envs/cartpole/                          # Custom environment code & hooks
+├── in/rules/cartpole/                         # Domain logic rules
+├── src/usr/models/blendrl/                    # Referenced model architecture
+└── results/checkpoints/cartpole/quick_test/   # Checkpoint weights (optional)
+```
+
+### 4.4 1-Click Roundtrip Installation via Theta Hub
+
+Any researcher receiving the `.zip` package can install it into their Theta-IDE in one click:
+- Drag and drop or import the `.zip` in **Components &rarr; Hub &rarr; Install Local Package**.
+- The [`HubInstaller`](file:///Users/cameronegbert/Research/Theta-IDE/frontend/hub/installer.py) automatically unpacks configs to `in/config/experiment/`, environments to `in/envs/`, and rules to `in/rules/`.
+- The experiment is immediately runnable with:
+  ```bash
+  python run_pipeline.py cartpole/quick_test
+  ```
+
+---
+
+## 5. Reference Case Study: BlendRL as a Component Plugin
+
+**BlendRL** is the reference implementation of a composite, hybrid neural-symbolic component plugin located in `src/usr/models/blendrl/`.
+
+### 5.1 Plugin Manifest (`.theta_component.json`)
 
 ```json
 {
-  "name": "blendrl",
+  "id": "blendrl",
+  "name": "BlendRL",
+  "kind": "model",
   "version": "1.0.0",
-  "component_type": "model",
   "description": "BlendRL hybrid neural-symbolic policy architecture",
-  "author": "Theta Research",
-  "entry_point": "src.usr.models.blendrl.agents.blender_agent:build_blender_module",
-  "protocols": [
-    "CompositeModelProtocol",
-    "AuxiliaryLossProtocol",
-    "OptimizerGroupsProtocol"
-  ]
+  "author": {"name": "Theta Research"},
+  "target_path": "src/usr/models/blendrl",
+  "compatibility": {"theta": ">=2.0.0"}
 }
 ```
 
-### 3.2 Registration
-
-In `src/usr/models/blendrl/agents/blender_agent.py`:
+### 5.2 Implementation Highlights
 
 ```python
 from src.app.core.model_registry import register_model
@@ -164,122 +333,57 @@ class BlenderActorCritic(nn.Module):
     """Hybrid Actor-Critic combining neural and symbolic policy heads."""
 
     @classmethod
-    def get_model_slots(cls) -> tuple[ModelSlot, ...]:
-        return (
+    def get_model_slots(cls) -> list[ModelSlot]:
+        return [
             ModelSlot(
                 name="neural",
                 description="Neural feature extractor / policy head",
-                candidate_types=(),  # Accepts any non-composite neural model
-                default_type="dnn",
+                default="dnn",
+                tags=["neural", "actor"],
             ),
             ModelSlot(
                 name="symbolic",
                 description="Symbolic logic reasoning module",
-                candidate_types=("nsfr", "neumann", "cew"),
-                default_type="nsfr",
+                default="nsfr",
+                tags=["symbolic", "logic"],
             ),
             ModelSlot(
                 name="blender",
                 description="Logic-neural policy blender",
-                candidate_types=("neural", "logic", "hybrid"),
-                default_type="neural",
+                default="neural",
+                tags=["blender"],
             ),
-        )
-```
+        ]
 
-### 3.3 Factory Builder
-
-```python
-def build_blender_module(cfg, env=None, action_dim=None, device="cpu"):
-    """Instantiate BlenderActorCritic from hierarchical Hydra config."""
-    # Resolves neural and symbolic subcomponents via build_model
-    ...
-```
-
-### 3.4 Custom Auxiliary Losses & Optimizer Parameter Groups
-
-```python
-    def compute_auxiliary_losses(self, batch, policy_output, step=0):
+    def compute_auxiliary_losses(self, batch, output) -> dict[str, torch.Tensor]:
         losses = {}
-        if self.blend_ent_coef > 0.0 and hasattr(policy_output, "get_aux"):
-            blend_weights = policy_output.get_aux("blend_weights")
-            if blend_weights is not None:
-                # Maximize entropy of blender gating weights
-                p = blend_weights.clamp(min=1e-8)
-                ent = -(p * torch.log(p)).sum(dim=-1).mean()
-                losses["blend_entropy"] = -self.blend_ent_coef * ent
+        be = getattr(output, "blend_entropy", None)
+        if isinstance(be, torch.Tensor):
+            losses["blend_entropy"] = be.mean()
         return losses
 
-    def configure_optimizer_groups(self, default_lr: float):
+    def configure_optimizer_groups(self, base_lr: float, weight_decay: float = 0.0, cfg=None):
         groups = []
-        if hasattr(self, "neural_agent") and self.neural_agent is not None:
-            groups.append({"params": self.neural_agent.parameters(), "lr": default_lr})
-        if hasattr(self, "logic_agent") and self.logic_agent is not None:
-            groups.append({"params": self.logic_agent.parameters(), "lr": self.logic_lr})
-        if hasattr(self, "blender") and self.blender is not None:
-            groups.append({"params": self.blender.parameters(), "lr": self.blender_lr})
+        logic_lr = float(self.get_cfg("logic_lr", base_lr))
+        blender_lr = float(self.get_cfg("blender_lr", base_lr))
+        if hasattr(self, "actor") and hasattr(self.actor, "policy_modules"):
+            for m, m_type in zip(self.actor.policy_modules, self.module_types):
+                lr = base_lr if m_type == "neural" else logic_lr
+                groups.append({"params": m.parameters(), "lr": lr, "weight_decay": weight_decay})
         return groups
 ```
 
 ---
 
-## 4. Configuring Composite Models in YAML
+## 6. Authoring Checklist
 
-Theta-IDE's 3-tier configuration natively supports composite models:
-
-### Tier 1: Base Profile (`in/config/model/blendrl.yaml`)
-
-```yaml
-actor_mode: hybrid
-blender:
-  mode: neural
-  blend_function: softmax
-blend_q_values: true
-blend_ent_coef: 0.05
-logic_lr: 0.001
-blender_lr: 0.0005
-
-neural:
-  type: dnn
-  hidden_sizes: [256, 256]
-
-symbolic:
-  type: nsfr
-  rules: default
-```
-
-### Tier 2: Universal Hyperparameters (`params.model.blendrl`)
-
-```yaml
-methods:
-  params:
-    gamma: 0.99
-    model:
-      blendrl:
-        blend_ent_coef: 0.02
-```
-
-### Tier 3: Experiment Method
-
-```yaml
-methods:
-  cql_blendrl_cew_resnet:
-    agent: cql
-    model:
-      blendrl:
-        neural: dueling_resnet
-        symbolic:
-          cew:
-            ecm_dthr: 0.03
-```
-
----
-
-## 5. Summary Checklist for Plugin Authors
-
-1. **Implement `@register_model("<name>")`** on your model class or factory function.
-2. If your model composes submodules, implement `get_model_slots()` returning `tuple[ModelSlot, ...]`.
-3. If your model requires extra losses, implement `compute_auxiliary_losses(batch, policy_output, step)`.
-4. If your model requires separate learning rates, implement `configure_optimizer_groups(default_lr)`.
-5. Provide a base YAML profile in `in/config/model/<name>.yaml`.
-6. Add unit tests verifying `build_model(cfg, env=env)` and protocol compliance.
+1. **Choose your component archetype**: Model, Agent, Environment, DataModule, Evaluator, or Experiment.
+2. **Implement the matching runtime protocol** in [`src/app/core/protocols.py`](file:///Users/cameronegbert/Research/Theta-IDE/src/app/core/protocols.py).
+3. **Register your component**:
+   - Models: `@register_model("<name>")`
+   - Agents: `@register_agent("<name>")`
+   - DataModules: `@register_component("<Name>")`
+4. **Publishing options**:
+   - **Local / Hub package**: Include `.theta_component.json` and export via `python run_pipeline.py export`.
+   - **PyPI Python package**: Declare entry points under `[project.entry-points."theta.*"]` in `pyproject.toml`.
+5. **Verify with test suite**: Run `pytest tests/test_plugin_discovery.py` to verify protocol conformance.

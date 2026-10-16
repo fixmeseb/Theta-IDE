@@ -203,8 +203,31 @@ class HubInstaller:
             else:
                 source_dir = staging_dir
 
+            # Validate component manifest if packaged in archive
+            pkg_meta_file = source_dir / ".theta_component.json"
+            if pkg_meta_file.is_file():
+                from src.app.core.manifest_schema import validate_manifest_file
+                is_valid, err_msg = validate_manifest_file(pkg_meta_file)
+                if not is_valid:
+                    raise ValueError(f"Component archive contains invalid manifest: {err_msg}")
+
             # Check for packaged configuration YAML(s) and deploy to in/config/
             installed_config_paths = []
+            is_root_relative = (source_dir / "in").is_dir() or component.kind == "experiment"
+
+            if is_root_relative:
+                # Deploy root-relative assets directly to workspace_dir (in/, src/, results/)
+                for item in sorted(source_dir.rglob("*")):
+                    if not item.is_file():
+                        continue
+                    rel = item.relative_to(source_dir)
+                    if rel.parts and rel.parts[0] in ("in", "src", "results"):
+                        dest_file = self.workspace_dir / rel
+                        dest_file.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(str(item), str(dest_file))
+                        if len(rel.parts) >= 2 and rel.parts[0] == "in" and rel.parts[1] == "config":
+                            installed_config_paths.append(str(dest_file.relative_to(self.workspace_dir)))
+
             pkg_config_dir = source_dir / "config"
             if pkg_config_dir.is_dir():
                 target_in_config = self.workspace_dir / "in" / "config"
@@ -250,28 +273,38 @@ class HubInstaller:
                 "config_path": installed_config_rel,
                 "config_paths": installed_config_paths,
             }
-            (source_dir / ".theta_component.json").write_text(
-                json.dumps(meta, indent=2) + "\n", encoding="utf-8"
-            )
 
-            # Atomic swap into target_dir
-            if target_dir.exists():
-                backup_dir = target_dir.with_name(f"{target_dir.name}.backup")
-                if backup_dir.exists():
-                    shutil.rmtree(backup_dir, ignore_errors=True)
-                target_dir.rename(backup_dir)
-                try:
-                    shutil.move(str(source_dir), str(target_dir))
-                    shutil.rmtree(backup_dir, ignore_errors=True)
-                except Exception:
-                    # Rollback
-                    if target_dir.exists():
-                        shutil.rmtree(target_dir, ignore_errors=True)
-                    backup_dir.rename(target_dir)
-                    raise
+            if is_root_relative:
+                target_dir.mkdir(parents=True, exist_ok=True)
+                (target_dir / ".theta_component.json").write_text(
+                    json.dumps(meta, indent=2) + "\n", encoding="utf-8"
+                )
+                readme_src = source_dir / "README.md"
+                if readme_src.is_file():
+                    shutil.copy2(str(readme_src), str(target_dir / "README.md"))
             else:
-                target_dir.parent.mkdir(parents=True, exist_ok=True)
-                shutil.move(str(source_dir), str(target_dir))
+                (source_dir / ".theta_component.json").write_text(
+                    json.dumps(meta, indent=2) + "\n", encoding="utf-8"
+                )
+
+                # Atomic swap into target_dir
+                if target_dir.exists():
+                    backup_dir = target_dir.with_name(f"{target_dir.name}.backup")
+                    if backup_dir.exists():
+                        shutil.rmtree(backup_dir, ignore_errors=True)
+                    target_dir.rename(backup_dir)
+                    try:
+                        shutil.move(str(source_dir), str(target_dir))
+                        shutil.rmtree(backup_dir, ignore_errors=True)
+                    except Exception:
+                        # Rollback
+                        if target_dir.exists():
+                            shutil.rmtree(target_dir, ignore_errors=True)
+                        backup_dir.rename(target_dir)
+                        raise
+                else:
+                    target_dir.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.move(str(source_dir), str(target_dir))
 
             # Inspect and install declared Python dependencies
             declared_deps = []

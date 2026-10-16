@@ -56,6 +56,8 @@ from .config_tab_manager import ConfigTabManager
 from .hub import HubClient, HubDialog
 from .job_manager import JobManager
 from .live_run import LiveRun, LiveRunCache
+from .export_dialog import ExportExperimentDialog
+from src.app.services import PROJECT_ROOT
 from src.app.services.config_service import LaunchError
 from .local_backend import LocalBackend
 from .monitor import ENV_MAX_REWARD, MonitorPanel
@@ -1157,6 +1159,8 @@ class Window(QMainWindow):
         file_menu = self.menuBar().addMenu("File")
         for aid, title, default_sc, callback in (
             ("new_experiment", "New experiment", "Ctrl+N", self.new_experiment),
+            ("scaffold_plugin", "Scaffold New Component Plugin…", "Ctrl+Shift+P", self.scaffold_plugin),
+            ("reload_components", "Reload Component Code", "Ctrl+Shift+R", self.reload_components),
             ("export_config", "Export draft YAML…", "Ctrl+Shift+S", self.export_config),
             ("save_config", "Save configuration", "Ctrl+S", self.save_current_config),
             ("close_tab", "Close tab", "Ctrl+W", self.close_active_tab),
@@ -2304,17 +2308,66 @@ class Window(QMainWindow):
 
     def export_config(self):
         config = self.config()
-        path, _ = QFileDialog.getSaveFileName(self, "Export experiment recipe", f"{config.name}.yaml", "YAML (*.yaml)")
-        if path:
+        exp_target = getattr(self, "current_experiment", None)
+        if not exp_target and hasattr(self, "config_viewer") and getattr(self.config_viewer, "current_path", None):
+            cur = self.config_viewer.current_path
             try:
-                if hasattr(self, "config_viewer") and getattr(self.config_viewer, "raw_data", None):
-                    text = yaml.safe_dump(self.config_viewer.raw_data, sort_keys=False)
-                else:
-                    text = config.recipe_yaml()
-                Path(path).write_text(text, encoding="utf-8")
-                self.log(f"Exported configuration to {path}.")
-            except OSError as exc:
-                QMessageBox.warning(self, "Export failed", str(exc))
+                exp_target = str(cur.relative_to(PROJECT_ROOT / "in" / "config" / "experiment"))
+            except Exception:
+                exp_target = cur.stem
+        if not exp_target:
+            exp_target = getattr(config, "name", "experiment")
+
+        raw_yaml = None
+        if hasattr(self, "config_viewer") and getattr(self.config_viewer, "raw_data", None):
+            raw_yaml = yaml.safe_dump(self.config_viewer.raw_data, sort_keys=False)
+        elif hasattr(config, "recipe_yaml"):
+            raw_yaml = config.recipe_yaml()
+
+        dialog = ExportExperimentDialog(
+            experiment_id=str(exp_target),
+            workspace_root=PROJECT_ROOT,
+            raw_yaml_text=raw_yaml,
+            parent=self,
+        )
+        if dialog.exec():
+            if dialog.export_result and dialog.export_result.success:
+                res = dialog.export_result
+                self.log(f"Exported Theta Hub component package ({len(res.files_included)} files) to {res.archive_path}.")
+                QMessageBox.information(
+                    self,
+                    "Export Successful",
+                    f"Successfully exported experiment component package:\n\n{res.archive_path}\n\nBundled {len(res.files_included)} files (manifest, configs, rules, models).",
+                )
+            else:
+                self.log(f"Exported configuration to {dialog.edit_dest.text()}.")
+
+    def scaffold_plugin(self):
+        from .scaffold_dialog import ScaffoldPluginDialog
+        dialog = ScaffoldPluginDialog(workspace_root=PROJECT_ROOT, parent=self)
+        if dialog.exec() and dialog.scaffold_result and dialog.scaffold_result.success:
+            res = dialog.scaffold_result
+            self.log(f"Scaffolded {res.component_id} component plugin at {res.target_dir} ({len(res.created_files)} files).")
+            if hasattr(self, "components_panel") and hasattr(self.components_panel, "components_tree"):
+                self.components_panel.components_tree.refresh()
+            QMessageBox.information(
+                self,
+                "Scaffolding Successful",
+                f"Successfully scaffolded {res.component_id} component plugin!\n\nTarget directory: {res.target_dir}\nCreated {len(res.created_files)} files.",
+            )
+
+    def reload_components(self):
+        from src.app.core.hot_reload import reload_component_modules
+        reloaded = reload_component_modules()
+        msg = f"Hot-reloaded {len(reloaded)} component modules live."
+        self.log(msg)
+        if hasattr(self, "components_panel") and hasattr(self.components_panel, "components_tree"):
+            self.components_panel.components_tree.refresh()
+        QMessageBox.information(
+            self,
+            "Hot-Reload Complete",
+            f"{msg}\n\nRefreshed model, agent, and environment registries.",
+        )
 
     def log(self, message):
         if hasattr(self, "console"):

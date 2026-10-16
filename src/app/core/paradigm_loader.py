@@ -77,8 +77,29 @@ def _auto_discover_components():
             except Exception:
                 pass
 
+    # Dynamically discover user data modules, evaluators, and components in src/usr/
+    usr_dir = Path(__file__).resolve().parents[2] / "usr"
+    for sub in ["eval", "data"]:
+        sub_dir = usr_dir / sub
+        if not sub_dir.is_dir():
+            continue
+        for mod_path in sorted(sub_dir.rglob("*.py")):
+            if mod_path.name.startswith("_") or "__pycache__" in mod_path.parts:
+                continue
+            try:
+                rel = mod_path.relative_to(usr_dir.parent)
+                mod_name = ".".join(rel.with_suffix("").parts)
+                importlib.import_module(mod_name)
+            except Exception:
+                pass
+
+    # Discover components declared via pyproject.toml entry-points
     try:
-        importlib.import_module("src.usr.eval.early_prediction.data_module")
+        from src.app.core.plugin_discovery import discover_entry_points
+        for group in ("theta.datamodules", "theta.components"):
+            for comp_name, comp_cls in discover_entry_points(group).items():
+                if isinstance(comp_cls, type):
+                    register_component(comp_name)(comp_cls)
     except Exception:
         pass
 

@@ -1,0 +1,262 @@
+"""Export dialog for packaging Theta experiments into Hub components or standalone recipes."""
+from __future__ import annotations
+
+from pathlib import Path
+from typing import Optional
+
+from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import (
+    QButtonGroup,
+    QCheckBox,
+    QDialog,
+    QFileDialog,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QLineEdit,
+    QMessageBox,
+    QPushButton,
+    QRadioButton,
+    QVBoxLayout,
+    QWidget,
+)
+
+from src.app.services.experiment_exporter import ExperimentExporter, ExportOptions, ExportResult
+from .theme import theme_color
+from .widgets import label
+
+
+class ExportExperimentDialog(QDialog):
+    """Modal dialog allowing users to export an experiment as a Theta Hub package (.zip)
+    or as a standalone recipe YAML.
+    """
+
+    def __init__(
+        self,
+        experiment_id: str,
+        workspace_root: Path,
+        raw_yaml_text: Optional[str] = None,
+        parent: Optional[QWidget] = None,
+    ):
+        super().__init__(parent)
+        self.experiment_id = experiment_id.strip()
+        self.workspace_root = Path(workspace_root)
+        self.raw_yaml_text = raw_yaml_text
+        self.exporter = ExperimentExporter(workspace_root=self.workspace_root)
+        self.export_result: Optional[ExportResult] = None
+
+        self.setWindowTitle("Export Experiment")
+        self.setMinimumWidth(520)
+        self.setModal(True)
+        self._init_ui()
+
+    def _init_ui(self):
+        root_layout = QVBoxLayout(self)
+        root_layout.setContentsMargins(20, 20, 20, 20)
+        root_layout.setSpacing(16)
+
+        # Header
+        header = QVBoxLayout()
+        header.setSpacing(4)
+        title = QLabel("Export Experiment")
+        title.setStyleSheet("font-size: 16px; font-weight: 700;")
+        header.addWidget(title)
+
+        sub = QLabel(f"Export '{self.experiment_id}' for distribution via Theta Hub or standalone execution.")
+        sub.setStyleSheet(f"color: {theme_color('muted')}; font-size: 12px;")
+        sub.setWordWrap(True)
+        header.addWidget(sub)
+        root_layout.addLayout(header)
+
+        # Format Card
+        format_card = QFrame()
+        format_card.setObjectName("card")
+        format_layout = QVBoxLayout(format_card)
+        format_layout.setSpacing(10)
+
+        format_layout.addWidget(label("EXPORT FORMAT", "eyebrow"))
+
+        self.btn_group = QButtonGroup(self)
+        self.radio_zip = QRadioButton("Theta Hub Component Archive (.zip)")
+        self.radio_zip.setChecked(True)
+        self.radio_zip.setStyleSheet("font-weight: 600;")
+        self.btn_group.addButton(self.radio_zip)
+        format_layout.addWidget(self.radio_zip)
+
+        zip_hint = QLabel("Self-contained package with manifest (.theta_component.json), environment rules, and model dependencies. Ready for 1-click install in Theta Hub.")
+        zip_hint.setStyleSheet(f"color: {theme_color('muted')}; font-size: 11px; margin-left: 22px;")
+        zip_hint.setWordWrap(True)
+        format_layout.addWidget(zip_hint)
+
+        self.radio_yaml = QRadioButton("Standalone Recipe YAML (.yaml)")
+        self.btn_group.addButton(self.radio_yaml)
+        format_layout.addWidget(self.radio_yaml)
+
+        yaml_hint = QLabel("Exports only the configuration recipe YAML for manual reproduction.")
+        yaml_hint.setStyleSheet(f"color: {theme_color('muted')}; font-size: 11px; margin-left: 22px;")
+        format_layout.addWidget(yaml_hint)
+
+        root_layout.addWidget(format_card)
+
+        # Options Card (Archive contents)
+        self.options_card = QFrame()
+        self.options_card.setObjectName("card")
+        opts_layout = QVBoxLayout(self.options_card)
+        opts_layout.setSpacing(8)
+
+        opts_layout.addWidget(label("PACKAGE ASSETS", "eyebrow"))
+
+        self.chk_env = QCheckBox("Include environment configuration & custom rules")
+        self.chk_env.setChecked(True)
+        opts_layout.addWidget(self.chk_env)
+
+        self.chk_models = QCheckBox("Include custom model architecture definitions")
+        self.chk_models.setChecked(True)
+        opts_layout.addWidget(self.chk_models)
+
+        self.chk_checkpoints = QCheckBox("Include trained checkpoint weights (if available)")
+        self.chk_checkpoints.setChecked(False)
+        opts_layout.addWidget(self.chk_checkpoints)
+
+        root_layout.addWidget(self.options_card)
+
+        # Metadata Row (Version & Author)
+        self.meta_card = QFrame()
+        self.meta_card.setObjectName("card")
+        meta_layout = QHBoxLayout(self.meta_card)
+        meta_layout.setSpacing(12)
+
+        ver_col = QVBoxLayout()
+        ver_col.setSpacing(4)
+        ver_col.addWidget(label("VERSION", "eyebrow"))
+        self.edit_version = QLineEdit("1.0.0")
+        ver_col.addWidget(self.edit_version)
+        meta_layout.addLayout(ver_col)
+
+        author_col = QVBoxLayout()
+        author_col.setSpacing(4)
+        author_col.addWidget(label("AUTHOR", "eyebrow"))
+        self.edit_author = QLineEdit("Theta Researcher")
+        author_col.addWidget(self.edit_author)
+        meta_layout.addLayout(author_col)
+
+        root_layout.addWidget(self.meta_card)
+
+        # Output Destination Card
+        dest_card = QFrame()
+        dest_card.setObjectName("card")
+        dest_layout = QVBoxLayout(dest_card)
+        dest_layout.setSpacing(6)
+
+        dest_layout.addWidget(label("DESTINATION", "eyebrow"))
+
+        dest_row = QHBoxLayout()
+        dest_row.setSpacing(8)
+        self.edit_dest = QLineEdit()
+        self._update_default_destination()
+        dest_row.addWidget(self.edit_dest)
+
+        self.btn_browse = QPushButton("Browse…")
+        self.btn_browse.clicked.connect(self._on_browse_clicked)
+        dest_row.addWidget(self.btn_browse)
+        dest_layout.addLayout(dest_row)
+
+        root_layout.addWidget(dest_card)
+
+        # Format switch connection
+        self.radio_zip.toggled.connect(self._on_format_changed)
+
+        # Buttons
+        button_row = QHBoxLayout()
+        button_row.setSpacing(10)
+        button_row.addStretch()
+
+        self.btn_cancel = QPushButton("Cancel")
+        self.btn_cancel.clicked.connect(self.reject)
+        button_row.addWidget(self.btn_cancel)
+
+        self.btn_export = QPushButton("Export")
+        self.btn_export.setDefault(True)
+        self.btn_export.setStyleSheet(
+            f"background-color: {theme_color('accent')}; color: #ffffff; font-weight: 700; padding: 6px 16px;"
+        )
+        self.btn_export.clicked.connect(self._on_export_clicked)
+        button_row.addWidget(self.btn_export)
+
+        root_layout.addLayout(button_row)
+
+    def _update_default_destination(self):
+        clean_name = self.experiment_id.replace("/", "_").replace(".yaml", "")
+        if self.radio_zip.isChecked():
+            exports_dir = self.workspace_root / "results" / "exports"
+            exports_dir.mkdir(parents=True, exist_ok=True)
+            default_path = exports_dir / f"{clean_name}_v{self.edit_version.text().strip() or '1.0.0'}.zip"
+        else:
+            default_path = self.workspace_root / f"{clean_name}.yaml"
+        self.edit_dest.setText(str(default_path))
+
+    def _on_format_changed(self, zip_checked: bool):
+        self.options_card.setVisible(zip_checked)
+        self.meta_card.setVisible(zip_checked)
+        self._update_default_destination()
+
+    def _on_browse_clicked(self):
+        clean_name = self.experiment_id.replace("/", "_").replace(".yaml", "")
+        if self.radio_zip.isChecked():
+            path, _ = QFileDialog.getSaveFileName(
+                self,
+                "Export Theta Hub Component",
+                self.edit_dest.text() or f"{clean_name}.zip",
+                "Theta Package (*.zip)",
+            )
+        else:
+            path, _ = QFileDialog.getSaveFileName(
+                self,
+                "Export Recipe YAML",
+                self.edit_dest.text() or f"{clean_name}.yaml",
+                "YAML (*.yaml)",
+            )
+        if path:
+            self.edit_dest.setText(path)
+
+    def _on_export_clicked(self):
+        target_path_str = self.edit_dest.text().strip()
+        if not target_path_str:
+            QMessageBox.warning(self, "Invalid Path", "Please specify an export destination path.")
+            return
+
+        target_path = Path(target_path_str)
+
+        if self.radio_yaml.isChecked():
+            # Export YAML only
+            try:
+                target_path.parent.mkdir(parents=True, exist_ok=True)
+                if self.raw_yaml_text:
+                    content = self.raw_yaml_text
+                else:
+                    exp_yaml = self.workspace_root / "in" / "config" / "experiment" / f"{self.experiment_id}.yaml"
+                    content = exp_yaml.read_text(encoding="utf-8") if exp_yaml.is_file() else ""
+                target_path.write_text(content, encoding="utf-8")
+                self.accept()
+            except Exception as exc:
+                QMessageBox.warning(self, "Export Failed", f"Could not write YAML: {exc}")
+            return
+
+        # Export ZIP Hub Component
+        opts = ExportOptions(
+            include_checkpoints=self.chk_checkpoints.isChecked(),
+            include_environment=self.chk_env.isChecked(),
+            include_models=self.chk_models.isChecked(),
+            include_rules=self.chk_env.isChecked(),
+            output_path=target_path,
+            author=self.edit_author.text().strip() or "Theta Researcher",
+            version=self.edit_version.text().strip() or "1.0.0",
+        )
+
+        res = self.exporter.export(self.experiment_id, options=opts)
+        self.export_result = res
+
+        if res.success:
+            self.accept()
+        else:
+            QMessageBox.warning(self, "Export Failed", res.error or "Unknown error exporting experiment.")
