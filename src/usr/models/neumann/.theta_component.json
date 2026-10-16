@@ -1,0 +1,15 @@
+{
+  "id": "neumann",
+  "name": "NEUMANN Neural Symbolic Reasoner",
+  "kind": "model",
+  "version": "1.0.0",
+  "description": "Neuro-symbolic message passing reasoner over logic graphs.",
+  "author": {
+    "name": "Hikaru Shindo"
+  },
+  "target_path": "src/usr/models/neumann",
+  "config_path": "in/config/model/neumann.yaml",
+  "compatibility": {
+    "theta": ">=2.0.0"
+  }
+}

@@ -1,7 +1,16 @@
 import os
 from typing import Any
 
-import lightning as L
+try:
+    import lightning as L
+    _LightningBase = L.LightningModule
+except ImportError:
+    try:
+        import pytorch_lightning as L
+        _LightningBase = L.LightningModule
+    except ImportError:
+        L = None
+        _LightningBase = object
 import numpy as np
 import torch
 import torch.nn as nn
@@ -10,7 +19,11 @@ from torch.distributions.categorical import Categorical
 
 from src.app.core.types import ActionResult
 from src.usr.methods.agent_registry import register_agent
-from src.usr.methods.base_agent import BaseAgent
+try:
+    from src.usr.methods.base_agent import BaseAgent
+except ImportError:
+    class BaseAgent(_LightningBase):
+        pass
 
 
 class StandardModelActorCriticWrapper(nn.Module):

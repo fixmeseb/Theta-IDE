@@ -230,8 +230,8 @@ def get_model_candidate_hyperparameters(
     candidates: list[str] = []
     if tree:
         model_params = tree.model_parameters(model_name)
-        for k, v in model_params.items():
-            if k not in ("architecture", "type", "lightning_module", "name", "slots") and not isinstance(v, dict):
+        for k in model_params:
+            if k not in ("architecture", "type", "lightning_module", "name", "slots"):
                 if k not in current_keys and k not in candidates:
                     candidates.append(k)
     if not candidates:
@@ -2679,27 +2679,71 @@ class ConfigViewer(QWidget):
                                 val = model_inner[mk]
                             if val is not None:
                                 model_keys_present.add(mk)
-                                row_mp = QHBoxLayout()
-                                if isinstance(val, bool):
-                                    cb_mp = ToggleSlider(checked=val)
-                                    cb_mp.toggled.connect(lambda v, mn=m_name, pk=mk: self._on_method_param_edited(mn, pk, v))
-                                    row_mp.addWidget(cb_mp)
-                                elif isinstance(val, (int, float)):
-                                    spin_mp = number_field(val)
-                                    spin_mp.setMaximumWidth(NUMBER_FIELD_WIDTH)
-                                    spin_mp.valueChanged.connect(lambda v, mn=m_name, pk=mk: self._on_method_param_edited(mn, pk, v))
-                                    row_mp.addWidget(spin_mp)
+                                if isinstance(val, dict):
+                                    sub_block = IndentedHierarchyBlock(level=2)
+                                    hdr_grp = QHBoxLayout()
+                                    hdr_grp.addWidget(label(f"[{mk}]", "muted"))
+                                    hdr_grp.addStretch()
+                                    btn_del_grp = _make_subtle_tool_button("close", f"Remove parameter group '{mk}'", size=20, icon_size=12)
+                                    btn_del_grp.clicked.connect(lambda _, mn=m_name, pk=mk: self._remove_method_param(mn, pk))
+                                    hdr_grp.addWidget(btn_del_grp)
+                                    model_rows.append(("", hdr_grp))
+                                    for nk, nv in val.items():
+                                        row_n = QHBoxLayout()
+                                        if isinstance(nv, bool):
+                                            cb_n = ToggleSlider(checked=nv)
+                                            cb_n.toggled.connect(lambda v, mn=m_name, pk=mk, ck=nk: self._on_method_nested_param_edited(mn, pk, ck, v))
+                                            row_n.addWidget(cb_n)
+                                        elif isinstance(nv, (int, float)):
+                                            spin_n = number_field(nv)
+                                            spin_n.setMaximumWidth(NUMBER_FIELD_WIDTH)
+                                            spin_n.valueChanged.connect(lambda v, mn=m_name, pk=mk, ck=nk: self._on_method_nested_param_edited(mn, pk, ck, v))
+                                            row_n.addWidget(spin_n)
+                                        elif isinstance(nv, list):
+                                            line_n = QLineEdit(str(list(nv)))
+                                            line_n.setMaximumWidth(TEXT_FIELD_WIDTH)
+                                            line_n.textChanged.connect(lambda v, mn=m_name, pk=mk, ck=nk: self._on_method_nested_param_edited(mn, pk, ck, v))
+                                            row_n.addWidget(line_n)
+                                        else:
+                                            line_n = QLineEdit(str(nv if nv is not None else ""))
+                                            line_n.setMaximumWidth(TEXT_FIELD_WIDTH)
+                                            line_n.textChanged.connect(lambda v, mn=m_name, pk=mk, ck=nk: self._on_method_nested_param_edited(mn, pk, ck, v))
+                                            row_n.addWidget(line_n)
+                                        btn_del_nk = _make_subtle_tool_button("close", f"Remove '{nk}'", size=20, icon_size=12)
+                                        btn_del_nk.clicked.connect(lambda _, mn=m_name, pk=mk, ck=nk: self._remove_method_nested_param(mn, pk, ck))
+                                        row_n.addWidget(btn_del_nk)
+                                        row_n.addStretch()
+                                        sub_block.addRow(str(nk), row_n)
+                                    model_rows.append(("", sub_block))
                                 else:
-                                    line_mp = QLineEdit(str(val))
-                                    line_mp.setMaximumWidth(TEXT_FIELD_WIDTH)
-                                    line_mp.textChanged.connect(
-                                        lambda v, mn=m_name, pk=mk: self._on_method_param_edited(mn, pk, v)
-                                    )
-                                    row_mp.addWidget(line_mp)
-                                btn_del_mp = _make_subtle_tool_button("close", f"Remove '{mk}'", size=20, icon_size=12)
-                                btn_del_mp.clicked.connect(lambda _, mn=m_name, pk=mk: self._remove_method_param(mn, pk))
-                                row_mp.addWidget(btn_del_mp)
-                                model_rows.append((str(mk), row_mp))
+                                    row_mp = QHBoxLayout()
+                                    if isinstance(val, bool):
+                                        cb_mp = ToggleSlider(checked=val)
+                                        cb_mp.toggled.connect(lambda v, mn=m_name, pk=mk: self._on_method_param_edited(mn, pk, v))
+                                        row_mp.addWidget(cb_mp)
+                                    elif isinstance(val, (int, float)):
+                                        spin_mp = number_field(val)
+                                        spin_mp.setMaximumWidth(NUMBER_FIELD_WIDTH)
+                                        spin_mp.valueChanged.connect(lambda v, mn=m_name, pk=mk: self._on_method_param_edited(mn, pk, v))
+                                        row_mp.addWidget(spin_mp)
+                                    elif isinstance(val, list):
+                                        line_mp = QLineEdit(str(list(val)))
+                                        line_mp.setMaximumWidth(TEXT_FIELD_WIDTH)
+                                        line_mp.textChanged.connect(
+                                            lambda v, mn=m_name, pk=mk: self._on_method_param_edited(mn, pk, v)
+                                        )
+                                        row_mp.addWidget(line_mp)
+                                    else:
+                                        line_mp = QLineEdit(str(val))
+                                        line_mp.setMaximumWidth(TEXT_FIELD_WIDTH)
+                                        line_mp.textChanged.connect(
+                                            lambda v, mn=m_name, pk=mk: self._on_method_param_edited(mn, pk, v)
+                                        )
+                                        row_mp.addWidget(line_mp)
+                                    btn_del_mp = _make_subtle_tool_button("close", f"Remove '{mk}'", size=20, icon_size=12)
+                                    btn_del_mp.clicked.connect(lambda _, mn=m_name, pk=mk: self._remove_method_param(mn, pk))
+                                    row_mp.addWidget(btn_del_mp)
+                                    model_rows.append((str(mk), row_mp))
 
                         if show_mo_defs:
                             for mk in sorted(model_keys):
@@ -3453,73 +3497,211 @@ class ConfigViewer(QWidget):
             self.boxes_layout.addWidget(box)
 
     def _render_generic_boxes(self):
-        """Render clean boxes for modular YAML configs (agent/*.yaml, env/*.yaml, etc.)."""
+        """Render clean boxes for modular YAML configs (agent/*.yaml, env/*.yaml, model/*.yaml, etc.)."""
         self.paradigm_badge.hide()
         data = self.raw_data
 
-        scalars = {k: v for k, v in data.items() if not isinstance(v, (dict, list))}
-        complex_items = {k: v for k, v in data.items() if isinstance(v, (dict, list))}
-
         stem = self.current_path.stem if self.current_path else ""
-        filtered_scalars = {}
-        for k, v in scalars.items():
+        leaf_params = {}
+        nested_sections = {}
+
+        for k, v in data.items():
             if k in ("name", "algorithm", "architecture", "reasoner", "experiment_id", "id"):
                 continue
             if k in ("type", "env_id") and str(v).lower() == stem.lower():
                 continue
             if isinstance(v, str) and v.lower() == stem.lower() and k in ("model", "agent"):
                 continue
-            filtered_scalars[k] = v
+            if isinstance(v, dict):
+                nested_sections[k] = v
+            else:
+                leaf_params[k] = v
 
-        if filtered_scalars:
-            box_props = ConfigBox("Parameters", f"Primary settings in {self.current_path.stem}")
+        # --- Parameters Card (Scalars and Lists) ---
+        box_props = ConfigBox()
+        hdr_layout = QHBoxLayout()
+        hdr_layout.setSpacing(8)
+        lbl_card_title = label("Parameters", "cardTitle")
+        hdr_layout.addWidget(lbl_card_title)
+        hdr_layout.addWidget(label(f"Settings in {stem}", "muted"))
+        hdr_layout.addStretch()
+
+        btn_add_p = _make_subtle_tool_button("plus", "Add parameter", size=22, icon_size=12)
+        btn_add_p.clicked.connect(self._prompt_add_generic_leaf_param)
+        hdr_layout.addWidget(btn_add_p)
+        box_props.add_layout(hdr_layout)
+
+        if leaf_params:
             form = QFormLayout()
             form.setVerticalSpacing(8)
-            for k, v in filtered_scalars.items():
+            for k, v in leaf_params.items():
+                row = QHBoxLayout()
+                row.setSpacing(8)
                 if isinstance(v, bool):
                     chk = ToggleSlider(checked=v)
                     chk.toggled.connect(lambda val, key=k: self._on_field_edited(key, val))
-                    form.addRow(k, chk)
+                    row.addWidget(chk)
                 elif isinstance(v, (int, float)):
                     spin = number_field(v)
+                    spin.setMaximumWidth(NUMBER_FIELD_WIDTH)
                     spin.valueChanged.connect(lambda val, key=k: self._on_field_edited(key, val))
-                    form.addRow(k, spin)
+                    row.addWidget(spin)
+                elif isinstance(v, list):
+                    txt = QLineEdit(str(list(v)))
+                    txt.setMaximumWidth(TEXT_FIELD_WIDTH + 80)
+                    txt.setToolTip("YAML list, e.g. [64, 64]")
+                    txt.textChanged.connect(lambda val, key=k: self._on_field_edited(key, _parse_yaml_value(val)))
+                    row.addWidget(txt)
                 else:
                     txt = QLineEdit(str(v if v is not None else ""))
-                    txt.textChanged.connect(lambda val, key=k: self._on_field_edited(key, val))
-                    form.addRow(k, txt)
+                    txt.setMaximumWidth(TEXT_FIELD_WIDTH)
+                    txt.textChanged.connect(lambda val, key=k: self._on_field_edited(key, _parse_yaml_value(val)))
+                    row.addWidget(txt)
+                btn_del = _make_subtle_tool_button("close", f"Remove '{k}'", size=20, icon_size=12)
+                btn_del.clicked.connect(lambda _, key=k: self._remove_generic_field(key))
+                row.addWidget(btn_del)
+                row.addStretch()
+                form.addRow(k, row)
             box_props.add_layout(form)
-            self.boxes_layout.addWidget(box_props)
+        else:
+            empty_row = QHBoxLayout()
+            empty_row.addWidget(label("No parameters configured. Click '+' to add one.", "muted"))
+            empty_row.addStretch()
+            box_props.add_layout(empty_row)
 
-        for section_name, section_val in complex_items.items():
-            box_sec = ConfigBox(section_name, f"Section: {section_name}")
+        self.boxes_layout.addWidget(box_props)
+
+        # --- Nested Sections (Hierarchical Parameters) ---
+        for section_name, section_val in nested_sections.items():
+            box_sec = ConfigBox()
+            sec_hdr = QHBoxLayout()
+            sec_hdr.setSpacing(8)
+            sec_hdr.addWidget(label(section_name, "cardTitle"))
+            sec_hdr.addStretch()
+
+            btn_add_sec_p = _make_subtle_tool_button("plus", f"Add parameter to '{section_name}'", size=22, icon_size=12)
+            btn_add_sec_p.clicked.connect(lambda _, sn=section_name: self._prompt_add_nested_generic_param((sn,)))
+            sec_hdr.addWidget(btn_add_sec_p)
+
+            btn_del_sec = _make_subtle_tool_button("close", f"Remove section '{section_name}'", size=22, icon_size=12)
+            btn_del_sec.clicked.connect(lambda _, sn=section_name: self._remove_generic_field(sn))
+            sec_hdr.addWidget(btn_del_sec)
+            box_sec.add_layout(sec_hdr)
+
             if isinstance(section_val, dict):
                 form_sec = QFormLayout()
                 form_sec.setVerticalSpacing(8)
-                for sk, sv in section_val.items():
-                    if isinstance(sv, bool):
-                        slider = ToggleSlider(checked=sv)
-                        slider.toggled.connect(lambda val, s=section_name, k=sk: self._on_nested_edited(s, k, val))
-                        form_sec.addRow(sk, slider)
-                    elif isinstance(sv, (int, float, str)):
-                        line = QLineEdit(str(sv))
-                        line.textChanged.connect(lambda val, s=section_name, k=sk: self._on_nested_edited(s, k, val))
-                        form_sec.addRow(sk, line)
-                    else:
-                        form_sec.addRow(sk, label(str(sv), "muted"))
+                self._render_generic_dict_contents(form_sec, section_val, (section_name,), level=1)
                 box_sec.add_layout(form_sec)
-            elif isinstance(section_val, list):
-                lbl = label(", ".join(str(item) for item in section_val), "muted")
-                lbl.setWordWrap(True)
-                box_sec.add_widget(lbl)
             self.boxes_layout.addWidget(box_sec)
+
+    def _render_generic_dict_contents(self, parent_layout, d: dict, path: tuple[str, ...], level: int = 1):
+        """Recursively render hierarchical nested dictionary contents in the generic component viewer."""
+        for k, v in d.items():
+            if isinstance(v, dict):
+                sub_block = IndentedHierarchyBlock(level=level)
+                sub_hdr = QHBoxLayout()
+                sub_hdr.addWidget(label(f"[{k}]", "muted"))
+                sub_hdr.addStretch()
+                btn_add_sub = _make_subtle_tool_button("plus", f"Add parameter to '{k}'", size=20, icon_size=12)
+                btn_add_sub.clicked.connect(lambda _, p=path + (k,): self._prompt_add_nested_generic_param(p))
+                sub_hdr.addWidget(btn_add_sub)
+                btn_del_sub = _make_subtle_tool_button("close", f"Remove '{k}'", size=20, icon_size=12)
+                btn_del_sub.clicked.connect(lambda _, p=path + (k,): self._remove_generic_path(p))
+                sub_hdr.addWidget(btn_del_sub)
+
+                sub_block.addRow("", sub_hdr)
+                self._render_generic_dict_contents(sub_block, v, path + (k,), level=level + 1)
+                parent_layout.addRow("", sub_block)
+            else:
+                row = QHBoxLayout()
+                row.setSpacing(8)
+                if isinstance(v, bool):
+                    chk = ToggleSlider(checked=v)
+                    chk.toggled.connect(lambda val, p=path + (k,): self._on_generic_path_edited(p, val))
+                    row.addWidget(chk)
+                elif isinstance(v, (int, float)):
+                    spin = number_field(v)
+                    spin.setMaximumWidth(NUMBER_FIELD_WIDTH)
+                    spin.valueChanged.connect(lambda val, p=path + (k,): self._on_generic_path_edited(p, val))
+                    row.addWidget(spin)
+                elif isinstance(v, list):
+                    txt = QLineEdit(str(list(v)))
+                    txt.setMaximumWidth(TEXT_FIELD_WIDTH + 80)
+                    txt.setToolTip("YAML list, e.g. [64, 64]")
+                    txt.textChanged.connect(lambda val, p=path + (k,): self._on_generic_path_edited(p, _parse_yaml_value(val)))
+                    row.addWidget(txt)
+                else:
+                    txt = QLineEdit(str(v if v is not None else ""))
+                    txt.setMaximumWidth(TEXT_FIELD_WIDTH)
+                    txt.textChanged.connect(lambda val, p=path + (k,): self._on_generic_path_edited(p, _parse_yaml_value(val)))
+                    row.addWidget(txt)
+                btn_del = _make_subtle_tool_button("close", f"Remove '{k}'", size=20, icon_size=12)
+                btn_del.clicked.connect(lambda _, p=path + (k,): self._remove_generic_path(p))
+                row.addWidget(btn_del)
+                row.addStretch()
+                parent_layout.addRow(k, row)
+
+    def _prompt_add_generic_leaf_param(self):
+        """Prompt user to add a new parameter to the component configuration."""
+        key, ok = QInputDialog.getText(self, "Add Parameter", "Parameter name:")
+        if not ok or not key.strip():
+            return
+        key = key.strip()
+        val_str, ok2 = QInputDialog.getText(self, "Parameter Value", f"Initial value for '{key}':")
+        if not ok2:
+            return
+        self.raw_data[key] = _parse_yaml_value(val_str)
+        self._mark_dirty()
+        self._render_boxes()
+
+    def _prompt_add_nested_generic_param(self, path: tuple[str, ...]):
+        """Prompt user to add a new parameter inside a nested section."""
+        path_str = ".".join(path)
+        key, ok = QInputDialog.getText(self, "Add Parameter", f"Parameter name inside '{path_str}':")
+        if not ok or not key.strip():
+            return
+        key = key.strip()
+        val_str, ok2 = QInputDialog.getText(self, "Parameter Value", f"Initial value for '{key}':")
+        if not ok2:
+            return
+        self._on_generic_path_edited(path + (key,), _parse_yaml_value(val_str))
+        self._render_boxes()
+
+    def _on_generic_path_edited(self, path: tuple[str, ...], value: Any):
+        if self._block_updates or not path:
+            return
+        cur = self.raw_data
+        for p in path[:-1]:
+            if p not in cur or not isinstance(cur[p], dict):
+                cur[p] = {}
+            cur = cur[p]
+        cur[path[-1]] = _parse_yaml_value(value) if isinstance(value, str) else value
+        self._mark_dirty()
+
+    def _remove_generic_field(self, key: str):
+        self.raw_data.pop(key, None)
+        self._mark_dirty()
+        self._render_boxes()
+
+    def _remove_generic_path(self, path: tuple[str, ...]):
+        if not path:
+            return
+        cur = self.raw_data
+        for p in path[:-1]:
+            if p not in cur or not isinstance(cur[p], dict):
+                return
+            cur = cur[p]
+        cur.pop(path[-1], None)
+        self._mark_dirty()
+        self._render_boxes()
 
     # ── Edit Handlers ──────────────────────────────────────────────────────────
 
     def _on_field_edited(self, key, value):
         if self._block_updates:
             return
-        self.raw_data[key] = value
+        self.raw_data[key] = _parse_yaml_value(value) if isinstance(value, str) else value
         self._mark_dirty()
 
     def _validate_method_name(self, name: str, existing_names: set[str]) -> str | None:
@@ -3765,6 +3947,36 @@ class ConfigViewer(QWidget):
                 return
         m_spec[param_key] = parsed_val
         self._mark_dirty()
+
+    def _on_method_nested_param_edited(self, method_name: str, parent_key: str, child_key: str, value: Any):
+        if self._block_updates:
+            return
+        methods = self.raw_data.setdefault("methods", {})
+        m_spec = methods.setdefault(method_name, {})
+        parsed_val = _parse_yaml_value(value) if isinstance(value, str) else value
+        if isinstance(m_spec.get("model"), dict):
+            model_name = next(iter(m_spec["model"]))
+            m_dict = m_spec["model"].setdefault(model_name, {})
+            if parent_key in m_dict and isinstance(m_dict[parent_key], dict):
+                m_dict[parent_key][child_key] = parsed_val
+                self._mark_dirty()
+                return
+        if parent_key not in m_spec or not isinstance(m_spec[parent_key], dict):
+            m_spec[parent_key] = {}
+        m_spec[parent_key][child_key] = parsed_val
+        self._mark_dirty()
+
+    def _remove_method_nested_param(self, method_name: str, parent_key: str, child_key: str):
+        methods = self.raw_data.get("methods", {})
+        m_spec = methods.get(method_name, {})
+        if isinstance(m_spec.get("model"), dict):
+            for m_dict in m_spec["model"].values():
+                if isinstance(m_dict, dict) and parent_key in m_dict and isinstance(m_dict[parent_key], dict):
+                    m_dict[parent_key].pop(child_key, None)
+        if parent_key in m_spec and isinstance(m_spec[parent_key], dict):
+            m_spec[parent_key].pop(child_key, None)
+        self._mark_dirty()
+        self._render_boxes()
 
     def _browse_dataset_path(self):
         """Open file dialog to select a dataset file or directory."""

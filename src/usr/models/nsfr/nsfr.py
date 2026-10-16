@@ -2,9 +2,11 @@ import numpy as np
 import torch
 import torch.nn as nn
 
+from src.app.core.model_registry import register_model
 from nsfr.utils.logic import get_index_by_predname
 
 
+@register_model("nsfr")
 class NSFReasoner(nn.Module):
     """The Neuro-Symbolic Forward Reasoner.
 

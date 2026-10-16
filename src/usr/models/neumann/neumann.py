@@ -1,12 +1,18 @@
 import numpy as np
 import torch
 import torch.nn as nn
-from torch_geometric.data import Batch, Data
+try:
+    from torch_geometric.data import Batch, Data
+except (ImportError, Exception):
+    Batch = None
+    Data = None
 
+from src.app.core.model_registry import register_model
 from neumann.logic_utils import add_true_atoms, get_index_by_predname, true
 from neumann.torch_utils import softor
 
 
+@register_model("neumann")
 class NEUMANN(nn.Module):
     """The Neuro-Sybolic Message Passing Reasoner (NEUMANN)  ʕ•̀ω•́ʔ✧
 
