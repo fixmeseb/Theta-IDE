@@ -49,7 +49,7 @@ def test_find_component_assets_multi_config_suite(tmp_path):
     env_py = ws / "in" / "envs" / "atari" / "env_vectorized.py"
     env_py.write_text("# atari code")
 
-    # Create manifest
+    # Create manifest with installed_from to simulate a Hub-installed package
     meta_file = ws / "in" / "envs" / "atari" / ".theta_component.json"
     import json
     meta_file.write_text(json.dumps({
@@ -57,6 +57,7 @@ def test_find_component_assets_multi_config_suite(tmp_path):
         "name": "Atari 2600 Environment Suite",
         "kind": "env",
         "version": "1.0.0",
+        "installed_from": "https://raw.githubusercontent.com/theta-hub/packages/atari.zip",
         "target_path": "in/envs/atari",
         "config_paths": [
             "in/config/env/atari/pong.yaml",
@@ -66,12 +67,47 @@ def test_find_component_assets_multi_config_suite(tmp_path):
 
     assets = find_component_assets(c1, "env/atari/pong.yaml", workspace_dir=ws)
     assert assets["is_component"] is True
+    assert assets["is_hub_installed"] is True
     assert assets["action_type"] == "uninstall"
     assert assets["comp_name"] == "Atari 2600 Environment Suite"
     assert assets["primary_code_file"] == env_py
     assert ws / "in" / "envs" / "atari" in assets["files_to_delete"]
     assert c1 in assets["files_to_delete"]
     assert c2 in assets["files_to_delete"]
+
+
+def test_find_component_assets_local_scaffolded_component(tmp_path):
+    """Test resolving a locally scaffolded component (not installed from Hub)."""
+    ws = tmp_path / "workspace_local"
+    ws.mkdir()
+    (ws / "in" / "config" / "model").mkdir(parents=True)
+    (ws / "src" / "usr" / "models" / "myfirstmlp").mkdir(parents=True)
+
+    cfg = ws / "in" / "config" / "model" / "myfirstmlp.yaml"
+    cfg.write_text("type: myfirstmlp\n")
+
+    code_py = ws / "src" / "usr" / "models" / "myfirstmlp" / "myfirstmlp_model.py"
+    code_py.write_text("# myfirstmlp code")
+
+    # Local manifest without installed_from
+    meta_file = ws / "src" / "usr" / "models" / "myfirstmlp" / ".theta_component.json"
+    import json
+    meta_file.write_text(json.dumps({
+        "id": "myfirstmlp",
+        "name": "MyfirstmlpModel",
+        "kind": "model",
+        "version": "0.1.0",
+        "target_path": "src/usr/models/myfirstmlp",
+        "config_path": "in/config/model/myfirstmlp.yaml",
+    }))
+
+    assets = find_component_assets(cfg, "model/myfirstmlp.yaml", workspace_dir=ws)
+    assert assets["is_component"] is True
+    assert assets["is_hub_installed"] is False
+    assert assets["action_type"] == "delete_component"
+    assert assets["primary_code_file"] == code_py
+    assert ws / "src" / "usr" / "models" / "myfirstmlp" in assets["files_to_delete"]
+    assert cfg in assets["files_to_delete"]
 
 
 def test_find_component_assets_loose_config(tmp_path):
@@ -86,6 +122,7 @@ def test_find_component_assets_loose_config(tmp_path):
 
     assets = find_component_assets(cfg, "agent/my_custom_loose_agent.yaml", workspace_dir=ws)
     assert assets["is_component"] is False
+    assert assets["is_hub_installed"] is False
     assert assets["action_type"] == "delete_config"
     assert assets["files_to_delete"] == [cfg]
 
@@ -93,16 +130,20 @@ def test_find_component_assets_loose_config(tmp_path):
 def test_delete_component_dialog(qapp, tmp_path):
     """Test DeleteComponentDialog interactions."""
     files = [tmp_path / "foo.yaml", tmp_path / "src" / "foo"]
-    dlg = DeleteComponentDialog("test_comp", files, is_component=True)
 
-    assert "Uninstall" in dlg.windowTitle()
-    assert dlg.dont_ask_again is False
+    # Local component: should say "Delete Component"
+    dlg_local = DeleteComponentDialog("myfirstmlp", files, is_component=True, is_hub_installed=False)
+    assert "Delete Component" in dlg_local.windowTitle()
+    assert dlg_local.dont_ask_again is False
+    dlg_local.chk_dont_ask.setChecked(True)
+    dlg_local._on_confirm()
+    assert dlg_local.dont_ask_again is True
+    dlg_local.deleteLater()
 
-    # Toggle checkbox
-    dlg.chk_dont_ask.setChecked(True)
-    dlg._on_confirm()
-    assert dlg.dont_ask_again is True
-    dlg.deleteLater()
+    # Hub component: should say "Uninstall Component"
+    dlg_hub = DeleteComponentDialog("Atari", files, is_component=True, is_hub_installed=True)
+    assert "Uninstall Component" in dlg_hub.windowTitle()
+    dlg_hub.deleteLater()
 
 
 def test_config_viewer_component_buttons(qapp, tmp_path):

@@ -168,6 +168,8 @@ class ComponentsPanel(QWidget):
             is_comp = assets["is_component"]
             target_code = assets["primary_code_file"]
 
+            is_hub = assets.get("is_hub_installed", False)
+
             if hasattr(self.viewer, "btn_edit_code"):
                 if target_code and target_code.is_file():
                     self.viewer.btn_edit_code.setToolTip(f"Open {target_code.name} in editor")
@@ -175,8 +177,10 @@ class ComponentsPanel(QWidget):
                     self.viewer.btn_edit_code.setToolTip(f"Open {comp_name} source code in editor")
 
             if hasattr(self.viewer, "btn_delete_component"):
-                if is_comp:
+                if is_hub:
                     self.viewer.btn_delete_component.setToolTip(f"Uninstall {comp_name} and remove all files")
+                elif is_comp:
+                    self.viewer.btn_delete_component.setToolTip(f"Delete component {comp_name} and all its files")
                 else:
                     self.viewer.btn_delete_component.setToolTip(f"Delete configuration {self.active_path.name}")
         except Exception:
@@ -233,6 +237,7 @@ class ComponentsPanel(QWidget):
         comp_name = assets["comp_name"]
         files_to_delete = assets["files_to_delete"]
         is_comp = assets["is_component"]
+        is_hub = assets.get("is_hub_installed", False)
 
         # Check settings for confirm_delete
         settings = self.get_settings_manager()
@@ -241,7 +246,9 @@ class ComponentsPanel(QWidget):
             should_confirm = bool(settings.get("components", "confirm_delete", default=True))
 
         if should_confirm:
-            dlg = DeleteComponentDialog(comp_name, files_to_delete, is_component=is_comp, parent=self)
+            dlg = DeleteComponentDialog(
+                comp_name, files_to_delete, is_component=is_comp, is_hub_installed=is_hub, parent=self
+            )
             if dlg.exec() != QDialog.DialogCode.Accepted:
                 return
             if dlg.dont_ask_again and settings is not None:
@@ -252,7 +259,7 @@ class ComponentsPanel(QWidget):
         installer = self.components_tree._get_installer() if hasattr(self.components_tree, "_get_installer") else None
 
         # If it is a managed Hub component with metadata, uninstall via installer
-        if is_comp and assets.get("meta") and installer:
+        if is_hub and assets.get("meta") and installer:
             try:
                 installer.uninstall_by_metadata(assets["meta"], remove_configs=True)
                 deleted_count = len(files_to_delete)
@@ -280,7 +287,7 @@ class ComponentsPanel(QWidget):
         # Notify plugin manager if this was an active plugin
         w = self.window()
         plugin_mgr = getattr(w, "plugin_manager", None)
-        if plugin_mgr is not None and is_comp:
+        if plugin_mgr is not None and is_hub:
             comp_id = assets.get("comp_id")
             if comp_id:
                 try:
@@ -288,7 +295,7 @@ class ComponentsPanel(QWidget):
                 except Exception:
                     pass
 
-        action_desc = "Uninstalled component" if is_comp else "Deleted configuration"
+        action_desc = "Uninstalled component" if is_hub else ("Deleted component" if is_comp else "Deleted configuration")
         self.log_fn(f"{action_desc} '{comp_name}' and all associated files.")
 
         # Reload components tree and auto-select fallback

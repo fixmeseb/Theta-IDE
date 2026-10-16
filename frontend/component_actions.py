@@ -172,7 +172,8 @@ def find_component_assets(
             elif (code_dir / "__init__.py").is_file():
                 primary_code_file = code_dir / "__init__.py"
 
-    action_type = "uninstall" if is_component else "delete_config"
+    is_hub_installed = bool(meta and meta.get("installed_from"))
+    action_type = "uninstall" if is_hub_installed else ("delete_component" if is_component else "delete_config")
 
     return {
         "comp_id": comp_id,
@@ -183,6 +184,7 @@ def find_component_assets(
         "primary_code_file": primary_code_file or code_dir or cfg,
         "files_to_delete": files_to_delete,
         "is_component": is_component,
+        "is_hub_installed": is_hub_installed,
         "action_type": action_type,
         "meta": meta,
     }
@@ -253,15 +255,20 @@ class DeleteComponentDialog(QDialog):
         comp_name: str,
         files_to_delete: List[Path],
         is_component: bool = True,
+        is_hub_installed: bool = False,
         parent=None,
     ):
         super().__init__(parent)
         self.is_component = is_component
+        self.is_hub_installed = is_hub_installed
         self.dont_ask_again = False
 
-        if is_component:
+        if is_hub_installed:
             self.setWindowTitle("Uninstall Component")
             action_verb = "Uninstall"
+        elif is_component:
+            self.setWindowTitle("Delete Component")
+            action_verb = "Delete"
         else:
             self.setWindowTitle("Delete Configuration")
             action_verb = "Delete"
@@ -277,21 +284,33 @@ class DeleteComponentDialog(QDialog):
         layout.addWidget(title)
 
         configs_count = len([f for f in files_to_delete if f.is_file() and f.suffix in (".yaml", ".yml")])
-        if is_component:
+        if is_hub_installed:
             if configs_count > 1:
                 desc_text = (
-                    f"This file is part of the installed component <b>{comp_name}</b>, which provides "
+                    f"This file is part of the Hub-installed component suite <b>{comp_name}</b>, which provides "
                     f"<b>{configs_count} configurations</b>.<br><br>"
                     f"Uninstalling will remove the entire component suite, including its source code and all configurations:"
                 )
             else:
                 desc_text = (
-                    f"Are you sure you want to uninstall component <b>{comp_name}</b>?<br>"
+                    f"Are you sure you want to uninstall Hub component <b>{comp_name}</b>?<br>"
                     "This action cannot be undone. Its source code directory and configuration will be permanently removed:"
+                )
+        elif is_component:
+            if configs_count > 1:
+                desc_text = (
+                    f"This file is part of local component <b>{comp_name}</b>, which provides "
+                    f"<b>{configs_count} configurations</b>.<br><br>"
+                    f"Are you sure you want to delete this component, including its source code directory and all configurations?"
+                )
+            else:
+                desc_text = (
+                    f"Are you sure you want to delete component <b>{comp_name}</b>?<br>"
+                    "This action cannot be undone. Its source code directory and configuration file will be permanently deleted:"
                 )
         else:
             desc_text = (
-                f"Are you sure you want to delete configuration <b>{comp_name}</b>?<br>"
+                f"Are you sure you want to delete configuration <b>'{comp_name}'</b>?<br>"
                 "This action cannot be undone. The configuration file will be permanently removed from disk:"
             )
 

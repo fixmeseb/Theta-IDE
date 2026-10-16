@@ -205,6 +205,7 @@ class {class_name}(nn.Module):
         self.num_in_features = obs_dim
         hidden_sizes = hidden_sizes or [64, 64]
 
+        # ── Feature Extractor Backbone ──────────────────────────────
         layers = []
         prev = obs_dim
         for h in hidden_sizes:
@@ -212,18 +213,27 @@ class {class_name}(nn.Module):
             layers.append(nn.ReLU())
             prev = h
         self.features = nn.Sequential(*layers)
+
+        # ── Output Heads (Actor & Critic) ───────────────────────────
         self.actor = nn.Linear(prev, n_actions)
         self.critic = nn.Linear(prev, 1)
 
     def forward(self, obs: torch.Tensor, **kwargs: Any) -> torch.Tensor:
+        """Forward pass: returns raw action logits."""
         feat = self.features(obs.float().reshape(obs.shape[0], -1))
         return self.actor(feat)
 
+    # ── RL Algorithm Protocol Methods (PPO, CQL, IQL) ───────────────
+    # These methods allow this model to be used directly as an actor-critic
+    # policy across Theta-IDE's online and offline RL algorithms.
+
     def get_value(self, obs: torch.Tensor, **kwargs: Any) -> torch.Tensor:
+        """Returns baseline state value V(s) for advantage estimation."""
         feat = self.features(obs.float().reshape(obs.shape[0], -1))
         return self.critic(feat)
 
     def get_action_and_value(self, obs: torch.Tensor, action: torch.Tensor = None) -> ActionResult:
+        """Sample action, calculate log probability, entropy, and baseline value."""
         feat = self.features(obs.float().reshape(obs.shape[0], -1))
         logits = self.actor(feat)
         probs = Categorical(logits=logits)
@@ -237,6 +247,7 @@ class {class_name}(nn.Module):
         )
 
     def get_action_probs(self, obs: torch.Tensor) -> torch.Tensor:
+        """Return normalized probability distribution over discrete actions."""
         logits = self.forward(obs)
         return torch.softmax(logits, dim=-1)
 '''
