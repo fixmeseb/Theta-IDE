@@ -61,41 +61,34 @@ class PPOAgent(BaseAgent):
         default_rules = self.get_cfg("rules", "default")
         default_reasoner = self.get_cfg("reasoner", "nsfr")
         default_arch = self.get_cfg("architecture", "mlp")
+        model_arch = self.resolve_model_name(default="blendrl" if self.is_modular else default_arch)
+
+        from src.app.core.model_registry import build_model
+
+        obs_dim = (
+            self.observation_space[-1] if hasattr(self, "observation_space") and self.observation_space else None
+        )
+        self.model = build_model(
+            model_arch,
+            env=self.env,
+            n_actions=self.n_actions,
+            device=self.device,
+            rules=self.get_cfg("rules", default_rules),
+            actor_mode=self.get_cfg("actor_mode", "hybrid"),
+            blender_mode=self.get_cfg("blender_mode", "neural"),
+            blend_function=self.get_cfg("blend_function", "softmax"),
+            reasoner=self.get_cfg("reasoner", default_reasoner),
+            architecture=self.get_cfg("architecture", default_arch),
+            hidden_sizes=self.get_cfg("hidden_sizes", [64, 64]),
+            obs_dim=obs_dim,
+            cfg=self.cfg,
+        )
 
         if self.is_modular:
-            from src.app.core.model_registry import build_model
-
-            self.model = build_model(
-                "blendrl",
-                env=self.env,
-                device=self.device,
-                rules=self.get_cfg("rules", default_rules),
-                actor_mode=self.get_cfg("actor_mode", "hybrid"),
-                blender_mode=self.get_cfg("blender_mode", "neural"),
-                blend_function=self.get_cfg("blend_function", "softmax"),
-                reasoner=self.get_cfg("reasoner", default_reasoner),
-                architecture=self.get_cfg("architecture", default_arch),
-                cfg=self.cfg,
-            )
             self.logic_shape = (
                 (2, self.observation_space[-1]) if len(self.observation_space) == 1 else self.observation_space
             )
             self.register_buffer("logic_obs", torch.zeros((self.num_steps, self.num_envs) + self.logic_shape))
-        else:
-            from src.app.core.model_registry import build_model
-
-            model_arch = self.resolve_model_name(default=default_arch)
-            obs_dim = (
-                self.observation_space[-1] if hasattr(self, "observation_space") and self.observation_space else None
-            )
-            self.model = build_model(
-                model_arch,
-                env=self.env,
-                n_actions=self.n_actions,
-                device=self.device,
-                hidden_sizes=self.get_cfg("hidden_sizes", [64, 64]),
-                obs_dim=obs_dim,
-            )
 
         # Storage for rollouts
         self.register_buffer("obs", torch.zeros((self.num_steps, self.num_envs) + self.observation_space))
@@ -319,12 +312,22 @@ class PPOAgent(BaseAgent):
                 v_loss = 0.5 * ((newvalue - self.b_returns[mb_inds].to(self.device)) ** 2).mean()
 
             entropy_loss = entropy.mean()
-            blend_entropy_loss = blend_entropy.mean() if isinstance(blend_entropy, torch.Tensor) else 0.0
+            aux_loss = torch.tensor(0.0, device=self.device)
+            if hasattr(self.model, "compute_auxiliary_losses"):
+                aux_dict = self.model.compute_auxiliary_losses(mb_inds, res)
+                for k, v in aux_dict.items():
+                    coef = self.get_cfg(f"{k}_coef", self.blend_ent_coef if "blend" in k else 0.01)
+                    if "entropy" in k:
+                        aux_loss = aux_loss - coef * v
+                    else:
+                        aux_loss = aux_loss + coef * v
+            elif isinstance(blend_entropy, torch.Tensor):
+                aux_loss = aux_loss - self.blend_ent_coef * blend_entropy.mean()
 
             loss = (
                 pg_loss
                 - self.ent_coef * entropy_loss
-                - self.blend_ent_coef * blend_entropy_loss
+                + aux_loss
                 + v_loss * self.vf_coef
             )
 
@@ -347,10 +350,15 @@ class PPOAgent(BaseAgent):
         self.log_dict(log_metrics)
 
     def configure_optimizers(self):
+        if hasattr(self.model, "configure_optimizer_groups"):
+            groups = self.model.configure_optimizer_groups(base_lr=self.lr, weight_decay=0.0, cfg=self.cfg)
+            if groups:
+                return optim.Adam(groups, eps=1e-5)
+
         if self.is_modular:
             params = []
             if hasattr(self.model, "actor") and hasattr(self.model.actor, "policy_modules"):
-                for m, m_type in zip(self.model.actor.policy_modules, self.model.module_types):
+                for m, m_type in zip(self.model.actor.policy_modules, getattr(self.model, "module_types", [])):
                     lr = self.lr if m_type == "neural" else self.logic_lr
                     params.append({"params": m.parameters(), "lr": lr})
             if (

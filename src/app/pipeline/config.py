@@ -196,7 +196,7 @@ def find_group_method_config(method_name: str, group: str | None = None) -> dict
             except Exception as e:
                 import logging
 
-                logging.getLogger("blendrl").warning("Failed to load method YAML %s: %s", path, e)
+                logging.getLogger("theta.pipeline").warning("Failed to load method YAML %s: %s", path, e)
     return {}
 
 
@@ -523,67 +523,100 @@ def parse_methods_dict(cfg) -> dict[str, dict]:
         agent_params = deep_merge(agent_params, m_agent_sub)
         model_params = deep_merge(model_params, m_model_sub)
 
-        # Special composite model resolution for BlendRL
+        # Generic composite model resolution (driven by model slots / subcomponents)
         consumed_keys = set()
-        if m_model_arch == "blendrl":
-            # 1. Neural Actor resolution
-            raw_neural = (
-                m_model_sub.get("neural")
-                or m_model_sub.get("neural_actor")
-                or m_dict.get("neural")
-                or m_dict.get("neural_actor")
-                or model_params.get("neural")
-                or model_params.get("neural_actor")
-                or m_dict.get("architecture")
-            )
-            default_neural = "dnn"
-            if isinstance(model_params.get("neural"), str):
-                default_neural = model_params["neural"]
-            elif isinstance(model_params.get("neural"), dict) and model_params["neural"].get("type"):
-                default_neural = model_params["neural"]["type"]
+        model_cls = None
+        try:
+            from src.app.core.model_registry import get_model_class
 
-            resolved_neural = resolve_composite_submodel(
-                raw_neural,
-                default_type=default_neural,
-                shared_model_params=shared_model,
-                shared_params=shared_params,
-            )
-            method_hidden = m_dict.get("hidden_sizes") or m_model_sub.get("hidden_sizes")
-            if method_hidden and "hidden_sizes" not in (raw_neural if isinstance(raw_neural, dict) else {}):
-                resolved_neural["hidden_sizes"] = method_hidden
-            resolved_neural["module_type"] = "neural"
+            model_cls = get_model_class(m_model_arch)
+        except Exception:
+            pass
 
-            # 2. Symbolic Actor resolution
-            raw_symbolic = (
-                m_model_sub.get("symbolic")
-                or m_model_sub.get("symbolic_actor")
-                or m_dict.get("symbolic")
-                or m_dict.get("symbolic_actor")
-                or model_params.get("symbolic")
-                or model_params.get("symbolic_actor")
-            )
-            default_symbolic = "nsfr"
-            if isinstance(model_params.get("symbolic"), str):
-                default_symbolic = model_params["symbolic"]
-            elif isinstance(model_params.get("symbolic"), dict) and model_params["symbolic"].get("type"):
-                default_symbolic = model_params["symbolic"]["type"]
+        base_model_cfg = load_model_base_config(m_model_arch) or {}
+        is_composite = (
+            (model_cls is not None and hasattr(model_cls, "get_model_slots"))
+            or (isinstance(base_model_cfg, dict) and any(isinstance(v, dict) for v in base_model_cfg.values()))
+            or m_model_arch in ("blendrl", "blender")
+        )
 
-            resolved_symbolic = resolve_composite_submodel(
-                raw_symbolic,
-                default_type=default_symbolic,
-                shared_model_params=shared_model,
-                shared_params=shared_params,
-            )
-            method_rules = m_dict.get("rules") or m_model_sub.get("rules")
-            if method_rules and "rules" not in (raw_symbolic if isinstance(raw_symbolic, dict) else {}):
-                resolved_symbolic["rules"] = method_rules
-            for cew_k in ("ecm_dthr", "fyd", "fyd_top_k"):
-                v_cew = m_dict.get(cew_k, m_model_sub.get(cew_k))
-                if v_cew is not None and cew_k not in (raw_symbolic if isinstance(raw_symbolic, dict) else {}):
-                    resolved_symbolic[cew_k] = v_cew
-            resolved_symbolic["module_type"] = resolved_symbolic.get("type", "nsfr")
+        if is_composite:
+            # Discover slots from CompositeModelProtocol or base model config
+            declared_slots = []
+            if model_cls is not None and hasattr(model_cls, "get_model_slots"):
+                declared_slots = list(model_cls.get_model_slots())
 
-            # 3. Blender Actor resolution
+            # Fallback slots from base config dictionary keys
+            slot_names = [s.name for s in declared_slots]
+            for k, v in base_model_cfg.items():
+                if isinstance(v, dict) and k not in slot_names and k != "blender":
+                    from src.app.core.protocols import ModelSlot
+
+                    def_t = v.get("type", k)
+                    declared_slots.append(ModelSlot(name=k, default=def_t))
+
+            # Backward-compat fallback if blendrl and no slots declared yet
+            if not declared_slots and m_model_arch in ("blendrl", "blender"):
+                from src.app.core.protocols import ModelSlot
+
+                declared_slots = [
+                    ModelSlot(name="neural", default="dnn"),
+                    ModelSlot(name="symbolic", default="nsfr"),
+                ]
+
+            # 1. Resolve submodels for each declared slot
+            resolved_submodels = []
+            for slot in declared_slots:
+                raw_sub = (
+                    m_model_sub.get(slot.name)
+                    or m_model_sub.get(f"{slot.name}_actor")
+                    or m_dict.get(slot.name)
+                    or m_dict.get(f"{slot.name}_actor")
+                    or model_params.get(slot.name)
+                    or model_params.get(f"{slot.name}_actor")
+                )
+                if slot.name == "neural" and not raw_sub:
+                    raw_sub = m_dict.get("architecture")
+
+                default_type = slot.default or "dnn"
+                if isinstance(model_params.get(slot.name), str):
+                    default_type = model_params[slot.name]
+                elif isinstance(model_params.get(slot.name), dict) and model_params[slot.name].get("type"):
+                    default_type = model_params[slot.name]["type"]
+
+                resolved_sub = resolve_composite_submodel(
+                    raw_sub,
+                    default_type=default_type,
+                    shared_model_params=shared_model,
+                    shared_params=shared_params,
+                )
+
+                if slot.name == "neural":
+                    method_hidden = m_dict.get("hidden_sizes") or m_model_sub.get("hidden_sizes")
+                    if method_hidden and "hidden_sizes" not in (raw_sub if isinstance(raw_sub, dict) else {}):
+                        resolved_sub["hidden_sizes"] = method_hidden
+                    resolved_sub["module_type"] = "neural"
+                    if "architecture" in resolved_sub:
+                        model_params["architecture"] = resolved_sub["architecture"]
+                    if "hidden_sizes" in resolved_sub:
+                        model_params["hidden_sizes"] = resolved_sub["hidden_sizes"]
+                elif slot.name == "symbolic":
+                    method_rules = m_dict.get("rules") or m_model_sub.get("rules")
+                    if method_rules and "rules" not in (raw_sub if isinstance(raw_sub, dict) else {}):
+                        resolved_sub["rules"] = method_rules
+                    for cew_k in ("ecm_dthr", "fyd", "fyd_top_k"):
+                        v_cew = m_dict.get(cew_k, m_model_sub.get(cew_k))
+                        if v_cew is not None and cew_k not in (raw_sub if isinstance(raw_sub, dict) else {}):
+                            resolved_sub[cew_k] = v_cew
+                    resolved_sub["module_type"] = resolved_sub.get("type", "nsfr")
+                    if "rules" in resolved_sub:
+                        model_params["rules"] = resolved_sub["rules"]
+
+                model_params[slot.name] = resolved_sub
+                resolved_submodels.append(dict(resolved_sub))
+                consumed_keys.update({slot.name, f"{slot.name}_actor"})
+
+            # 2. Blender Actor resolution (for hybrid/blending architectures)
             raw_blender = (
                 m_model_sub.get("blender")
                 or m_model_sub.get("blender_actor")
@@ -592,8 +625,7 @@ def parse_methods_dict(cfg) -> dict[str, dict]:
                 or model_params.get("blender")
                 or model_params.get("blender_actor")
             )
-            base_blendrl = load_model_base_config("blendrl")
-            default_blender = base_blendrl.get("blender", {"mode": "neural", "blend_function": "softmax"})
+            default_blender = base_model_cfg.get("blender", {"mode": "neural", "blend_function": "softmax"})
             shared_blender = {}
             if isinstance(shared_model, dict) and "blender" in shared_model:
                 shared_blender = shared_model["blender"]
@@ -611,35 +643,27 @@ def parse_methods_dict(cfg) -> dict[str, dict]:
             if b_fn:
                 resolved_blender["blend_function"] = b_fn
 
-            # 4. Modules: check if explicit or synthesize
+            model_params["blender"] = resolved_blender
+            model_params["blender_mode"] = resolved_blender.get("mode", "neural")
+            model_params["blend_function"] = resolved_blender.get("blend_function", "softmax")
+
+            # 3. Modules synthesis (for composite multi-module models)
             explicit_modules = m_dict.get("modules") or m_model_sub.get("modules") or model_params.get("modules")
             if explicit_modules:
                 resolved_modules = explicit_modules
                 model_params["explicit_modules"] = True
                 model_params["modules"] = resolved_modules
-            else:
-                resolved_modules = [dict(resolved_symbolic), dict(resolved_neural)]
+            elif resolved_submodels:
+                # Place symbolic before neural for blendrl backward-compat order
+                sym_first = sorted(
+                    resolved_submodels,
+                    key=lambda m: 0 if m.get("module_type") in ("nsfr", "neumann", "cew") else 1,
+                )
+                resolved_modules = sym_first
                 resolved_mcfg["modules"] = resolved_modules
 
-            # 5. Populate model_params
-            model_params["neural"] = resolved_neural
-            model_params["symbolic"] = resolved_symbolic
-            model_params["blender"] = resolved_blender
-            if "architecture" in resolved_neural:
-                model_params["architecture"] = resolved_neural["architecture"]
-            if "hidden_sizes" in resolved_neural:
-                model_params["hidden_sizes"] = resolved_neural["hidden_sizes"]
-            if "rules" in resolved_symbolic:
-                model_params["rules"] = resolved_symbolic["rules"]
-            model_params["blender_mode"] = resolved_blender.get("mode", "neural")
-            model_params["blend_function"] = resolved_blender.get("blend_function", "softmax")
-
-            consumed_keys = {
-                "neural",
-                "symbolic",
+            consumed_keys.update({
                 "blender",
-                "neural_actor",
-                "symbolic_actor",
                 "blender_actor",
                 "modules",
                 "architecture",
@@ -650,7 +674,7 @@ def parse_methods_dict(cfg) -> dict[str, dict]:
                 "fyd_top_k",
                 "blender_mode",
                 "blend_function",
-            }
+            })
 
         # Support inheriting tuned parameters from a previous Optuna sweep via from_study
         study_ref = m_dict.get("from_study")
@@ -671,7 +695,7 @@ def parse_methods_dict(cfg) -> dict[str, dict]:
             else:
                 import logging
 
-                logging.getLogger("blendrl").warning(
+                logging.getLogger("theta.pipeline").warning(
                     "Method '%s' specified from_study='%s', but best_params.yaml was not found.",
                     method_name,
                     study_ref,

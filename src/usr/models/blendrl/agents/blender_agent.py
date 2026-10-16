@@ -5,6 +5,7 @@ import random
 # from nudge.env import NudgeBaseEnv
 import sys
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import torch
@@ -363,26 +364,126 @@ class BlenderActor(nn.Module):
         return q_values
 
 
+def build_blender_module(
+    env,
+    blender_rules,
+    device,
+    train=True,
+    blender_mode="logic",
+    reasoner="nsfr",
+    explain=False,
+    out_size=2,
+    architecture="cnn",
+):
+    assert blender_mode in ["logic", "neural"]
+    if blender_mode == "logic":
+        if reasoner == "nsfr":
+            from nsfr.common import get_blender_nsfr_model
+
+            return get_blender_nsfr_model(env.name, blender_rules, device, train=train, explain=explain)
+        elif reasoner == "neumann":
+            from neumann.common import get_blender_neumann_model, get_neumann_model
+
+            return get_blender_neumann_model(env.name, blender_rules, device, train=train, explain=explain)
+    if blender_mode == "neural":
+        from src.usr.models.neural.architectures import NatureCNNActor, StandardMLPActor
+
+        if architecture == "cnn":
+            net = NatureCNNActor(out_size=out_size)
+        else:
+            obs = env.reset()
+            if isinstance(obs, tuple):
+                obs = obs[0]
+            num_in_features = np.prod(obs.shape[1:])
+            net = StandardMLPActor(num_in_features=num_in_features, out_size=out_size)
+        net.to(device)
+        return net
+
+
 @register_model("blendrl", "blender")
 class BlenderActorCritic(nn.Module):
     """
     BlendeRL actor-critic that supports heterogeneous policy modules.
+    Implements CompositeModelProtocol, AuxiliaryLossProtocol, and OptimizerGroupsProtocol.
     """
+
+    @classmethod
+    def get_model_slots(cls):
+        from src.app.core.protocols import ModelSlot
+
+        return [
+            ModelSlot(
+                name="neural",
+                required=True,
+                default="dnn",
+                tags=["neural", "actor"],
+                description="Neural policy/critic actor",
+            ),
+            ModelSlot(
+                name="symbolic",
+                required=False,
+                default="nsfr",
+                tags=["symbolic", "logic"],
+                description="Symbolic/fuzzy logic reasoner",
+            ),
+        ]
+
+    def get_routing_weights(self, obs, logic_obs=None):
+        if hasattr(self, "actor") and hasattr(self.actor, "to_blender_policy_distribution"):
+            return self.actor.to_blender_policy_distribution(obs, logic_obs)
+        return None
+
+    def compute_auxiliary_losses(self, batch, output) -> dict[str, torch.Tensor]:
+        losses = {}
+        be = getattr(output, "blend_entropy", None)
+        if be is None and hasattr(output, "aux"):
+            be = output.aux.get("blend_entropy")
+        if isinstance(be, torch.Tensor):
+            losses["blend_entropy"] = be.mean()
+        return losses
+
+    def configure_optimizer_groups(
+        self, base_lr: float, weight_decay: float = 0.0, cfg: Any = None
+    ) -> list[dict[str, Any]]:
+        groups = []
+        logic_lr = float(self.get_cfg("logic_lr", base_lr))
+        blender_lr = float(self.get_cfg("blender_lr", base_lr))
+        used_ids = set()
+
+        if hasattr(self, "actor") and hasattr(self.actor, "policy_modules"):
+            for m, m_type in zip(self.actor.policy_modules, getattr(self, "module_types", [])):
+                lr = base_lr if m_type == "neural" else logic_lr
+                m_params = [p for p in m.parameters() if p.requires_grad and id(p) not in used_ids]
+                if m_params:
+                    used_ids.update(id(p) for p in m_params)
+                    groups.append({"params": m_params, "lr": lr, "weight_decay": weight_decay})
+
+        if hasattr(self, "actor") and hasattr(self.actor, "blender") and self.actor.blender is not None:
+            b_params = [p for p in self.actor.blender.parameters() if p.requires_grad and id(p) not in used_ids]
+            if b_params:
+                used_ids.update(id(p) for p in b_params)
+                groups.append({"params": b_params, "lr": blender_lr, "weight_decay": weight_decay})
+
+        rem = [p for p in self.parameters() if p.requires_grad and id(p) not in used_ids]
+        if rem:
+            groups.append({"params": rem, "lr": base_lr, "weight_decay": weight_decay})
+        return groups
 
     def __init__(
         self,
         env,
-        rules,
-        actor_mode,
-        blender_mode,
-        blend_function,
-        reasoner,
-        device,
+        rules="default",
+        actor_mode="hybrid",
+        blender_mode="neural",
+        blend_function="softmax",
+        reasoner="nsfr",
+        device="cpu",
         architecture=None,
         rng=None,
         explain=False,
         modules=None,
         cfg=None,  # For accessing other agent hyperparams
+        **kwargs,
     ):
         super().__init__()
         self.device = device

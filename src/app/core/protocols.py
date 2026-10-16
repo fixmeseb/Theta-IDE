@@ -6,9 +6,8 @@ and environments. Models implement these protocols to declare runtime capabiliti
 without hardcoding class checks in base agent loops.
 """
 
-from __future__ import annotations
-
-from typing import Any, Protocol, runtime_checkable
+from dataclasses import dataclass, field
+from typing import Any, Callable, Protocol, runtime_checkable
 
 import torch
 import torch.nn as nn
@@ -53,12 +52,83 @@ class HasModelCallbacks(Protocol):
         ...
 
 
+@dataclass
+class ModelSlot:
+    """Defines a slot for a submodel inside a composite architecture.
+
+    Attributes:
+        name: Unique identifier for the slot (e.g. 'neural', 'symbolic', 'encoder').
+        required: Whether this slot must be filled for the model to instantiate.
+        default: Default model identifier to populate if none is provided.
+        tags: List of semantic tags to filter candidate models in the GUI/registry.
+        description: User-facing explanation of the subcomponent's role.
+    """
+
+    name: str
+    required: bool = True
+    default: str | None = None
+    tags: list[str] = field(default_factory=list)
+    description: str = ""
+
+
+@runtime_checkable
+class CompositeModelProtocol(Protocol):
+    """Protocol for composite models that assemble subcomponents/submodels."""
+
+    @classmethod
+    def get_model_slots(cls) -> list[ModelSlot]:
+        """Declare submodel slots to the GUI and configuration pipeline."""
+        ...
+
+    @classmethod
+    def build_from_config(
+        cls,
+        cfg: dict[str, Any],
+        env: Any,
+        device: torch.device,
+        submodels: dict[str, nn.Module],
+        **kwargs: Any,
+    ) -> nn.Module:
+        """Plugin-owned constructor receiving instantiated child modules."""
+        ...
+
+
+@runtime_checkable
+class EnvironmentWrapperProtocol(Protocol):
+    """Protocol for plugins requiring specialized environment wrappers (e.g. logic predicates)."""
+
+    @classmethod
+    def get_env_wrappers(cls, env: Any, cfg: dict[str, Any]) -> list[Any]:
+        """Return wrapper classes or callables to apply to the environment upon initialization."""
+        ...
+
+
+@runtime_checkable
+class AuxiliaryLossProtocol(Protocol):
+    """Protocol for models that produce auxiliary losses during training."""
+
+    def compute_auxiliary_losses(self, batch: Any, output: Any) -> dict[str, torch.Tensor]:
+        """Return dictionary of named auxiliary losses (e.g. {'aux_loss': tensor})."""
+        ...
+
+
+@runtime_checkable
+class OptimizerGroupsProtocol(Protocol):
+    """Protocol for models requiring custom PyTorch optimizer parameter groups."""
+
+    def configure_optimizer_groups(
+        self, base_lr: float, weight_decay: float, cfg: Any = None
+    ) -> list[dict[str, Any]]:
+        """Return custom parameter group dictionaries with individual learning rates."""
+        ...
+
+
 def walk_model_modules(root: Any) -> list[Any]:
     """Recursively collect a model and all constituent sub-models.
 
     Supports:
       - Standalone models (returns [root])
-      - Composite models (e.g. BlendRL BlenderActorCritic via `policy_modules`)
+      - Composite models declaring policy_modules or CompositeModelProtocol
       - Standard torch.nn.Module hierarchies
     """
     if root is None:
@@ -73,11 +143,19 @@ def walk_model_modules(root: Any) -> list[Any]:
         visited.add(id(obj))
         modules.append(obj)
 
-        # Check for explicit policy_modules (e.g. BlendRL composite model)
+        # Check for explicit policy_modules
         policy_modules = getattr(obj, "policy_modules", None)
         if policy_modules is not None and isinstance(policy_modules, (list, tuple)):
             for sub_m in policy_modules:
                 _traverse(sub_m)
+
+        # Check subcomponents if object implements CompositeModelProtocol
+        if hasattr(obj, "get_subcomponents") and callable(getattr(obj, "get_subcomponents")):
+            try:
+                for sub_m in obj.get_subcomponents().values():
+                    _traverse(sub_m)
+            except Exception:
+                pass
 
         # Check for target models or constituent actor/critic networks
         for attr in (
@@ -87,7 +165,6 @@ def walk_model_modules(root: Any) -> list[Any]:
             "q_network",
             "target_q_model",
             "target_q_network",
-            "blender",
             "actor",
             "critic",
         ):

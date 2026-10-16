@@ -674,3 +674,33 @@ def test_experiment_methods_start_from_the_group_default_method(qapp, tmp_path):
     fresh.load_file(experiment, "experiment/probe_group/child.yaml")
     added = fresh.add_method()
     assert fresh.raw_data["methods"][added] == {}
+
+
+def test_generic_composite_model_slots_and_discovery(tmp_path):
+    from frontend.config_model import ConfigTree, Model
+    from frontend.config_viewer import config_tree, get_method_candidate_subcomponents
+
+    tree = config_tree()
+    assert "blendrl" in tree.models
+    assert tree.models["blendrl"].is_composite is True
+    assert set(tree.models["blendrl"].slots) == {"neural", "symbolic", "blender"}
+    assert tree.models["dnn"].is_composite is False
+    assert set(tree.model_slots("blendrl")) == {"neural", "symbolic", "blender"}
+    assert tree.model_slots("dnn") == []
+
+    # Test generic composite model with slots declared in YAML
+    custom_model_yaml = tmp_path / "custom_composite.yaml"
+    custom_model_yaml.write_text(
+        "architecture: custom_composite\n"
+        "slots: [backbone, classifier_head]\n"
+        "backbone:\n"
+        "  type: nature_cnn\n"
+        "classifier_head:\n"
+        "  type: standard_mlp\n",
+        encoding="utf-8",
+    )
+    custom_model = Model.from_file(custom_model_yaml)
+    assert custom_model.is_composite is True
+    assert custom_model.slots == ["backbone", "classifier_head"]
+    assert "backbone" in custom_model.subcomponents
+    assert "classifier_head" in custom_model.subcomponents

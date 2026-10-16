@@ -158,7 +158,7 @@ class WorkflowsPanel(QWidget):
         self.palette_list = QListWidget()
         self.palette_list.setSpacing(4)
         items = [
-            ("Online RL (PPO/BlendRL)", "online_rl"),
+            ("Online RL (PPO)", "online_rl"),
             ("Offline RL (IQL/CQL)", "offline_rl"),
             ("Supervised / Prediction", "supervised"),
             ("Model Distillation", "distillation"),
@@ -224,7 +224,7 @@ class WorkflowsPanel(QWidget):
     def _show_add_node_menu(self):
         menu = QMenu(self)
         items = [
-            ("Online RL (PPO/BlendRL)", "online_rl"),
+            ("Online RL (PPO)", "online_rl"),
             ("Offline RL (IQL/CQL)", "offline_rl"),
             ("Supervised / Prediction", "supervised"),
             ("Model Distillation", "distillation"),

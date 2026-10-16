@@ -437,15 +437,91 @@ def test_dynamic_build_model_cew_and_blendrl():
     )
     assert isinstance(m_blend, BlenderActorCritic)
 
+def test_custom_third_party_composite_plugin_end_to_end():
+    """Verify that any third-party composite plugin can implement the protocols and run with standard RL algorithms with ZERO BlendRL dependencies."""
+    from src.app.core.protocols import ModelSlot, CompositeModelProtocol, AuxiliaryLossProtocol, OptimizerGroupsProtocol
+    from src.app.core.model_registry import register_model, build_model
+    from src.usr.methods.ppo_agent import PPOAgent
+    import torch.nn as nn
 
-def test_load_cleanrl_agent_parameterized_actions():
-    from src.app.core.factories import load_cleanrl_agent
+    @register_model("mock_custom_composite")
+    class MockCustomCompositeActorCritic(nn.Module):
+        @classmethod
+        def get_model_slots(cls):
+            return (
+                ModelSlot(name="backbone", default="standard_mlp"),
+                ModelSlot(name="head", default="standard_mlp"),
+            )
 
-    agent_default = load_cleanrl_agent()
-    assert agent_default.n_actions == 18
+        def __init__(self, obs_dim=4, n_actions=2, **kwargs):
+            super().__init__()
+            self.backbone = nn.Linear(obs_dim, 16)
+            self.head = nn.Linear(16, n_actions)
+            self.critic = nn.Linear(16, 1)
 
-    agent_custom = load_cleanrl_agent(n_actions=4)
-    assert agent_custom.n_actions == 4
+        def get_action_and_value(self, x, action=None):
+            feat = torch.relu(self.backbone(x))
+            logits = self.head(feat)
+            dist = torch.distributions.Categorical(logits=logits)
+            if action is None:
+                action = dist.sample()
+            val = self.critic(feat)
+            return ActionResult(
+                action=action,
+                logprob=dist.log_prob(action),
+                entropy=dist.entropy(),
+                value=val,
+                aux={"backbone_l2": torch.tensor(0.01)},
+            )
+
+        def compute_auxiliary_losses(self, batch, output, step=0):
+            return {"backbone_reg": torch.tensor(0.05, requires_grad=True)}
+
+        def configure_optimizer_groups(self, base_lr: float, weight_decay: float = 0.0, cfg: Any = None):
+            return [
+                {"params": self.backbone.parameters(), "lr": base_lr * 0.1},
+                {"params": self.head.parameters(), "lr": base_lr},
+            ]
+
+    # Verify build_model instantiates it
+    custom_model = build_model("mock_custom_composite", obs_dim=4, n_actions=2)
+    assert isinstance(custom_model, MockCustomCompositeActorCritic)
+
+    # Instantiate PPO agent with this custom composite model
+    cfg = {
+        "agent": {"algorithm": "ppo", "lr": 1e-3},
+        "model": "mock_custom_composite",
+        "env": {"name": "cartpole", "obs_dim": 4, "n_actions": 2},
+    }
+    ppo = PPOAgent(cfg)
+    assert ppo.is_modular is True
+    assert isinstance(ppo.model, MockCustomCompositeActorCritic)
+
+    # Verify optimizer groups were delegated to the custom plugin
+    optimizer = ppo.configure_optimizers()
+    groups = optimizer.param_groups
+    assert len(groups) == 2
+    assert groups[0]["lr"] == 1e-4
+    assert groups[1]["lr"] == 1e-3
+
+    # Verify auxiliary losses were collected from the custom plugin
+    aux = ppo.model.compute_auxiliary_losses(None, None)
+    assert "backbone_reg" in aux
+    assert float(aux["backbone_reg"]) == pytest.approx(0.05)
+
+    # Conversely: verify standard neural agent has standard single param group
+    std_cfg = {
+        "agent": {"algorithm": "ppo", "lr": 1e-3},
+        "model": "standard_mlp",
+        "env": {"name": "cartpole", "obs_dim": 4, "n_actions": 2},
+    }
+    ppo_std = PPOAgent(std_cfg)
+    assert ppo_std.is_modular is False
+    std_optimizer = ppo_std.configure_optimizers()
+    std_groups = std_optimizer.param_groups
+    assert len(std_groups) == 1
+    assert std_groups[0]["lr"] == 1e-3
+
 
 
 

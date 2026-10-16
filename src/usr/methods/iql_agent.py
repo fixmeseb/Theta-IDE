@@ -96,10 +96,11 @@ class IQLAgent(OfflineAgentBase):
 
         # ── Policy / Actor via Model Registry ──────────────────────
         self.is_modular = self.is_hybrid_configured()
+        model_arch = self.resolve_model_name(default="blendrl" if self.is_modular else default_arch)
 
         if self.is_modular:
             self.model = build_model(
-                "blendrl",
+                model_arch,
                 env=self.env,
                 device=self.device,
                 rules=self.get_cfg("rules", default_rules),
@@ -264,8 +265,17 @@ class IQLAgent(OfflineAgentBase):
         opt_q = optim.Adam(list(self.q_network.parameters()) + list(self.q_network2.parameters()), lr=lr)
         opt_v = optim.Adam(self.value_network.parameters(), lr=lr)
 
+        target_m = self.model if self.is_modular else self.actor
+        if hasattr(target_m, "configure_optimizer_groups"):
+            groups = target_m.configure_optimizer_groups(base_lr=lr, weight_decay=0.0, cfg=self.cfg)
+            if groups:
+                opt_a = optim.Adam(groups)
+                return [opt_q, opt_v, opt_a]
+
         if self.is_modular:
-            actor_params = list(self.model.policy_modules.parameters()) + list(self.model.blender.parameters())
+            actor_params = list(self.model.policy_modules.parameters()) + (
+                list(self.model.blender.parameters()) if hasattr(self.model, "blender") and self.model.blender else []
+            )
             opt_a = optim.Adam(actor_params, lr=lr)
         else:
             opt_a = optim.Adam(self.actor.parameters(), lr=lr)

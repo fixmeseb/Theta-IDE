@@ -1,7 +1,7 @@
 import time
 from typing import Sequence
 import torch
-from blendrl.env_vectorized import VectorizedNudgeBaseEnv
+from src.app.core.env_vectorized import VectorizedNudgeBaseEnv
 from hackatari.core import HackAtari
 import torch as th
 from packaging import version

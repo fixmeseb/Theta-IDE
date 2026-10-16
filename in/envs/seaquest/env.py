@@ -2,7 +2,7 @@ from typing import Sequence
 import torch
 from nudge.env import NudgeBaseEnv
 from hackatari.core import HackAtari
-from blendrl.env_utils import make_env
+from src.app.core.atari_wrappers import make_env
 import numpy as np
 import torch as th
 from ocatari.ram.seaquest import MAX_NB_OBJECTS

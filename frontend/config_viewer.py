@@ -223,22 +223,21 @@ def get_model_candidate_hyperparameters(
     tree: ConfigTree | None,
     current_keys: set[str] | None = None,
 ) -> list[str]:
-    """Candidate hyperparameters specific to a model architecture (or blendrl top-level)."""
+    """Candidate hyperparameters specific to a model architecture (or composite top-level)."""
     if not model_name:
         return []
     current_keys = current_keys or set()
-    if model_name == "blendrl":
-        blend_keys = ["neural", "symbolic", "blender", "blend_q_values", "blend_ent_coef", "actor_mode", "logic_lr", "blender_lr"]
-        return [k for k in blend_keys if k not in current_keys]
     candidates: list[str] = []
     if tree:
         model_params = tree.model_parameters(model_name)
         for k, v in model_params.items():
-            if k not in ("architecture", "type", "lightning_module", "name") and not isinstance(v, dict):
+            if k not in ("architecture", "type", "lightning_module", "name", "slots") and not isinstance(v, dict):
                 if k not in current_keys and k not in candidates:
                     candidates.append(k)
     if not candidates:
-        if model_name == "dnn":
+        if model_name == "blendrl":
+            candidates = ["blend_q_values", "blend_ent_coef", "actor_mode", "logic_lr", "blender_lr"]
+        elif model_name == "dnn":
             candidates = ["hidden_sizes", "activation"]
         elif model_name == "dueling_resnet":
             candidates = ["hidden_sizes"]
@@ -292,8 +291,10 @@ def get_method_candidate_subcomponents(
         return []
     current_keys = current_keys or set()
     subcomps = tree.model_subcomponents(model_name) if tree else {}
-    if not subcomps and model_name == "blendrl":
-        subcomps = {"neural": {}, "symbolic": {}, "blender": {}}
+    if not subcomps and tree:
+        slots = tree.model_slots(model_name)
+        if slots:
+            subcomps = {s: {} for s in slots}
     return [k for k in subcomps.keys() if k not in current_keys]
 
 
@@ -2316,12 +2317,13 @@ class ConfigViewer(QWidget):
                         ms = methods.setdefault(mn, {})
                         if not v:
                             ms.pop("model", None)
-                        elif v == "blendrl":
+                        elif tree and v in tree.models and tree.models[v].is_composite:
                             if not isinstance(ms.get("model"), dict):
-                                ms["model"] = "blendrl"
+                                ms["model"] = v
                         else:
                             ms["model"] = v
-                            for sk in ("neural", "symbolic", "blender"):
+                            prev_slots = tree.model_slots(cur_mn) if (tree and cur_mn in tree.models) else ("neural", "symbolic", "blender")
+                            for sk in prev_slots:
                                 ms.pop(sk, None)
                         self._mark_dirty()
                         self._render_boxes()
@@ -2341,13 +2343,20 @@ class ConfigViewer(QWidget):
 
                 if model_name:
                     is_composite_model = bool(
-                        model_name == "blendrl"
-                        or (tree and model_name in tree.models and tree.models[model_name].is_composite)
+                        (tree and model_name in tree.models and tree.models[model_name].is_composite)
+                        or model_name == "blendrl"
                     )
-                    blend_param_keys = ["blend_q_values", "blend_ent_coef", "actor_mode", "logic_lr", "blender_lr"]
+                    composite_param_keys = []
+                    if tree and model_name in tree.models:
+                        composite_param_keys = [
+                            k for k, v in tree.model_parameters(model_name).items()
+                            if not isinstance(v, dict) and k not in ("architecture", "type", "lightning_module", "name", "slots")
+                        ]
+                    if not composite_param_keys and is_composite_model:
+                        composite_param_keys = ["blend_q_values", "blend_ent_coef", "actor_mode", "logic_lr", "blender_lr"]
 
                     if is_composite_model:
-                        for bk in blend_param_keys:
+                        for bk in composite_param_keys:
                             val = None
                             if isinstance(model_inner, dict) and bk in model_inner:
                                 val = model_inner[bk]
@@ -2375,12 +2384,19 @@ class ConfigViewer(QWidget):
                                 row_bp.addWidget(btn_del_bp)
                                 model_rows.append((str(bk), row_bp))
 
+                        # Determine known subcomponent slot names for this composite model
+                        known_slots = []
+                        if tree and model_name in tree.models:
+                            known_slots = tree.model_slots(model_name)
+                        if not known_slots:
+                            known_slots = ["neural", "symbolic", "blender"]
+
                         subcomps_present = {}
                         if isinstance(model_inner, dict):
-                            for sk in ("neural", "symbolic", "blender"):
-                                if sk in model_inner:
-                                    subcomps_present[sk] = model_inner[sk]
-                        for sk in ("neural", "symbolic", "blender"):
+                            for sk, sv in model_inner.items():
+                                if isinstance(sv, dict) or sk in known_slots:
+                                    subcomps_present[sk] = sv
+                        for sk in known_slots:
                             if sk in m_spec and sk not in subcomps_present:
                                 subcomps_present[sk] = m_spec[sk]
 
@@ -2395,7 +2411,7 @@ class ConfigViewer(QWidget):
 
                             if s_name == "neural":
                                 neural_choices = [
-                                    m for m in (sorted(tree.models) if tree else ["dnn", "dueling_resnet", "transformer", "lstm", "cnn"])
+                                    m for m in (sorted(tree.models) if tree else ["dnn", "dueling_resnet", "transformer", "lstm", "cnn", "standard_mlp", "nature_cnn"])
                                     if m not in ("blendrl", "nsfr", "neumann", "cew")
                                 ]
                                 cur_arch = "dnn"
@@ -2512,6 +2528,55 @@ class ConfigViewer(QWidget):
                                     row_blender.addWidget(btn_add_sub_p)
                                 model_rows.append(("Blender Mode", row_blender))
 
+                            else:
+                                choices = [
+                                    m for m in (sorted(tree.models) if tree else [])
+                                    if (not tree or not tree.models[m].is_composite)
+                                ]
+                                cur_type = ""
+                                if isinstance(s_val, str):
+                                    cur_type = s_val
+                                elif isinstance(s_val, dict):
+                                    cur_type = s_val.get("type", "")
+                                sub_candidates = []
+                                if tree and cur_type:
+                                    sub_candidates = [k for k in tree.model_parameters(cur_type).keys() if k not in ("architecture", "type")]
+                                filtered_sub_cand = [c for c in sub_candidates if c not in sub_params]
+                                btn_add_sub_p = None
+                                if filtered_sub_cand:
+                                    btn_add_sub_p = _make_param_adder_button(
+                                        f"Add {s_name} parameter",
+                                        filtered_sub_cand,
+                                        lambda p, mn=m_name, sn=s_name: self._add_method_subcomponent_param(mn, sn, p),
+                                        parent_widget=sub_card
+                                    )
+                                row_gen = QHBoxLayout()
+                                if choices:
+                                    combo_gen = ComboBox()
+                                    combo_gen.setMaximumWidth(TEXT_FIELD_WIDTH)
+                                    combo_gen.addItems(choices)
+                                    if cur_type and cur_type not in choices:
+                                        combo_gen.insertItem(0, cur_type)
+                                    if cur_type:
+                                        combo_gen.setCurrentText(cur_type)
+                                    combo_gen.currentTextChanged.connect(
+                                        lambda v, mn=m_name, sn=s_name: self._on_method_subcomponent_type_changed(mn, sn, v)
+                                    )
+                                    row_gen.addWidget(combo_gen)
+                                else:
+                                    line_gen = QLineEdit(str(cur_type))
+                                    line_gen.setMaximumWidth(TEXT_FIELD_WIDTH)
+                                    line_gen.textChanged.connect(
+                                        lambda v, mn=m_name, sn=s_name: self._on_method_subcomponent_type_changed(mn, sn, v)
+                                    )
+                                    row_gen.addWidget(line_gen)
+                                btn_del_sc = _make_subtle_tool_button("close", f"Remove '{s_name}' subcomponent", size=20, icon_size=12)
+                                btn_del_sc.clicked.connect(lambda _, mn=m_name, sn=s_name: self._remove_method_subcomponent(mn, sn))
+                                row_gen.addWidget(btn_del_sc)
+                                if btn_add_sub_p:
+                                    row_gen.addWidget(btn_add_sub_p)
+                                model_rows.append((f"{s_name.replace('_', ' ').title()} Module", row_gen))
+
                             sub_block = IndentedHierarchyBlock(level=2)
                             sub_rows = []
                             for sp_k, sp_v in list(sub_params.items()):
@@ -2555,17 +2620,17 @@ class ConfigViewer(QWidget):
                                     sub_block.addRow(sr_lbl, sr_box)
                                 model_rows.append(("", sub_block))
 
-                        curr_blend_keys = set()
+                        curr_comp_keys = set()
                         if isinstance(model_inner, dict):
-                            curr_blend_keys.update(model_inner.keys())
-                        curr_blend_keys.update(m_spec.keys())
+                            curr_comp_keys.update(model_inner.keys())
+                        curr_comp_keys.update(m_spec.keys())
 
                         cand_subcomps = get_method_candidate_subcomponents(model_name, tree, set(subcomps_present.keys()))
-                        cand_blend = cand_subcomps + [k for k in blend_param_keys if k not in curr_blend_keys]
-                        if cand_blend:
+                        cand_comp = cand_subcomps + [k for k in composite_param_keys if k not in curr_comp_keys]
+                        if cand_comp:
                             btn_add_mp = _make_param_adder_button(
-                                "Add blendrl parameter",
-                                cand_blend,
+                                f"Add {model_name} parameter",
+                                cand_comp,
                                 lambda p, mn=m_name: self._add_method_param(mn, p),
                                 parent_widget=sub_card
                             )
@@ -3860,16 +3925,6 @@ class ConfigViewer(QWidget):
             model_params = tree.model_parameters(model_name)
             if param_key in model_params:
                 return model_params[param_key]
-            if model_name == "blendrl":
-                blend_defaults = {
-                    "blend_ent_coef": 0.05,
-                    "logic_lr": 0.001,
-                    "blender_lr": 0.0005,
-                    "blend_q_values": True,
-                    "actor_mode": "hybrid",
-                }
-                if param_key in blend_defaults:
-                    return blend_defaults[param_key]
 
         # 5. Generic fallback
         known = {

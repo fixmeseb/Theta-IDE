@@ -4,6 +4,9 @@ blender:
   mode: neural
   blend_function: softmax
 blend_q_values: true
+blend_ent_coef: 0.05
+logic_lr: 0.001
+blender_lr: 0.0005
 
 neural:
   type: dnn

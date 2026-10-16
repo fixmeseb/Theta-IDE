@@ -132,11 +132,17 @@ class Model:
 
     @property
     def is_composite(self) -> bool:
-        return self.name == "blendrl" or any(isinstance(v, dict) for v in self.parameters.values())
+        return bool(self.subcomponents) or "slots" in self.parameters
 
     @property
     def subcomponents(self) -> dict[str, dict[str, Any]]:
         return {k: dict(v) for k, v in self.parameters.items() if isinstance(v, dict)}
+
+    @property
+    def slots(self) -> list[str]:
+        if "slots" in self.parameters and isinstance(self.parameters["slots"], (list, tuple)):
+            return list(self.parameters["slots"])
+        return list(self.subcomponents.keys())
 
 
 @dataclass(frozen=True)
@@ -381,6 +387,11 @@ class ConfigTree:
             for k, v in self.models[model_name].parameters.items()
             if isinstance(v, dict)
         }
+
+    def model_slots(self, model_name: str | None) -> list[str]:
+        if not model_name or model_name not in self.models:
+            return []
+        return self.models[model_name].slots
 
 
 @dataclass(frozen=True)

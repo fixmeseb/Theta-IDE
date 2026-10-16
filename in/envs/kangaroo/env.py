@@ -3,7 +3,7 @@ import torch
 from nudge.env import NudgeBaseEnv
 from ocatari.core import OCAtari
 from hackatari.core import HackAtari
-from blendrl.env_utils import make_env
+from src.app.core.atari_wrappers import make_env
 import numpy as np
 import torch as th
 from ocatari.ram.kangaroo import MAX_ESSENTIAL_OBJECTS
@@ -14,7 +14,11 @@ from stable_baselines3.common.vec_env import VecFrameStack
 
 from src.app.core.factories import load_cleanrl_envs
 
-from blendrl.env_utils import kangaroo_modifs
+kangaroo_modifs = [
+    "disable_coconut",
+    "randomize_kangaroo_position",
+    "change_level_0",
+]
 
 
 class NudgeEnv(NudgeBaseEnv):

@@ -2,16 +2,18 @@ import time
 from typing import Sequence
 import torch
 from HackAtari.hackatari.games import kangaroo
-from blendrl.env_vectorized import VectorizedNudgeBaseEnv
-from blendrl.env_utils import make_env
+from src.app.core.env_vectorized import VectorizedNudgeBaseEnv
+from src.app.core.atari_wrappers import make_env
 from hackatari.core import HackAtari
 import torch as th
 from ocatari.ram.kangaroo import MAX_ESSENTIAL_OBJECTS
 import gymnasium as gym
 
-import time
-
-from blendrl.env_utils import kangaroo_modifs
+kangaroo_modifs = [
+    "disable_coconut",
+    "randomize_kangaroo_position",
+    "change_level_0",
+]
 
 
 class VectorizedNudgeEnv(VectorizedNudgeBaseEnv):

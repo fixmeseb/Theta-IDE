@@ -13,8 +13,8 @@ def layer_init(layer, std=np.sqrt(2), bias_const=0.0):
     return layer
 
 
-@register_model("neural_blender_actor")
-class NeuralBlenderActor(nn.Module):
+@register_model("nature_cnn_actor", "nature_cnn", "neural_blender_actor")
+class NatureCNNActor(nn.Module):
     def __init__(self, out_size=2):
         super().__init__()
         self.network = nn.Sequential(
@@ -40,8 +40,12 @@ class NeuralBlenderActor(nn.Module):
         return torch.softmax(logits, dim=-1)
 
 
-@register_model("neural_blender_mlp")
-class NeuralBlenderMLP(nn.Module):
+# Backward compatibility alias
+NeuralBlenderActor = NatureCNNActor
+
+
+@register_model("standard_mlp_actor", "standard_mlp", "neural_blender_mlp")
+class StandardMLPActor(nn.Module):
     def __init__(self, num_in_features, out_size=2, hidden_sizes=[256, 256]):
         super().__init__()
         self.num_in_features = num_in_features
@@ -74,6 +78,10 @@ class NeuralBlenderMLP(nn.Module):
         hidden = self.network(x)
         logits = self.actor(hidden)
         return logits
+
+
+# Backward compatibility alias
+NeuralBlenderMLP = StandardMLPActor
 
 
 @register_model("cnn", "nature_cnn", "cnn_actor")

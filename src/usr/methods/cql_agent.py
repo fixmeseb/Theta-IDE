@@ -36,12 +36,13 @@ class CQLAgent(OfflineAgentBase):
         default_rules = self.get_cfg("rules", "default")
         default_reasoner = self.get_cfg("reasoner", "nsfr")
         default_arch = self.get_cfg("architecture", "mlp")
+        model_arch = self.resolve_model_name(default="blendrl" if self.is_modular else default_arch)
+
+        from src.app.core.model_registry import build_model
 
         if self.is_modular:
-            from src.app.core.model_registry import build_model
-
             self.model = build_model(
-                "blendrl",
+                model_arch,
                 env=self.env,
                 device=self.device,
                 rules=self.get_cfg("rules", default_rules),
@@ -54,7 +55,7 @@ class CQLAgent(OfflineAgentBase):
                 cfg=self.cfg,
             )
             self.target_model = build_model(
-                "blendrl",
+                model_arch,
                 env=self.env,
                 device=self.device,
                 rules=self.get_cfg("rules", default_rules),
@@ -478,6 +479,12 @@ class CQLAgent(OfflineAgentBase):
         lr = float(self.get_cfg("lr", 3e-4))
         logic_lr = float(self.get_cfg("logic_lr", lr))
         blender_lr = float(self.get_cfg("blender_lr", lr))
+
+        if hasattr(self.model, "configure_optimizer_groups"):
+            groups = self.model.configure_optimizer_groups(base_lr=lr, weight_decay=weight_decay, cfg=self.cfg)
+            if groups:
+                return optim.Adam(groups)
+
         if self.is_modular:
             param_groups = []
             used_param_ids = set()
