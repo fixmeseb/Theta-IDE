@@ -235,9 +235,7 @@ def get_model_candidate_hyperparameters(
                 if k not in current_keys and k not in candidates:
                     candidates.append(k)
     if not candidates:
-        if model_name == "blendrl":
-            candidates = ["blend_q_values", "blend_ent_coef", "actor_mode", "logic_lr", "blender_lr"]
-        elif model_name == "dnn":
+        if model_name == "dnn":
             candidates = ["hidden_sizes", "activation"]
         elif model_name == "dueling_resnet":
             candidates = ["hidden_sizes"]
@@ -2343,8 +2341,7 @@ class ConfigViewer(QWidget):
 
                 if model_name:
                     is_composite_model = bool(
-                        (tree and model_name in tree.models and tree.models[model_name].is_composite)
-                        or model_name == "blendrl"
+                        tree and model_name in tree.models and tree.models[model_name].is_composite
                     )
                     composite_param_keys = []
                     if tree and model_name in tree.models:
@@ -2352,8 +2349,6 @@ class ConfigViewer(QWidget):
                             k for k, v in tree.model_parameters(model_name).items()
                             if not isinstance(v, dict) and k not in ("architecture", "type", "lightning_module", "name", "slots")
                         ]
-                    if not composite_param_keys and is_composite_model:
-                        composite_param_keys = ["blend_q_values", "blend_ent_coef", "actor_mode", "logic_lr", "blender_lr"]
 
                     if is_composite_model:
                         for bk in composite_param_keys:
@@ -2388,8 +2383,6 @@ class ConfigViewer(QWidget):
                         known_slots = []
                         if tree and model_name in tree.models:
                             known_slots = tree.model_slots(model_name)
-                        if not known_slots:
-                            known_slots = ["neural", "symbolic", "blender"]
 
                         subcomps_present = {}
                         if isinstance(model_inner, dict):
@@ -2412,7 +2405,7 @@ class ConfigViewer(QWidget):
                             if s_name == "neural":
                                 neural_choices = [
                                     m for m in (sorted(tree.models) if tree else ["dnn", "dueling_resnet", "transformer", "lstm", "cnn", "standard_mlp", "nature_cnn"])
-                                    if m not in ("blendrl", "nsfr", "neumann", "cew")
+                                    if (not tree or not tree.models[m].is_composite)
                                 ]
                                 cur_arch = "dnn"
                                 if isinstance(s_val, str):
@@ -3995,18 +3988,13 @@ class ConfigViewer(QWidget):
         m_spec = methods.setdefault(method_name, {})
         tree = config_tree()
         model_val = m_spec.get("model")
-        model_name = next(iter(model_val)) if isinstance(model_val, dict) else str(model_val or "blendrl")
+        model_name = next(iter(model_val)) if isinstance(model_val, dict) else str(model_val or "dnn")
 
-        if subcomp_name == "neural":
+        tree = config_tree()
+        subcomps = tree.model_subcomponents(model_name) if tree else {}
+        sub_default = dict(subcomps.get(subcomp_name, {}))
+        if not sub_default:
             sub_default = {"type": "dnn"}
-        elif subcomp_name == "symbolic":
-            sub_default = {"type": "nsfr"}
-        elif subcomp_name == "blender":
-            sub_default = {"mode": "neural"}
-        else:
-            tree = config_tree()
-            subcomps = tree.model_subcomponents(model_name) if tree else {}
-            sub_default = dict(subcomps.get(subcomp_name, {}))
 
         if isinstance(m_spec.get("model"), dict):
             m_spec["model"].setdefault(model_name, {})[subcomp_name] = sub_default

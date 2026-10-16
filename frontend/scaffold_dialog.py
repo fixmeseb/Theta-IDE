@@ -6,7 +6,6 @@ from typing import Optional
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
-    QCheckBox,
     QComboBox,
     QDialog,
     QFrame,
@@ -79,12 +78,6 @@ class ScaffoldPluginDialog(QDialog):
         self.edit_name.textChanged.connect(self._update_preview)
         layout.addWidget(self.edit_name)
 
-        # Composite Model toggle (visible only for models)
-        self.chk_composite = QCheckBox("Composite Model Architecture (assembles submodels via ModelSlot)")
-        self.chk_composite.setChecked(False)
-        self.chk_composite.toggled.connect(self._update_preview)
-        layout.addWidget(self.chk_composite)
-
         # Author and Version
         meta_row = QHBoxLayout()
         meta_row.setSpacing(10)
@@ -140,8 +133,6 @@ class ScaffoldPluginDialog(QDialog):
         self._update_preview()
 
     def _on_kind_changed(self):
-        kind = self.combo_kind.currentData()
-        self.chk_composite.setVisible(kind == "model")
         self._update_preview()
 
     def _update_preview(self):
@@ -200,7 +191,6 @@ class ScaffoldPluginDialog(QDialog):
             kind=self.combo_kind.currentData(),
             author=self.edit_author.text().strip() or "Theta Researcher",
             version=self.edit_version.text().strip() or "0.1.0",
-            is_composite=self.chk_composite.isChecked(),
         )
 
         res = self.scaffolder.scaffold(opts)

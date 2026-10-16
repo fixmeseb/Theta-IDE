@@ -54,8 +54,10 @@ class ComponentsPanel(QWidget):
         self.components_tree.file_selected.connect(self.on_component_selected)
         self.splitter.addWidget(self.components_tree)
 
-        # Square buttons located at the top of the filetree next to 'create new component'
+        # Square buttons located at the top of the filetree
         self.btn_save = self.components_tree.btn_save
+        self.btn_plus = getattr(self.components_tree, "btn_plus", getattr(self.components_tree, "btn_new", None))
+        self.btn_new = self.btn_plus
         self.btn_hub = self.components_tree.btn_hub
         self.btn_toggle_raw = self.components_tree.btn_toggle_raw
         if self.btn_save is not None:

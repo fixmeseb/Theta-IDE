@@ -593,8 +593,8 @@ class ConfigTreeWidget(QWidget):
         if self.mode == "components":
             return {
                 "row1_left": [self.btn_refresh, self.btn_collapse, self.btn_expand, self.btn_search],
-                "row1_right": [self.btn_hub, self.btn_toggle_raw],
-                "row2_left": [self.btn_new, self.btn_duplicate],
+                "row1_right": [self.btn_plus, self.btn_hub, self.btn_toggle_raw],
+                "row2_left": [self.btn_duplicate],
                 "row2_right": [],
             }
         elif self.mode in ("experiments", "experiment"):
@@ -705,9 +705,10 @@ class ConfigTreeWidget(QWidget):
         self.btn_search.clicked.connect(self.toggle_search)
 
         if self.mode == "components":
-            self.btn_new = self._tool_button("new_file", "New", button_id="new_file")
-            self.btn_new.setToolTip("Create a new modular component (agent, env, model, etc.)")
-            self.btn_new.clicked.connect(self.prompt_new_component)
+            self.btn_plus = self._tool_button("plus", "+", button_id="plus")
+            self.btn_plus.setToolTip("Scaffold a new component plugin (+)")
+            self.btn_plus.clicked.connect(self.prompt_scaffold_component)
+            self.btn_new = self.btn_plus
             self.btn_new_group = self.btn_new  # backwards compatibility alias
             self.btn_new_subfolder = None
             self.btn_new_experiment = self.btn_new
@@ -1942,3 +1943,19 @@ class ConfigTreeWidget(QWidget):
             self.select_file(f"{cat_name}/{filename}")
         except OSError as exc:
             QMessageBox.critical(self, "Error", str(exc))
+
+    def prompt_scaffold_component(self):
+        """Open the component scaffolding wizard dialog to create a new component plugin."""
+        window = self.window()
+        if hasattr(window, "scaffold_plugin"):
+            window.scaffold_plugin()
+        else:
+            from .scaffold_dialog import ScaffoldPluginDialog
+            workspace_root = find_config_root().parent
+            dialog = ScaffoldPluginDialog(workspace_root=workspace_root, parent=self)
+            if dialog.exec() and dialog.scaffold_result and dialog.scaffold_result.success:
+                self.populate()
+
+    def refresh(self):
+        """Alias for populate() to ensure compatibility."""
+        self.populate()

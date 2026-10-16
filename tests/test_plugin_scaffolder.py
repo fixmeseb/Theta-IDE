@@ -94,7 +94,6 @@ def test_scaffold_invalid_kind(tmp_path):
 def test_scaffold_dialog_gui(qapp, tmp_path):
     dialog = ScaffoldPluginDialog(workspace_root=tmp_path)
     dialog.edit_name.setText("test_dialog_model")
-    dialog.chk_composite.setChecked(True)
 
     # Trigger scaffolding
     dialog._on_scaffold_clicked()
@@ -103,3 +102,25 @@ def test_scaffold_dialog_gui(qapp, tmp_path):
     assert dialog.scaffold_result.success is True
     assert (dialog.scaffold_result.target_dir / "test_dialog_model_model.py").is_file()
     dialog.deleteLater()
+
+
+def test_components_panel_plus_button(qapp, tmp_path):
+    from frontend.components_panel import ComponentsPanel
+    panel = ComponentsPanel()
+    assert hasattr(panel, "btn_plus")
+    assert panel.btn_plus is not None
+    assert panel.btn_plus.property("svg_icon") == "plus"
+    assert panel.btn_hub is not None
+
+    header_widgets = [
+        panel.components_tree.header_layout.itemAt(i).widget()
+        for i in range(panel.components_tree.header_layout.count())
+        if panel.components_tree.header_layout.itemAt(i).widget() is not None
+    ]
+    assert panel.btn_plus in header_widgets
+    assert panel.btn_hub in header_widgets
+    plus_idx = header_widgets.index(panel.btn_plus)
+    hub_idx = header_widgets.index(panel.btn_hub)
+    assert abs(plus_idx - hub_idx) == 1
+    panel.deleteLater()
+

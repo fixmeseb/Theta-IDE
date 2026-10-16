@@ -2348,8 +2348,11 @@ class Window(QMainWindow):
         if dialog.exec() and dialog.scaffold_result and dialog.scaffold_result.success:
             res = dialog.scaffold_result
             self.log(f"Scaffolded {res.component_id} component plugin at {res.target_dir} ({len(res.created_files)} files).")
-            if hasattr(self, "components_panel") and hasattr(self.components_panel, "components_tree"):
-                self.components_panel.components_tree.refresh()
+            try:
+                if hasattr(self, "components_panel") and hasattr(self.components_panel, "components_tree"):
+                    self.components_panel.components_tree.populate()
+            except Exception as exc:
+                self.log(f"Warning during tree refresh: {exc}")
             QMessageBox.information(
                 self,
                 "Scaffolding Successful",

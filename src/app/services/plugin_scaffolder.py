@@ -181,8 +181,10 @@ class {class_name}(nn.Module):
 from typing import Any
 import torch
 import torch.nn as nn
+from torch.distributions.categorical import Categorical
 
 from src.app.core.model_registry import register_model
+from src.app.core.types import ActionResult
 
 
 @register_model("{name}")
@@ -199,6 +201,8 @@ class {class_name}(nn.Module):
     ):
         super().__init__()
         self.device = torch.device(device) if isinstance(device, str) else device
+        self.n_actions = n_actions
+        self.num_in_features = obs_dim
         hidden_sizes = hidden_sizes or [64, 64]
 
         layers = []
@@ -207,11 +211,34 @@ class {class_name}(nn.Module):
             layers.append(nn.Linear(prev, h))
             layers.append(nn.ReLU())
             prev = h
-        layers.append(nn.Linear(prev, n_actions))
-        self.net = nn.Sequential(*layers)
+        self.features = nn.Sequential(*layers)
+        self.actor = nn.Linear(prev, n_actions)
+        self.critic = nn.Linear(prev, 1)
 
     def forward(self, obs: torch.Tensor, **kwargs: Any) -> torch.Tensor:
-        return self.net(obs)
+        feat = self.features(obs.float().reshape(obs.shape[0], -1))
+        return self.actor(feat)
+
+    def get_value(self, obs: torch.Tensor, **kwargs: Any) -> torch.Tensor:
+        feat = self.features(obs.float().reshape(obs.shape[0], -1))
+        return self.critic(feat)
+
+    def get_action_and_value(self, obs: torch.Tensor, action: torch.Tensor = None) -> ActionResult:
+        feat = self.features(obs.float().reshape(obs.shape[0], -1))
+        logits = self.actor(feat)
+        probs = Categorical(logits=logits)
+        if action is None:
+            action = probs.sample()
+        return ActionResult(
+            action=action,
+            logprob=probs.log_prob(action),
+            entropy=probs.entropy(),
+            value=self.critic(feat),
+        )
+
+    def get_action_probs(self, obs: torch.Tensor) -> torch.Tensor:
+        logits = self.forward(obs)
+        return torch.softmax(logits, dim=-1)
 '''
         code_file.write_text(code_content, encoding="utf-8")
         created.append(code_file)
