@@ -348,6 +348,7 @@ class {class_name}(L.LightningModule):
         cfg_file = self.workspace_root / "in" / "config" / "agent" / f"{name}.yaml"
         cfg_file.parent.mkdir(parents=True, exist_ok=True)
         cfg_yaml = f"""# Default algorithm hyperparameters for {name}
+algorithm: {name}
 agent: {name}
 lr: 0.0003
 batch_size: 64

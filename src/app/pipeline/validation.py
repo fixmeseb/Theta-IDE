@@ -325,13 +325,30 @@ def _validate_methods_for_paradigm(cfg: Any, paradigm_name: str, paradigm_def: d
                     f"but method '{method_name}' has no 'agent' declared."
                 )
             clean_algo = agent_algo.lower().replace("-", "_")
-            if not any(
+            in_allowed = any(
                 clean_algo == a.lower()
                 or clean_algo.startswith(a.lower() + "_")
                 or clean_algo.startswith(a.lower() + "/")
                 or clean_algo.endswith("/" + a.lower())
                 for a in allowed_agents
-            ):
+            )
+            if not in_allowed:
+                try:
+                    from src.usr.methods.agent_registry import AGENT_REGISTRY, auto_discover
+                    if not AGENT_REGISTRY:
+                        auto_discover()
+                    agent_cls = AGENT_REGISTRY.get(clean_algo) or AGENT_REGISTRY.get(agent_algo)
+                    if agent_cls is not None:
+                        if hasattr(agent_cls, "get_supported_paradigms"):
+                            supported = [p.lower() for p in agent_cls.get_supported_paradigms()]
+                            if paradigm_name.lower() in supported:
+                                in_allowed = True
+                        else:
+                            in_allowed = True
+                except Exception:
+                    pass
+
+            if not in_allowed:
                 raise ConfigurationError(
                     f"[ConfigurationError] Method '{method_name}' uses agent '{agent_algo}', "
                     f"which is not allowed in paradigm '{paradigm_name}'. Allowed agents: {allowed_agents}."
