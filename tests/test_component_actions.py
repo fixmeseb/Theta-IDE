@@ -147,9 +147,10 @@ def test_delete_component_dialog(qapp, tmp_path):
 
 
 def test_config_viewer_component_buttons(qapp, tmp_path):
-    """Test btn_edit_code and btn_delete_component layout and visibility in ConfigViewer."""
+    """Test btn_edit_code, btn_export_component, and btn_delete_component layout and visibility."""
     viewer = ConfigViewer()
     assert hasattr(viewer, "btn_edit_code")
+    assert hasattr(viewer, "btn_export_component")
     assert hasattr(viewer, "btn_delete_component")
 
     # In default mode (not component mode), buttons are hidden
@@ -157,35 +158,42 @@ def test_config_viewer_component_buttons(qapp, tmp_path):
     cfg.write_text("key: value\n")
     viewer.load_file(cfg, "test.yaml")
     assert viewer.btn_edit_code.isHidden()
+    assert viewer.btn_export_component.isHidden()
     assert viewer.btn_delete_component.isHidden()
 
     # In component mode, buttons are shown when a file is loaded
     viewer.is_component_mode = True
     viewer.load_file(cfg, "test.yaml")
     assert not viewer.btn_edit_code.isHidden()
+    assert not viewer.btn_export_component.isHidden()
     assert not viewer.btn_delete_component.isHidden()
 
-    # Verify relative layout: pencil is to the left of trash
+    # Verify relative layout: pencil -> export -> trash
     hb_layout = viewer.header_bar.layout()
     idx_pencil = -1
+    idx_export = -1
     idx_trash = -1
     for i in range(hb_layout.count()):
         w = hb_layout.itemAt(i).widget()
         if w is viewer.btn_edit_code:
             idx_pencil = i
+        elif w is viewer.btn_export_component:
+            idx_export = i
         elif w is viewer.btn_delete_component:
             idx_trash = i
 
     assert idx_pencil != -1
+    assert idx_export != -1
     assert idx_trash != -1
-    assert idx_pencil < idx_trash
-    assert idx_trash == idx_pencil + 1
+    assert idx_pencil < idx_export < idx_trash
+    assert idx_export == idx_pencil + 1
+    assert idx_trash == idx_export + 1
 
     viewer.deleteLater()
 
 
 def test_components_panel_integration(qapp, tmp_path, monkeypatch):
-    """Test ComponentsPanel wiring for editor opening and component deletion."""
+    """Test ComponentsPanel wiring for editor opening, auto-save on navigation, and component export/deletion."""
     # Setup mock workspace
     ws = tmp_path / "ws"
     ws.mkdir()
@@ -195,7 +203,10 @@ def test_components_panel_integration(qapp, tmp_path, monkeypatch):
     code_dir.mkdir(parents=True)
 
     cfg = cfg_dir / "sample_mlp.yaml"
-    cfg.write_text("type: sample_mlp\n")
+    cfg.write_text("type: sample_mlp\nhidden_sizes: [64, 64]\n")
+
+    cfg2 = cfg_dir / "another_model.yaml"
+    cfg2.write_text("type: another_model\n")
 
     code_file = code_dir / "sample_mlp_model.py"
     code_file.write_text("# sample model")
@@ -219,7 +230,23 @@ def test_components_panel_integration(qapp, tmp_path, monkeypatch):
     # Assert viewer is in component mode and buttons are visible
     assert panel.viewer.is_component_mode is True
     assert not panel.viewer.btn_edit_code.isHidden()
+    assert not panel.viewer.btn_export_component.isHidden()
     assert not panel.viewer.btn_delete_component.isHidden()
+
+    # Test auto-save when switching components
+    panel.viewer.raw_data["hidden_sizes"] = [128, 128]
+    panel.viewer.is_dirty = True
+    panel.on_component_selected(cfg2, "model/another_model.yaml")
+    # Verify cfg was automatically saved with the modified hidden_sizes
+    assert "128" in cfg.read_text()
+
+    # Switch back to first component
+    panel.on_component_selected(cfg, "model/sample_mlp.yaml")
+    # Test auto-save when switching to Hub
+    panel.viewer.raw_data["hidden_sizes"] = [256, 256]
+    panel.viewer.is_dirty = True
+    panel.show_hub()
+    assert "256" in cfg.read_text()
 
     # Test open in editor
     opened_targets = []
@@ -227,6 +254,15 @@ def test_components_panel_integration(qapp, tmp_path, monkeypatch):
     panel.open_active_component_in_editor()
     assert len(opened_targets) == 1
     assert opened_targets[0] == code_file
+
+    # Test export component dialog wiring
+    from frontend.export_dialog import ExportComponentDialog
+    from src.app.services.component_exporter import ComponentExportResult
+    mock_res = ComponentExportResult(success=True, export_path=tmp_path / "export.zip", files_included=["file1"])
+    monkeypatch.setattr(ExportComponentDialog, "exec", lambda self: 1)
+    monkeypatch.setattr(ExportComponentDialog, "__init__", lambda self, *args, **kwargs: setattr(self, "export_result", mock_res) or setattr(self, "comp_name", "SampleMLP") or None)
+    monkeypatch.setattr("PyQt6.QtWidgets.QMessageBox.information", lambda *args, **kwargs: None)
+    panel.prompt_export_active_component()
 
     # Test delete component (mock dialog acceptance)
     from PyQt6.QtWidgets import QDialog

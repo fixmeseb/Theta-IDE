@@ -3,16 +3,10 @@ defaults:
 - Atari Games/_base
 - override /env: atari/pong
 methods:
-  PPO:
+  test:
+    model: myfourthmlp
     agent: ppo
-    model: dnn
     hidden_sizes:
-    - 16
-    - 16
-  PPO_sb3:
-    agent: sb3/dqn
-    model: dnn
-    hidden_sizes:
-    - 8
-    - 8
+    - 64
+    - 64
 total_timesteps: 10000

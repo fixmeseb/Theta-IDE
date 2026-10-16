@@ -90,6 +90,7 @@ class ComponentsPanel(QWidget):
         self.viewer.dirty_state_changed.connect(self.components_tree.set_file_dirty)
         self.viewer.file_renamed.connect(self._on_component_file_renamed)
         self.viewer.edit_code_requested.connect(self.open_active_component_in_editor)
+        self.viewer.export_component_requested.connect(self.prompt_export_active_component)
         self.viewer.delete_component_requested.connect(self.prompt_delete_active_component)
         if self.btn_save is not None:
             self.viewer.dirty_changed.connect(self.btn_save.setEnabled)
@@ -150,6 +151,8 @@ class ComponentsPanel(QWidget):
 
     def on_component_selected(self, file_path, rel_path):
         """Handle component file selection from the tree."""
+        if hasattr(self, "viewer") and self.viewer and self.viewer.is_dirty:
+            self.save_current()
         self.show_params()
         self.active_path = Path(file_path)
         self.active_rel_path = rel_path
@@ -158,7 +161,7 @@ class ComponentsPanel(QWidget):
         self._update_raw_yaml_view()
 
     def _update_component_action_buttons(self):
-        """Update tooltips and state for pencil (edit code) and trash (uninstall/delete) buttons."""
+        """Update tooltips and state for pencil, export, and trash buttons."""
         if not self.active_path or not self.active_path.exists():
             return
         try:
@@ -175,6 +178,9 @@ class ComponentsPanel(QWidget):
                     self.viewer.btn_edit_code.setToolTip(f"Open {target_code.name} in editor")
                 else:
                     self.viewer.btn_edit_code.setToolTip(f"Open {comp_name} source code in editor")
+
+            if hasattr(self.viewer, "btn_export_component"):
+                self.viewer.btn_export_component.setToolTip(f"Export '{comp_name}' for Theta Hub or GitHub")
 
             if hasattr(self.viewer, "btn_delete_component"):
                 if is_hub:
@@ -219,6 +225,33 @@ class ComponentsPanel(QWidget):
                 QMessageBox.warning(self, "Open in Editor", f"Could not launch editor for {target}.")
         else:
             QMessageBox.warning(self, "Open in Editor", f"No source file found for {assets['comp_name']}.")
+
+    def prompt_export_active_component(self, file_path=None, rel_path=None):
+        """Export the active component as a Theta Hub package (.zip) or standalone directory."""
+        target_cfg = Path(file_path) if file_path else self.active_path
+        target_rel = rel_path or self.active_rel_path
+        if not target_cfg or not target_cfg.exists():
+            return
+
+        if hasattr(self, "viewer") and self.viewer and self.viewer.is_dirty:
+            self.save_current()
+
+        from .export_dialog import ExportComponentDialog
+        workspace_root = self.components_tree.root_dir.parent
+        dlg = ExportComponentDialog(
+            config_path=target_cfg,
+            rel_path=target_rel,
+            workspace_root=workspace_root,
+            parent=self,
+        )
+        if dlg.exec() and dlg.export_result and dlg.export_result.success:
+            res = dlg.export_result
+            self.log_fn(f"Exported component '{dlg.comp_name}' to {res.export_path} ({len(res.files_included)} files).")
+            QMessageBox.information(
+                self,
+                "Component Exported",
+                f"Successfully exported component '{dlg.comp_name}'!\n\nDestination:\n{res.export_path}\n\nBundled {len(res.files_included)} files.",
+            )
 
     def prompt_delete_active_component(self, file_path=None, rel_path=None):
         """Prompt to uninstall the component or delete its configuration, and remove all files."""
@@ -298,8 +331,16 @@ class ComponentsPanel(QWidget):
         action_desc = "Uninstalled component" if is_hub else ("Deleted component" if is_comp else "Deleted configuration")
         self.log_fn(f"{action_desc} '{comp_name}' and all associated files.")
 
+        from .config_viewer import invalidate_config_tree
+        invalidate_config_tree()
+
         # Reload components tree and auto-select fallback
         self.reload_components()
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        if hasattr(self, "viewer") and self.viewer and self.viewer.is_dirty:
+            self.save_current()
 
     def _on_component_file_renamed(self, old_rel, new_rel):
         self.active_path = self.viewer.current_path
@@ -345,6 +386,8 @@ class ComponentsPanel(QWidget):
 
     def show_hub(self, initial_kind: str | None = None):
         """Switch view to the embedded Component Hub in place of the parameters panels."""
+        if hasattr(self, "viewer") and self.viewer and self.viewer.is_dirty:
+            self.save_current()
         hub = self._ensure_hub_view()
         if initial_kind:
             hub._select_kind(initial_kind)

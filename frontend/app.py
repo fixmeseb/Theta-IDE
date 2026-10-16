@@ -1348,9 +1348,31 @@ class Window(QMainWindow):
             self.tabs.setCurrentWidget(self.tabs.tabs["tensorboard"]["widget"])
 
     def tab_changed(self, index):
+        # 1. If leaving components panel, auto-save any unsaved edits
+        if hasattr(self, "components_panel") and self.components_panel is not None:
+            if hasattr(self.components_panel, "viewer") and self.components_panel.viewer and self.components_panel.viewer.is_dirty:
+                self.components_panel.save_current()
+
+        # Invalidate the config tree cache so the active panel sees fresh models/agents/envs
+        from .config_viewer import invalidate_config_tree
+        invalidate_config_tree()
+
         w = self.tabs.widget(index)
         if hasattr(w, "activate") and callable(w.activate):
             w.activate()
+
+        # If switching to config_panel (Experiment panel), refresh the active viewer so dropdowns update
+        if w is getattr(self, "config_panel", None):
+            if hasattr(self, "config_tab_manager"):
+                active_v = self.config_tab_manager.current_viewer()
+                if active_v and hasattr(active_v, "reload_data"):
+                    active_v.reload_data(force_tree_refresh=True)
+
+        # If switching to components_panel, refresh viewer
+        if w is getattr(self, "components_panel", None):
+            if hasattr(self.components_panel, "viewer") and hasattr(self.components_panel.viewer, "reload_data"):
+                self.components_panel.viewer.reload_data(force_tree_refresh=True)
+
         if self.tabs.widget(index) is self.queue_panel:
             self.on_queue_changed(self.jobs.queue_state())
         if hasattr(self, "terminal_panel") and self.tabs.widget(index) is self.terminal_panel:
@@ -2346,6 +2368,8 @@ class Window(QMainWindow):
         from .scaffold_dialog import ScaffoldPluginDialog
         dialog = ScaffoldPluginDialog(workspace_root=PROJECT_ROOT, parent=self)
         if dialog.exec() and dialog.scaffold_result and dialog.scaffold_result.success:
+            from .config_viewer import invalidate_config_tree
+            invalidate_config_tree()
             res = dialog.scaffold_result
             self.log(f"Scaffolded {res.component_id} component plugin at {res.target_dir} ({len(res.created_files)} files).")
             try:

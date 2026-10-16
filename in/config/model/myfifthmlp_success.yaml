@@ -1,0 +1,5 @@
+# Default configuration for myfifthmlp_success
+type: myfifthmlp_success
+hidden_sizes:
+- 16
+- 16

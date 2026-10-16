@@ -1600,6 +1600,8 @@ class ConfigTreeWidget(QWidget):
             return False, str(exc)
         if self.current_rel_path == rel_path:
             self.current_rel_path = None
+        from .config_viewer import invalidate_config_tree
+        invalidate_config_tree()
         self.file_deleted.emit(rel_path)
         self.populate()
         return True, None
@@ -1623,6 +1625,8 @@ class ConfigTreeWidget(QWidget):
             target.write_text(rename_experiment_text(text, target.stem), encoding="utf-8")
         except OSError as exc:
             return None, str(exc)
+        from .config_viewer import invalidate_config_tree
+        invalidate_config_tree()
         new_rel = str(Path(rel_path).parent / new_name)
         self.populate()
         self.select_file(new_rel)
@@ -1954,6 +1958,8 @@ class ConfigTreeWidget(QWidget):
             workspace_root = find_config_root().parent
             dialog = ScaffoldPluginDialog(workspace_root=workspace_root, parent=self)
             if dialog.exec() and dialog.scaffold_result and dialog.scaffold_result.success:
+                from .config_viewer import invalidate_config_tree
+                invalidate_config_tree()
                 self.populate()
 
     def refresh(self):

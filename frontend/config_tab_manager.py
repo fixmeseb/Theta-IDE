@@ -161,6 +161,10 @@ class ConfigTabManager(QTabWidget):
         # 1. Already open in an existing tab?
         if norm_rel in self._tabs:
             viewer = self._tabs[norm_rel]
+            if hasattr(viewer, "reload_data"):
+                from .config_viewer import invalidate_config_tree
+                invalidate_config_tree()
+                viewer.reload_data(force_tree_refresh=True)
             idx = self.indexOf(viewer)
             if idx >= 0:
                 self.setCurrentIndex(idx)

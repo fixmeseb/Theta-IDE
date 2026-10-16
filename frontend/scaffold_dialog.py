@@ -197,6 +197,8 @@ class ScaffoldPluginDialog(QDialog):
         self.scaffold_result = res
 
         if res.success:
+            from .config_viewer import invalidate_config_tree
+            invalidate_config_tree()
             self.accept()
         else:
             QMessageBox.warning(self, "Scaffolding Failed", res.error or "Unknown scaffolding error.")

@@ -94,6 +94,8 @@ def find_component_assets(
     # 2. Heuristic fallback resolution if no metadata found
     rel = rel_path or str(cfg.relative_to(ws / "in" / "config") if (ws / "in" / "config") in cfg.parents else cfg.name)
     rel = rel.replace("\\", "/").lstrip("/")
+    if rel.startswith("in/config/"):
+        rel = rel[len("in/config/"):]
 
     if not code_dir:
         candidate_dir: Optional[Path] = None

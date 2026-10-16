@@ -423,14 +423,21 @@ _CONFIG_TREE = None
 _CONFIG_TREE_LOADED = False
 
 
-def config_tree():
+def invalidate_config_tree():
+    """Clear cached in/config tree so subsequent lookups re-scan the filesystem."""
+    global _CONFIG_TREE, _CONFIG_TREE_LOADED
+    _CONFIG_TREE = None
+    _CONFIG_TREE_LOADED = False
+
+
+def config_tree(force_reload: bool = False):
     """The parsed in/config tree, or None if it cannot be found.
 
     Callers must handle None: the viewer falls back to free-text entry so it
     still works when run outside a checkout.
     """
     global _CONFIG_TREE, _CONFIG_TREE_LOADED
-    if not _CONFIG_TREE_LOADED:
+    if force_reload or not _CONFIG_TREE_LOADED:
         _CONFIG_TREE_LOADED = True
         try:
             _CONFIG_TREE = ConfigTree.discover()
@@ -699,6 +706,7 @@ class ConfigViewer(QWidget):
     group_renamed = pyqtSignal(str, str)
     dir_renamed = pyqtSignal(str, str)
     edit_code_requested = pyqtSignal(object, str)
+    export_component_requested = pyqtSignal(object, str)
     delete_component_requested = pyqtSignal(object, str)
 
     INHERIT = "(inherit from base)"
@@ -821,6 +829,15 @@ class ConfigViewer(QWidget):
         self.btn_edit_code.hide()
         self.btn_edit_code.clicked.connect(self._on_edit_code_clicked)
         hb_layout.addWidget(self.btn_edit_code)
+
+        self.btn_export_component = _make_subtle_tool_button(
+            "export", "Export component package for Theta-Hub or GitHub", size=26, icon_size=15
+        )
+        self.btn_export_component.setObjectName("btnExportComponent")
+        self.btn_export_component.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_export_component.hide()
+        self.btn_export_component.clicked.connect(self._on_export_component_clicked)
+        hb_layout.addWidget(self.btn_export_component)
 
         self.btn_delete_component = _make_subtle_tool_button(
             "trash", "Uninstall component and all its files", size=26, icon_size=15
@@ -1006,6 +1023,10 @@ class ConfigViewer(QWidget):
         if self.current_path:
             self.edit_code_requested.emit(self.current_path, self.current_rel_path or "")
 
+    def _on_export_component_clicked(self):
+        if self.current_path:
+            self.export_component_requested.emit(self.current_path, self.current_rel_path or "")
+
     def _on_delete_component_clicked(self):
         if self.current_path:
             self.delete_component_requested.emit(self.current_path, self.current_rel_path or "")
@@ -1144,8 +1165,23 @@ class ConfigViewer(QWidget):
                 proxy_self._viewer.file_title.setText(val)
         return _TitleProxy(self)
 
+    def reload_data(self, force_tree_refresh: bool = True):
+        """Reload the config and refresh all visual cards/dropdowns."""
+        if force_tree_refresh:
+            invalidate_config_tree()
+        if self.current_path and self.current_path.exists():
+            if not self.is_dirty:
+                self.load_file(self.current_path, self.current_rel_path or "")
+            else:
+                self._render_boxes()
+        elif self.raw_data:
+            self._render_boxes()
+
     def load_file(self, file_path: Path, rel_path: str):
         """Parse YAML file and render visual boxes."""
+        if getattr(self, "auto_save", False) and self.is_dirty:
+            self.save_to_disk()
+
         self.current_path = Path(file_path)
         self.current_rel_path = rel_path
         self.is_dirty = False
@@ -1216,9 +1252,11 @@ class ConfigViewer(QWidget):
 
         if getattr(self, "is_component_mode", False) and self.current_path:
             self.btn_edit_code.show()
+            self.btn_export_component.show()
             self.btn_delete_component.show()
         else:
             self.btn_edit_code.hide()
+            self.btn_export_component.hide()
             self.btn_delete_component.hide()
 
 
@@ -4526,12 +4564,18 @@ class ConfigViewer(QWidget):
             self._update_dirty_ui()
             if self.current_rel_path:
                 self.dirty_state_changed.emit(self.current_rel_path, False)
+            invalidate_config_tree()
             self.save_requested.emit()
             return True
         except Exception as exc:
             if show_error:
                 QMessageBox.critical(self, "Save Error", f"Could not save file to disk:\n{exc}")
             return False
+
+    def focusOutEvent(self, event):
+        super().focusOutEvent(event)
+        if getattr(self, "auto_save", False) and self.is_dirty:
+            self.save_to_disk()
 
     def get_overrides(self):
         """Build command-line Hydra overrides matching current UI values."""
