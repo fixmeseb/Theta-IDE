@@ -698,6 +698,8 @@ class ConfigViewer(QWidget):
     file_renamed = pyqtSignal(str, str)
     group_renamed = pyqtSignal(str, str)
     dir_renamed = pyqtSignal(str, str)
+    edit_code_requested = pyqtSignal(object, str)
+    delete_component_requested = pyqtSignal(object, str)
 
     INHERIT = "(inherit from base)"
 
@@ -707,6 +709,7 @@ class ConfigViewer(QWidget):
             settings_manager = None
         super().__init__(parent)
         self.settings_manager = settings_manager
+        self.is_component_mode = False
         self.current_path = None
         self.current_rel_path = None
         self.raw_data = {}
@@ -809,6 +812,24 @@ class ConfigViewer(QWidget):
         self.dirty_status.hide()
 
         hb_layout.addStretch()
+
+        self.btn_edit_code = _make_subtle_tool_button(
+            "pencil", "Open component source code in editor", size=26, icon_size=15
+        )
+        self.btn_edit_code.setObjectName("btnEditCode")
+        self.btn_edit_code.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_edit_code.hide()
+        self.btn_edit_code.clicked.connect(self._on_edit_code_clicked)
+        hb_layout.addWidget(self.btn_edit_code)
+
+        self.btn_delete_component = _make_subtle_tool_button(
+            "trash", "Uninstall component and all its files", size=26, icon_size=15
+        )
+        self.btn_delete_component.setObjectName("btnDeleteComponent")
+        self.btn_delete_component.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_delete_component.hide()
+        self.btn_delete_component.clicked.connect(self._on_delete_component_clicked)
+        hb_layout.addWidget(self.btn_delete_component)
 
         # Maintained for programmatic and test compatibility; hidden from visual header
         self.chk_view_mode = QCheckBox("Show Resolved Defaults")
@@ -980,6 +1001,14 @@ class ConfigViewer(QWidget):
         self.title_editor.show()
         self.title_editor.setFocus()
         self.title_editor.selectAll()
+
+    def _on_edit_code_clicked(self):
+        if self.current_path:
+            self.edit_code_requested.emit(self.current_path, self.current_rel_path or "")
+
+    def _on_delete_component_clicked(self):
+        if self.current_path:
+            self.delete_component_requested.emit(self.current_path, self.current_rel_path or "")
 
     def _cancel_title_edit(self):
         self._is_editing_title = False
@@ -1184,6 +1213,13 @@ class ConfigViewer(QWidget):
             self.breadcrumb_sep.hide()
             self.file_title.setText(self.current_path.stem if self.current_path else "")
             self.file_title.setToolTip(f"{self.current_rel_path}\n(Click to rename)")
+
+        if getattr(self, "is_component_mode", False) and self.current_path:
+            self.btn_edit_code.show()
+            self.btn_delete_component.show()
+        else:
+            self.btn_edit_code.hide()
+            self.btn_delete_component.hide()
 
 
         is_experiment = (
