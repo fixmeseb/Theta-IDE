@@ -181,15 +181,13 @@ class {class_name}(nn.Module):
 from typing import Any
 import torch
 import torch.nn as nn
-from torch.distributions.categorical import Categorical
 
 from src.app.core.model_registry import register_model
-from src.app.core.types import ActionResult
 
 
 @register_model("{name}")
 class {class_name}(nn.Module):
-    """Custom neural network policy / feature extractor."""
+    """Custom neural network architecture."""
 
     def __init__(
         self,
@@ -201,55 +199,22 @@ class {class_name}(nn.Module):
     ):
         super().__init__()
         self.device = torch.device(device) if isinstance(device, str) else device
+        self.obs_dim = obs_dim
         self.n_actions = n_actions
-        self.num_in_features = obs_dim
         hidden_sizes = hidden_sizes or [64, 64]
 
-        # ── Feature Extractor Backbone ──────────────────────────────
         layers = []
         prev = obs_dim
         for h in hidden_sizes:
             layers.append(nn.Linear(prev, h))
             layers.append(nn.ReLU())
             prev = h
-        self.features = nn.Sequential(*layers)
-
-        # ── Output Heads (Actor & Critic) ───────────────────────────
-        self.actor = nn.Linear(prev, n_actions)
-        self.critic = nn.Linear(prev, 1)
+        layers.append(nn.Linear(prev, n_actions))
+        self.net = nn.Sequential(*layers)
 
     def forward(self, obs: torch.Tensor, **kwargs: Any) -> torch.Tensor:
-        """Forward pass: returns raw action logits."""
-        feat = self.features(obs.float().reshape(obs.shape[0], -1))
-        return self.actor(feat)
-
-    # ── RL Algorithm Protocol Methods (PPO, CQL, IQL) ───────────────
-    # These methods allow this model to be used directly as an actor-critic
-    # policy across Theta-IDE's online and offline RL algorithms.
-
-    def get_value(self, obs: torch.Tensor, **kwargs: Any) -> torch.Tensor:
-        """Returns baseline state value V(s) for advantage estimation."""
-        feat = self.features(obs.float().reshape(obs.shape[0], -1))
-        return self.critic(feat)
-
-    def get_action_and_value(self, obs: torch.Tensor, action: torch.Tensor = None) -> ActionResult:
-        """Sample action, calculate log probability, entropy, and baseline value."""
-        feat = self.features(obs.float().reshape(obs.shape[0], -1))
-        logits = self.actor(feat)
-        probs = Categorical(logits=logits)
-        if action is None:
-            action = probs.sample()
-        return ActionResult(
-            action=action,
-            logprob=probs.log_prob(action),
-            entropy=probs.entropy(),
-            value=self.critic(feat),
-        )
-
-    def get_action_probs(self, obs: torch.Tensor) -> torch.Tensor:
-        """Return normalized probability distribution over discrete actions."""
-        logits = self.forward(obs)
-        return torch.softmax(logits, dim=-1)
+        """Forward pass through the network."""
+        return self.net(obs.float().reshape(obs.shape[0], -1))
 '''
         code_file.write_text(code_content, encoding="utf-8")
         created.append(code_file)

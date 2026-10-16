@@ -239,3 +239,32 @@ def test_components_panel_integration(qapp, tmp_path, monkeypatch):
     assert not code_dir.exists()
 
     panel.deleteLater()
+
+
+def test_ppo_agent_wraps_standard_model():
+    """Test that StandardModelActorCriticWrapper adapts a pure standard model (only forward()) to RL protocols."""
+    import torch
+    import torch.nn as nn
+    from src.usr.methods.ppo_agent import StandardModelActorCriticWrapper
+
+    class PureForwardModel(nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.linear = nn.Linear(4, 2)
+
+        def forward(self, x, **kwargs):
+            return self.linear(x)
+
+    model = PureForwardModel()
+    wrapper = StandardModelActorCriticWrapper(model, obs_dim=4, n_actions=2)
+
+    obs = torch.randn(5, 4)
+    res = wrapper.get_action_and_value(obs)
+    assert res.action.shape == (5,)
+    assert res.logprob.shape == (5,)
+    assert res.value.shape == (5, 1)
+
+    probs = wrapper.get_action_probs(obs)
+    assert probs.shape == (5, 2)
+    assert torch.allclose(probs.sum(dim=-1), torch.ones(5))
+
