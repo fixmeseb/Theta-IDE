@@ -21,6 +21,7 @@ import hydra
 from omegaconf import DictConfig, OmegaConf
 
 from src.app import telemetry
+from src.app.core.checkpoints import CheckpointSchedule, checkpoint_interval, checkpoint_name
 
 
 @hydra.main(version_base=None, config_path="../../../../in/config", config_name="config")
@@ -79,13 +80,20 @@ def main(cfg: DictConfig):
 
     # Custom SB3 Callback to bridge telemetry into the Theta-IDE telemetry run
     class ThetaMetricsCallback(BaseCallback):
-        def __init__(self, run: telemetry.Run, eval_freq: int = 1000):
+        def __init__(self, run: telemetry.Run, eval_freq: int = 1000, schedule: CheckpointSchedule | None = None):
             super().__init__()
             self.run = run
             self.eval_freq = eval_freq
             self.last_eval_step = 0
+            self.schedule = schedule
 
         def _on_step(self) -> bool:
+            if self.schedule is not None and self.schedule.due(self.num_timesteps):
+                path = ckpt_dir / f"{checkpoint_name(self.num_timesteps)}.zip"
+                self.model.save(str(path))
+                self.run.artifact(path, kind="checkpoint", transitions=self.num_timesteps)
+                self.run.event("checkpoint", f"Saved {path.name} at {self.num_timesteps:,} transitions",
+                               path=str(path), transitions=self.num_timesteps)
             # Check episodic rewards from monitor or locals
             if self.n_calls % self.eval_freq == 0:
                 infos = self.locals.get("infos", [])
@@ -162,7 +170,9 @@ def main(cfg: DictConfig):
 
     model = AlgoClass(policy_type, env, verbose=1, **algo_kwargs)
 
-    cb = ThetaMetricsCallback(run=logger, eval_freq=1000)
+    interval = checkpoint_interval(cfg)
+    schedule = CheckpointSchedule(interval, total_timesteps) if interval else None
+    cb = ThetaMetricsCallback(run=logger, eval_freq=1000, schedule=schedule)
 
     start_time = time.time()
     status = "failed"

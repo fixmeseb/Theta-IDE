@@ -876,7 +876,9 @@ resources:
   memory: "16G"
 
 total_timesteps: 100000
-eval_episodes: 20</code></pre>
+eval_episodes: 20
+num_checkpoints: 10              # or checkpoint_every_steps: 10000 (one or the other)</code></pre>
+<p><b>Checkpoints</b> (online RL): set <code>checkpoint_every_steps</code> to save a checkpoint each time training passes another N timesteps, or <code>num_checkpoints</code> to save that many, spread evenly over <code>total_timesteps</code>. The last one always falls at the end of the run. They are saved as <code>step_&lt;timesteps&gt;.ckpt</code> (<code>.zip</code> for Stable-Baselines3) next to <code>best_model</code>. Setting both is an error. In the experiment editor, <b>+ &rarr; Checkpoints</b> adds the row; its menu switches between the two.</p>
 
 <hr style="border: 0; border-top: 1px solid rgba(255,255,255,0.1); margin: 20px 0;" />
 

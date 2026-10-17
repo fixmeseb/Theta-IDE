@@ -366,6 +366,10 @@ class IndentedHierarchyBlock(QFrame):
             self.form_layout.addRow(label_or_widget)
 
 
+# Periodic checkpoints (src/app/core/checkpoints.py): an experiment sets one of these, not both.
+CHECKPOINT_KEYS = ("checkpoint_every_steps", "num_checkpoints")
+DEFAULT_CHECKPOINTS = 10
+
 # Top-level experiment keys the five fixed boxes already render. Everything else
 # goes through _render_remaining_sections, so a paradigm's own settings are
 # editable rather than invisible: every supervised experiment keeps its real
@@ -395,6 +399,8 @@ FIXED_BOX_KEYS = frozenset(
         "description",
         "eval_freq_steps",
         "eval_freq",
+        "checkpoint_every_steps",
+        "num_checkpoints",
         "experiment_id",
     }
 )
@@ -1706,10 +1712,13 @@ class ConfigViewer(QWidget):
                 row_eval_freq.addWidget(label("(inherited)", "muted"))
             row_eval_freq.addStretch()
 
+        row_checkpoints = self._checkpoint_row(data, resolved)
+
         # Extra custom experiment parameters (top-level scalars)
         standard_top_level_keys = {
             "defaults", "paradigm", "experiment_id", "description",
             "seed", "total_timesteps", "eval_episodes", "eval_freq_steps", "eval_freq",
+            "checkpoint_every_steps", "num_checkpoints",
             "methods", "env", "trainer", "resources", "dataset", "dataset_path",
             "offline_datasets", "tensorboard", "no_plot", "save_dataset", "recover",
             "hydra", "plots", "tuning", "sweeper"
@@ -1750,6 +1759,8 @@ class ConfigViewer(QWidget):
             grid_items.append((label("Eval Episodes"), row_eval_ep))
         if show_eval_freq and row_eval_freq:
             grid_items.append((label("Eval Frequency"), row_eval_freq))
+        if row_checkpoints:
+            grid_items.append((label("Checkpoints"), row_checkpoints))
         for extra_lbl, extra_row in extra_experiment_items:
             grid_items.append((extra_lbl, extra_row))
 
@@ -1844,6 +1855,8 @@ class ConfigViewer(QWidget):
                 budget_cands.append(("eval_episodes", "Eval Episodes", int(resolved.get("eval_episodes") or 100)))
             if "eval_freq_steps" not in data and "eval_freq" not in data:
                 budget_cands.append(("eval_freq_steps", "Eval Frequency (Steps)", int(resolved.get("eval_freq_steps") or 10000)))
+            if paradigm == "online_rl" and not any(k in data for k in CHECKPOINT_KEYS):
+                budget_cands.append(("num_checkpoints", "Checkpoints", DEFAULT_CHECKPOINTS))
 
             for bk, blbl, bdef in budget_cands:
                 act = opt_menu.addAction(blbl)
@@ -4033,6 +4046,75 @@ class ConfigViewer(QWidget):
         m_spec[param_key] = parsed_val
         self._mark_dirty()
         self._render_boxes()
+
+    def _checkpoint_row(self, data, resolved):
+        """Checkpoints: every N timesteps, or a total count spread over the run (one key or the other).
+
+        Switching the mode edits this row in place: rebuilding the boxes would delete the focused menu,
+        and the scroll area would jump to wherever Qt moved the focus next.
+        """
+        source = data if any(k in data for k in CHECKPOINT_KEYS) else resolved if self.view_mode == "resolved" else {}
+        key = next((k for k in CHECKPOINT_KEYS if source.get(k) is not None), None)
+        if key is None:
+            return None
+        state = {"key": key}
+        mode = ComboBox()
+        for k, text in zip(CHECKPOINT_KEYS, ("Every N timesteps", "Total count")):
+            mode.addItem(text, k)
+        mode.setCurrentIndex(CHECKPOINT_KEYS.index(key))
+        mode.setToolTip("Save a checkpoint each time training passes another N timesteps, "
+                        "or save this many, spread evenly over Total Timesteps")
+        spin = SpinBox()
+        spin.setMaximumWidth(NUMBER_FIELD_WIDTH)
+        spin.setRange(1, 100_000_000)
+        spin.setValue(int(source[key]))
+        spin.valueChanged.connect(lambda v: self._on_field_edited(state["key"], v))
+        row = QHBoxLayout()
+        row.setSpacing(6)
+        row.addWidget(mode)
+        row.addWidget(spin)
+        state["tail"] = self._checkpoint_remove_button() if key in data else label("(inherited)", "muted")
+        row.addWidget(state["tail"])
+        row.addStretch()
+        mode.currentIndexChanged.connect(lambda _: self._switch_checkpoint_mode(state, spin, row, mode.currentData()))
+        self._show_checkpoint_key(state, spin)
+        return row
+
+    def _checkpoint_remove_button(self):
+        button = _make_subtle_tool_button("close", "Remove the checkpoint schedule", size=20, icon_size=12)
+        button.clicked.connect(lambda: ([self.raw_data.pop(k, None) for k in CHECKPOINT_KEYS],
+                                        self._mark_dirty(), self._render_boxes()))
+        return button
+
+    def _show_checkpoint_key(self, state, spin):
+        for k in CHECKPOINT_KEYS:
+            self.field_widgets.pop(k, None)
+        self.field_widgets[state["key"]] = spin
+        spin.setSingleStep(1_000 if state["key"] == "checkpoint_every_steps" else 1)
+
+    def _switch_checkpoint_mode(self, state, spin, row, new_key):
+        """Swap one checkpoint key for the other, converting the value so the schedule stays about the same."""
+        old_key = state["key"]
+        if self._block_updates or old_key == new_key:
+            return
+        resolved = self._get_resolved_defaults()
+        total = int(self.raw_data.get("total_timesteps") or resolved.get("total_timesteps") or 0)
+        value = int(self.raw_data.get(old_key) or resolved.get(old_key) or 1)
+        for k in CHECKPOINT_KEYS:
+            self.raw_data.pop(k, None)
+        default = 10_000 if new_key == "checkpoint_every_steps" else DEFAULT_CHECKPOINTS
+        self.raw_data[new_key] = max(1, -(-total // value)) if total else default
+        state["key"] = new_key
+        self._show_checkpoint_key(state, spin)
+        spin.blockSignals(True)
+        spin.setValue(self.raw_data[new_key])
+        spin.blockSignals(False)
+        if isinstance(state["tail"], QLabel):  # was inherited: it is this experiment's own setting now
+            button = self._checkpoint_remove_button()
+            row.replaceWidget(state["tail"], button)
+            state["tail"].deleteLater()
+            state["tail"] = button
+        self._mark_dirty()
 
     def _add_experiment_param(self, key: str, default_val: Any = None):
         """Add an experiment-level parameter override to the configuration."""
