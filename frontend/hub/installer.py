@@ -89,7 +89,6 @@ class HubInstaller:
         hub_candidates = [
             self.workspace_dir.resolve().parent / "theta-hub",
             Path(__file__).resolve().parents[3] / "theta-hub",
-            Path("/Users/cameronegbert/Research/theta-hub"),
         ]
         for hub_dir in hub_candidates:
             if not hub_dir.is_dir():
@@ -164,7 +163,6 @@ class HubInstaller:
             local_candidates = [
                 self.workspace_dir.resolve().parent / "theta-hub" / "packages" / Path(url).name,
                 Path(__file__).resolve().parents[3] / "theta-hub" / "packages" / Path(url).name,
-                Path("/Users/cameronegbert/Research/theta-hub") / "packages" / Path(url).name,
             ]
             matching_local = next((p for p in local_candidates if p.is_file()), None)
 

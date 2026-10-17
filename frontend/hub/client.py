@@ -99,8 +99,6 @@ class HubClient(QObject):
                 self.workspace_dir.resolve().parent / "theta-hub" / "index.json",
                 Path(__file__).resolve().parents[3] / "theta-hub" / "dist" / "index.json",
                 Path(__file__).resolve().parents[3] / "theta-hub" / "index.json",
-                Path("/Users/cameronegbert/Research/theta-hub/dist/index.json"),
-                Path("/Users/cameronegbert/Research/theta-hub/index.json"),
             ]
             matching_hub = next((p for p in local_hub_candidates if p.is_file()), None)
             if matching_hub is not None:
