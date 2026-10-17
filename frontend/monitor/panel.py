@@ -102,6 +102,11 @@ def measures_environment_steps(run):
     tree = config_tree()
     if tree is None or paradigm not in tree.paradigms:
         return True
+    p_obj = tree.paradigms.get(paradigm)
+    if p_obj and hasattr(p_obj, "field_enabled") and p_obj.field_enabled("eval_episodes"):
+        return True
+    if paradigm in ("online_rl", "offline_rl", "rl"):
+        return True
     return bool(tree.agents_for(paradigm))
 
 

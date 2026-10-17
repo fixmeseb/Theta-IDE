@@ -27,16 +27,17 @@ $$\text{Action 0} = \text{PS} \quad | \quad \text{Action 1} = \text{WE} \quad | 
 ## 2. Detailed Implementation Steps
 
 ### Step 1: Export Script in NeSyRL
-Create [`/Users/cameronegbert/Research/NeSyRL/scripts/export_pyrenees_for_tutor.py`](file:///Users/cameronegbert/Research/NeSyRL/scripts/export_pyrenees_for_tutor.py):
+Create [`scripts/export_pyrenees_for_tutor.py`](file:///scripts/export_pyrenees_for_tutor.py):
 - Loads `results/checkpoints/pyrenees/test_pyrenees_blendrl/cql_blendrl_human_neural/0/best_model.ckpt`.
 - Loads scaler parameters from `in/datasets/pyrenees/pyrenees_scaler.npz` and `in/datasets/pyrenees/pyrenees_gmm_scaler.npz`.
 - Compiles the TorchScript model using `torch.jit.trace`.
-- Populates `/Users/cameronegbert/Research/Pyrenees/Pyrenees-python/app/models/policies/Blend-RL/`:
+- Populates `Pyrenees-python/app/models/policies/Blend-RL/`:
   - `trace/`: Saves `problem.pt`, `ex132(w).pt`, `ex132a(w).pt`, `ex152a(w).pt`, `ex212(w).pt`, `ex242(w).pt`, `ex252(w).pt`, `ex252a(w).pt`, `exc137(w).pt`, `exp426d(w).pt`, `exp426e(w).pt`.
   - `minmax/`: Saves `problem_0.pkl`, `ex132(w)_0.pkl`, `ex132a(w)_0.pkl`, `ex152a(w)_0.pkl`, `ex212(w)_0.pkl`, `ex242(w)_0.pkl`, `ex252(w)_0.pkl`, `ex252a(w)_0.pkl`, `exc137(w)_0.pkl`, `exp426d(w)_0.pkl`, `exp426e(w)_0.pkl`.
 
 ```python
 # Code outline for scripts/export_pyrenees_for_tutor.py:
+import os
 import torch
 import numpy as np
 import pickle
@@ -62,7 +63,7 @@ class StandaloneBlendRL(torch.nn.Module):
 model = StandaloneBlendRL(agent)
 traced = torch.jit.trace(model, torch.zeros((1, 123), dtype=torch.float32))
 
-target_dir = Path("/Users/cameronegbert/Research/Pyrenees/Pyrenees-python/app/models/policies/Blend-RL")
+target_dir = Path(os.environ.get("PYRENEES_POLICY_DIR", "../Pyrenees/Pyrenees-python/app/models/policies/Blend-RL"))
 trace_dir = target_dir / "trace"
 minmax_dir = target_dir / "minmax"
 trace_dir.mkdir(parents=True, exist_ok=True)
@@ -82,7 +83,7 @@ print("Successfully exported all 11 Blend-RL models and scalers!")
 ---
 
 ### Step 2: Policy Loader in `app/torch_policies.py`
-In [`app/torch_policies.py`](file:///Users/cameronegbert/Research/Pyrenees/Pyrenees-python/app/torch_policies.py):
+In [`app/torch_policies.py`](app/torch_policies.py):
 1. In `PedagogicalAgent.__init__`:
    Set `self.subdirectory = "trace"` and `self.extension = "pt"` when `policy_name == "Blend-RL"`.
 2. In `logic_mapping`:
@@ -106,7 +107,7 @@ In [`app/torch_policies.py`](file:///Users/cameronegbert/Research/Pyrenees/Pyren
 ---
 
 ### Step 3: Routing in `app/routes.py`
-In [`app/routes.py`](file:///Users/cameronegbert/Research/Pyrenees/Pyrenees-python/app/routes.py):
+In [`app/routes.py`](app/routes.py):
 1. In `getProblemLevelDecision`:
    ```python
    elif user_condition == 26140:  # BlendRL Policy
@@ -125,7 +126,7 @@ In [`app/routes.py`](file:///Users/cameronegbert/Research/Pyrenees/Pyrenees-pyth
 ---
 
 ### Step 4: Unit Testing in `app/blendrl_policy_test.py`
-Create [`app/blendrl_policy_test.py`](file:///Users/cameronegbert/Research/Pyrenees/Pyrenees-python/app/blendrl_policy_test.py):
+Create [`app/blendrl_policy_test.py`](app/blendrl_policy_test.py):
 ```python
 import unittest
 import numpy as np
@@ -158,10 +159,10 @@ class TestBlendRLPolicy(unittest.TestCase):
 Run the following commands in terminal:
 ```bash
 # 1. Run Export Script in NeSyRL
-/Users/cameronegbert/Research/NeSyRL/venv/bin/python /Users/cameronegbert/Research/NeSyRL/scripts/export_pyrenees_for_tutor.py
+venv/bin/python in/envs/pyrenees/tools/export_pyrenees_for_tutor.py
 
 # 2. Run BlendRL Unit Test
-cd /Users/cameronegbert/Research/Pyrenees/Pyrenees-python
+cd ../Pyrenees/Pyrenees-python
 python -m unittest app/blendrl_policy_test.py
 
 # 3. Run Full Pyrenees Test Suite

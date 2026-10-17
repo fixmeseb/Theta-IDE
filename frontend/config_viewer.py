@@ -223,18 +223,15 @@ def get_model_candidate_hyperparameters(
     tree: ConfigTree | None,
     current_keys: set[str] | None = None,
 ) -> list[str]:
-    """Candidate hyperparameters specific to a model architecture (or blendrl top-level)."""
+    """Candidate hyperparameters specific to a model architecture (or composite top-level)."""
     if not model_name:
         return []
     current_keys = current_keys or set()
-    if model_name == "blendrl":
-        blend_keys = ["neural", "symbolic", "blender", "blend_q_values", "blend_ent_coef", "actor_mode", "logic_lr", "blender_lr"]
-        return [k for k in blend_keys if k not in current_keys]
     candidates: list[str] = []
     if tree:
         model_params = tree.model_parameters(model_name)
-        for k, v in model_params.items():
-            if k not in ("architecture", "type", "lightning_module", "name") and not isinstance(v, dict):
+        for k in model_params:
+            if k not in ("architecture", "type", "lightning_module", "name", "slots"):
                 if k not in current_keys and k not in candidates:
                     candidates.append(k)
     if not candidates:
@@ -292,8 +289,10 @@ def get_method_candidate_subcomponents(
         return []
     current_keys = current_keys or set()
     subcomps = tree.model_subcomponents(model_name) if tree else {}
-    if not subcomps and model_name == "blendrl":
-        subcomps = {"neural": {}, "symbolic": {}, "blender": {}}
+    if not subcomps and tree:
+        slots = tree.model_slots(model_name)
+        if slots:
+            subcomps = {s: {} for s in slots}
     return [k for k in subcomps.keys() if k not in current_keys]
 
 
@@ -382,8 +381,11 @@ FIXED_BOX_KEYS = frozenset(
         "seed",
         "total_timesteps",
         "eval_episodes",
+        "epochs",
+        "eval_every_n_epochs",
         "methods",
         "env",
+        "site",
         "trainer",
         "resources",
         "tensorboard",
@@ -395,7 +397,6 @@ FIXED_BOX_KEYS = frozenset(
         # the same setting twice.
         "hydra",
         "dataset_path",
-        "offline_datasets",
         "description",
         "eval_freq_steps",
         "eval_freq",
@@ -428,14 +429,21 @@ _CONFIG_TREE = None
 _CONFIG_TREE_LOADED = False
 
 
-def config_tree():
+def invalidate_config_tree():
+    """Clear cached in/config tree so subsequent lookups re-scan the filesystem."""
+    global _CONFIG_TREE, _CONFIG_TREE_LOADED
+    _CONFIG_TREE = None
+    _CONFIG_TREE_LOADED = False
+
+
+def config_tree(force_reload: bool = False):
     """The parsed in/config tree, or None if it cannot be found.
 
     Callers must handle None: the viewer falls back to free-text entry so it
     still works when run outside a checkout.
     """
     global _CONFIG_TREE, _CONFIG_TREE_LOADED
-    if not _CONFIG_TREE_LOADED:
+    if force_reload or not _CONFIG_TREE_LOADED:
         _CONFIG_TREE_LOADED = True
         try:
             _CONFIG_TREE = ConfigTree.discover()
@@ -703,8 +711,15 @@ class ConfigViewer(QWidget):
     file_renamed = pyqtSignal(str, str)
     group_renamed = pyqtSignal(str, str)
     dir_renamed = pyqtSignal(str, str)
+    edit_code_requested = pyqtSignal(object, str)
+    export_component_requested = pyqtSignal(object, str)
+    delete_component_requested = pyqtSignal(object, str)
 
     INHERIT = "(inherit from base)"
+
+    @property
+    def tree(self):
+        return config_tree()
 
     def __init__(self, settings_manager=None, parent=None):
         if isinstance(settings_manager, QWidget) and parent is None:
@@ -712,6 +727,7 @@ class ConfigViewer(QWidget):
             settings_manager = None
         super().__init__(parent)
         self.settings_manager = settings_manager
+        self.is_component_mode = False
         self.current_path = None
         self.current_rel_path = None
         self.raw_data = {}
@@ -814,6 +830,33 @@ class ConfigViewer(QWidget):
         self.dirty_status.hide()
 
         hb_layout.addStretch()
+
+        self.btn_edit_code = _make_subtle_tool_button(
+            "pencil", "Open component source code in editor", size=26, icon_size=15
+        )
+        self.btn_edit_code.setObjectName("btnEditCode")
+        self.btn_edit_code.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_edit_code.hide()
+        self.btn_edit_code.clicked.connect(self._on_edit_code_clicked)
+        hb_layout.addWidget(self.btn_edit_code)
+
+        self.btn_export_component = _make_subtle_tool_button(
+            "export", "Export component package for Theta-Hub or GitHub", size=26, icon_size=15
+        )
+        self.btn_export_component.setObjectName("btnExportComponent")
+        self.btn_export_component.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_export_component.hide()
+        self.btn_export_component.clicked.connect(self._on_export_component_clicked)
+        hb_layout.addWidget(self.btn_export_component)
+
+        self.btn_delete_component = _make_subtle_tool_button(
+            "trash", "Uninstall component and all its files", size=26, icon_size=15
+        )
+        self.btn_delete_component.setObjectName("btnDeleteComponent")
+        self.btn_delete_component.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_delete_component.hide()
+        self.btn_delete_component.clicked.connect(self._on_delete_component_clicked)
+        hb_layout.addWidget(self.btn_delete_component)
 
         # Maintained for programmatic and test compatibility; hidden from visual header
         self.chk_view_mode = QCheckBox("Show Resolved Defaults")
@@ -986,6 +1029,18 @@ class ConfigViewer(QWidget):
         self.title_editor.setFocus()
         self.title_editor.selectAll()
 
+    def _on_edit_code_clicked(self):
+        if self.current_path:
+            self.edit_code_requested.emit(self.current_path, self.current_rel_path or "")
+
+    def _on_export_component_clicked(self):
+        if self.current_path:
+            self.export_component_requested.emit(self.current_path, self.current_rel_path or "")
+
+    def _on_delete_component_clicked(self):
+        if self.current_path:
+            self.delete_component_requested.emit(self.current_path, self.current_rel_path or "")
+
     def _cancel_title_edit(self):
         self._is_editing_title = False
         self.title_editor.hide()
@@ -1061,22 +1116,6 @@ class ConfigViewer(QWidget):
                 else:
                     self.raw_data["architecture"] = new_title
 
-            # Recursive string replacement for any exact matches of old_title
-            def _replace_matching(d):
-                if isinstance(d, dict):
-                    for k, v in list(d.items()):
-                        if isinstance(v, str) and v.lower() == old_title.lower():
-                            d[k] = new_title
-                        elif isinstance(v, (dict, list)):
-                            _replace_matching(v)
-                elif isinstance(d, list):
-                    for idx, item in enumerate(d):
-                        if isinstance(item, str) and item.lower() == old_title.lower():
-                            d[idx] = new_title
-                        elif isinstance(item, (dict, list)):
-                            _replace_matching(item)
-
-            _replace_matching(self.raw_data)
 
             # Check if methods dict has a method named after old_title
             if "methods" in self.raw_data and isinstance(self.raw_data["methods"], dict):
@@ -1136,8 +1175,23 @@ class ConfigViewer(QWidget):
                 proxy_self._viewer.file_title.setText(val)
         return _TitleProxy(self)
 
+    def reload_data(self, force_tree_refresh: bool = True):
+        """Reload the config and refresh all visual cards/dropdowns."""
+        if force_tree_refresh:
+            invalidate_config_tree()
+        if self.current_path and self.current_path.exists():
+            if not self.is_dirty:
+                self.load_file(self.current_path, self.current_rel_path or "")
+            else:
+                self._render_boxes()
+        elif self.raw_data:
+            self._render_boxes()
+
     def load_file(self, file_path: Path, rel_path: str):
         """Parse YAML file and render visual boxes."""
+        if getattr(self, "auto_save", False) and self.is_dirty:
+            self.save_to_disk()
+
         self.current_path = Path(file_path)
         self.current_rel_path = rel_path
         self.is_dirty = False
@@ -1205,6 +1259,15 @@ class ConfigViewer(QWidget):
             self.breadcrumb_sep.hide()
             self.file_title.setText(self.current_path.stem if self.current_path else "")
             self.file_title.setToolTip(f"{self.current_rel_path}\n(Click to rename)")
+
+        if getattr(self, "is_component_mode", False) and self.current_path:
+            self.btn_edit_code.show()
+            self.btn_export_component.show()
+            self.btn_delete_component.show()
+        else:
+            self.btn_edit_code.hide()
+            self.btn_export_component.hide()
+            self.btn_delete_component.hide()
 
 
         is_experiment = (
@@ -1482,8 +1545,13 @@ class ConfigViewer(QWidget):
                     self.combo_env.setCurrentText(curr_text)
                 else:
                     base_e = self._get_base_env()
-                    if base_e and base_e in allowed:
+                    if base_e:
+                        if base_e not in allowed:
+                            self.combo_env.addItem(base_e, base_e)
                         self.combo_env.setCurrentText(base_e)
+                    elif curr_text and curr_text not in ("", "— Select Environment —"):
+                        self.combo_env.addItem(curr_text, curr_text)
+                        self.combo_env.setCurrentText(curr_text)
                     else:
                         self.combo_env.setCurrentIndex(0)
                 self.combo_env.blockSignals(False)
@@ -1496,7 +1564,10 @@ class ConfigViewer(QWidget):
             else:
                 allowed_init = []
             self.combo_env.addItems(allowed_init)
-            if base_env and base_env in allowed_init:
+            if base_env:
+                if base_env not in allowed_init:
+                    self.combo_env.addItem(base_env, base_env)
+                    self.combo_env.setToolTip(f"Missing component: Environment '{base_env}' is not installed in in/config/env/. Install it via Component Hub.")
                 self.combo_env.setCurrentText(base_env)
             else:
                 self.combo_env.setCurrentIndex(0)
@@ -1539,7 +1610,10 @@ class ConfigViewer(QWidget):
                 allowed_envs = [e.name for e in tree.environments_for(self.combo_paradigm.currentText())]
                 self.combo_env.addItems(allowed_envs)
                 explicit_env = self._get_explicit_env()
-                if explicit_env and explicit_env in allowed_envs and explicit_env != inherited_env:
+                if explicit_env and explicit_env != inherited_env:
+                    if explicit_env not in allowed_envs:
+                        self.combo_env.addItem(explicit_env, explicit_env)
+                        self.combo_env.setToolTip(f"Missing component: Environment '{explicit_env}' is not installed in in/config/env/. Install it via Component Hub.")
                     self.combo_env.setCurrentText(explicit_env)
                 else:
                     self.combo_env.setCurrentIndex(0)
@@ -1574,7 +1648,7 @@ class ConfigViewer(QWidget):
             if needs_env_prompt:
                 if "env" in data:
                     exp_env = self._get_explicit_env()
-                    if not exp_env or exp_env not in allowed_envs:
+                    if not exp_env:
                         if self.combo_env.findText("— Select Environment —") == -1:
                             self.combo_env.insertItem(1, "— Select Environment —", None)
                             self.combo_env.setCurrentIndex(1)
@@ -1631,6 +1705,7 @@ class ConfigViewer(QWidget):
         self.field_widgets["eval_episodes"] = self.spin_eval_ep
 
         eval_ep_enabled = True
+        is_online = (paradigm == "online_rl")
         if tree and paradigm in tree.paradigms:
             rules = tree.paradigms[paradigm]
             base = _read_group_base(tree, self._group_name())
@@ -1644,10 +1719,50 @@ class ConfigViewer(QWidget):
                     self.spin_eval_ep.setSuffix(f"   (not used by {paradigm})")
                 self.spin_eval_ep.setToolTip(rules.disabled_reason("eval_episodes"))
 
-        show_timesteps = ("total_timesteps" in data or self.view_mode == "resolved")
+        show_timesteps = is_online and ("total_timesteps" in data or self.view_mode == "resolved")
         show_seed = ("seed" in data or self.view_mode == "resolved")
-        show_eval_ep = ("eval_episodes" in data or not eval_ep_enabled or self.view_mode == "resolved")
-        show_eval_freq = ("eval_freq_steps" in data or "eval_freq" in data or (self.view_mode == "resolved" and ("eval_freq_steps" in resolved or "eval_freq" in resolved)))
+        show_eval_ep = is_online and ("eval_episodes" in data or not eval_ep_enabled or self.view_mode == "resolved")
+        show_eval_freq = is_online and ("eval_freq_steps" in data or "eval_freq" in data or (self.view_mode == "resolved" and ("eval_freq_steps" in resolved or "eval_freq" in resolved)))
+        show_epochs = not is_online and ("epochs" in data or self.view_mode == "resolved" or "epochs" in resolved)
+        show_eval_every = not is_online and ("eval_every_n_epochs" in data or self.view_mode == "resolved" or "eval_every_n_epochs" in resolved)
+
+        # Row layout for epochs
+        self.spin_epochs = SpinBox()
+        self.spin_epochs.setMaximumWidth(NUMBER_FIELD_WIDTH)
+        self.spin_epochs.setRange(1, 100000)
+        self.spin_epochs.setValue(int(data.get("epochs") or resolved.get("epochs") or 10))
+        self.spin_epochs.valueChanged.connect(lambda v: self._on_field_edited("epochs", v))
+        self.field_widgets["epochs"] = self.spin_epochs
+
+        row_epochs = QHBoxLayout()
+        row_epochs.setSpacing(6)
+        row_epochs.addWidget(self.spin_epochs)
+        if "epochs" in data:
+            btn_del_ep = _make_subtle_tool_button("close", "Remove epochs override to rely on group default", size=20, icon_size=12)
+            btn_del_ep.clicked.connect(lambda: (self.raw_data.pop("epochs", None), self._mark_dirty(), self._render_boxes()))
+            row_epochs.addWidget(btn_del_ep)
+        else:
+            row_epochs.addWidget(label("(inherited)", "muted"))
+        row_epochs.addStretch()
+
+        # Row layout for eval_every_n_epochs
+        self.spin_eval_every = SpinBox()
+        self.spin_eval_every.setMaximumWidth(NUMBER_FIELD_WIDTH)
+        self.spin_eval_every.setRange(1, 1000)
+        self.spin_eval_every.setValue(int(data.get("eval_every_n_epochs") or resolved.get("eval_every_n_epochs") or 1))
+        self.spin_eval_every.valueChanged.connect(lambda v: self._on_field_edited("eval_every_n_epochs", v))
+        self.field_widgets["eval_every_n_epochs"] = self.spin_eval_every
+
+        row_eval_every = QHBoxLayout()
+        row_eval_every.setSpacing(6)
+        row_eval_every.addWidget(self.spin_eval_every)
+        if "eval_every_n_epochs" in data:
+            btn_del_ee = _make_subtle_tool_button("close", "Remove eval_every_n_epochs override to rely on group default", size=20, icon_size=12)
+            btn_del_ee.clicked.connect(lambda: (self.raw_data.pop("eval_every_n_epochs", None), self._mark_dirty(), self._render_boxes()))
+            row_eval_every.addWidget(btn_del_ee)
+        else:
+            row_eval_every.addWidget(label("(inherited)", "muted"))
+        row_eval_every.addStretch()
 
         # Row layout for timesteps
         row_timesteps = QHBoxLayout()
@@ -1718,9 +1833,9 @@ class ConfigViewer(QWidget):
         standard_top_level_keys = {
             "defaults", "paradigm", "experiment_id", "description",
             "seed", "total_timesteps", "eval_episodes", "eval_freq_steps", "eval_freq",
-            "checkpoint_every_steps", "num_checkpoints",
-            "methods", "env", "trainer", "resources", "dataset", "dataset_path",
-            "offline_datasets", "tensorboard", "no_plot", "save_dataset", "recover",
+            "epochs", "eval_every_n_epochs", "checkpoint_every_steps", "num_checkpoints",
+            "methods", "env", "site", "trainer", "resources", "dataset", "dataset_path",
+            "tensorboard", "no_plot", "save_dataset", "recover",
             "hydra", "plots", "tuning", "sweeper"
         }
         extra_experiment_items = []
@@ -1751,16 +1866,24 @@ class ConfigViewer(QWidget):
                 extra_experiment_items.append((label(str(extra_k)), row_extra))
 
         grid_items = []
-        if show_timesteps:
-            grid_items.append((label("Total Timesteps"), row_timesteps))
-        if show_seed:
-            grid_items.append((label("Random Seed"), row_seed))
-        if show_eval_ep:
-            grid_items.append((label("Eval Episodes"), row_eval_ep))
-        if show_eval_freq and row_eval_freq:
-            grid_items.append((label("Eval Frequency"), row_eval_freq))
-        if row_checkpoints:
-            grid_items.append((label("Checkpoints"), row_checkpoints))
+        if is_online:
+            if show_timesteps:
+                grid_items.append((label("Total Timesteps"), row_timesteps))
+            if show_seed:
+                grid_items.append((label("Random Seed"), row_seed))
+            if show_eval_ep:
+                grid_items.append((label("Eval Episodes"), row_eval_ep))
+            if show_eval_freq and row_eval_freq:
+                grid_items.append((label("Eval Frequency"), row_eval_freq))
+            if row_checkpoints:  # counted in timesteps: online RL only (validation rejects it elsewhere)
+                grid_items.append((label("Checkpoints"), row_checkpoints))
+        else:
+            if show_epochs:
+                grid_items.append((label("Epochs"), row_epochs))
+            if show_seed:
+                grid_items.append((label("Random Seed"), row_seed))
+            if show_eval_every:
+                grid_items.append((label("Eval Frequency (Epochs)"), row_eval_every))
         for extra_lbl, extra_row in extra_experiment_items:
             grid_items.append((extra_lbl, extra_row))
 
@@ -1847,16 +1970,24 @@ class ConfigViewer(QWidget):
 
             # 1. Budget & Timing Candidates
             budget_cands = []
-            if "total_timesteps" not in data:
-                budget_cands.append(("total_timesteps", "Total Timesteps", int(resolved.get("total_timesteps") or 10000)))
-            if "seed" not in data:
-                budget_cands.append(("seed", "Random Seed", int(resolved.get("seed") if resolved.get("seed") is not None else 42)))
-            if eval_ep_enabled and "eval_episodes" not in data:
-                budget_cands.append(("eval_episodes", "Eval Episodes", int(resolved.get("eval_episodes") or 100)))
-            if "eval_freq_steps" not in data and "eval_freq" not in data:
-                budget_cands.append(("eval_freq_steps", "Eval Frequency (Steps)", int(resolved.get("eval_freq_steps") or 10000)))
-            if paradigm == "online_rl" and not any(k in data for k in CHECKPOINT_KEYS):
-                budget_cands.append(("num_checkpoints", "Checkpoints", DEFAULT_CHECKPOINTS))
+            if is_online:
+                if "total_timesteps" not in data:
+                    budget_cands.append(("total_timesteps", "Total Timesteps", int(resolved.get("total_timesteps") or 10000)))
+                if "seed" not in data:
+                    budget_cands.append(("seed", "Random Seed", int(resolved.get("seed") if resolved.get("seed") is not None else 42)))
+                if eval_ep_enabled and "eval_episodes" not in data:
+                    budget_cands.append(("eval_episodes", "Eval Episodes", int(resolved.get("eval_episodes") or 100)))
+                if "eval_freq_steps" not in data and "eval_freq" not in data:
+                    budget_cands.append(("eval_freq_steps", "Eval Frequency (Steps)", int(resolved.get("eval_freq_steps") or 10000)))
+                if not any(k in data for k in CHECKPOINT_KEYS):
+                    budget_cands.append(("num_checkpoints", "Checkpoints", DEFAULT_CHECKPOINTS))
+            else:
+                if "epochs" not in data:
+                    budget_cands.append(("epochs", "Epochs", int(resolved.get("epochs") or 10)))
+                if "seed" not in data:
+                    budget_cands.append(("seed", "Random Seed", int(resolved.get("seed") if resolved.get("seed") is not None else 42)))
+                if "eval_every_n_epochs" not in data:
+                    budget_cands.append(("eval_every_n_epochs", "Eval Frequency (Epochs)", int(resolved.get("eval_every_n_epochs") or 1)))
 
             for bk, blbl, bdef in budget_cands:
                 act = opt_menu.addAction(blbl)
@@ -1888,14 +2019,29 @@ class ConfigViewer(QWidget):
         # --- BOX 2 / 3: METHODS & AGENT ARCHITECTURES ---
         methods_dict = data.get("methods", {})
         methods_num = "3" if is_base else "2"
-        box_methods = ConfigBox(f"{methods_num}. Methods & Algorithms", "Configured agents, policies, and hyperparameter overrides")
+        box_methods = ConfigBox("Methods", "Configured agents, policies, and hyperparameter overrides")
         m_layout = QVBoxLayout()
         m_layout.setSpacing(10)
 
-        # Universal Parameters (methods.params)
+        # Universal / Shared Parameters (methods.params)
         has_params = "params" in methods_dict and isinstance(methods_dict["params"], dict)
         resolved_params = resolved.get("methods", {}).get("params", {}) if isinstance(resolved.get("methods"), dict) else {}
         show_params = has_params or (self.view_mode == "resolved" and bool(resolved_params))
+
+        # Top-left Methods header with title and subtle plus button to add shared parameters
+        methods_header = QHBoxLayout()
+        methods_header.setSpacing(8)
+        lbl_methods_title = label("Methods", "heading")
+        lbl_methods_title.setStyleSheet("font-size: 23px; font-weight: 600;")
+        methods_header.addWidget(lbl_methods_title)
+
+        if not show_params:
+            btn_create_params = _make_subtle_tool_button("plus", "Add Shared Parameters (params)", size=24, icon_size=14)
+            btn_create_params.clicked.connect(lambda: self.add_block("params"))
+            methods_header.addWidget(btn_create_params)
+
+        methods_header.addStretch()
+        m_layout.addLayout(methods_header)
 
         if show_params:
             p_card = QFrame()
@@ -1905,11 +2051,16 @@ class ConfigViewer(QWidget):
             p_layout.setSpacing(8)
 
             p_header = QHBoxLayout()
+            p_header.setSpacing(8)
+            lbl_shared = label("Shared Parameters", "cardTitle")
+            lbl_shared.setStyleSheet("font-size: 16px; font-weight: 600;")
+            p_header.addWidget(lbl_shared)
+
             if not has_params:
                 p_header.addWidget(label("(inherited from base)", "muted"))
             p_header.addStretch()
             if has_params:
-                btn_rm_params = _make_subtle_tool_button("trash", "Remove universal parameters block", size=24, icon_size=14)
+                btn_rm_params = _make_subtle_tool_button("trash", "Remove Shared Parameters block", size=24, icon_size=14)
                 btn_rm_params.clicked.connect(lambda: self.remove_block("params"))
                 p_header.addWidget(btn_rm_params)
             p_layout.addLayout(p_header)
@@ -1923,7 +2074,7 @@ class ConfigViewer(QWidget):
                 for m in sorted(tree.models):
                     common_universal.append(f"model.{m}")
             cand_u = [u for u in common_universal if u not in curr_params]
-            btn_add_u = _make_param_adder_button("Add universal parameter", cand_u, lambda pk: self._add_universal_param(pk), parent_widget=self)
+            btn_add_u = _make_param_adder_button("Add shared parameter", cand_u, lambda pk: self._add_universal_param(pk), parent_widget=self)
 
             rendered_u_rows = []
 
@@ -1969,7 +2120,7 @@ class ConfigViewer(QWidget):
                         p_row.addWidget(line_v)
 
                     if has_params:
-                        btn_del_p = _make_subtle_tool_button("close", f"Remove universal parameter '{k_path}'", size=20, icon_size=12)
+                        btn_del_p = _make_subtle_tool_button("close", f"Remove parameter '{k_path}'", size=20, icon_size=12)
                         btn_del_p.clicked.connect(lambda _, kp=k_path: self._remove_universal_param(kp))
                         p_row.addWidget(btn_del_p)
                     rendered_u_rows.append(p_row)
@@ -1984,16 +2135,12 @@ class ConfigViewer(QWidget):
                     p_layout.addLayout(r)
             else:
                 row_empty_p = QHBoxLayout()
-                row_empty_p.addWidget(label("No universal parameters configured.", "muted"))
+                row_empty_p.addWidget(label("No shared parameters configured.", "muted"))
                 row_empty_p.addWidget(btn_add_u)
                 row_empty_p.addStretch()
                 p_layout.addLayout(row_empty_p)
 
             m_layout.addWidget(p_card)
-        else:
-            btn_create_params = QPushButton("+ Add Universal Parameters (params)")
-            btn_create_params.clicked.connect(lambda: self.add_block("params"))
-            m_layout.addWidget(btn_create_params)
 
         has_methods = any(k != "params" and isinstance(v, dict) for k, v in methods_dict.items()) if methods_dict else False
         pending_new = getattr(self, "_pending_new_method", False)
@@ -2117,10 +2264,20 @@ class ConfigViewer(QWidget):
                     if agent_val:
                         if agent_val not in permitted:
                             txt_agent.insertItem(0, agent_val)
-                            txt_agent.setToolTip(
-                                f"'{agent_val}' is not permitted by {paradigm} "
-                                f"(allowed: {', '.join(permitted) or 'none declared'})"
+                            is_missing = not (
+                                tree and (
+                                    agent_val in tree.agents
+                                    or any(a.name == agent_val or a.algorithm == agent_val for a in tree.agents.values())
+                                    or (tree.config_root / "agent" / f"{agent_val}.yaml").is_file()
+                                )
                             )
+                            if is_missing:
+                                txt_agent.setToolTip(f"Missing component: Algorithm '{agent_val}' is not installed in in/config/agent/. Install it via Component Hub.")
+                            else:
+                                txt_agent.setToolTip(
+                                    f"'{agent_val}' is not permitted by {paradigm} "
+                                    f"(allowed: {', '.join(permitted) or 'none declared'})"
+                                )
                         else:
                             txt_agent.setToolTip(f"Agents permitted by {paradigm}")
                         txt_agent.setCurrentText(agent_val)
@@ -2163,18 +2320,14 @@ class ConfigViewer(QWidget):
                         )
 
                         agent_defaults = dict(tree.agent_hyperparameters(agent_val)) if (tree and agent_val) else {}
-                        agent_param_keys = set(agent_defaults.keys())
-                        agent_param_keys = agent_param_keys - set(TRAINING_HYPERPARAMETERS) - {"algorithm", "name", "type"}
-                        if agent_val == "cql":
-                            agent_param_keys.update(["cql_alpha", "soft_target_tau", "use_actor", "target_entropy", "cql_weight"])
-                        elif agent_val == "ppo":
-                            agent_param_keys.update(["clip_coef", "clip_range", "ent_coef", "vf_coef", "gae_lambda", "num_steps", "num_envs", "update_epochs", "max_grad_norm", "target_kl"])
-                        elif agent_val == "iql":
-                            agent_param_keys.update(["expectile", "temperature", "soft_target_tau"])
+                        agent_param_keys = set(agent_defaults.keys()) - set(TRAINING_HYPERPARAMETERS) - {"algorithm", "name", "type"}
 
                         # 1. Overridden keys in m_spec
+                        _m_raw = m_spec.get("model", "")
+                        _m_name = next(iter(_m_raw)) if isinstance(_m_raw, dict) and _m_raw else str(_m_raw or "")
+                        known_model_slots = set(tree.model_slots(_m_name)) if (tree and _m_name in tree.models) else set()
                         for ak, av in list(m_spec.items()):
-                            if ak in ("agent", "model", "neural", "symbolic", "blender", "base"):
+                            if ak in ("agent", "model", "base") or ak in known_model_slots:
                                 continue
                             if ak in agent_param_keys or (agent_val and ak.startswith(f"{agent_val}_")):
                                 agent_keys_present.add(ak)
@@ -2257,10 +2410,22 @@ class ConfigViewer(QWidget):
                     if model_name:
                         if model_name not in known:
                             txt_model.insertItem(0, model_name)
+                            mo_stem = model_name.split("/")[-1]
+                            is_missing = not (
+                                tree and (
+                                    model_name in tree.models
+                                    or mo_stem in tree.models
+                                    or (tree.config_root / "model" / f"{model_name}.yaml").is_file()
+                                    or (tree.config_root / "model" / "basics" / f"{mo_stem}.yaml").is_file()
+                                )
+                            )
+                            if is_missing:
+                                txt_model.setToolTip(f"Missing component: Model '{model_name}' is not installed in in/config/model/. Install it via Component Hub.")
+                            else:
+                                txt_model.setToolTip("Architectures defined in in/config/model/")
+                        else:
+                            txt_model.setToolTip("Architectures defined in in/config/model/")
                         txt_model.setCurrentText(model_name)
-                    else:
-                        txt_model.setCurrentIndex(-1)
-                    txt_model.setToolTip("Architectures defined in in/config/model/")
 
                     def _on_model_changed(v, mn=m_name, cur_mn=model_name):
                         if self._block_updates or v == cur_mn:
@@ -2269,12 +2434,13 @@ class ConfigViewer(QWidget):
                         ms = methods.setdefault(mn, {})
                         if not v:
                             ms.pop("model", None)
-                        elif v == "blendrl":
+                        elif tree and v in tree.models and tree.models[v].is_composite:
                             if not isinstance(ms.get("model"), dict):
-                                ms["model"] = "blendrl"
+                                ms["model"] = v
                         else:
                             ms["model"] = v
-                            for sk in ("neural", "symbolic", "blender"):
+                            prev_slots = tree.model_slots(cur_mn) if (tree and cur_mn in tree.models) else []
+                            for sk in prev_slots:
                                 ms.pop(sk, None)
                         self._mark_dirty()
                         self._render_boxes()
@@ -2291,16 +2457,21 @@ class ConfigViewer(QWidget):
                 model_keys_present = set()
                 model_rows = []
                 btn_add_mp = None
+                known_slots = []
 
                 if model_name:
                     is_composite_model = bool(
-                        model_name == "blendrl"
-                        or (tree and model_name in tree.models and tree.models[model_name].is_composite)
+                        tree and model_name in tree.models and tree.models[model_name].is_composite
                     )
-                    blend_param_keys = ["blend_q_values", "blend_ent_coef", "actor_mode", "logic_lr", "blender_lr"]
+                    composite_param_keys = []
+                    if tree and model_name in tree.models:
+                        composite_param_keys = [
+                            k for k, v in tree.model_parameters(model_name).items()
+                            if not isinstance(v, dict) and k not in ("architecture", "type", "lightning_module", "name", "slots")
+                        ]
 
                     if is_composite_model:
-                        for bk in blend_param_keys:
+                        for bk in composite_param_keys:
                             val = None
                             if isinstance(model_inner, dict) and bk in model_inner:
                                 val = model_inner[bk]
@@ -2328,142 +2499,88 @@ class ConfigViewer(QWidget):
                                 row_bp.addWidget(btn_del_bp)
                                 model_rows.append((str(bk), row_bp))
 
+                        # Determine known subcomponent slot names for this composite model
+                        known_slots = []
+                        if tree and model_name in tree.models:
+                            known_slots = tree.model_slots(model_name)
+
                         subcomps_present = {}
                         if isinstance(model_inner, dict):
-                            for sk in ("neural", "symbolic", "blender"):
-                                if sk in model_inner:
-                                    subcomps_present[sk] = model_inner[sk]
-                        for sk in ("neural", "symbolic", "blender"):
+                            for sk, sv in model_inner.items():
+                                if isinstance(sv, dict) or sk in known_slots:
+                                    subcomps_present[sk] = sv
+                        for sk in known_slots:
                             if sk in m_spec and sk not in subcomps_present:
                                 subcomps_present[sk] = m_spec[sk]
 
                         for s_name, s_val in list(subcomps_present.items()):
                             sub_params = {}
-                            if isinstance(s_val, dict):
-                                if s_name == "symbolic" and any(k in ("cew", "nsfr", "neumann") for k in s_val):
-                                    inner_r = next(k for k in ("cew", "nsfr", "neumann") if k in s_val)
-                                    sub_params = s_val[inner_r] if isinstance(s_val[inner_r], dict) else {}
+                            cur_type = ""
+                            if isinstance(s_val, str):
+                                cur_type = s_val
+                            elif isinstance(s_val, dict):
+                                # Detect if submodel is nested under a model name key (e.g. {nsfr: {rules: default}})
+                                nested_model_key = next((k for k in s_val if (tree and k in tree.models)), None)
+                                if nested_model_key:
+                                    cur_type = nested_model_key
+                                    sub_params = s_val[nested_model_key] if isinstance(s_val[nested_model_key], dict) else {}
                                 else:
-                                    sub_params = {k: v for k, v in s_val.items() if k not in ("type", "architecture", "reasoner", "mode")}
+                                    cur_type = s_val.get("type", "")
+                                    sub_params = {k: v for k, v in s_val.items() if k not in ("type", "architecture", "reasoner")}
 
-                            if s_name == "neural":
-                                neural_choices = [
-                                    m for m in (sorted(tree.models) if tree else ["dnn", "dueling_resnet", "transformer", "lstm", "cnn"])
-                                    if m not in ("blendrl", "nsfr", "neumann", "cew")
-                                ]
-                                cur_arch = "dnn"
-                                if isinstance(s_val, str):
-                                    cur_arch = s_val
-                                elif isinstance(s_val, dict):
-                                    cur_arch = s_val.get("type") or next((k for k in s_val if k in neural_choices), "dnn")
+                            choices = [
+                                m for m in (sorted(tree.models) if tree else [])
+                                if (not tree or not tree.models[m].is_composite)
+                            ]
 
-                                sub_candidates = []
-                                if tree:
-                                    sub_candidates = [k for k in tree.model_parameters(cur_arch).keys() if k not in ("architecture", "type")]
-                                if not sub_candidates:
-                                    sub_candidates = ["hidden_sizes", "activation"]
-                                filtered_sub_cand = [c for c in sub_candidates if c not in sub_params]
-                                btn_add_sub_p = None
-                                if filtered_sub_cand:
-                                    btn_add_sub_p = _make_param_adder_button(
-                                        f"Add {s_name} parameter",
-                                        filtered_sub_cand,
-                                        lambda p, mn=m_name, sn=s_name: self._add_method_subcomponent_param(mn, sn, p),
-                                        parent_widget=sub_card
-                                    )
+                            sub_candidates = []
+                            if tree and cur_type and cur_type in tree.models:
+                                sub_candidates = [k for k in tree.model_parameters(cur_type).keys() if k not in ("architecture", "type")]
+                            elif tree and model_name in tree.models:
+                                # Fall back to candidate keys defined in composite model default slot
+                                slot_def = tree.models[model_name].parameters.get(s_name)
+                                if isinstance(slot_def, dict):
+                                    sub_candidates = list(slot_def.keys())
+                            filtered_sub_cand = [c for c in sub_candidates if c not in sub_params]
+                            btn_add_sub_p = None
+                            if filtered_sub_cand:
+                                btn_add_sub_p = _make_param_adder_button(
+                                    f"Add {s_name} parameter",
+                                    filtered_sub_cand,
+                                    lambda p, mn=m_name, sn=s_name: self._add_method_subcomponent_param(mn, sn, p),
+                                    parent_widget=sub_card
+                                )
 
-                                row_arch = QHBoxLayout()
-                                combo_arch = ComboBox()
-                                combo_arch.setMaximumWidth(TEXT_FIELD_WIDTH)
-                                combo_arch.addItems(neural_choices)
-                                if cur_arch not in neural_choices:
-                                    combo_arch.insertItem(0, cur_arch)
-                                combo_arch.setCurrentText(cur_arch)
-                                combo_arch.currentTextChanged.connect(
+                            row_gen = QHBoxLayout()
+                            if choices and (cur_type in choices or cur_type or not sub_params):
+                                combo_gen = ComboBox()
+                                combo_gen.setMaximumWidth(TEXT_FIELD_WIDTH)
+                                combo_gen.setToolTip(f"Select {s_name} module architecture")
+                                combo_gen.addItems(choices)
+                                if cur_type and cur_type not in choices:
+                                    combo_gen.insertItem(0, cur_type)
+                                if cur_type:
+                                    combo_gen.setCurrentText(cur_type)
+                                combo_gen.currentTextChanged.connect(
                                     lambda v, mn=m_name, sn=s_name: self._on_method_subcomponent_type_changed(mn, sn, v)
                                 )
-                                row_arch.addWidget(combo_arch)
-                                btn_del_sc = _make_subtle_tool_button("close", f"Remove '{s_name}' subcomponent", size=20, icon_size=12)
-                                btn_del_sc.clicked.connect(lambda _, mn=m_name, sn=s_name: self._remove_method_subcomponent(mn, sn))
-                                row_arch.addWidget(btn_del_sc)
-                                if btn_add_sub_p:
-                                    row_arch.addWidget(btn_add_sub_p)
-                                model_rows.append(("Neural Architecture", row_arch))
-
-                            elif s_name == "symbolic":
-                                symbolic_choices = ["nsfr", "neumann", "cew"]
-                                cur_reasoner = "nsfr"
-                                if isinstance(s_val, str):
-                                    cur_reasoner = s_val
-                                elif isinstance(s_val, dict):
-                                    cur_reasoner = next((k for k in ("cew", "nsfr", "neumann") if k in s_val), s_val.get("type", "nsfr"))
-
-                                sub_candidates = []
-                                if tree:
-                                    sub_candidates = [k for k in tree.model_parameters(cur_reasoner).keys() if k not in ("reasoner", "type")]
-                                for standard_p in ("rules", "logic_lr", "valuation", "ecm_dthr", "fyd"):
-                                    if standard_p not in sub_candidates:
-                                        if cur_reasoner == "cew" and standard_p in ("rules", "ecm_dthr", "fyd", "fyd_top_k"):
-                                            sub_candidates.append(standard_p)
-                                        elif cur_reasoner in ("nsfr", "neumann") and standard_p in ("rules", "logic_lr", "valuation"):
-                                            sub_candidates.append(standard_p)
-                                filtered_sub_cand = [c for c in sub_candidates if c not in sub_params]
-                                btn_add_sub_p = None
-                                if filtered_sub_cand:
-                                    btn_add_sub_p = _make_param_adder_button(
-                                        f"Add {s_name} parameter",
-                                        filtered_sub_cand,
-                                        lambda p, mn=m_name, sn=s_name: self._add_method_subcomponent_param(mn, sn, p),
-                                        parent_widget=sub_card
-                                    )
-
-                                row_sym = QHBoxLayout()
-                                combo_sym = ComboBox()
-                                combo_sym.setMaximumWidth(TEXT_FIELD_WIDTH)
-                                combo_sym.addItems(symbolic_choices)
-                                if cur_reasoner not in symbolic_choices:
-                                    combo_sym.insertItem(0, cur_reasoner)
-                                combo_sym.setCurrentText(cur_reasoner)
-                                combo_sym.setToolTip("Symbolic logic reasoner (nsfr, neumann, cew)")
-                                combo_sym.currentTextChanged.connect(
+                                row_gen.addWidget(combo_gen)
+                            elif cur_type:
+                                line_gen = QLineEdit(str(cur_type))
+                                line_gen.setMaximumWidth(TEXT_FIELD_WIDTH)
+                                line_gen.textChanged.connect(
                                     lambda v, mn=m_name, sn=s_name: self._on_method_subcomponent_type_changed(mn, sn, v)
                                 )
-                                row_sym.addWidget(combo_sym)
-                                btn_del_sc = _make_subtle_tool_button("close", f"Remove '{s_name}' subcomponent", size=20, icon_size=12)
-                                btn_del_sc.clicked.connect(lambda _, mn=m_name, sn=s_name: self._remove_method_subcomponent(mn, sn))
-                                row_sym.addWidget(btn_del_sc)
-                                if btn_add_sub_p:
-                                    row_sym.addWidget(btn_add_sub_p)
-                                model_rows.append(("Logic Module (Symbolic)", row_sym))
+                                row_gen.addWidget(line_gen)
 
-                            elif s_name == "blender":
-                                sub_candidates = ["blend_function", "temperature"]
-                                filtered_sub_cand = [c for c in sub_candidates if c not in sub_params]
-                                btn_add_sub_p = None
-                                if filtered_sub_cand:
-                                    btn_add_sub_p = _make_param_adder_button(
-                                        f"Add {s_name} parameter",
-                                        filtered_sub_cand,
-                                        lambda p, mn=m_name, sn=s_name: self._add_method_subcomponent_param(mn, sn, p),
-                                        parent_widget=sub_card
-                                    )
+                            btn_del_sc = _make_subtle_tool_button("close", f"Remove '{s_name}' subcomponent", size=20, icon_size=12)
+                            btn_del_sc.clicked.connect(lambda _, mn=m_name, sn=s_name: self._remove_method_subcomponent(mn, sn))
+                            row_gen.addWidget(btn_del_sc)
+                            if btn_add_sub_p:
+                                row_gen.addWidget(btn_add_sub_p)
 
-                                row_blender = QHBoxLayout()
-                                combo_bmode = ComboBox()
-                                combo_bmode.setMaximumWidth(TEXT_FIELD_WIDTH)
-                                combo_bmode.addItems(["neural", "logic", "hybrid"])
-                                cur_mode = s_val.get("mode", "neural") if isinstance(s_val, dict) else "neural"
-                                combo_bmode.setCurrentText(cur_mode)
-                                combo_bmode.currentTextChanged.connect(
-                                    lambda v, mn=m_name: self._on_method_subcomponent_param_edited(mn, "blender", "mode", v)
-                                )
-                                row_blender.addWidget(combo_bmode)
-                                btn_del_sc = _make_subtle_tool_button("close", f"Remove '{s_name}' subcomponent", size=20, icon_size=12)
-                                btn_del_sc.clicked.connect(lambda _, mn=m_name, sn=s_name: self._remove_method_subcomponent(mn, sn))
-                                row_blender.addWidget(btn_del_sc)
-                                if btn_add_sub_p:
-                                    row_blender.addWidget(btn_add_sub_p)
-                                model_rows.append(("Blender Mode", row_blender))
+                            slot_title = f"{s_name.replace('_', ' ').title()} Module"
+                            model_rows.append((slot_title, row_gen))
 
                             sub_block = IndentedHierarchyBlock(level=2)
                             sub_rows = []
@@ -2482,12 +2599,14 @@ class ConfigViewer(QWidget):
                                 sp_row.addWidget(btn_sp_del)
                                 sub_rows.append((str(sp_k), sp_row))
 
-                            if show_mo_defs:
+                            if show_mo_defs and tree:
                                 def_sub_dict = {}
-                                if s_name == "neural" and tree:
-                                    def_sub_dict = dict(tree.model_parameters(cur_arch if "cur_arch" in locals() else "dnn"))
-                                elif s_name == "symbolic" and tree:
-                                    def_sub_dict = dict(tree.model_parameters(cur_reasoner if "cur_reasoner" in locals() else "nsfr"))
+                                if cur_type and cur_type in tree.models:
+                                    def_sub_dict = dict(tree.model_parameters(cur_type))
+                                elif model_name in tree.models:
+                                    slot_template = tree.models[model_name].parameters.get(s_name)
+                                    if isinstance(slot_template, dict):
+                                        def_sub_dict = dict(slot_template)
                                 for dp_k, dp_v in def_sub_dict.items():
                                     if dp_k not in sub_params and dp_k not in ("architecture", "type", "reasoner", "mode"):
                                         dp_row = QHBoxLayout()
@@ -2508,17 +2627,17 @@ class ConfigViewer(QWidget):
                                     sub_block.addRow(sr_lbl, sr_box)
                                 model_rows.append(("", sub_block))
 
-                        curr_blend_keys = set()
+                        curr_comp_keys = set()
                         if isinstance(model_inner, dict):
-                            curr_blend_keys.update(model_inner.keys())
-                        curr_blend_keys.update(m_spec.keys())
+                            curr_comp_keys.update(model_inner.keys())
+                        curr_comp_keys.update(m_spec.keys())
 
                         cand_subcomps = get_method_candidate_subcomponents(model_name, tree, set(subcomps_present.keys()))
-                        cand_blend = cand_subcomps + [k for k in blend_param_keys if k not in curr_blend_keys]
-                        if cand_blend:
+                        cand_comp = cand_subcomps + [k for k in composite_param_keys if k not in curr_comp_keys]
+                        if cand_comp:
                             btn_add_mp = _make_param_adder_button(
-                                "Add blendrl parameter",
-                                cand_blend,
+                                f"Add {model_name} parameter",
+                                cand_comp,
                                 lambda p, mn=m_name: self._add_method_param(mn, p),
                                 parent_widget=sub_card
                             )
@@ -2538,27 +2657,71 @@ class ConfigViewer(QWidget):
                                 val = model_inner[mk]
                             if val is not None:
                                 model_keys_present.add(mk)
-                                row_mp = QHBoxLayout()
-                                if isinstance(val, bool):
-                                    cb_mp = ToggleSlider(checked=val)
-                                    cb_mp.toggled.connect(lambda v, mn=m_name, pk=mk: self._on_method_param_edited(mn, pk, v))
-                                    row_mp.addWidget(cb_mp)
-                                elif isinstance(val, (int, float)):
-                                    spin_mp = number_field(val)
-                                    spin_mp.setMaximumWidth(NUMBER_FIELD_WIDTH)
-                                    spin_mp.valueChanged.connect(lambda v, mn=m_name, pk=mk: self._on_method_param_edited(mn, pk, v))
-                                    row_mp.addWidget(spin_mp)
+                                if isinstance(val, dict):
+                                    sub_block = IndentedHierarchyBlock(level=2)
+                                    hdr_grp = QHBoxLayout()
+                                    hdr_grp.addWidget(label(f"[{mk}]", "muted"))
+                                    hdr_grp.addStretch()
+                                    btn_del_grp = _make_subtle_tool_button("close", f"Remove parameter group '{mk}'", size=20, icon_size=12)
+                                    btn_del_grp.clicked.connect(lambda _, mn=m_name, pk=mk: self._remove_method_param(mn, pk))
+                                    hdr_grp.addWidget(btn_del_grp)
+                                    model_rows.append(("", hdr_grp))
+                                    for nk, nv in val.items():
+                                        row_n = QHBoxLayout()
+                                        if isinstance(nv, bool):
+                                            cb_n = ToggleSlider(checked=nv)
+                                            cb_n.toggled.connect(lambda v, mn=m_name, pk=mk, ck=nk: self._on_method_nested_param_edited(mn, pk, ck, v))
+                                            row_n.addWidget(cb_n)
+                                        elif isinstance(nv, (int, float)):
+                                            spin_n = number_field(nv)
+                                            spin_n.setMaximumWidth(NUMBER_FIELD_WIDTH)
+                                            spin_n.valueChanged.connect(lambda v, mn=m_name, pk=mk, ck=nk: self._on_method_nested_param_edited(mn, pk, ck, v))
+                                            row_n.addWidget(spin_n)
+                                        elif isinstance(nv, list):
+                                            line_n = QLineEdit(str(list(nv)))
+                                            line_n.setMaximumWidth(TEXT_FIELD_WIDTH)
+                                            line_n.textChanged.connect(lambda v, mn=m_name, pk=mk, ck=nk: self._on_method_nested_param_edited(mn, pk, ck, v))
+                                            row_n.addWidget(line_n)
+                                        else:
+                                            line_n = QLineEdit(str(nv if nv is not None else ""))
+                                            line_n.setMaximumWidth(TEXT_FIELD_WIDTH)
+                                            line_n.textChanged.connect(lambda v, mn=m_name, pk=mk, ck=nk: self._on_method_nested_param_edited(mn, pk, ck, v))
+                                            row_n.addWidget(line_n)
+                                        btn_del_nk = _make_subtle_tool_button("close", f"Remove '{nk}'", size=20, icon_size=12)
+                                        btn_del_nk.clicked.connect(lambda _, mn=m_name, pk=mk, ck=nk: self._remove_method_nested_param(mn, pk, ck))
+                                        row_n.addWidget(btn_del_nk)
+                                        row_n.addStretch()
+                                        sub_block.addRow(str(nk), row_n)
+                                    model_rows.append(("", sub_block))
                                 else:
-                                    line_mp = QLineEdit(str(val))
-                                    line_mp.setMaximumWidth(TEXT_FIELD_WIDTH)
-                                    line_mp.textChanged.connect(
-                                        lambda v, mn=m_name, pk=mk: self._on_method_param_edited(mn, pk, v)
-                                    )
-                                    row_mp.addWidget(line_mp)
-                                btn_del_mp = _make_subtle_tool_button("close", f"Remove '{mk}'", size=20, icon_size=12)
-                                btn_del_mp.clicked.connect(lambda _, mn=m_name, pk=mk: self._remove_method_param(mn, pk))
-                                row_mp.addWidget(btn_del_mp)
-                                model_rows.append((str(mk), row_mp))
+                                    row_mp = QHBoxLayout()
+                                    if isinstance(val, bool):
+                                        cb_mp = ToggleSlider(checked=val)
+                                        cb_mp.toggled.connect(lambda v, mn=m_name, pk=mk: self._on_method_param_edited(mn, pk, v))
+                                        row_mp.addWidget(cb_mp)
+                                    elif isinstance(val, (int, float)):
+                                        spin_mp = number_field(val)
+                                        spin_mp.setMaximumWidth(NUMBER_FIELD_WIDTH)
+                                        spin_mp.valueChanged.connect(lambda v, mn=m_name, pk=mk: self._on_method_param_edited(mn, pk, v))
+                                        row_mp.addWidget(spin_mp)
+                                    elif isinstance(val, list):
+                                        line_mp = QLineEdit(str(list(val)))
+                                        line_mp.setMaximumWidth(TEXT_FIELD_WIDTH)
+                                        line_mp.textChanged.connect(
+                                            lambda v, mn=m_name, pk=mk: self._on_method_param_edited(mn, pk, v)
+                                        )
+                                        row_mp.addWidget(line_mp)
+                                    else:
+                                        line_mp = QLineEdit(str(val))
+                                        line_mp.setMaximumWidth(TEXT_FIELD_WIDTH)
+                                        line_mp.textChanged.connect(
+                                            lambda v, mn=m_name, pk=mk: self._on_method_param_edited(mn, pk, v)
+                                        )
+                                        row_mp.addWidget(line_mp)
+                                    btn_del_mp = _make_subtle_tool_button("close", f"Remove '{mk}'", size=20, icon_size=12)
+                                    btn_del_mp.clicked.connect(lambda _, mn=m_name, pk=mk: self._remove_method_param(mn, pk))
+                                    row_mp.addWidget(btn_del_mp)
+                                    model_rows.append((str(mk), row_mp))
 
                         if show_mo_defs:
                             for mk in sorted(model_keys):
@@ -2714,7 +2877,9 @@ class ConfigViewer(QWidget):
                     row_g.addWidget(lbl_def)
                     train_rows.append(("Discount Factor (γ)", row_g))
 
-                consumed_keys = {"agent", "model", "neural", "symbolic", "blender", "base", "lr", "batch_size", "gamma"}
+                consumed_keys = {"agent", "model", "base", "lr", "batch_size", "gamma"}
+                if known_slots:
+                    consumed_keys.update(known_slots)
                 consumed_keys.update(agent_keys_present)
                 consumed_keys.update(model_keys_present)
 
@@ -2989,7 +3154,7 @@ class ConfigViewer(QWidget):
             self.boxes_layout.addWidget(box_tr)
 
         # --- MODULAR BOX: DATASET SPECIFICATION ---
-        has_dataset = "dataset_path" in data or "offline_datasets" in data
+        has_dataset = "dataset_path" in data
         is_offline_req = paradigm in ("offline_rl", "supervised")
         show_dataset = has_dataset or is_offline_req or (self.view_mode == "resolved" and "dataset_path" in resolved)
 
@@ -3050,22 +3215,6 @@ class ConfigViewer(QWidget):
             ds_path_row.addStretch()
             ds_form.addRow("Dataset Path", ds_path_row)
 
-            # offline_datasets text line
-            self.txt_offline_ds = QLineEdit()
-            self.txt_offline_ds.setMaximumWidth(320)
-            off_val = data.get("offline_datasets") or resolved.get("offline_datasets") or ""
-            if isinstance(off_val, list):
-                off_val = ", ".join(str(x) for x in off_val)
-            self.txt_offline_ds.setText(str(off_val))
-            self.txt_offline_ds.setPlaceholderText("Comma-separated list of dataset names (optional)...")
-            self.txt_offline_ds.textChanged.connect(
-                lambda v: self._on_field_edited("offline_datasets", [x.strip() for x in v.split(",") if x.strip()] if "," in v else v.strip())
-            )
-            off_row = QHBoxLayout()
-            off_row.addWidget(self.txt_offline_ds)
-            off_row.addStretch()
-            ds_form.addRow("Offline Datasets", off_row)
-
             box_ds.add_layout(ds_form)
             self.boxes_layout.addWidget(box_ds)
 
@@ -3090,29 +3239,47 @@ class ConfigViewer(QWidget):
             grid_res.setVerticalSpacing(8)
             res_dict = data.get("resources", {}) if has_res else resolved.get("resources", {})
 
-            grid_res.addWidget(label("Time Limit"), 0, 0)
+            # Site Profile Dropdown
+            grid_res.addWidget(label("Site Profile"), 0, 0)
+            combo_site = ComboBox()
+            combo_site.setMaximumWidth(NUMBER_FIELD_WIDTH)
+            sites = list(tree.sites) if tree and hasattr(tree, "sites") else ["local", "ncshare", "arc"]
+            if "local" not in sites:
+                sites.insert(0, "local")
+            current_site = str(data.get("site") or resolved.get("site") or "local")
+            for s in sites:
+                combo_site.addItem(s)
+            s_idx = combo_site.findText(current_site)
+            if s_idx != -1:
+                combo_site.setCurrentIndex(s_idx)
+            combo_site.currentTextChanged.connect(
+                lambda v: self._on_field_edited("site", v)
+            )
+            grid_res.addWidget(combo_site, 0, 1)
+
+            grid_res.addWidget(label("Time Limit"), 0, 2)
             txt_time = QLineEdit(str(res_dict.get("time") or "02:00:00"))
             txt_time.setMaximumWidth(NUMBER_FIELD_WIDTH)
             txt_time.textChanged.connect(lambda v: self._on_nested_edited("resources", "time", v))
-            grid_res.addWidget(txt_time, 0, 1)
+            grid_res.addWidget(txt_time, 0, 3)
 
-            grid_res.addWidget(label("GPUs"), 0, 2)
+            grid_res.addWidget(label("GPUs"), 1, 0)
             txt_gpus = QLineEdit(str(res_dict.get("gpus") if res_dict.get("gpus") is not None else 0))
             txt_gpus.setMaximumWidth(NUMBER_FIELD_WIDTH)
             txt_gpus.textChanged.connect(lambda v: self._on_nested_edited("resources", "gpus", v))
-            grid_res.addWidget(txt_gpus, 0, 3)
+            grid_res.addWidget(txt_gpus, 1, 1)
 
-            grid_res.addWidget(label("CPU Cores"), 1, 0)
+            grid_res.addWidget(label("CPU Cores"), 1, 2)
             txt_cores = QLineEdit(str(res_dict.get("cores") if res_dict.get("cores") is not None else 4))
             txt_cores.setMaximumWidth(NUMBER_FIELD_WIDTH)
             txt_cores.textChanged.connect(lambda v: self._on_nested_edited("resources", "cores", v))
-            grid_res.addWidget(txt_cores, 1, 1)
+            grid_res.addWidget(txt_cores, 1, 3)
 
-            grid_res.addWidget(label("Memory"), 1, 2)
+            grid_res.addWidget(label("Memory"), 2, 0)
             txt_mem = QLineEdit(str(res_dict.get("memory") or "16G"))
             txt_mem.setMaximumWidth(NUMBER_FIELD_WIDTH)
             txt_mem.textChanged.connect(lambda v: self._on_nested_edited("resources", "memory", v))
-            grid_res.addWidget(txt_mem, 1, 3)
+            grid_res.addWidget(txt_mem, 2, 1)
 
             box_res.add_layout(grid_res)
             self.boxes_layout.addWidget(box_res)
@@ -3310,73 +3477,211 @@ class ConfigViewer(QWidget):
             self.boxes_layout.addWidget(box)
 
     def _render_generic_boxes(self):
-        """Render clean boxes for modular YAML configs (agent/*.yaml, env/*.yaml, etc.)."""
+        """Render clean boxes for modular YAML configs (agent/*.yaml, env/*.yaml, model/*.yaml, etc.)."""
         self.paradigm_badge.hide()
         data = self.raw_data
 
-        scalars = {k: v for k, v in data.items() if not isinstance(v, (dict, list))}
-        complex_items = {k: v for k, v in data.items() if isinstance(v, (dict, list))}
-
         stem = self.current_path.stem if self.current_path else ""
-        filtered_scalars = {}
-        for k, v in scalars.items():
+        leaf_params = {}
+        nested_sections = {}
+
+        for k, v in data.items():
             if k in ("name", "algorithm", "architecture", "reasoner", "experiment_id", "id"):
                 continue
             if k in ("type", "env_id") and str(v).lower() == stem.lower():
                 continue
             if isinstance(v, str) and v.lower() == stem.lower() and k in ("model", "agent"):
                 continue
-            filtered_scalars[k] = v
+            if isinstance(v, dict):
+                nested_sections[k] = v
+            else:
+                leaf_params[k] = v
 
-        if filtered_scalars:
-            box_props = ConfigBox("Parameters", f"Primary settings in {self.current_path.stem}")
+        # --- Parameters Card (Scalars and Lists) ---
+        box_props = ConfigBox()
+        hdr_layout = QHBoxLayout()
+        hdr_layout.setSpacing(8)
+        lbl_card_title = label("Parameters", "cardTitle")
+        hdr_layout.addWidget(lbl_card_title)
+        hdr_layout.addWidget(label(f"Settings in {stem}", "muted"))
+        hdr_layout.addStretch()
+
+        btn_add_p = _make_subtle_tool_button("plus", "Add parameter", size=22, icon_size=12)
+        btn_add_p.clicked.connect(self._prompt_add_generic_leaf_param)
+        hdr_layout.addWidget(btn_add_p)
+        box_props.add_layout(hdr_layout)
+
+        if leaf_params:
             form = QFormLayout()
             form.setVerticalSpacing(8)
-            for k, v in filtered_scalars.items():
+            for k, v in leaf_params.items():
+                row = QHBoxLayout()
+                row.setSpacing(8)
                 if isinstance(v, bool):
                     chk = ToggleSlider(checked=v)
                     chk.toggled.connect(lambda val, key=k: self._on_field_edited(key, val))
-                    form.addRow(k, chk)
+                    row.addWidget(chk)
                 elif isinstance(v, (int, float)):
                     spin = number_field(v)
+                    spin.setMaximumWidth(NUMBER_FIELD_WIDTH)
                     spin.valueChanged.connect(lambda val, key=k: self._on_field_edited(key, val))
-                    form.addRow(k, spin)
+                    row.addWidget(spin)
+                elif isinstance(v, list):
+                    txt = QLineEdit(str(list(v)))
+                    txt.setMaximumWidth(TEXT_FIELD_WIDTH + 80)
+                    txt.setToolTip("YAML list, e.g. [64, 64]")
+                    txt.textChanged.connect(lambda val, key=k: self._on_field_edited(key, _parse_yaml_value(val)))
+                    row.addWidget(txt)
                 else:
                     txt = QLineEdit(str(v if v is not None else ""))
-                    txt.textChanged.connect(lambda val, key=k: self._on_field_edited(key, val))
-                    form.addRow(k, txt)
+                    txt.setMaximumWidth(TEXT_FIELD_WIDTH)
+                    txt.textChanged.connect(lambda val, key=k: self._on_field_edited(key, _parse_yaml_value(val)))
+                    row.addWidget(txt)
+                btn_del = _make_subtle_tool_button("close", f"Remove '{k}'", size=20, icon_size=12)
+                btn_del.clicked.connect(lambda _, key=k: self._remove_generic_field(key))
+                row.addWidget(btn_del)
+                row.addStretch()
+                form.addRow(k, row)
             box_props.add_layout(form)
-            self.boxes_layout.addWidget(box_props)
+        else:
+            empty_row = QHBoxLayout()
+            empty_row.addWidget(label("No parameters configured. Click '+' to add one.", "muted"))
+            empty_row.addStretch()
+            box_props.add_layout(empty_row)
 
-        for section_name, section_val in complex_items.items():
-            box_sec = ConfigBox(section_name, f"Section: {section_name}")
+        self.boxes_layout.addWidget(box_props)
+
+        # --- Nested Sections (Hierarchical Parameters) ---
+        for section_name, section_val in nested_sections.items():
+            box_sec = ConfigBox()
+            sec_hdr = QHBoxLayout()
+            sec_hdr.setSpacing(8)
+            sec_hdr.addWidget(label(section_name, "cardTitle"))
+            sec_hdr.addStretch()
+
+            btn_add_sec_p = _make_subtle_tool_button("plus", f"Add parameter to '{section_name}'", size=22, icon_size=12)
+            btn_add_sec_p.clicked.connect(lambda _, sn=section_name: self._prompt_add_nested_generic_param((sn,)))
+            sec_hdr.addWidget(btn_add_sec_p)
+
+            btn_del_sec = _make_subtle_tool_button("close", f"Remove section '{section_name}'", size=22, icon_size=12)
+            btn_del_sec.clicked.connect(lambda _, sn=section_name: self._remove_generic_field(sn))
+            sec_hdr.addWidget(btn_del_sec)
+            box_sec.add_layout(sec_hdr)
+
             if isinstance(section_val, dict):
                 form_sec = QFormLayout()
                 form_sec.setVerticalSpacing(8)
-                for sk, sv in section_val.items():
-                    if isinstance(sv, bool):
-                        slider = ToggleSlider(checked=sv)
-                        slider.toggled.connect(lambda val, s=section_name, k=sk: self._on_nested_edited(s, k, val))
-                        form_sec.addRow(sk, slider)
-                    elif isinstance(sv, (int, float, str)):
-                        line = QLineEdit(str(sv))
-                        line.textChanged.connect(lambda val, s=section_name, k=sk: self._on_nested_edited(s, k, val))
-                        form_sec.addRow(sk, line)
-                    else:
-                        form_sec.addRow(sk, label(str(sv), "muted"))
+                self._render_generic_dict_contents(form_sec, section_val, (section_name,), level=1)
                 box_sec.add_layout(form_sec)
-            elif isinstance(section_val, list):
-                lbl = label(", ".join(str(item) for item in section_val), "muted")
-                lbl.setWordWrap(True)
-                box_sec.add_widget(lbl)
             self.boxes_layout.addWidget(box_sec)
+
+    def _render_generic_dict_contents(self, parent_layout, d: dict, path: tuple[str, ...], level: int = 1):
+        """Recursively render hierarchical nested dictionary contents in the generic component viewer."""
+        for k, v in d.items():
+            if isinstance(v, dict):
+                sub_block = IndentedHierarchyBlock(level=level)
+                sub_hdr = QHBoxLayout()
+                sub_hdr.addWidget(label(f"[{k}]", "muted"))
+                sub_hdr.addStretch()
+                btn_add_sub = _make_subtle_tool_button("plus", f"Add parameter to '{k}'", size=20, icon_size=12)
+                btn_add_sub.clicked.connect(lambda _, p=path + (k,): self._prompt_add_nested_generic_param(p))
+                sub_hdr.addWidget(btn_add_sub)
+                btn_del_sub = _make_subtle_tool_button("close", f"Remove '{k}'", size=20, icon_size=12)
+                btn_del_sub.clicked.connect(lambda _, p=path + (k,): self._remove_generic_path(p))
+                sub_hdr.addWidget(btn_del_sub)
+
+                sub_block.addRow("", sub_hdr)
+                self._render_generic_dict_contents(sub_block, v, path + (k,), level=level + 1)
+                parent_layout.addRow("", sub_block)
+            else:
+                row = QHBoxLayout()
+                row.setSpacing(8)
+                if isinstance(v, bool):
+                    chk = ToggleSlider(checked=v)
+                    chk.toggled.connect(lambda val, p=path + (k,): self._on_generic_path_edited(p, val))
+                    row.addWidget(chk)
+                elif isinstance(v, (int, float)):
+                    spin = number_field(v)
+                    spin.setMaximumWidth(NUMBER_FIELD_WIDTH)
+                    spin.valueChanged.connect(lambda val, p=path + (k,): self._on_generic_path_edited(p, val))
+                    row.addWidget(spin)
+                elif isinstance(v, list):
+                    txt = QLineEdit(str(list(v)))
+                    txt.setMaximumWidth(TEXT_FIELD_WIDTH + 80)
+                    txt.setToolTip("YAML list, e.g. [64, 64]")
+                    txt.textChanged.connect(lambda val, p=path + (k,): self._on_generic_path_edited(p, _parse_yaml_value(val)))
+                    row.addWidget(txt)
+                else:
+                    txt = QLineEdit(str(v if v is not None else ""))
+                    txt.setMaximumWidth(TEXT_FIELD_WIDTH)
+                    txt.textChanged.connect(lambda val, p=path + (k,): self._on_generic_path_edited(p, _parse_yaml_value(val)))
+                    row.addWidget(txt)
+                btn_del = _make_subtle_tool_button("close", f"Remove '{k}'", size=20, icon_size=12)
+                btn_del.clicked.connect(lambda _, p=path + (k,): self._remove_generic_path(p))
+                row.addWidget(btn_del)
+                row.addStretch()
+                parent_layout.addRow(k, row)
+
+    def _prompt_add_generic_leaf_param(self):
+        """Prompt user to add a new parameter to the component configuration."""
+        key, ok = QInputDialog.getText(self, "Add Parameter", "Parameter name:")
+        if not ok or not key.strip():
+            return
+        key = key.strip()
+        val_str, ok2 = QInputDialog.getText(self, "Parameter Value", f"Initial value for '{key}':")
+        if not ok2:
+            return
+        self.raw_data[key] = _parse_yaml_value(val_str)
+        self._mark_dirty()
+        self._render_boxes()
+
+    def _prompt_add_nested_generic_param(self, path: tuple[str, ...]):
+        """Prompt user to add a new parameter inside a nested section."""
+        path_str = ".".join(path)
+        key, ok = QInputDialog.getText(self, "Add Parameter", f"Parameter name inside '{path_str}':")
+        if not ok or not key.strip():
+            return
+        key = key.strip()
+        val_str, ok2 = QInputDialog.getText(self, "Parameter Value", f"Initial value for '{key}':")
+        if not ok2:
+            return
+        self._on_generic_path_edited(path + (key,), _parse_yaml_value(val_str))
+        self._render_boxes()
+
+    def _on_generic_path_edited(self, path: tuple[str, ...], value: Any):
+        if self._block_updates or not path:
+            return
+        cur = self.raw_data
+        for p in path[:-1]:
+            if p not in cur or not isinstance(cur[p], dict):
+                cur[p] = {}
+            cur = cur[p]
+        cur[path[-1]] = _parse_yaml_value(value) if isinstance(value, str) else value
+        self._mark_dirty()
+
+    def _remove_generic_field(self, key: str):
+        self.raw_data.pop(key, None)
+        self._mark_dirty()
+        self._render_boxes()
+
+    def _remove_generic_path(self, path: tuple[str, ...]):
+        if not path:
+            return
+        cur = self.raw_data
+        for p in path[:-1]:
+            if p not in cur or not isinstance(cur[p], dict):
+                return
+            cur = cur[p]
+        cur.pop(path[-1], None)
+        self._mark_dirty()
+        self._render_boxes()
 
     # ── Edit Handlers ──────────────────────────────────────────────────────────
 
     def _on_field_edited(self, key, value):
         if self._block_updates:
             return
-        self.raw_data[key] = value
+        self.raw_data[key] = _parse_yaml_value(value) if isinstance(value, str) else value
         self._mark_dirty()
 
     def _validate_method_name(self, name: str, existing_names: set[str]) -> str | None:
@@ -3485,12 +3790,21 @@ class ConfigViewer(QWidget):
             return meth_name
 
         def_name, def_spec = self._get_group_default_method()
+        paradigm = self.raw_data.get("paradigm") or self._inherited_paradigm() or "online_rl"
+        tree = config_tree()
+        p_obj = tree.paradigms.get(paradigm) if tree and paradigm in tree.paradigms else None
+        default_model = (
+            (def_spec.get("model") if def_spec else None)
+            or (p_obj.raw.get("default_model") if p_obj else None)
+            or "dnn"
+        )
+
         methods = self.raw_data.setdefault("methods", {})
         if name:
             meth_name = name
         elif agent or model:
             from .config_model import unique_method_name
-            meth_name = unique_method_name(methods, agent, model or "dnn")
+            meth_name = unique_method_name(methods, agent, model or default_model)
         elif def_name and def_name not in methods:
             meth_name = def_name
         else:
@@ -3613,6 +3927,36 @@ class ConfigViewer(QWidget):
                 return
         m_spec[param_key] = parsed_val
         self._mark_dirty()
+
+    def _on_method_nested_param_edited(self, method_name: str, parent_key: str, child_key: str, value: Any):
+        if self._block_updates:
+            return
+        methods = self.raw_data.setdefault("methods", {})
+        m_spec = methods.setdefault(method_name, {})
+        parsed_val = _parse_yaml_value(value) if isinstance(value, str) else value
+        if isinstance(m_spec.get("model"), dict):
+            model_name = next(iter(m_spec["model"]))
+            m_dict = m_spec["model"].setdefault(model_name, {})
+            if parent_key in m_dict and isinstance(m_dict[parent_key], dict):
+                m_dict[parent_key][child_key] = parsed_val
+                self._mark_dirty()
+                return
+        if parent_key not in m_spec or not isinstance(m_spec[parent_key], dict):
+            m_spec[parent_key] = {}
+        m_spec[parent_key][child_key] = parsed_val
+        self._mark_dirty()
+
+    def _remove_method_nested_param(self, method_name: str, parent_key: str, child_key: str):
+        methods = self.raw_data.get("methods", {})
+        m_spec = methods.get(method_name, {})
+        if isinstance(m_spec.get("model"), dict):
+            for m_dict in m_spec["model"].values():
+                if isinstance(m_dict, dict) and parent_key in m_dict and isinstance(m_dict[parent_key], dict):
+                    m_dict[parent_key].pop(child_key, None)
+        if parent_key in m_spec and isinstance(m_spec[parent_key], dict):
+            m_spec[parent_key].pop(child_key, None)
+        self._mark_dirty()
+        self._render_boxes()
 
     def _browse_dataset_path(self):
         """Open file dialog to select a dataset file or directory."""
@@ -3802,16 +4146,6 @@ class ConfigViewer(QWidget):
             model_params = tree.model_parameters(model_name)
             if param_key in model_params:
                 return model_params[param_key]
-            if model_name == "blendrl":
-                blend_defaults = {
-                    "blend_ent_coef": 0.05,
-                    "logic_lr": 0.001,
-                    "blender_lr": 0.0005,
-                    "blend_q_values": True,
-                    "actor_mode": "hybrid",
-                }
-                if param_key in blend_defaults:
-                    return blend_defaults[param_key]
 
         # 5. Generic fallback
         known = {
@@ -3851,12 +4185,14 @@ class ConfigViewer(QWidget):
         if not sub_type:
             if isinstance(m_spec.get(subcomp_name), str):
                 sub_type = m_spec[subcomp_name]
-            elif subcomp_name == "symbolic":
-                sub_type = "nsfr"
-            elif subcomp_name == "neural":
-                sub_type = "dnn"
-            elif subcomp_name == "blender":
-                sub_type = "blender"
+            elif tree and model_name and model_name in tree.models:
+                slot_dict = tree.models[model_name].parameters.get(subcomp_name)
+                if isinstance(slot_dict, dict):
+                    sub_type = slot_dict.get("type") or slot_dict.get("architecture") or subcomp_name
+                    if param_key in slot_dict:
+                        return slot_dict[param_key]
+                elif isinstance(slot_dict, str):
+                    sub_type = slot_dict
 
         if tree and sub_type and sub_type in tree.models:
             model_params = tree.model_parameters(sub_type)
@@ -3882,18 +4218,13 @@ class ConfigViewer(QWidget):
         m_spec = methods.setdefault(method_name, {})
         tree = config_tree()
         model_val = m_spec.get("model")
-        model_name = next(iter(model_val)) if isinstance(model_val, dict) else str(model_val or "blendrl")
+        model_name = next(iter(model_val)) if isinstance(model_val, dict) else str(model_val or "dnn")
 
-        if subcomp_name == "neural":
+        tree = config_tree()
+        subcomps = tree.model_subcomponents(model_name) if tree else {}
+        sub_default = dict(subcomps.get(subcomp_name, {}))
+        if not sub_default:
             sub_default = {"type": "dnn"}
-        elif subcomp_name == "symbolic":
-            sub_default = {"type": "nsfr"}
-        elif subcomp_name == "blender":
-            sub_default = {"mode": "neural"}
-        else:
-            tree = config_tree()
-            subcomps = tree.model_subcomponents(model_name) if tree else {}
-            sub_default = dict(subcomps.get(subcomp_name, {}))
 
         if isinstance(m_spec.get("model"), dict):
             m_spec["model"].setdefault(model_name, {})[subcomp_name] = sub_default
@@ -3938,10 +4269,9 @@ class ConfigViewer(QWidget):
         cur_val = container.get(subcomp_name)
         if isinstance(cur_val, str):
             container[subcomp_name] = new_type
-        elif isinstance(cur_val, dict):
-            old_reasoner = next((r for r in ("cew", "nsfr", "neumann") if r in cur_val), None)
-            if old_reasoner:
-                params = cur_val.pop(old_reasoner)
+            old_submodel = next((k for k in cur_val if (self.tree and k in self.tree.models)), None)
+            if old_submodel:
+                params = cur_val.pop(old_submodel)
                 container[subcomp_name] = {new_type: params if isinstance(params, dict) else {}}
             elif "type" in cur_val:
                 cur_val["type"] = new_type
@@ -3975,11 +4305,12 @@ class ConfigViewer(QWidget):
                 m_spec[subcomp_name] = {"type": m_spec[subcomp_name]}
             target = m_spec[subcomp_name]
 
-        for r_name in ("cew", "nsfr", "neumann"):
-            if r_name in target and isinstance(target[r_name], dict):
-                target[r_name][key] = _parse_yaml_value(value)
-                self._mark_dirty()
-                return
+        if self.tree:
+            for sub_name in self.tree.models:
+                if sub_name in target and isinstance(target[sub_name], dict):
+                    target[sub_name][key] = _parse_yaml_value(value)
+                    self._mark_dirty()
+                    return
 
         target[key] = _parse_yaml_value(value)
         self._mark_dirty()
@@ -3996,12 +4327,13 @@ class ConfigViewer(QWidget):
         if target is None and subcomp_name in m_spec and isinstance(m_spec[subcomp_name], dict):
             target = m_spec[subcomp_name]
         if target is not None:
-            for r_name in ("cew", "nsfr", "neumann"):
-                if r_name in target and isinstance(target[r_name], dict):
-                    target[r_name].pop(key, None)
-                    self._mark_dirty()
-                    self._render_boxes()
-                    return
+            if self.tree:
+                for sub_name in self.tree.models:
+                    if sub_name in target and isinstance(target[sub_name], dict):
+                        target[sub_name].pop(key, None)
+                        self._mark_dirty()
+                        self._render_boxes()
+                        return
             target.pop(key, None)
             self._mark_dirty()
             self._render_boxes()
@@ -4028,17 +4360,23 @@ class ConfigViewer(QWidget):
     def _add_method_param(self, method_name, param_key, value=None):
         if not param_key:
             return
-        if param_key in ("neural", "symbolic", "blender"):
-            self._add_method_subcomponent(method_name, param_key)
-            return
-        if value is None or value == "":
-            value = self._resolve_default_param_value(method_name, param_key)
         methods = self.raw_data.setdefault("methods", {})
         m_spec = methods.setdefault(method_name, {})
+        model_name = None
+        if isinstance(m_spec.get("model"), str):
+            model_name = m_spec["model"]
+        elif isinstance(m_spec.get("model"), dict):
+            model_name = next(iter(m_spec["model"]), None)
+
+        if self.tree and model_name and param_key in self.tree.model_slots(model_name):
+            self._add_method_subcomponent(method_name, param_key)
+            return
+
+        if value is None or value == "":
+            value = self._resolve_default_param_value(method_name, param_key)
         parsed_val = _parse_yaml_value(value)
-        if isinstance(m_spec.get("model"), dict):
-            model_name = next(iter(m_spec["model"]))
-            if param_key in ("blend_q_values", "blend_ent_coef", "actor_mode", "logic_lr", "blender_lr"):
+        if isinstance(m_spec.get("model"), dict) and model_name:
+            if self.tree and model_name in self.tree.models and param_key in self.tree.model_parameters(model_name):
                 m_spec["model"].setdefault(model_name, {})[param_key] = parsed_val
                 self._mark_dirty()
                 self._render_boxes()
@@ -4246,12 +4584,18 @@ class ConfigViewer(QWidget):
             self._update_dirty_ui()
             if self.current_rel_path:
                 self.dirty_state_changed.emit(self.current_rel_path, False)
+            invalidate_config_tree()
             self.save_requested.emit()
             return True
         except Exception as exc:
             if show_error:
                 QMessageBox.critical(self, "Save Error", f"Could not save file to disk:\n{exc}")
             return False
+
+    def focusOutEvent(self, event):
+        super().focusOutEvent(event)
+        if getattr(self, "auto_save", False) and self.is_dirty:
+            self.save_to_disk()
 
     def get_overrides(self):
         """Build command-line Hydra overrides matching current UI values."""
@@ -4266,7 +4610,7 @@ class ConfigViewer(QWidget):
             overrides.append(f"++description='{data['description']}'")
 
         # Hydra config-group selections (defaults in in/config/config.yaml)
-        for group in ("paradigm", "env"):
+        for group in ("paradigm", "env", "site"):
             value = self._get_explicit_env() if group == "env" else data.get(group)
             if isinstance(value, str) and value and value != self.INHERIT:
                 overrides.append(f"{group}={value}")
@@ -4275,6 +4619,10 @@ class ConfigViewer(QWidget):
             overrides.append(f"seed={data['seed']}")
         if "total_timesteps" in data:
             overrides.append(f"total_timesteps={data['total_timesteps']}")
+        if "epochs" in data:
+            overrides.append(f"epochs={data['epochs']}")
+        if "eval_every_n_epochs" in data:
+            overrides.append(f"eval_every_n_epochs={data['eval_every_n_epochs']}")
         if "tensorboard" in data:
             overrides.append(f"tensorboard={str(data['tensorboard']).lower()}")
         if "save_dataset" in data and data["save_dataset"]:

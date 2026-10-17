@@ -1,6 +1,6 @@
 from omegaconf import OmegaConf
 
-from src.app.pipeline.slurm import generate_sbatch_header
+from src.app.pipeline.slurm import generate_sbatch_header, generate_sbatch_script
 
 
 def test_slurm_compute_node_defaults():
@@ -85,5 +85,27 @@ def test_slurm_ncshare_split_sites():
     assert "#SBATCH --mem=32G" in header_gpu
     assert "#SBATCH --gres=gpu:1" in header_gpu
     assert cfg_gpu.site.consolidate is True
+
+    GlobalHydra.instance().clear()
+
+
+def test_slurm_script_is_depersonalized():
+    """Verify that generated Slurm scripts contain no hardcoded home paths or user emails."""
+    from hydra import compose, initialize
+    from hydra.core.global_hydra import GlobalHydra
+
+    GlobalHydra.instance().clear()
+    initialize(config_path="../in/config", version_base=None)
+    cfg = compose(config_name="config", overrides=["site=ncshare"])
+    script = generate_sbatch_script(
+        job_name="depersonalized_test",
+        cmd_args=["+experiment=cartpole/test"],
+        log_dir="results/logs/slurm",
+        cfg=cfg,
+    )
+    assert 'export PROJECT_ROOT="${PROJECT_ROOT:-${SLURM_SUBMIT_DIR:-$(pwd)}}"' in script
+    assert "/Users/" not in script
+    assert "/home/" not in script
+    assert "--mail-user" not in script
 
     GlobalHydra.instance().clear()

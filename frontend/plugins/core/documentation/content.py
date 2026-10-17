@@ -887,35 +887,36 @@ num_checkpoints: 10              # or checkpoint_every_steps: 10000 (one or the 
 
 <h3>6. Packaging & Publishing to the Community Hub</h3>
 
-<h4>Creating the Release Archive</h4>
-<p>Compress your component files into a <code>.zip</code> file:</p>
-<pre><code>zip -r my_cql-1.0.0.zip my_method/</code></pre>
+<h4>1-Click Experiment-to-Plugin Export</h4>
+<p>Theta-IDE provides native 1-click export of any experiment and its complete dependency closure:</p>
+<ul>
+  <li><b>GUI Action Bar:</b> Click <b>Export</b> (or <code>Ctrl+Shift+S</code>) &rarr; choose <i>Theta Hub Component Archive (.zip)</i>. The IDE automatically traces the recipe YAML, base configs, environment wrappers, domain rules, custom model architectures, and optional checkpoint weights.</li>
+  <li><b>CLI Command:</b>
+    <pre><code>python run_pipeline.py export cartpole/quick_test
+# With trained checkpoints:
+python run_pipeline.py export cartpole/quick_test --include-weights --out results/exports/my_exp.zip</code></pre>
+  </li>
+</ul>
 
-<h4>Generating the SHA-256 Checksum</h4>
-<p>Theta-IDE enforces cryptographic integrity verification before extraction:</p>
-<pre><code>shasum -a 256 my_cql-1.0.0.zip
-# Example output: a1b2c3d4e5f6...</code></pre>
+<h4>Universal Python Packaging (<code>pyproject.toml</code>)</h4>
+<p>Any component can be packaged as a standard Python package and installed via <code>pip</code>. Theta-IDE auto-discovers declared entry points at startup:</p>
+<pre><code>[project.entry-points."theta.models"]
+my_model = "my_pkg.models:MyModel"
 
-<h4>Publishing in the Hub Registry (<code>dist/index.json</code>)</h4>
-<p>Add your component entry to the Hub's index:</p>
-<pre><code>{
-  "id": "my_cql",
-  "name": "Custom Conservative Q-Learning",
-  "kind": "method",
-  "version": "1.0.0",
-  "description": "Robust offline RL with adaptive conservatism penalties.",
-  "author": { "name": "Your Name", "github": "yourhandle" },
-  "tags": ["rl", "offline", "cql"],
-  "releases": {
-    "1.0.0": {
-      "tag": "v1.0.0",
-      "url": "https://github.com/yourhandle/my_cql/releases/download/v1.0.0/my_cql-1.0.0.zip",
-      "sha256": "a1b2c3d4e5f6...",
-      "size_bytes": 14200
-    }
-  }
-}</code></pre>
-<p>Once published, the component is immediately searchable, installable, and updatable via the <b>Community Hub</b> pane in Theta-IDE.</p>
+[project.entry-points."theta.agents"]
+my_agent = "my_pkg.agents:MyAgent"
+
+[project.entry-points."theta.environments"]
+my_env = "my_pkg.envs:MyEnvPlugin"
+
+[project.entry-points."theta.datamodules"]
+my_dm = "my_pkg.data:MyDataModule"</code></pre>
+
+<h4>Manual Release Archive & Hub Registry (<code>dist/index.json</code>)</h4>
+<p>For standalone zip releases, package your directory and generate the SHA-256 hash:</p>
+<pre><code>zip -r my_cql-1.0.0.zip my_method/
+shasum -a 256 my_cql-1.0.0.zip</code></pre>
+<p>Add your release to the Hub catalog index, and it becomes installable with one click directly in the <b>Community Hub</b>.</p>
 """,
     ),
     DocArticle(

@@ -55,7 +55,7 @@ def list_experiments() -> list[dict[str, Any]]:
     exp_dir = CONFIG_DIR / "experiment"
     exps = []
     for f in sorted(exp_dir.glob("**/*.yaml")):
-        if f.name.startswith("_"):
+        if f.name.startswith("_") or f.parent.name == "methods" or "/methods/" in f.as_posix():
             continue
         rel_path = f.relative_to(exp_dir)
         try:

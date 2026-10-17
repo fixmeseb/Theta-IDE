@@ -30,7 +30,7 @@ def create_transfer_learning_preset() -> WorkflowGraph:
     n2 = make_online_rl_node(
         "target_fine_tuner", "MountainCar PPO (Target)", experiment_ref="cartpole/quick_test", pos_x=440, pos_y=120
     )
-    n2.overrides = ["env=mountaincar", "++train.freeze_backbone=false"]
+    n2.overrides = ["env=gym_classic_control/mountaincar", "++train.freeze_backbone=false"]
 
     graph.add_node(n1)
     graph.add_node(n2)
@@ -71,7 +71,7 @@ def create_model_distillation_preset() -> WorkflowGraph:
         description="A large hybrid BlendRL teacher model generates rollout transitions with soft action logits to train a fast student MLP.",
     )
     teacher = make_online_rl_node(
-        "teacher_model", "Pretrained BlendRL (Teacher)", experiment_ref="seaquest/quick_test", pos_x=60, pos_y=120
+        "teacher_model", "Pretrained BlendRL (Teacher)", experiment_ref="cartpole/quick_test", pos_x=60, pos_y=120
     )
 
     # Rollout generator node

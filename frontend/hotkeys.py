@@ -329,10 +329,29 @@ class HotkeyManager(QObject):
         """Return True if *key* is a pure modifier key (Ctrl, Shift, Alt, …)."""
         return key in _MODIFIER_KEY_CODES
 
+    def is_in_hotkey_editor(self, watched: Optional[QObject] = None) -> bool:
+        """Return True if a hotkey or shortcut editor field is currently focused or being edited."""
+        app = QApplication.instance()
+        focus_w = app.focusWidget() if app else None
+        for w in (watched, focus_w):
+            if w is not None:
+                if getattr(w, "_is_hotkey_editor", False):
+                    return True
+                cname = w.__class__.__name__
+                if cname in ("HotkeyComboEdit", "MenuShortcutEdit", "QKeySequenceEdit"):
+                    return True
+        return False
+
     # ── Event filter ──────────────────────────────────────────────────────
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
         if not self.enabled:
+            return super().eventFilter(watched, event)
+
+        # When actively recording or editing a hotkey/shortcut, do not intercept keys
+        if self.is_in_hotkey_editor(watched):
+            self._cancel_leader()
+            self._action_key_held = False
             return super().eventFilter(watched, event)
 
         # When the terminal pane is active, let it handle all keys uninterrupted

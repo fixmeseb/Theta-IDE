@@ -1,8 +1,0 @@
-agent: ppo
-model: dnn
-
-style:
-  label: "PPO"
-  color: "#1f77b4"
-  marker: "o"
-  linestyle: "-"

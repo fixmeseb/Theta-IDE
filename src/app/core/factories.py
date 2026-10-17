@@ -7,7 +7,6 @@ import numpy as np
 import torch
 
 from src.app.core.utils import load_module
-from src.usr.models.neural.architectures import CNNActor, NeuralBlenderActor, NeuralBlenderMLP
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +39,24 @@ def get_blender(
     out_size=2,
     architecture="cnn",
 ):
+    """Deprecated legacy helper. Blenders are now managed directly by the BlendRL plugin."""
+    try:
+        from src.usr.models.blendrl.agents.blender_agent import build_blender_module
+
+        return build_blender_module(
+            env=env,
+            blender_rules=blender_rules,
+            device=device,
+            train=train,
+            blender_mode=blender_mode,
+            reasoner=reasoner,
+            explain=explain,
+            out_size=out_size,
+            architecture=architecture,
+        )
+    except ImportError:
+        pass
+
     assert blender_mode in ["logic", "neural"]
     if blender_mode == "logic":
         if reasoner == "nsfr":
@@ -52,13 +69,13 @@ def get_blender(
             return get_blender_neumann_model(env.name, blender_rules, device, train=train, explain=explain)
     if blender_mode == "neural":
         if architecture == "cnn":
-            net = NeuralBlenderActor(out_size=out_size)
+            net = NatureCNNActor(out_size=out_size)
         else:
             obs = env.reset()
             if isinstance(obs, tuple):
                 obs = obs[0]
             num_in_features = np.prod(obs.shape[1:])
-            net = NeuralBlenderMLP(num_in_features=num_in_features, out_size=out_size)
+            net = StandardMLPActor(num_in_features=num_in_features, out_size=out_size)
         net.to(device)
         return net
 

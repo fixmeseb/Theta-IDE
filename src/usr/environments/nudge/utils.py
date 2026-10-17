@@ -9,7 +9,7 @@ import numpy as np
 import torch
 import yaml
 
-from blendrl.env_vectorized import VectorizedNudgeBaseEnv
+from src.app.core.env_vectorized import VectorizedNudgeBaseEnv
 from nsfr.nsfr import NSFReasoner
 from nsfr.utils.common import load_module
 from nsfr.utils.torch import softor

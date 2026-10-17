@@ -8,11 +8,8 @@ default_callbacks:
 constraints:
   requires:
     methods: non_empty
+    agent: required
   forbids:
     eval_episodes: non_zero
-
-allowed_agents:
-  - cql
-  - iql
 forbidden_agents:
   - ppo

@@ -5,6 +5,7 @@ defaults:
   - override /env: cartpole
 
 paradigm: online_rl
+eval_episodes: 100
 seed: 42
 recover: false
 # Also write TensorBoard logs to results/tensorboard/ (viewable in the GUI's TensorBoard tab)

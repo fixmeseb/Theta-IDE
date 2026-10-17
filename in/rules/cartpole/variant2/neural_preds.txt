@@ -1,3 +1,0 @@
-leaning_left:1:oagent
-leaning_right:1:oagent
-true:1:oenv

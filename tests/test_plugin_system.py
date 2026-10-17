@@ -64,6 +64,8 @@ class SamplePlugin(Plugin):
         self.window = Window(data_dir=self.temp_dir)
 
     def tearDown(self):
+        if hasattr(self, "window"):
+            self.window.close()
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
     def test_zero_bundled_plugins_shipped_with_theta(self):

@@ -70,8 +70,15 @@ def get_shell_env_block(site_cfg=None) -> str:
     """Generate shell export lines for Slurm scripts.
 
     Includes PROJECT_ROOT, module loads, PYTHONPATH, and extra env vars.
+    Uses dynamic SLURM_SUBMIT_DIR / $(pwd) resolution so scripts remain
+    depersonalized and portable across users and cluster environments.
     """
-    lines = [f"export PROJECT_ROOT={PROJECT_ROOT}"]
+    explicit_root = getattr(site_cfg, "project_root", None) if site_cfg else None
+    if explicit_root:
+        lines = [f'export PROJECT_ROOT="${{PROJECT_ROOT:-{explicit_root}}}"']
+    else:
+        lines = ['export PROJECT_ROOT="${PROJECT_ROOT:-${SLURM_SUBMIT_DIR:-$(pwd)}}"']
+
 
     # Module loads (safe initialization for non-interactive Slurm subshells)
     mod_list = getattr(site_cfg, "module_loads", []) or []

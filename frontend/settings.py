@@ -108,6 +108,10 @@ visible = [
 # List of plugin IDs that are currently enabled.
 enabled = []
 
+[components]
+# Prompt for confirmation when deleting a component from the components panel.
+confirm_delete = true
+
 [hub]
 # What to do with configuration files when uninstalling a component from Theta Hub.
 # Options: "ask" (prompt each time), "keep" (preserve configs), "remove" (delete configs)
@@ -506,6 +510,14 @@ class SettingsManager(QObject):
     @hub_uninstall_configs.setter
     def hub_uninstall_configs(self, val: str) -> None:
         self.set("hub", "uninstall_configs", val)
+
+    @property
+    def confirm_delete_component(self) -> bool:
+        return bool(self.get("components", "confirm_delete", default=True))
+
+    @confirm_delete_component.setter
+    def confirm_delete_component(self, val: bool) -> None:
+        self.set("components", "confirm_delete", bool(val))
 
     @property
     def hotkeys_enabled(self) -> bool:

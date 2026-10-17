@@ -88,14 +88,11 @@ def build_method_overrides(
     merged_agent_params = dict(method_cfg.get("agent_params", {}))
     merged_agent_params.update(agent_subparams)
 
-    if model_arch == "blendrl":
-        merged_model_params = dict(method_cfg.get("model_params", {}))
-    else:
-        merged_model_params = dict(method_cfg.get("model_params", {}))
-        merged_model_params.update(model_subparams)
+    merged_model_params = dict(method_cfg.get("model_params", {}))
+    merged_model_params.update(model_subparams)
 
-    # For BlendRL, if modules was auto-synthesized from neural/symbolic, omit the redundant modules CLI string
-    if model_arch == "blendrl" and not merged_model_params.get("explicit_modules", False):
+    # For composite models, if modules was auto-synthesized, omit the redundant modules CLI string
+    if not merged_model_params.get("explicit_modules", False):
         merged_model_params.pop("modules", None)
     merged_model_params.pop("explicit_modules", None)
 
@@ -143,8 +140,7 @@ def build_method_overrides(
         "from_study",
     }
     if (
-        model_arch == "blendrl"
-        and not method_cfg.get("explicit_modules", False)
+        not method_cfg.get("explicit_modules", False)
         and not merged_model_params.get("explicit_modules", False)
     ):
         _INTERNAL_KEYS.add("modules")

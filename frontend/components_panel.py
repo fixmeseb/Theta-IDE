@@ -1,9 +1,11 @@
 """Dedicated Components panel for managing modular configurations (agent, env, model, paradigms, site, hydra, etc.)."""
+import shutil
 from pathlib import Path
 
 import yaml
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
+    QDialog,
     QFrame,
     QHBoxLayout,
     QMessageBox,
@@ -54,8 +56,10 @@ class ComponentsPanel(QWidget):
         self.components_tree.file_selected.connect(self.on_component_selected)
         self.splitter.addWidget(self.components_tree)
 
-        # Square buttons located at the top of the filetree next to 'create new component'
+        # Square buttons located at the top of the filetree
         self.btn_save = self.components_tree.btn_save
+        self.btn_plus = getattr(self.components_tree, "btn_plus", getattr(self.components_tree, "btn_new", None))
+        self.btn_new = self.btn_plus
         self.btn_hub = self.components_tree.btn_hub
         self.btn_toggle_raw = self.components_tree.btn_toggle_raw
         if self.btn_save is not None:
@@ -78,12 +82,16 @@ class ComponentsPanel(QWidget):
         self.content_splitter = QSplitter(Qt.Orientation.Horizontal)
 
         self.viewer = ConfigViewer()
+        self.viewer.is_component_mode = True
         self.viewer.auto_save = True
         self.viewer.btn_save = self.btn_save
         self.viewer.config_changed.connect(self._on_viewer_changed)
         self.viewer.save_requested.connect(self._on_viewer_saved)
         self.viewer.dirty_state_changed.connect(self.components_tree.set_file_dirty)
         self.viewer.file_renamed.connect(self._on_component_file_renamed)
+        self.viewer.edit_code_requested.connect(self.open_active_component_in_editor)
+        self.viewer.export_component_requested.connect(self.prompt_export_active_component)
+        self.viewer.delete_component_requested.connect(self.prompt_delete_active_component)
         if self.btn_save is not None:
             self.viewer.dirty_changed.connect(self.btn_save.setEnabled)
         self.content_splitter.addWidget(self.viewer)
@@ -143,17 +151,203 @@ class ComponentsPanel(QWidget):
 
     def on_component_selected(self, file_path, rel_path):
         """Handle component file selection from the tree."""
+        if hasattr(self, "viewer") and self.viewer and self.viewer.is_dirty:
+            self.save_current()
         self.show_params()
         self.active_path = Path(file_path)
         self.active_rel_path = rel_path
         self.viewer.load_file(self.active_path, rel_path)
+        self._update_component_action_buttons()
         self._update_raw_yaml_view()
+
+    def _update_component_action_buttons(self):
+        """Update tooltips and state for pencil, export, and trash buttons."""
+        if not self.active_path or not self.active_path.exists():
+            return
+        try:
+            from .component_actions import find_component_assets
+            assets = find_component_assets(self.active_path, self.active_rel_path)
+            comp_name = assets["comp_name"]
+            is_comp = assets["is_component"]
+            target_code = assets["primary_code_file"]
+
+            is_hub = assets.get("is_hub_installed", False)
+
+            if hasattr(self.viewer, "btn_edit_code"):
+                if target_code and target_code.is_file():
+                    self.viewer.btn_edit_code.setToolTip(f"Open {target_code.name} in editor")
+                else:
+                    self.viewer.btn_edit_code.setToolTip(f"Open {comp_name} source code in editor")
+
+            if hasattr(self.viewer, "btn_export_component"):
+                self.viewer.btn_export_component.setToolTip(f"Export '{comp_name}' for Theta Hub or GitHub")
+
+            if hasattr(self.viewer, "btn_delete_component"):
+                if is_hub:
+                    self.viewer.btn_delete_component.setToolTip(f"Uninstall {comp_name} and remove all files")
+                elif is_comp:
+                    self.viewer.btn_delete_component.setToolTip(f"Delete component {comp_name} and all its files")
+                else:
+                    self.viewer.btn_delete_component.setToolTip(f"Delete configuration {self.active_path.name}")
+        except Exception:
+            pass
+
+    def get_settings_manager(self):
+        """Resolve a SettingsManager instance from window, parent, or default instance."""
+        w = self.window()
+        if hasattr(w, "settings_manager") and w.settings_manager is not None:
+            return w.settings_manager
+        parent = self.parent()
+        if parent is not None and hasattr(parent, "settings_manager") and parent.settings_manager is not None:
+            return parent.settings_manager
+        try:
+            from .settings import SettingsManager
+            return SettingsManager()
+        except Exception:
+            return None
+
+    def open_active_component_in_editor(self, file_path=None, rel_path=None):
+        """Open the active component's primary source code in an editor."""
+        target_cfg = Path(file_path) if file_path else self.active_path
+        target_rel = rel_path or self.active_rel_path
+        if not target_cfg or not target_cfg.exists():
+            return
+
+        from .component_actions import find_component_assets, open_in_editor
+        assets = find_component_assets(target_cfg, target_rel)
+        target = assets.get("primary_code_file") or assets.get("code_dir") or target_cfg
+
+        if target and target.exists():
+            success = open_in_editor(target)
+            if success:
+                self.log_fn(f"Opened {target.name} in external editor.")
+            else:
+                QMessageBox.warning(self, "Open in Editor", f"Could not launch editor for {target}.")
+        else:
+            QMessageBox.warning(self, "Open in Editor", f"No source file found for {assets['comp_name']}.")
+
+    def prompt_export_active_component(self, file_path=None, rel_path=None):
+        """Export the active component as a Theta Hub package (.zip) or standalone directory."""
+        target_cfg = Path(file_path) if file_path else self.active_path
+        target_rel = rel_path or self.active_rel_path
+        if not target_cfg or not target_cfg.exists():
+            return
+
+        if hasattr(self, "viewer") and self.viewer and self.viewer.is_dirty:
+            self.save_current()
+
+        from .export_dialog import ExportComponentDialog
+        workspace_root = self.components_tree.root_dir.parent
+        dlg = ExportComponentDialog(
+            config_path=target_cfg,
+            rel_path=target_rel,
+            workspace_root=workspace_root,
+            parent=self,
+        )
+        if dlg.exec() and dlg.export_result and dlg.export_result.success:
+            res = dlg.export_result
+            self.log_fn(f"Exported component '{dlg.comp_name}' to {res.export_path} ({len(res.files_included)} files).")
+            QMessageBox.information(
+                self,
+                "Component Exported",
+                f"Successfully exported component '{dlg.comp_name}'!\n\nDestination:\n{res.export_path}\n\nBundled {len(res.files_included)} files.",
+            )
+
+    def prompt_delete_active_component(self, file_path=None, rel_path=None):
+        """Prompt to uninstall the component or delete its configuration, and remove all files."""
+        target_cfg = Path(file_path) if file_path else self.active_path
+        target_rel = rel_path or self.active_rel_path
+        if not target_cfg or not target_cfg.exists():
+            return
+
+        # Protection: Prevent deleting global config.yaml
+        if target_cfg.name in ("config.yaml", "config.yml") and target_rel in ("config.yaml", "config.yml"):
+            QMessageBox.warning(self, "Cannot Delete", "The root config.yaml cannot be deleted.")
+            return
+
+        from .component_actions import find_component_assets, DeleteComponentDialog
+        assets = find_component_assets(target_cfg, target_rel)
+        comp_name = assets["comp_name"]
+        files_to_delete = assets["files_to_delete"]
+        is_comp = assets["is_component"]
+        is_hub = assets.get("is_hub_installed", False)
+
+        # Check settings for confirm_delete
+        settings = self.get_settings_manager()
+        should_confirm = True
+        if settings is not None:
+            should_confirm = bool(settings.get("components", "confirm_delete", default=True))
+
+        if should_confirm:
+            dlg = DeleteComponentDialog(
+                comp_name, files_to_delete, is_component=is_comp, is_hub_installed=is_hub, parent=self
+            )
+            if dlg.exec() != QDialog.DialogCode.Accepted:
+                return
+            if dlg.dont_ask_again and settings is not None:
+                settings.set("components", "confirm_delete", False)
+
+        # Execute uninstallation / deletion
+        deleted_count = 0
+        installer = self.components_tree._get_installer() if hasattr(self.components_tree, "_get_installer") else None
+
+        # If it is a managed Hub component with metadata, uninstall via installer
+        if is_hub and assets.get("meta") and installer:
+            try:
+                installer.uninstall_by_metadata(assets["meta"], remove_configs=True)
+                deleted_count = len(files_to_delete)
+            except Exception as exc:
+                self.log_fn(f"Installer uninstall notice: {exc}")
+
+        # Delete any remaining files or directories in files_to_delete
+        for item in files_to_delete:
+            try:
+                if item.is_dir():
+                    shutil.rmtree(str(item), ignore_errors=True)
+                    deleted_count += 1
+                elif item.is_file():
+                    item.unlink(missing_ok=True)
+                    deleted_count += 1
+                    # Clean up empty parent folder if inside in/config/<category>/<subdir>
+                    p = item.parent
+                    if p.is_dir() and not any(p.iterdir()):
+                        in_cfg = (self.components_tree.root_dir).resolve()
+                        if p != in_cfg and p.parent != in_cfg and in_cfg in p.parents:
+                            p.rmdir()
+            except Exception as exc:
+                self.log_fn(f"Error removing {item}: {exc}")
+
+        # Notify plugin manager if this was an active plugin
+        w = self.window()
+        plugin_mgr = getattr(w, "plugin_manager", None)
+        if plugin_mgr is not None and is_hub:
+            comp_id = assets.get("comp_id")
+            if comp_id:
+                try:
+                    plugin_mgr.disable_plugin(comp_id)
+                except Exception:
+                    pass
+
+        action_desc = "Uninstalled component" if is_hub else ("Deleted component" if is_comp else "Deleted configuration")
+        self.log_fn(f"{action_desc} '{comp_name}' and all associated files.")
+
+        from .config_viewer import invalidate_config_tree
+        invalidate_config_tree()
+
+        # Reload components tree and auto-select fallback
+        self.reload_components()
+
+    def hideEvent(self, event):
+        super().hideEvent(event)
+        if hasattr(self, "viewer") and self.viewer and self.viewer.is_dirty:
+            self.save_current()
 
     def _on_component_file_renamed(self, old_rel, new_rel):
         self.active_path = self.viewer.current_path
         self.active_rel_path = new_rel
         self.components_tree.current_rel_path = new_rel
         self.components_tree.populate()
+        self._update_component_action_buttons()
         self._update_raw_yaml_view()
 
     def get_hub_client(self):
@@ -162,15 +356,22 @@ class ComponentsPanel(QWidget):
             return self.hub_client
         w = self.window()
         if hasattr(w, "hub_client") and w.hub_client is not None:
-            return w.hub_client
+            self.hub_client = w.hub_client
+            return self.hub_client
         parent = self.parent()
         if parent is not None and hasattr(parent, "hub_client") and parent.hub_client is not None:
-            return parent.hub_client
-        workspace_dir = Path.cwd()
-        data_dir = Path.home() / ".thetaide"
+            self.hub_client = parent.hub_client
+            return self.hub_client
+        workspace_dir = (
+            self.components_tree.root_dir.parent.parent
+            if hasattr(self, "components_tree") and self.components_tree.root_dir
+            else Path(__file__).resolve().parents[2]
+        )
+        data_dir = workspace_dir / ".thetaide"
         self.hub_client = HubClient(
             workspace_dir=workspace_dir,
             data_dir=data_dir,
+            on_change_callback=lambda comp_id, act: self.reload_components(),
         )
         return self.hub_client
 
@@ -183,6 +384,7 @@ class ComponentsPanel(QWidget):
         self.hub_view = HubView(
             client=client,
             initial_kind=None,
+            mode="components",
             close_button_text="Back to Parameters",
             parent=self,
         )
@@ -192,6 +394,8 @@ class ComponentsPanel(QWidget):
 
     def show_hub(self, initial_kind: str | None = None):
         """Switch view to the embedded Component Hub in place of the parameters panels."""
+        if hasattr(self, "viewer") and self.viewer and self.viewer.is_dirty:
+            self.save_current()
         hub = self._ensure_hub_view()
         if initial_kind:
             hub._select_kind(initial_kind)
@@ -277,6 +481,7 @@ class ComponentsPanel(QWidget):
                 self.active_path = self.components_tree.root_dir / curr
                 self.active_rel_path = curr
                 self.viewer.load_file(self.active_path, curr)
+                self._update_component_action_buttons()
                 self._update_raw_yaml_view()
             else:
                 self.components_tree.select_file(curr)
@@ -295,6 +500,7 @@ class ComponentsPanel(QWidget):
                             self.active_path = self.components_tree.root_dir / sibling_rel
                             self.active_rel_path = sibling_rel
                             self.viewer.load_file(self.active_path, sibling_rel)
+                            self._update_component_action_buttons()
                             self._update_raw_yaml_view()
                             selected_alt = True
                         else:

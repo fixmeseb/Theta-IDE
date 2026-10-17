@@ -49,6 +49,7 @@ GUI_FIELDS = [
         "key": "methods.ppo.lr",
         "label": "Learning rate",
         "type": "float",
+        "default": 0.0003,
         "default_from": "agent.lr",
         "min": 1e-6,
         "max": 1.0,
@@ -59,6 +60,7 @@ GUI_FIELDS = [
         "key": "methods.ppo.batch_size",
         "label": "Batch size",
         "type": "int",
+        "default": 64,
         "default_from": "agent.batch_size",
         "choices": [32, 64, 128, 256],
         "help": "Minibatch size for each PPO update.",
@@ -67,6 +69,7 @@ GUI_FIELDS = [
         "key": "methods.ppo.gamma",
         "label": "Discount factor · γ",
         "type": "float",
+        "default": 0.99,
         "default_from": "env.gamma",
         "min": 0.0,
         "max": 1.0,
@@ -77,6 +80,7 @@ GUI_FIELDS = [
         "key": "tensorboard",
         "label": "Log to TensorBoard",
         "type": "bool",
+        "default": False,
         "default_from": "tensorboard",
         "help": "Also write TensorBoard logs to results/tensorboard/ for the TensorBoard tab.",
     },
@@ -118,7 +122,11 @@ def config_schema() -> dict[str, Any]:
         field = dict(field)
         source = field.pop("default_from", None)
         if source:
-            field["default"] = OmegaConf.select(composed.cfg, source)
+            val = OmegaConf.select(composed.cfg, source)
+            if val is None and source == "agent.lr":
+                val = OmegaConf.select(composed.cfg, "agent.learning_rate")
+            if val is not None:
+                field["default"] = val
         fields.append(field)
     method_prefix = f"methods.{GUI_METHOD['name']}"
     return {

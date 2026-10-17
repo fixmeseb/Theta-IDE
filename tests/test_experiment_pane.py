@@ -558,6 +558,31 @@ class TestConfigViewer(unittest.TestCase):
         self.viewer._remove_universal_param("cql_alpha")
         self.assertNotIn("cql_alpha", self.viewer.raw_data.get("methods", {}).get("params", {}))
 
+    def test_methods_and_shared_params_title_sizes(self):
+        """Verify method box title matches experiment title size (23px heading) and shared params matches method titles (16px cardTitle)."""
+        self.viewer._add_universal_param("lr", 0.001)
+
+        # Method box title "Methods"
+        methods_labels = [
+            lbl for lbl in self.viewer.findChildren(QLabel)
+            if lbl.text() == "Methods"
+        ]
+        self.assertEqual(len(methods_labels), 1)
+        methods_lbl = methods_labels[0]
+        self.assertEqual(methods_lbl.objectName(), "heading")
+        self.assertIn("23px", methods_lbl.styleSheet())
+        self.assertEqual(self.viewer.file_title.objectName(), "heading")
+
+        # Shared params title "Shared Parameters"
+        shared_labels = [
+            lbl for lbl in self.viewer.findChildren(QLabel)
+            if lbl.text() == "Shared Parameters"
+        ]
+        self.assertEqual(len(shared_labels), 1)
+        shared_lbl = shared_labels[0]
+        self.assertEqual(shared_lbl.objectName(), "cardTitle")
+        self.assertIn("16px", shared_lbl.styleSheet())
+
     def test_method_hyperparameter_crud(self):
         # Adding hyperparameter to method
         self.viewer._add_method_param("ppo", "ent_coef", 0.05)

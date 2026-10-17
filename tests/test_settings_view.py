@@ -428,6 +428,127 @@ class TestHotkeysSettingsPage(unittest.TestCase):
         self.assertEqual(self.window.settings_manager.get("shortcuts", "zoom_in"), "Ctrl++")
         self.assertEqual(self.settings.menu_shortcut_edits["zoom_in"].keySequence().toString(), "Ctrl++")
 
+    def test_rebind_open_launcher_overwrites_combo_and_updates_action(self):
+        """Clicking open_launcher edit listens and overwrites previous combo with single new combo."""
+        from PyQt6.QtCore import Qt, QEvent
+        from PyQt6.QtGui import QKeyEvent
+
+        self.settings.show_tab("hotkeys")
+        edit_launcher = self.settings.menu_shortcut_edits["open_launcher"]
+
+        # Initial default is Ctrl+Space
+        self.assertEqual(edit_launcher.keySequence().toString(), "Ctrl+Space")
+
+        # Simulate clicking / focusing the edit -> starts recording
+        edit_launcher._start_recording()
+        self.assertTrue(edit_launcher._is_recording)
+        self.assertEqual(edit_launcher.text(), "")
+
+        # Simulate user pressing Ctrl+Shift+L
+        ev = QKeyEvent(
+            QEvent.Type.KeyPress,
+            Qt.Key.Key_L,
+            Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.ShiftModifier,
+        )
+        edit_launcher.keyPressEvent(ev)
+
+        # Combo overwrites previous value completely (not appended as a list of keys)
+        self.assertEqual(edit_launcher.keySequence().toString(), "Ctrl+Shift+L")
+        self.assertEqual(self.window.settings_manager.get("shortcuts", "open_launcher"), "Ctrl+Shift+L")
+        if "open_launcher" in self.window.menu_actions:
+            self.assertEqual(self.window.menu_actions["open_launcher"].shortcut().toString(), "Ctrl+Shift+L")
+
+        # Reset back to default
+        self.settings._reset_menu_shortcuts_to_default()
+        self.assertEqual(edit_launcher.keySequence().toString(), "Ctrl+Space")
+        self.assertEqual(self.window.settings_manager.get("shortcuts", "open_launcher"), "Ctrl+Space")
+
+    def test_menu_shortcut_conflict_detection_and_resolution(self):
+        """Assigning duplicate shortcut to open_launcher triggers conflict banners and row warnings."""
+        from PyQt6.QtGui import QKeySequence
+
+        self.settings.show_tab("hotkeys")
+        edit_launcher = self.settings.menu_shortcut_edits["open_launcher"]
+        edit_training = self.settings.menu_shortcut_edits["launch_training"]
+
+        # Initially no conflicts
+        self.assertFalse(self.settings._validate_hotkey_conflicts())
+        self.assertFalse(self.settings.conflict_banner.isVisible())
+        self.assertFalse(self.settings.menu_conflict_banner.isVisible())
+
+        # Cause conflict: set open_launcher to F5 (which is assigned to launch_training)
+        edit_launcher.setKeySequence(QKeySequence("F5"))
+
+        # Conflict must be detected and alerted
+        self.assertTrue(self.settings._validate_hotkey_conflicts())
+        self.assertTrue(self.settings.conflict_banner.isVisible())
+        self.assertTrue(self.settings.menu_conflict_banner.isVisible())
+        self.assertIn("F5", self.settings.menu_conflict_banner_label.text())
+        self.assertTrue(self.settings.menu_conflict_labels["open_launcher"].isVisible())
+        self.assertTrue(self.settings.menu_conflict_labels["launch_training"].isVisible())
+        self.assertIn("Conflict", self.settings.menu_conflict_labels["open_launcher"].text())
+        self.assertTrue(edit_launcher._has_conflict)
+        self.assertTrue(edit_training._has_conflict)
+
+        # Resolve conflict: assign Alt+Space back to open_launcher
+        edit_launcher.setKeySequence(QKeySequence("Alt+Space"))
+
+        # Conflicts must now be cleared
+        self.assertFalse(self.settings._validate_hotkey_conflicts())
+        self.assertFalse(self.settings.conflict_banner.isVisible())
+        self.assertFalse(self.settings.menu_conflict_banner.isVisible())
+        self.assertFalse(self.settings.menu_conflict_labels["open_launcher"].isVisible())
+        self.assertFalse(self.settings.menu_conflict_labels["launch_training"].isVisible())
+        self.assertFalse(edit_launcher._has_conflict)
+        self.assertFalse(edit_training._has_conflict)
+
+        # Restore default
+        self.settings._reset_menu_shortcuts_to_default()
+
+    def test_menu_shortcut_clear_and_escape_cancel(self):
+        """User can clear a menu shortcut via backspace or cancel recording via Escape."""
+        from PyQt6.QtCore import Qt, QEvent
+        from PyQt6.QtGui import QKeyEvent
+
+        self.settings.show_tab("hotkeys")
+        edit_launcher = self.settings.menu_shortcut_edits["open_launcher"]
+        self.assertEqual(edit_launcher.keySequence().toString(), "Ctrl+Space")
+
+        # Test Escape cancels recording without changing shortcut
+        edit_launcher._start_recording()
+        ev_esc = QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Escape, Qt.KeyboardModifier.NoModifier)
+        edit_launcher.keyPressEvent(ev_esc)
+        self.assertEqual(edit_launcher.keySequence().toString(), "Ctrl+Space")
+
+        # Test Backspace clears shortcut
+        ev_bs = QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Backspace, Qt.KeyboardModifier.NoModifier)
+        edit_launcher.keyPressEvent(ev_bs)
+        self.assertEqual(edit_launcher.keySequence().toString(), "")
+        self.assertEqual(self.window.settings_manager.get("shortcuts", "open_launcher"), "")
+        if "open_launcher" in self.window.menu_actions:
+            self.assertTrue(self.window.menu_actions["open_launcher"].shortcut().isEmpty())
+
+        # Restore default
+        self.settings._reset_menu_shortcuts_to_default()
+        self.assertEqual(edit_launcher.keySequence().toString(), "Ctrl+Space")
+
+    def test_hotkey_manager_bypasses_when_shortcut_editor_focused(self):
+        """HotkeyManager does not intercept key presses while a shortcut editor is focused."""
+        from PyQt6.QtCore import Qt, QEvent
+        from PyQt6.QtGui import QKeyEvent
+
+        self.settings.show_tab("hotkeys")
+        edit_launcher = self.settings.menu_shortcut_edits["open_launcher"]
+        edit_launcher.setFocus()
+
+        hm = self.window.hotkey_manager
+        self.assertTrue(hm.is_in_hotkey_editor(edit_launcher))
+
+        # Event filter should return False (let event pass to editor)
+        ev_b = QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_B, Qt.KeyboardModifier.ControlModifier)
+        filtered = hm.eventFilter(edit_launcher, ev_b)
+        self.assertFalse(filtered)
+
     def test_zoom_actions_and_scaling(self):
         """Window zoom_in, zoom_out, and reset_zoom update zoom factor and persist."""
         self.assertEqual(self.window.zoom_factor, 1.0)

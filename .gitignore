@@ -84,4 +84,25 @@ coverage.xml
 # Leftover artifacts
 temp/
 .src/
-/docs
+
+# Component and plugin runtime directories (managed via Hub / local authoring)
+/in/envs/*
+!/in/envs/.gitkeep
+/in/rules/*
+!/in/rules/.gitkeep
+/in/config/agent/*
+!/in/config/agent/.gitkeep
+/in/config/model/*
+!/in/config/model/.gitkeep
+/in/config/env/*
+!/in/config/env/.gitkeep
+/src/usr/methods/*
+!/src/usr/methods/__init__.py
+!/src/usr/methods/agent_registry.py
+!/src/usr/methods/base_agent.py
+!/src/usr/methods/sb3_runner.py
+!/src/usr/methods/.gitkeep
+/src/usr/models/*
+!/src/usr/models/__init__.py
+!/src/usr/models/.gitkeep
+

@@ -1,4 +1,4 @@
-# Antigravity Context: BlendRL (Refactored)
+# Antigravity Context: Theta-IDE
 
 This document is the foundational source of truth for Antigravity in this workspace. It defines the architecture, data standards, and critical logic rules that must be followed.
 
@@ -11,8 +11,8 @@ This document is the foundational source of truth for Antigravity in this worksp
 - [6. Hydra & Debugging Heuristics](#6-hydra--debugging-heuristics)
 - [7. Unified Logging & Reproducibility](#7-unified-logging--reproducibility)
 - [8. Environment Customization & Wrappers](#8-environment-customization--wrappers)
-- [9. Agent Implementation Guide](#9-agent-implementation-guide)
-- [10. Logic-Neural Bridge (The "Blender")](#10-logic-neural-bridge-the-blender)
+- [9. Agent & Model Implementation Guide](#9-agent--model-implementation-guide)
+- [10. Component Plugin Architecture & The BlendRL Case Study](#10-component-plugin-architecture--the-blendrl-case-study)
 - [11. Method Style Registry](#11-method-style-registry)
 - [12. Plotting Architecture](#12-plotting-architecture)
 - [13. Pipeline Architecture](#13-pipeline-architecture)
@@ -23,7 +23,7 @@ This document is the foundational source of truth for Antigravity in this worksp
 
 ## 1. Project Overview & Pipeline Rules
 
-BlendRL jointly learns symbolic (logic) and neural policies. It integrates logic agents (NSFR/Neumann) with RL (PPO, IQL) to create hybrid agents.
+Theta-IDE is a modular reinforcement learning & architecture benchmarking IDE and execution engine. It decouples core RL training algorithms (PPO, CQL, IQL) from model architectures, allowing pure neural models, composite architectures, and hybrid neural-symbolic systems (such as the reference BlendRL plugin) to plug in via clean runtime protocols.
 
 **No standalone scripts.** Do not write `if __name__ == "__main__":` Python scripts, bash scripts, or one-off files in the root or `scripts/` directories. Use the modular pipeline:
 - **Run experiments:** `python run_pipeline.py <group>/<exp>` — configure via Hydra in `in/config/`.
@@ -135,7 +135,7 @@ Priority: CLI flags > experiment `resources:` > site config > hardcoded fallback
     - `site=ncshare` / `site=arc`: Generates and submits Slurm batch scripts.
     - **Cluster Push Mandate:** Push all changes to GitHub before submitting cluster jobs.
 - **Filesystem:**
-    - All datasets and training workloads must use repository paths (`in/datasets/`) or local user storage (`/hpc/home/`).
+    - All datasets and training workloads must use repository paths (`in/datasets/`) or local user storage.
 - **State Recovery:** Use `recover=true` to resume from the latest checkpoint. States saved in `results/checkpoints/[GROUP]/[EXP_ID]/[AGENT]/`.
 
 ---
@@ -171,17 +171,22 @@ Priority: CLI flags > experiment `resources:` > site config > hardcoded fallback
 Agents are PyTorch Lightning Modules in `src/usr/methods/` (registered in `agent_registry.py`):
 - `PPOAgent`: Standard online actor-critic RL.
 - `IQLAgent`: Offline RL using Implicit Q-Learning.
-- `BlendRLAgent` / `BlendRLIQLAgent`: Hybrid logic-neural agents.
+- `CQLAgent`: Offline RL using Conservative Q-Learning.
 - **Model Architecture Selection:** All models live in `src/usr/models/` and are registered via `@register_model`. Instantiated through `build_model()` (`src/app/core/model_registry.py`).
+- **Algorithm-Model Decoupling:** Algorithms interact with policy models via duck-typed protocols: `ForwardModelProtocol`, `AuxiliaryLossProtocol`, and `OptimizerGroupsProtocol`.
 
 See `pipeline-crud` skill for step-by-step instructions on adding new agents.
 
 ---
 
-## 10. Logic-Neural Bridge (The "Blender")
-- **Reasoners:** NSFR (Neural Symbolic Forward Reasoner) or Neumann.
-- **Rule Loading:** `get_blender` (`src/app/core/factories.py`) initializes from `in/rules/`.
-- **Hybrid Forward Pass:** Raw observations processed by neural encoders and logic reasoners simultaneously; outputs blended into a single policy.
+## 10. Component Plugin Architecture & The BlendRL Case Study
+- **Component Plugin Contracts (`src/app/core/protocols.py`):**
+    - `ModelSlot`: Declares composite submodel slots (e.g. `neural`, `symbolic`, `blender`, `encoder`, `decoder`), candidate model types, and defaults.
+    - `CompositeModelProtocol`: Models implementing `get_model_slots()` auto-configure GUI slot cards and hierarchical pipeline overrides.
+    - `AuxiliaryLossProtocol`: Models declare auxiliary losses (e.g. entropy regularization over gate weights) added automatically to algorithm losses.
+    - `OptimizerGroupsProtocol`: Models configure custom parameter groups with per-module learning rates.
+    - `EnvironmentWrapperProtocol`: Models declare required Gymnasium environment wrappers.
+- **Reference Case Study (BlendRL):** BlendRL is implemented as a standalone component plugin in `src/usr/models/blendrl/`. It composes neural policies with logic reasoners (NSFR/Neumann/CEW) via learned or heuristic blending. See [`docs/COMPONENT_PLUGIN_GUIDE.md`](file:///Users/cameronegbert/Research/Theta-IDE/docs/COMPONENT_PLUGIN_GUIDE.md) for full implementation details.
 
 ---
 
@@ -216,7 +221,7 @@ See `pipeline-crud` skill for adding new plotters.
 - **`src/app/pipeline/workflow/model.py`**: `WorkflowGraph`, `WorkflowNode`, `WorkflowString`, `PortType` — string diagram data model.
 - **`src/app/pipeline/config.py`**: Name normalization, method list parsing, CLI arg sanitization.
 - **`src/app/pipeline/datasets.py`**: Dataset path resolution, online symlinking, plotting dispatch.
-- **`src/app/pipeline/slurm.py`**: Slurm header builder (`generate_sbatch_header`), job submission (`submit_sbatch`). Mail: `--mail-type=END,FAIL`, `--mail-user=egbertcm23@gmail.com`.
+- **`src/app/pipeline/slurm.py`**: Slurm header builder (`generate_sbatch_header`), job submission (`submit_sbatch`). Mail: configurable via site config (`--mail-type`, `--mail-user`).
 - **`src/app/pipeline/local_runner.py`**: Local sequential phase execution (`_setup_output_dirs` → `run_methods` → `run_plotting_phase`).
 - **`src/app/pipeline/slurm_runner.py`**: Cluster batch script generation and job dependency orchestration.
 - **`src/app/pipeline/shape_rewards.py`**: Offline ETL utility — `run_shape_rewards(cfg, context=None)`. Not a registered task; called as a library function from workflow transform nodes.
@@ -238,7 +243,7 @@ See `pipeline-crud` skill for adding new plotters.
 
 ## 15. Maintenance & Evolution
 - **Update this document** when new standard paths, evaluation standards, or core algorithms are introduced.
-- **Workflow reference:** [`docs/WORKFLOW_GUIDE.md`](file:///Users/cameronegbert/Research/NeSyRL/docs/WORKFLOW_GUIDE.md).
+- **Workflow reference:** [`docs/WORKFLOW_GUIDE.md`](docs/WORKFLOW_GUIDE.md).
 
 ---
 *Last Updated: 2026-09-16*

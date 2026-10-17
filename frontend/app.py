@@ -56,6 +56,8 @@ from .config_tab_manager import ConfigTabManager
 from .hub import HubClient, HubDialog
 from .job_manager import JobManager
 from .live_run import LiveRun, LiveRunCache
+from .export_dialog import ExportExperimentDialog
+from src.app.services import PROJECT_ROOT
 from src.app.services.config_service import LaunchError
 from .local_backend import LocalBackend
 from .monitor import ENV_MAX_REWARD, MonitorPanel
@@ -468,7 +470,18 @@ class Window(QMainWindow):
         default_exp = "experiment/cartpole/quick_test.yaml"
         if not (self.config_tree.root_dir / default_exp).exists():
             default_exp = "experiment/thetaide/cartpole_ppo_reference.yaml"
-        self.config_tree.select_file(default_exp)
+        if not (self.config_tree.root_dir / default_exp).exists():
+            exp_dir = self.config_tree.root_dir / "experiment"
+            candidates = sorted(
+                p for p in exp_dir.rglob("*.yaml")
+                if not p.name.startswith("_") and p.is_file()
+            ) if exp_dir.is_dir() else []
+            if candidates:
+                default_exp = str(candidates[0].relative_to(self.config_tree.root_dir))
+            else:
+                default_exp = None
+        if default_exp:
+            self.config_tree.select_file(default_exp)
 
     def toggle_yaml_preview(self, checked=None):
         if checked is None:
@@ -542,6 +555,26 @@ class Window(QMainWindow):
 
         if hasattr(self, "config_tree") and self.config_tree is not None:
             self.config_tree.select_file(rel_path, emit_signal=False)
+
+        if Path(rel_path).name.startswith("_") or not norm_rel.startswith("experiment/"):
+            self.compose_valid = False
+            self.update_launch_state()
+            if getattr(self, "preview_status", None) is not None:
+                self.preview_status.setText("Template configuration • not directly executable")
+            if getattr(self, "preview_errors", None) is not None:
+                self.preview_errors.hide()
+            if getattr(self, "builder_status", None) is not None:
+                self.builder_status.setObjectName("muted")
+                self.builder_status.setText("Base template: provides group defaults inherited by experiments in this directory.")
+                self.builder_status.setStyle(self.builder_status.style())
+            if getattr(self, "preview", None) is not None:
+                if getattr(viewer, "current_path", None) and viewer.current_path.is_file():
+                    self.preview.setPlainText(f"# {viewer.current_path.name} (Base Template)\n# Experiments in this group inherit these settings:\n\n" + viewer.current_path.read_text(encoding="utf-8"))
+                else:
+                    self.preview.setPlainText("# Base Template\n# Group defaults inherited by experiments.")
+            if hasattr(self, "plugin_manager"):
+                self.plugin_manager.notify_experiment_changed(self.current_experiment, self.active_config_path)
+            return
 
         self.request_compose()
         if hasattr(self, "plugin_manager"):
@@ -718,7 +751,9 @@ class Window(QMainWindow):
         if hasattr(self, "menu_actions"):
             for aid, action in self.menu_actions.items():
                 default_sc = action.property("_default_sc") or ""
-                sc = self.settings_manager.get("shortcuts", aid, default=default_sc) or default_sc
+                sc = self.settings_manager.get("shortcuts", aid, default=default_sc)
+                if sc is None:
+                    sc = default_sc
                 norm = normalize_menu_shortcut(sc)
                 if norm:
                     seq = QKeySequence(norm)
@@ -978,6 +1013,9 @@ class Window(QMainWindow):
         dialog.exec()
 
     def _on_hub_component_changed(self, component_id: str, action: str):
+        from .config_viewer import invalidate_config_tree
+        invalidate_config_tree()
+
         comp = self.hub_client.get_component(component_id) if hasattr(self, "hub_client") else None
 
         # Determine target category folder in in/config/ (e.g. "agent", "model", "env", "experiment")
@@ -1035,9 +1073,9 @@ class Window(QMainWindow):
         self.save_layout()
         self.statusBar().showMessage(f"Hub {action} finished: {component_id}", 4000)
 
-    def open_hub(self, initial_kind: str | None = None):
+    def open_hub(self, initial_kind: str | None = None, mode: str = "plugins"):
         if hasattr(self, "hub_client"):
-            dialog = HubDialog(self.hub_client, initial_kind=initial_kind, parent=self)
+            dialog = HubDialog(self.hub_client, initial_kind=initial_kind, mode=mode, parent=self)
             dialog.exec()
 
     def update_pane_sliders_state(self):
@@ -1151,6 +1189,8 @@ class Window(QMainWindow):
         file_menu = self.menuBar().addMenu("File")
         for aid, title, default_sc, callback in (
             ("new_experiment", "New experiment", "Ctrl+N", self.new_experiment),
+            ("scaffold_plugin", "Scaffold New Component Plugin…", "Ctrl+Shift+P", self.scaffold_plugin),
+            ("reload_components", "Reload Component Code", "Ctrl+Shift+R", self.reload_components),
             ("export_config", "Export draft YAML…", "Ctrl+Shift+S", self.export_config),
             ("save_config", "Save configuration", "Ctrl+S", self.save_current_config),
             ("close_tab", "Close tab", "Ctrl+W", self.close_active_tab),
@@ -1337,9 +1377,31 @@ class Window(QMainWindow):
             self.tabs.setCurrentWidget(self.tabs.tabs["tensorboard"]["widget"])
 
     def tab_changed(self, index):
+        # 1. If leaving components panel, auto-save any unsaved edits
+        if hasattr(self, "components_panel") and self.components_panel is not None:
+            if hasattr(self.components_panel, "viewer") and self.components_panel.viewer and self.components_panel.viewer.is_dirty:
+                self.components_panel.save_current()
+
+        # Invalidate the config tree cache so the active panel sees fresh models/agents/envs
+        from .config_viewer import invalidate_config_tree
+        invalidate_config_tree()
+
         w = self.tabs.widget(index)
         if hasattr(w, "activate") and callable(w.activate):
             w.activate()
+
+        # If switching to config_panel (Experiment panel), refresh the active viewer so dropdowns update
+        if w is getattr(self, "config_panel", None):
+            if hasattr(self, "config_tab_manager"):
+                active_v = self.config_tab_manager.current_viewer()
+                if active_v and hasattr(active_v, "reload_data"):
+                    active_v.reload_data(force_tree_refresh=True)
+
+        # If switching to components_panel, refresh viewer
+        if w is getattr(self, "components_panel", None):
+            if hasattr(self.components_panel, "viewer") and hasattr(self.components_panel.viewer, "reload_data"):
+                self.components_panel.viewer.reload_data(force_tree_refresh=True)
+
         if self.tabs.widget(index) is self.queue_panel:
             self.on_queue_changed(self.jobs.queue_state())
         if hasattr(self, "terminal_panel") and self.tabs.widget(index) is self.terminal_panel:
@@ -1502,7 +1564,11 @@ class Window(QMainWindow):
             self.preview_errors.setText("\n".join(messages))
             self.preview_errors.show()
             self.builder_status.setObjectName("configError")
-            self.builder_status.setText("✗ " + messages[0].splitlines()[0])
+            missing = self.check_missing_components()
+            if missing:
+                self.builder_status.setText(f"✗ Missing component: {', '.join(missing)}")
+            else:
+                self.builder_status.setText("✗ " + messages[0].splitlines()[0])
         self.update_launch_state()
         self.builder_status.setStyle(self.builder_status.style())
 
@@ -1534,53 +1600,29 @@ class Window(QMainWindow):
                      'pip install -e ".[gui]" then python -m frontend')
             return
         self.schema = data
-        env = data["environment"]
-        method = data["method"]
-        for title, text in (("Environment", env.get("env_id") or env["name"]),
-                            ("Method", f"{method['agent'].upper()} · {method['model']}"),
-                            ("Training mode", f"Online · {data['paradigm']}")):
-            if title in self.fixed_fields:
-                self.fixed_fields[title].setItemText(0, text)
-        for field in data["fields"]:
-            widget = self.fields.get(field["key"])
-            if widget is None:
-                continue
-            widget.setToolTip(f"{field['help']}\nOverride: {field['key']}")
-            if "choices" in field:
-                current = widget.currentText()
-                widget.blockSignals(True)
-                widget.clear()
-                widget.addItems([str(choice) for choice in field["choices"]])
-                widget.setCurrentText(current)
-                widget.blockSignals(False)
-            elif "min" in field:
-                widget.setRange(field["min"], field["max"])
-                if "step" in field:
-                    widget.setSingleStep(field["step"])
-            if apply_defaults and field["key"] != "experiment_id" and field.get("default") is not None:
-                if "choices" in field:
-                    widget.setCurrentText(str(field["default"]))
-                elif field["type"] == "bool":
-                    widget.setChecked(bool(field["default"]))
-                else:
-                    widget.setValue(field["default"])
-        self.log(f"Experiment builder loaded: {env['name']} / {method['agent']} ({data['base_experiment']}).")
         self.update_config()
 
     def set_config(self, config):
         if hasattr(self, "config_viewer"):
             d = self.config_viewer.raw_data
-            d["experiment_id"] = config.name
-            d["seed"] = config.seed
-            d["total_timesteps"] = config.total_timesteps
-            d["tensorboard"] = config.tensorboard
-            methods = d.setdefault("methods", {})
-            if isinstance(methods, dict):
-                ppo_spec = methods.setdefault("ppo", {})
-                if isinstance(ppo_spec, dict):
-                    ppo_spec["lr"] = config.lr
-                    ppo_spec["batch_size"] = config.batch_size
-                    ppo_spec["gamma"] = config.gamma
+            if isinstance(config, dict):
+                d.clear()
+                d.update(config)
+            else:
+                d["experiment_id"] = getattr(config, "name", "experiment")
+                d["seed"] = getattr(config, "seed", 42)
+                d["total_timesteps"] = getattr(config, "total_timesteps", 10000)
+                d["tensorboard"] = getattr(config, "tensorboard", False)
+                methods = d.setdefault("methods", {})
+                if isinstance(methods, dict) and ("ppo" in methods or not methods):
+                    ppo_spec = methods.setdefault("ppo", {})
+                    if isinstance(ppo_spec, dict):
+                        if hasattr(config, "lr"):
+                            ppo_spec["lr"] = config.lr
+                        if hasattr(config, "batch_size"):
+                            ppo_spec["batch_size"] = config.batch_size
+                        if hasattr(config, "gamma"):
+                            ppo_spec["gamma"] = config.gamma
             self.config_viewer._render_boxes()
         self.update_config()
 
@@ -1605,32 +1647,122 @@ class Window(QMainWindow):
             self.statusBar().showMessage(f"Could not save run: {exc}", 12000)
             return False
 
+    def check_missing_components(self) -> list[str]:
+        """Check if current experiment references any missing agent, model, or environment."""
+        if not getattr(self, "current_experiment", None):
+            return []
+
+        missing = []
+        ct = getattr(self, "config_tree", None)
+        tree = getattr(ct, "tree_model", None) if ct is not None else None
+        if tree is None:
+            try:
+                from frontend.config_model import config_tree
+                tree = config_tree()
+            except Exception:
+                tree = None
+
+        # 1. Check from compose errors if any
+        compose_err = getattr(self, "compose_error", "") or ""
+        import re
+        find_matches = re.findall(r"Could not find '(agent|model|env|paradigms)/([^']+)'", compose_err)
+        for cat, name in find_matches:
+            missing.append(f"{cat}: {name}")
+
+        # 2. Check from current viewer or experiment file
+        viewer = getattr(self, "config_viewer", None)
+        if viewer and getattr(viewer, "raw_data", None):
+            data = viewer.raw_data
+            # Environment check
+            env_val = viewer._get_explicit_env() or viewer._get_base_env()
+            if env_val and tree:
+                env_exists = (
+                    env_val in tree.environments
+                    or any(e.name == env_val for e in tree.environments.values())
+                    or (tree.config_root / "env" / f"{env_val}.yaml").is_file()
+                )
+                if not env_exists:
+                    missing.append(f"environment: {env_val}")
+
+            # Methods check
+            methods = data.get("methods", {})
+            if isinstance(methods, dict):
+                for m_name, m_spec in methods.items():
+                    if not isinstance(m_spec, dict):
+                        continue
+                    ag = m_spec.get("agent")
+                    if isinstance(ag, dict):
+                        ag = ag.get("algorithm") or ag.get("name")
+                    if ag and tree:
+                        ag_str = str(ag)
+                        ag_exists = (
+                            ag_str in tree.agents
+                            or any(a.name == ag_str or a.algorithm == ag_str for a in tree.agents.values())
+                            or (tree.config_root / "agent" / f"{ag_str}.yaml").is_file()
+                        )
+                        if not ag_exists:
+                            missing.append(f"algorithm: {ag_str}")
+
+                    mo = m_spec.get("model")
+                    if isinstance(mo, dict):
+                        mo = next(iter(mo)) if mo else None
+                    if mo and tree:
+                        mo_str = str(mo)
+                        mo_stem = mo_str.split("/")[-1]
+                        mo_exists = (
+                            mo_str in tree.models
+                            or mo_stem in tree.models
+                            or (tree.config_root / "model" / f"{mo_str}.yaml").is_file()
+                            or (tree.config_root / "model" / "basics" / f"{mo_stem}.yaml").is_file()
+                        )
+                        if not mo_exists:
+                            missing.append(f"model: {mo_str}")
+
+        return list(dict.fromkeys(missing))
+
     def update_launch_state(self):
         idle = self.active is None
         has_experiment = bool(getattr(self, "current_experiment", None))
-        ready = idle and self.compose_valid and has_experiment
-        for button in launch_buttons(self):
+        missing_components = Window.check_missing_components(self) if has_experiment else []
+        ready = idle and self.compose_valid and has_experiment and not missing_components
+        for button in launch_buttons(self):  # the experiment tree's and the Queue tab's
             button.setEnabled(ready)
         if self.queue_button is not None:
-            self.queue_button.setEnabled(self.compose_valid and has_experiment)
+            self.queue_button.setEnabled(self.compose_valid and has_experiment and not missing_components)
         if self.stop_button is not None:
             self.stop_button.setEnabled(not idle)
         if not idle:
             tip = "Cannot run: A run is currently active. Stop it before launching another."
+            btn_text = "Running..."
         elif not has_experiment:
             rel = getattr(self, "active_config_rel_path", "") or ""
             if rel and Path(rel).name.startswith("_"):
                 tip = "Cannot run: Base templates (_base.yaml) cannot be run directly. Select an experiment."
             else:
                 tip = "Cannot run: Select an experiment configuration from the experiment tree."
+            btn_text = "No experiment"
+        elif missing_components:
+            missing_str = ", ".join(missing_components)
+            tip = f"Cannot run: Missing component ({missing_str}). Install it via Component Hub."
+            btn_text = f"Missing component: {missing_components[0]}"
+            if getattr(self, "builder_status", None) is not None:
+                self.builder_status.setObjectName("configError")
+                self.builder_status.setText(f"✗ Missing component: {missing_str}")
+                self.builder_status.setStyle(self.builder_status.style())
         elif not self.compose_valid:
             err = getattr(self, "compose_error", None) or "This configuration has not passed pipeline validation."
             tip = f"Cannot run: {err}"
+            btn_text = "Validation failed"
         else:
             exp_name = getattr(self, "current_experiment", "experiment")
             tip = f"Train {exp_name} through the backend (F5)"
+            btn_text = "Launch training"
         for button in launch_buttons(self):
             button.setToolTip(tip)
+        # Only the experiment tree's button says why in its text; the Queue tab's stays "Launch now"
+        # (a reason such as "Missing component: nsfr" does not fit it) and says why in its tooltip.
+        if self.start_button is not None and hasattr(self.start_button, "setText"):
+            self.start_button.setText(btn_text)
         if hasattr(self, "queue_panel"):
             self.queue_panel.set_experiment(getattr(self, "current_experiment", None),
                                             getattr(self, "active_config_rel_path", "") or "")
@@ -1662,6 +1794,10 @@ class Window(QMainWindow):
         if self.active:
             self.statusBar().showMessage("A run is already active. Stop it before launching another.", 4000)
             return
+        missing = self.check_missing_components()
+        if missing:
+            self.statusBar().showMessage(f"Cannot run: Missing component ({', '.join(missing)})", 6000)
+            return
         if not self.compose_valid:
             self.statusBar().showMessage("Fix config errors before launching.", 5000)
             return
@@ -1670,7 +1806,10 @@ class Window(QMainWindow):
 
         config = self.config()
         exp_target = getattr(self, "current_experiment", None) or BASE_EXPERIMENT
-        experiment_id = self.unique_experiment_id(config.name)
+        is_recover = False
+        if hasattr(self, "config_viewer") and getattr(self.config_viewer, "raw_data", None):
+            is_recover = bool(self.config_viewer.raw_data.get("recover", False))
+        experiment_id = self.unique_experiment_id(config.name, is_recover=is_recover)
         overrides = self.config_viewer.get_overrides() if hasattr(self, "config_viewer") else config.overrides()
         overrides = [o for o in overrides if not o.startswith("++experiment_id=")] + [f"++experiment_id='{experiment_id}'"]
         for button in launch_buttons(self):
@@ -1858,16 +1997,32 @@ class Window(QMainWindow):
 
     # ── Job queue ────────────────────────────────────────────────────────────
 
-    def unique_experiment_id(self, name):
-        """<name>_<date>-<time>, with a counter if several jobs are created within the same second."""
-        base = f"{name}_{datetime.now():%Y%m%d-%H%M%S}"
-        experiment_id, n = base, 2
-        while experiment_id in self.issued_ids:
-            experiment_id, n = f"{base}-{n}", n + 1
-        self.issued_ids.add(experiment_id)
-        return experiment_id
+    def unique_experiment_id(self, name, is_recover=False):
+        """<name>_<date>-<time>, with a counter if several jobs are created within the same second.
+        When recovering a checkpoint (is_recover=True), preserves the exact experiment name."""
+        if is_recover:
+            return name
+        group = getattr(self, "current_experiment", "").split("/")[0] if getattr(self, "current_experiment", None) else None
+        exists_on_disk = False
+        if group:
+            from src.app.services import LOGS_DIR
+            if (LOGS_DIR / group / name).exists():
+                exists_on_disk = True
+        if name in self.issued_ids or exists_on_disk:
+            base = f"{name}_{datetime.now():%Y%m%d-%H%M%S}"
+            experiment_id, n = base, 2
+            while experiment_id in self.issued_ids:
+                experiment_id, n = f"{base}-{n}", n + 1
+            self.issued_ids.add(experiment_id)
+            return experiment_id
+        self.issued_ids.add(name)
+        return name
 
     def add_to_queue(self):
+        missing = self.check_missing_components()
+        if missing:
+            self.statusBar().showMessage(f"Cannot queue: Missing component ({', '.join(missing)})", 6000)
+            return
         if not self.compose_valid:
             self.statusBar().showMessage("Fix config errors before queueing.", 5000)
             return
@@ -1876,7 +2031,10 @@ class Window(QMainWindow):
 
         config = self.config()
         exp_target = getattr(self, "current_experiment", None) or BASE_EXPERIMENT
-        experiment_id = self.unique_experiment_id(config.name)
+        is_recover = False
+        if hasattr(self, "config_viewer") and getattr(self.config_viewer, "raw_data", None):
+            is_recover = bool(self.config_viewer.raw_data.get("recover", False))
+        experiment_id = self.unique_experiment_id(config.name, is_recover=is_recover)
         overrides = self.config_viewer.get_overrides() if hasattr(self, "config_viewer") else config.overrides()
         overrides = [o for o in overrides if not o.startswith("++experiment_id=")] + [f"++experiment_id='{experiment_id}'"]
         if self.queue_button is not None:
@@ -2232,13 +2390,38 @@ class Window(QMainWindow):
 
     def load_run_config(self, run):
         """Put a run record's builder config into the experiment builder; return why not, or None."""
-        if run.get("origin") == "cli" and not run.get("builder_compatible"):
-            return ("The experiment builder only edits single-method CartPole/PPO runs; "
-                    "this run's config is in its results/logs folder.")
-        self.set_config(Config(**run["config"]))
-        self.tabs.setCurrentWidget(self.config_panel)
-        self.log(f"Loaded exact configuration from {run['id']}. Launch to create a new run.")
-        return None
+        cfg_dict = None
+        group = run.get("backend", {}).get("group")
+        exp_id = run.get("backend", {}).get("experiment_id")
+        if group and exp_id:
+            from src.app.services import LOGS_DIR
+            saved_cfg = LOGS_DIR / group / exp_id / "config.yaml"
+            if saved_cfg.is_file():
+                try:
+                    cfg_dict = yaml.safe_load(saved_cfg.read_text(encoding="utf-8"))
+                except Exception:
+                    cfg_dict = None
+        if cfg_dict is None and hasattr(self, "store"):
+            store_cfg = self.store.root / run.get("id", "") / "config.yaml"
+            if store_cfg.is_file():
+                try:
+                    cfg_dict = yaml.safe_load(store_cfg.read_text(encoding="utf-8"))
+                except Exception:
+                    cfg_dict = None
+
+        if isinstance(cfg_dict, dict):
+            self.set_config(cfg_dict)
+            self.tabs.setCurrentWidget(self.config_panel)
+            self.log(f"Loaded exact configuration from {run['id']}. Launch to create a new run.")
+            return None
+
+        if "config" in run and isinstance(run["config"], dict):
+            self.set_config(Config(**run["config"]))
+            self.tabs.setCurrentWidget(self.config_panel)
+            self.log(f"Loaded configuration from {run['id']}. Launch to create a new run.")
+            return None
+
+        return "Could not load saved configuration for this run."
 
     def load_results_config(self, run_key):
         """The Results panel's Load in experiment builder: find the run record for a results/logs folder."""
@@ -2291,17 +2474,71 @@ class Window(QMainWindow):
 
     def export_config(self):
         config = self.config()
-        path, _ = QFileDialog.getSaveFileName(self, "Export experiment recipe", f"{config.name}.yaml", "YAML (*.yaml)")
-        if path:
+        exp_target = getattr(self, "current_experiment", None)
+        if not exp_target and hasattr(self, "config_viewer") and getattr(self.config_viewer, "current_path", None):
+            cur = self.config_viewer.current_path
             try:
-                if hasattr(self, "config_viewer") and getattr(self.config_viewer, "raw_data", None):
-                    text = yaml.safe_dump(self.config_viewer.raw_data, sort_keys=False)
-                else:
-                    text = config.recipe_yaml()
-                Path(path).write_text(text, encoding="utf-8")
-                self.log(f"Exported configuration to {path}.")
-            except OSError as exc:
-                QMessageBox.warning(self, "Export failed", str(exc))
+                exp_target = str(cur.relative_to(PROJECT_ROOT / "in" / "config" / "experiment"))
+            except Exception:
+                exp_target = cur.stem
+        if not exp_target:
+            exp_target = getattr(config, "name", "experiment")
+
+        raw_yaml = None
+        if hasattr(self, "config_viewer") and getattr(self.config_viewer, "raw_data", None):
+            raw_yaml = yaml.safe_dump(self.config_viewer.raw_data, sort_keys=False)
+        elif hasattr(config, "recipe_yaml"):
+            raw_yaml = config.recipe_yaml()
+
+        dialog = ExportExperimentDialog(
+            experiment_id=str(exp_target),
+            workspace_root=PROJECT_ROOT,
+            raw_yaml_text=raw_yaml,
+            parent=self,
+        )
+        if dialog.exec():
+            if dialog.export_result and dialog.export_result.success:
+                res = dialog.export_result
+                self.log(f"Exported Theta Hub component package ({len(res.files_included)} files) to {res.archive_path}.")
+                QMessageBox.information(
+                    self,
+                    "Export Successful",
+                    f"Successfully exported experiment component package:\n\n{res.archive_path}\n\nBundled {len(res.files_included)} files (manifest, configs, rules, models).",
+                )
+            else:
+                self.log(f"Exported configuration to {dialog.edit_dest.text()}.")
+
+    def scaffold_plugin(self):
+        from .scaffold_dialog import ScaffoldPluginDialog
+        dialog = ScaffoldPluginDialog(workspace_root=PROJECT_ROOT, parent=self)
+        if dialog.exec() and dialog.scaffold_result and dialog.scaffold_result.success:
+            from .config_viewer import invalidate_config_tree
+            invalidate_config_tree()
+            res = dialog.scaffold_result
+            self.log(f"Scaffolded {res.component_id} component plugin at {res.target_dir} ({len(res.created_files)} files).")
+            try:
+                if hasattr(self, "components_panel") and hasattr(self.components_panel, "components_tree"):
+                    self.components_panel.components_tree.populate()
+            except Exception as exc:
+                self.log(f"Warning during tree refresh: {exc}")
+            QMessageBox.information(
+                self,
+                "Scaffolding Successful",
+                f"Successfully scaffolded {res.component_id} component plugin!\n\nTarget directory: {res.target_dir}\nCreated {len(res.created_files)} files.",
+            )
+
+    def reload_components(self):
+        from src.app.core.hot_reload import reload_component_modules
+        reloaded = reload_component_modules()
+        msg = f"Hot-reloaded {len(reloaded)} component modules live."
+        self.log(msg)
+        if hasattr(self, "components_panel") and hasattr(self.components_panel, "components_tree"):
+            self.components_panel.components_tree.refresh()
+        QMessageBox.information(
+            self,
+            "Hot-Reload Complete",
+            f"{msg}\n\nRefreshed model, agent, and environment registries.",
+        )
 
     def log(self, message):
         if hasattr(self, "console"):

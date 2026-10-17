@@ -8,7 +8,7 @@ nodes:
     label: Pretrained BlendRL (Teacher)
     category: paradigm
     paradigm: online_rl
-    experiment_ref: seaquest/quick_test
+    experiment_ref: cartpole/quick_test
     overrides: []
     pos:
     - 60

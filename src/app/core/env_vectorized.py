@@ -77,6 +77,21 @@ class VectorizedBaseEnv(ABC):
             if os.path.exists(candidate):
                 env_path = candidate
 
+        if not os.path.exists(env_path):
+            clean_name = name.lower().split("/")[-1]
+            if clean_name in ("cartpole", "mountaincar", "pendulum", "acrobot"):
+                cand = "in/envs/gym_classic_control/env_vectorized.py"
+                if os.path.exists(cand):
+                    env_path = cand
+            elif clean_name in ("beam_rider", "breakout", "mspacman", "pong", "qbert", "seaquest", "space_invaders"):
+                cand = "in/envs/atari/env_vectorized.py"
+                if os.path.exists(cand):
+                    env_path = cand
+            elif clean_name in ("mnist", "digits"):
+                cand = "in/envs/mnist/env_vectorized.py"
+                if os.path.exists(cand):
+                    env_path = cand
+
         if os.path.exists(env_path):
             env_module = load_module(env_path)
             cls = getattr(env_module, "VectorizedEnv", None) or getattr(env_module, "VectorizedNudgeEnv", None)

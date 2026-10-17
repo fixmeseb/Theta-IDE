@@ -1,7 +1,7 @@
 """Online RL paradigm components.
 
 Wraps the existing online training loop (VectorizedEnv + Lightning) for
-simulator-based RL agents (PPO, BlendRL online).
+simulator-based RL agents (e.g. PPO).
 """
 
 from __future__ import annotations
@@ -44,7 +44,7 @@ class EpisodicRewardEvalProtocol(BaseEvalProtocol):
 class OnlineRLRunner(BaseParadigmRunner):
     """Runs the online RL training loop for simulator-based agents.
 
-    Dispatches declared online methods (e.g. PPO, BlendRL online) sequentially
+    Dispatches declared online methods (e.g. PPO) sequentially
     or via cluster jobs, followed by the automated plotting phase.
     """
 

@@ -10,7 +10,7 @@ import urllib.request
 from typing import Callable, Optional, Tuple
 from zipfile import ZipFile
 
-from .models import HubComponent, ReleaseInfo
+from .models import AuthorInfo, HubComponent, ReleaseInfo
 from frontend.plugins.dependencies import (
     check_missing_dependencies,
     install_packages,
@@ -27,11 +27,13 @@ class HubInstaller:
         data_dir: Path,
         on_change_callback: Optional[Callable[[str, str], None]] = None,
         settings_manager: Optional[Any] = None,
+        lookup_component_fn: Optional[Callable[[str], Optional[HubComponent]]] = None,
     ):
         self.workspace_dir = Path(workspace_dir)
         self.data_dir = Path(data_dir)
         self.on_change_callback = on_change_callback  # (component_id, action: "install" | "uninstall")
         self.settings_manager = settings_manager
+        self.lookup_component_fn = lookup_component_fn
 
     def resolve_target_dir(self, component: HubComponent) -> Path:
         """Determine the filesystem destination for a component based on its kind."""
@@ -44,7 +46,7 @@ class HubInstaller:
         # Standard conventions
         if component.kind == "plugin":
             return self.data_dir / "plugins" / component.id
-        elif component.kind == "method":
+        elif component.kind in ("method", "agent"):
             return self.workspace_dir / "src" / "usr" / "methods" / component.id
         elif component.kind == "model":
             return self.workspace_dir / "src" / "usr" / "models" / component.id
@@ -52,23 +54,68 @@ class HubInstaller:
             return self.workspace_dir / "in" / "envs" / component.id
         elif component.kind == "experiment":
             return self.workspace_dir / "in" / "config" / "experiment" / component.id
+        elif component.kind in ("suite", "package"):
+            return self.workspace_dir / ".thetaide" / "suites" / component.id
         else:
             return self.workspace_dir / "components" / component.id
 
     def resolve_config_path(self, component: HubComponent) -> Optional[Path]:
         """Determine destination path for a component's default configuration in in/config/."""
         extra_cfg = getattr(component, "extra", {}).get("config_path") if hasattr(component, "extra") else None
+        if not extra_cfg and hasattr(component, "config_path") and component.config_path:
+            extra_cfg = component.config_path
         if extra_cfg:
             return self.workspace_dir / extra_cfg
 
         if component.kind == "model":
+            if component.id in ("dnn", "nature_cnn", "dueling_resnet"):
+                return self.workspace_dir / "in" / "config" / "model" / "basics" / f"{component.id}.yaml"
             return self.workspace_dir / "in" / "config" / "model" / f"{component.id}.yaml"
-        elif component.kind == "method":
+        elif component.kind in ("method", "agent"):
             return self.workspace_dir / "in" / "config" / "agent" / f"{component.id}.yaml"
         elif component.kind == "env":
             return self.workspace_dir / "in" / "config" / "env" / f"{component.id}.yaml"
         elif component.kind == "experiment":
             return self.workspace_dir / "in" / "config" / "experiment" / f"{component.id}.yaml"
+        return None
+
+    def lookup_component(self, component_id: str) -> Optional[HubComponent]:
+        """Look up a HubComponent by ID from lookup_component_fn, local index cache, or candidate directories."""
+        if self.lookup_component_fn is not None:
+            comp = self.lookup_component_fn(component_id)
+            if comp:
+                return comp
+
+        hub_candidates = [
+            self.workspace_dir.resolve().parent / "theta-hub",
+            Path(__file__).resolve().parents[3] / "theta-hub",
+        ]
+        for hub_dir in hub_candidates:
+            if not hub_dir.is_dir():
+                continue
+            for json_path in hub_dir.glob(f"registry/*/{component_id}.json"):
+                try:
+                    data = json.loads(json_path.read_text(encoding="utf-8"))
+                    comp = HubComponent.from_dict(data)
+                    for ver, rel in list(comp.releases.items()):
+                        zip_stem = Path(rel.url).name
+                        local_zip = hub_dir / "packages" / zip_stem
+                        if local_zip.is_file():
+                            rel.url = local_zip.as_uri()
+                    return comp
+                except Exception:
+                    continue
+
+        cache_index = self.data_dir / "cache" / "hub" / "index.json"
+        if cache_index.is_file():
+            try:
+                data = json.loads(cache_index.read_text(encoding="utf-8"))
+                for item in data.get("components", []):
+                    if item.get("id") == component_id:
+                        return HubComponent.from_dict(item)
+            except Exception:
+                pass
+
         return None
 
     def check_installed(self, component: HubComponent) -> Tuple[bool, Optional[str]]:
@@ -203,8 +250,31 @@ class HubInstaller:
             else:
                 source_dir = staging_dir
 
+            # Validate component manifest if packaged in archive
+            pkg_meta_file = source_dir / ".theta_component.json"
+            if pkg_meta_file.is_file():
+                from src.app.core.manifest_schema import validate_manifest_file
+                is_valid, err_msg = validate_manifest_file(pkg_meta_file)
+                if not is_valid:
+                    raise ValueError(f"Component archive contains invalid manifest: {err_msg}")
+
             # Check for packaged configuration YAML(s) and deploy to in/config/
             installed_config_paths = []
+            is_root_relative = (source_dir / "in").is_dir() or component.kind == "experiment"
+
+            if is_root_relative:
+                # Deploy root-relative assets directly to workspace_dir (in/, src/, results/)
+                for item in sorted(source_dir.rglob("*")):
+                    if not item.is_file():
+                        continue
+                    rel = item.relative_to(source_dir)
+                    if rel.parts and rel.parts[0] in ("in", "src", "results"):
+                        dest_file = self.workspace_dir / rel
+                        dest_file.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(str(item), str(dest_file))
+                        if len(rel.parts) >= 2 and rel.parts[0] == "in" and rel.parts[1] == "config":
+                            installed_config_paths.append(str(dest_file.relative_to(self.workspace_dir)))
+
             pkg_config_dir = source_dir / "config"
             if pkg_config_dir.is_dir():
                 target_in_config = self.workspace_dir / "in" / "config"
@@ -240,7 +310,15 @@ class HubInstaller:
                         break
 
             # Write component tracking metadata
-            meta = {
+            existing_pkg_meta = {}
+            if (source_dir / ".theta_component.json").is_file():
+                try:
+                    existing_pkg_meta = json.loads((source_dir / ".theta_component.json").read_text(encoding="utf-8"))
+                except Exception:
+                    pass
+
+            meta = dict(existing_pkg_meta)
+            meta.update({
                 "id": component.id,
                 "name": component.name,
                 "kind": component.kind,
@@ -249,29 +327,62 @@ class HubInstaller:
                 "sha256": release.sha256,
                 "config_path": installed_config_rel,
                 "config_paths": installed_config_paths,
-            }
-            (source_dir / ".theta_component.json").write_text(
-                json.dumps(meta, indent=2) + "\n", encoding="utf-8"
-            )
+            })
 
-            # Atomic swap into target_dir
-            if target_dir.exists():
-                backup_dir = target_dir.with_name(f"{target_dir.name}.backup")
-                if backup_dir.exists():
-                    shutil.rmtree(backup_dir, ignore_errors=True)
-                target_dir.rename(backup_dir)
-                try:
-                    shutil.move(str(source_dir), str(target_dir))
-                    shutil.rmtree(backup_dir, ignore_errors=True)
-                except Exception:
-                    # Rollback
-                    if target_dir.exists():
-                        shutil.rmtree(target_dir, ignore_errors=True)
-                    backup_dir.rename(target_dir)
-                    raise
+            if is_root_relative:
+                target_dir.mkdir(parents=True, exist_ok=True)
+                (target_dir / ".theta_component.json").write_text(
+                    json.dumps(meta, indent=2) + "\n", encoding="utf-8"
+                )
+                readme_src = source_dir / "README.md"
+                if readme_src.is_file():
+                    shutil.copy2(str(readme_src), str(target_dir / "README.md"))
             else:
-                target_dir.parent.mkdir(parents=True, exist_ok=True)
-                shutil.move(str(source_dir), str(target_dir))
+                (source_dir / ".theta_component.json").write_text(
+                    json.dumps(meta, indent=2) + "\n", encoding="utf-8"
+                )
+
+                # Atomic swap into target_dir
+                if target_dir.exists():
+                    backup_dir = target_dir.with_name(f"{target_dir.name}.backup")
+                    if backup_dir.exists():
+                        shutil.rmtree(backup_dir, ignore_errors=True)
+                    target_dir.rename(backup_dir)
+                    try:
+                        shutil.move(str(source_dir), str(target_dir))
+                        shutil.rmtree(backup_dir, ignore_errors=True)
+                    except Exception:
+                        # Rollback
+                        if target_dir.exists():
+                            shutil.rmtree(target_dir, ignore_errors=True)
+                        backup_dir.rename(target_dir)
+                else:
+                    target_dir.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.move(str(source_dir), str(target_dir))
+
+            # If this component is a suite declaring child components, install each
+            suite_components = []
+            target_meta_file = target_dir / ".theta_component.json"
+            if target_meta_file.is_file():
+                try:
+                    pkg_data = json.loads(target_meta_file.read_text(encoding="utf-8"))
+                    suite_components = pkg_data.get("dependencies", {}).get("components", [])
+                except Exception:
+                    pass
+            if not suite_components and hasattr(component, "extra") and isinstance(component.extra, dict):
+                suite_components = component.extra.get("dependencies", {}).get("components", [])
+
+            installed_children = []
+            if suite_components:
+                for child_id in suite_components:
+                    child_comp = self.lookup_component(child_id)
+                    if child_comp:
+                        self.install(child_comp)
+                        installed_children.append(child_id)
+
+            if installed_children:
+                meta["installed_components"] = installed_children
+                target_meta_file.write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
 
             # Inspect and install declared Python dependencies
             declared_deps = []
@@ -326,9 +437,10 @@ class HubInstaller:
                 shutil.rmtree(staging_dir, ignore_errors=True)
 
     def has_configs(self, component: HubComponent) -> bool:
-        """Check if any configuration files for this component exist on disk."""
+        """Check if any configuration files for this component or its suite children exist on disk."""
         target_dir = self.resolve_target_dir(component)
         meta_file = target_dir / ".theta_component.json"
+        children = []
         if meta_file.exists():
             try:
                 mdata = json.loads(meta_file.read_text(encoding="utf-8"))
@@ -337,8 +449,19 @@ class HubInstaller:
                         return True
                 if mdata.get("config_path") and (self.workspace_dir / mdata["config_path"]).is_file():
                     return True
+                children.extend(mdata.get("installed_components", []))
+                children.extend(mdata.get("dependencies", {}).get("components", []))
             except Exception:
                 pass
+
+        if hasattr(component, "extra") and isinstance(component.extra, dict):
+            children.extend(component.extra.get("dependencies", {}).get("components", []))
+
+        for child_id in set(children):
+            child_comp = self.lookup_component(child_id)
+            if child_comp and self.has_configs(child_comp):
+                return True
+
         config_path = self.resolve_config_path(component)
         if config_path and config_path.is_file():
             return True
@@ -360,6 +483,7 @@ class HubInstaller:
             self.workspace_dir / "in" / "envs",
             self.workspace_dir / "src" / "usr" / "methods",
             self.workspace_dir / "src" / "usr" / "models",
+            self.workspace_dir / ".thetaide" / "suites",
             self.workspace_dir / "plugins",
             self.data_dir / "plugins",
         ]
@@ -395,7 +519,7 @@ class HubInstaller:
         recorded_configs = meta.get("config_paths") or ([meta["config_path"]] if meta.get("config_path") else [])
 
         if target_dir.exists():
-            shutil.rmtree(target_dir)
+            shutil.rmtree(target_dir, ignore_errors=True)
 
         if remove_configs and recorded_configs:
             for cfg_rel in recorded_configs:
@@ -403,14 +527,26 @@ class HubInstaller:
                 if p.is_file():
                     try:
                         p.unlink()
-                        if p.parent.is_dir() and not any(p.parent.iterdir()):
-                            p.parent.rmdir()
+                        parent = p.parent.resolve()
+                        in_cfg = (self.workspace_dir / "in" / "config").resolve()
+                        while parent != in_cfg and parent.parent != in_cfg and in_cfg in parent.parents and parent.is_dir() and not any(parent.iterdir()):
+                            parent.rmdir()
+                            parent = parent.parent
                     except Exception:
                         pass
 
         if self.on_change_callback:
             comp_id = meta.get("id") or target_dir.name
             self.on_change_callback(comp_id, "uninstall")
+
+        children_to_uninstall = meta.get("installed_components") or meta.get("dependencies", {}).get("components", [])
+        for child_id in children_to_uninstall:
+            child_comp = self.lookup_component(child_id)
+            if child_comp:
+                try:
+                    self.uninstall(child_comp, remove_configs=remove_configs)
+                except Exception:
+                    pass
 
         return True
 
@@ -421,6 +557,7 @@ class HubInstaller:
 
         # Check .theta_component.json for recorded config paths before removing target_dir
         recorded_configs = []
+        recorded_installed_children = []
         meta_file = target_dir / ".theta_component.json"
         if meta_file.exists():
             try:
@@ -429,11 +566,27 @@ class HubInstaller:
                     recorded_configs.extend(mdata["config_paths"])
                 elif mdata.get("config_path"):
                     recorded_configs.append(mdata["config_path"])
+                if mdata.get("installed_components"):
+                    recorded_installed_children.extend(mdata["installed_components"])
+                if not recorded_installed_children and mdata.get("dependencies", {}).get("components"):
+                    recorded_installed_children.extend(mdata["dependencies"]["components"])
             except Exception:
                 pass
 
+        if not recorded_installed_children and hasattr(component, "extra") and isinstance(component.extra, dict):
+            recorded_installed_children.extend(component.extra.get("dependencies", {}).get("components", []))
+
         if target_dir.exists():
-            shutil.rmtree(target_dir)
+            shutil.rmtree(target_dir, ignore_errors=True)
+
+        # If this was a suite with recorded child components, uninstall them as well
+        for child_id in recorded_installed_children:
+            child_comp = self.lookup_component(child_id)
+            if child_comp:
+                try:
+                    self.uninstall(child_comp, remove_configs=remove_configs)
+                except Exception:
+                    pass
 
         # Remove deployed config YAML(s) in in/config/ if remove_configs is True
         if remove_configs:
@@ -443,11 +596,23 @@ class HubInstaller:
                     if p.is_file():
                         try:
                             p.unlink()
-                            # If parent directory is now empty, remove it (e.g. in/config/agent/sb3/)
-                            if p.parent.is_dir() and not any(p.parent.iterdir()):
-                                p.parent.rmdir()
+                            parent = p.parent.resolve()
+                            in_cfg = (self.workspace_dir / "in" / "config").resolve()
+                            while parent != in_cfg and parent.parent != in_cfg and in_cfg in parent.parents and parent.is_dir() and not any(parent.iterdir()):
+                                parent.rmdir()
+                                parent = parent.parent
                         except Exception:
                             pass
+            elif config_path and config_path.is_file():
+                try:
+                    config_path.unlink()
+                    parent = config_path.parent.resolve()
+                    in_cfg = (self.workspace_dir / "in" / "config").resolve()
+                    while parent != in_cfg and parent.parent != in_cfg and in_cfg in parent.parents and parent.is_dir() and not any(parent.iterdir()):
+                        parent.rmdir()
+                        parent = parent.parent
+                except Exception:
+                    pass
             elif config_path and config_path.is_file():
                 try:
                     config_path.unlink()

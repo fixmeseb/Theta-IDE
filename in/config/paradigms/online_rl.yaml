@@ -9,13 +9,7 @@ default_callbacks:
 constraints:
   requires:
     methods: non_empty
-
-allowed_agents:
-  - ppo
-  - a2c
-  - dqn
-  - sac
-  - sb3
+    agent: required
 forbidden_agents:
   - cql
   - iql

@@ -1,7 +1,0 @@
-architecture: lstm
-hidden_dim: 64
-num_layers: 2
-dropout: 0.2
-use_dual_pooling: true
-use_tcn_conv: false
-bidirectional: false

@@ -94,7 +94,6 @@ def auto_discover():
         if module_info.name.startswith("_") or module_info.name in (
             "agent_registry",
             "base_agent",
-            "cew_utils",
         ):
             continue
         try:
@@ -106,4 +105,15 @@ def auto_discover():
 def list_registered_agents():
     """Return sorted list of registered algorithm prefixes."""
     auto_discover()
-    return sorted(AGENT_REGISTRY.keys())
+    agents = set(AGENT_REGISTRY.keys())
+    # Discover configured agent algorithms from in/config/agent/
+    methods_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(os.path.dirname(os.path.dirname(methods_dir)))
+    agent_cfg_dir = os.path.join(project_root, "in", "config", "agent")
+    if os.path.isdir(agent_cfg_dir):
+        for root, _, files in os.walk(agent_cfg_dir):
+            for f in files:
+                if (f.endswith(".yaml") or f.endswith(".yml")) and not f.startswith("_"):
+                    stem = f.rsplit(".", 1)[0]
+                    agents.add(stem)
+    return sorted(agents)

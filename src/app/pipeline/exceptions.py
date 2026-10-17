@@ -1,4 +1,4 @@
-"""Pipeline-level exceptions for BlendRL."""
+"""Pipeline-level exceptions for Theta."""
 
 
 class ConfigurationError(Exception):

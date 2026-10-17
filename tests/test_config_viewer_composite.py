@@ -16,6 +16,13 @@ def qapp():
     return app
 
 
+@pytest.fixture(autouse=True)
+def _require_plugins():
+    tree = config_tree()
+    if not tree.models or not tree.agents:
+        pytest.skip("Component plugins uninstalled; skipping composite viewer tests")
+
+
 def test_config_viewer_loads_cql_benchmark(qapp, tmp_path):
     # Copy mimic cql_benchmark.yaml to tmp_path
     src_file = Path("in/config/experiment/mimic/cql_benchmark.yaml")
@@ -388,16 +395,16 @@ def test_blendrl_model_block_and_logic_module_rendering(qapp, tmp_path):
     viewer._add_method_param("ppo_blendrl_final_cp", "symbolic")
     qapp.processEvents()
 
-    # Now Logic Module (Symbolic) is rendered
+    # Now Symbolic Module is rendered
     labels = [l.text() for l in viewer.findChildren(QLabel)]
-    assert "Logic Module (Symbolic)" in labels
-    assert "Neural Architecture" not in labels
-    assert "Blender Mode" not in labels
+    assert "Symbolic Module" in labels
+    assert "Neural Module" not in labels
+    assert "Blender Module" not in labels
 
-    # Find the ComboBox for Logic Module
+    # Find the ComboBox for Symbolic Module
     combos = viewer.findChildren(ComboBox)
-    logic_combos = [c for c in combos if "Symbolic logic reasoner" in c.toolTip()]
-    assert len(logic_combos) >= 1, "Expected Logic Module ComboBox with symbolic reasoner tooltip"
+    logic_combos = [c for c in combos if "symbolic" in c.toolTip().lower()]
+    assert len(logic_combos) >= 1, "Expected Symbolic Module ComboBox with symbolic tooltip"
     logic_combo = logic_combos[0]
 
     # Verify choices include nsfr, neumann, cew with default nsfr
@@ -441,7 +448,7 @@ def test_blendrl_model_block_and_logic_module_rendering(qapp, tmp_path):
     qapp.processEvents()
 
     labels = [l.text() for l in viewer.findChildren(QLabel)]
-    assert "Logic Module (Symbolic)" not in labels
+    assert "Symbolic Module" not in labels
 
     # Verify symbolic is back in candidate blend parameters
     spec = viewer.raw_data["methods"]["ppo_blendrl_final_cp"]
@@ -452,7 +459,7 @@ def test_blendrl_model_block_and_logic_module_rendering(qapp, tmp_path):
     viewer._add_method_param("ppo_blendrl_final_cp", "neural")
     qapp.processEvents()
     labels = [l.text() for l in viewer.findChildren(QLabel)]
-    assert "Neural Architecture" in labels
+    assert "Neural Module" in labels
 
     # Add hidden_sizes under neural
     viewer._add_method_subcomponent_param("ppo_blendrl_final_cp", "neural", "hidden_sizes", [128, 128])
@@ -469,19 +476,19 @@ def test_blendrl_model_block_and_logic_module_rendering(qapp, tmp_path):
     viewer._remove_method_subcomponent("ppo_blendrl_final_cp", "neural")
     qapp.processEvents()
     labels = [l.text() for l in viewer.findChildren(QLabel)]
-    assert "Neural Architecture" not in labels
+    assert "Neural Module" not in labels
 
     # 5. Add blender subcomponent
     viewer._add_method_param("ppo_blendrl_final_cp", "blender")
     qapp.processEvents()
     labels = [l.text() for l in viewer.findChildren(QLabel)]
-    assert "Blender Mode" in labels
+    assert "Blender Module" in labels
 
     # Remove blender
     viewer._remove_method_subcomponent("ppo_blendrl_final_cp", "blender")
     qapp.processEvents()
     labels = [l.text() for l in viewer.findChildren(QLabel)]
-    assert "Blender Mode" not in labels
+    assert "Blender Module" not in labels
 
 
 def test_blendrl_params_and_rules_editing(qapp, tmp_path):
@@ -674,3 +681,33 @@ def test_experiment_methods_start_from_the_group_default_method(qapp, tmp_path):
     fresh.load_file(experiment, "experiment/probe_group/child.yaml")
     added = fresh.add_method()
     assert fresh.raw_data["methods"][added] == {}
+
+
+def test_generic_composite_model_slots_and_discovery(tmp_path):
+    from frontend.config_model import ConfigTree, Model
+    from frontend.config_viewer import config_tree, get_method_candidate_subcomponents
+
+    tree = config_tree()
+    assert "blendrl" in tree.models
+    assert tree.models["blendrl"].is_composite is True
+    assert set(tree.models["blendrl"].slots) == {"neural", "symbolic", "blender"}
+    assert tree.models["dnn"].is_composite is False
+    assert set(tree.model_slots("blendrl")) == {"neural", "symbolic", "blender"}
+    assert tree.model_slots("dnn") == []
+
+    # Test generic composite model with slots declared in YAML
+    custom_model_yaml = tmp_path / "custom_composite.yaml"
+    custom_model_yaml.write_text(
+        "architecture: custom_composite\n"
+        "slots: [backbone, classifier_head]\n"
+        "backbone:\n"
+        "  type: nature_cnn\n"
+        "classifier_head:\n"
+        "  type: standard_mlp\n",
+        encoding="utf-8",
+    )
+    custom_model = Model.from_file(custom_model_yaml)
+    assert custom_model.is_composite is True
+    assert custom_model.slots == ["backbone", "classifier_head"]
+    assert "backbone" in custom_model.subcomponents
+    assert "classifier_head" in custom_model.subcomponents

@@ -1,4 +1,4 @@
-# NeSyRL: Modular Reinforcement Learning & Architecture Benchmark Framework
+# Theta-IDE: Modular Reinforcement Learning & Architecture Benchmark Framework
 
 [![CI](https://github.com/CameronEgb/Offline-BlendRL/actions/workflows/ci.yml/badge.svg)](https://github.com/CameronEgb/Offline-BlendRL/actions/workflows/ci.yml)
 [![Tests](https://github.com/CameronEgb/Offline-BlendRL/actions/workflows/ci.yml/badge.svg?event=push&branch=main)](https://github.com/CameronEgb/Offline-BlendRL/actions/workflows/ci.yml)
@@ -7,7 +7,9 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
 
-A PyTorch Lightning & Hydra-powered framework for training and evaluating modular RL policies across standard neural (MLP, ResNet, Transformer) and hybrid neural-symbolic (BlendRL) architectures, comparing Online vs. Offline learning efficiency across benchmark environments.
+A PyTorch Lightning & Hydra-powered framework and IDE for training, tuning, and evaluating modular RL policies across standard neural (MLP, NatureCNN, ResNet, Transformer) and hybrid neural-symbolic architectures (with BlendRL as an installed reference component plugin), comparing Online vs. Offline learning efficiency across benchmark environments.
+
+For information on authoring custom model architecture plugins, see the [Component Plugin Authoring Guide](docs/COMPONENT_PLUGIN_GUIDE.md).
 
 ---
 

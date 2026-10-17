@@ -11,6 +11,7 @@ selection turns into.
 from __future__ import annotations
 
 import re
+import shlex
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Mapping
@@ -46,6 +47,7 @@ def _yaml_files(directory: Path) -> list[Path]:
 @dataclass(frozen=True)
 class Environment:
     name: str
+    compatible_paradigms: tuple[str, ...] = ()
     raw: Mapping[str, Any] = field(default_factory=dict, repr=False)
 
     @classmethod
@@ -59,6 +61,9 @@ class Environment:
                 rel_name = path.stem
 
         env_name = raw.get("name")
+        if not env_name and isinstance(raw.get("env"), dict):
+            env_name = raw["env"].get("name")
+
         if env_name and "/" in env_name:
             chosen_name = env_name
         elif "/" in rel_name:
@@ -66,8 +71,20 @@ class Environment:
         else:
             chosen_name = env_name or rel_name
 
+        paradigms = raw.get("compatible_paradigms") or raw.get("paradigms")
+        if not paradigms and isinstance(raw.get("env"), dict):
+            paradigms = raw["env"].get("paradigms") or raw["env"].get("compatible_paradigms")
+
+        if isinstance(paradigms, list):
+            cp = tuple(str(p) for p in paradigms)
+        elif isinstance(paradigms, str):
+            cp = (paradigms,)
+        else:
+            cp = ()
+
         return cls(
             name=chosen_name,
+            compatible_paradigms=cp,
             raw=raw,
         )
 
@@ -76,6 +93,7 @@ class Environment:
 class Agent:
     name: str
     algorithm: str
+    compatible_paradigms: tuple[str, ...] = ()
     hyperparameters: Mapping[str, Any] = field(default_factory=dict, repr=False)
     raw: Mapping[str, Any] = field(default_factory=dict, repr=False)
 
@@ -88,10 +106,20 @@ class Agent:
                 name = path.relative_to(root).with_suffix("").as_posix()
             except ValueError:
                 name = path.stem
+
+        paradigms = raw.get("compatible_paradigms") or raw.get("paradigms")
+        if isinstance(paradigms, list):
+            cp = tuple(str(p) for p in paradigms)
+        elif isinstance(paradigms, str):
+            cp = (paradigms,)
+        else:
+            cp = ()
+
         return cls(
             name=name,
             algorithm=raw.get("algorithm") or path.stem,
-            hyperparameters={k: v for k, v in raw.items() if k != "algorithm"},
+            compatible_paradigms=cp,
+            hyperparameters={k: v for k, v in raw.items() if k not in ("algorithm", "paradigms", "compatible_paradigms")},
             raw=raw,
         )
 
@@ -100,6 +128,7 @@ class Agent:
 class Model:
     name: str
     architecture: str
+    compatible_paradigms: tuple[str, ...] = ()
     parameters: Mapping[str, Any] = field(default_factory=dict, repr=False)
     raw: Mapping[str, Any] = field(default_factory=dict, repr=False)
 
@@ -112,20 +141,36 @@ class Model:
                 name = path.relative_to(root).with_suffix("").as_posix()
             except ValueError:
                 name = path.stem
+
+        paradigms = raw.get("compatible_paradigms") or raw.get("paradigms")
+        if isinstance(paradigms, list):
+            cp = tuple(str(p) for p in paradigms)
+        elif isinstance(paradigms, str):
+            cp = (paradigms,)
+        else:
+            cp = ()
+
         return cls(
             name=name,
             architecture=raw.get("architecture") or path.stem,
-            parameters={k: v for k, v in raw.items() if k != "architecture"},
+            compatible_paradigms=cp,
+            parameters={k: v for k, v in raw.items() if k not in ("architecture", "paradigms", "compatible_paradigms")},
             raw=raw,
         )
 
     @property
     def is_composite(self) -> bool:
-        return self.name == "blendrl" or any(isinstance(v, dict) for v in self.parameters.values())
+        return bool(self.subcomponents) or "slots" in self.parameters
 
     @property
     def subcomponents(self) -> dict[str, dict[str, Any]]:
         return {k: dict(v) for k, v in self.parameters.items() if isinstance(v, dict)}
+
+    @property
+    def slots(self) -> list[str]:
+        if "slots" in self.parameters and isinstance(self.parameters["slots"], (list, tuple)):
+            return list(self.parameters["slots"])
+        return list(self.subcomponents.keys())
 
 
 @dataclass(frozen=True)
@@ -184,20 +229,41 @@ class Paradigm:
     def permits_agent(self, agent: Agent | str) -> bool:
         algo = (agent.algorithm if isinstance(agent, Agent) else str(agent)).lower()
         name = (agent.name if isinstance(agent, Agent) else str(agent)).lower()
-        if any(f.lower() in (algo, name) or name.startswith(f.lower() + "/") for f in self.forbidden_agents):
+        clean = (algo, name, name.split("/")[-1], algo.split("/")[-1])
+        if any(
+            f.lower() in clean
+            or name.startswith(f.lower() + "/")
+            or name.endswith("/" + f.lower())
+            for f in self.forbidden_agents
+        ):
             return False
-        # An empty allow-list permits no agent at all. supervised declares one
-        # deliberately: it has no policy, so its methods name a model only.
-        if not self.allowed_agents:
+
+        if isinstance(agent, Agent) and agent.compatible_paradigms:
+            return self.name in agent.compatible_paradigms
+
+        # Fallback for agents without explicit compatible_paradigms
+        if "allowed_agents" in self.raw and not self.allowed_agents:
+            # Explicitly declared empty allow list (e.g. supervised)
             return False
-        for allowed in self.allowed_agents:
-            al = allowed.lower()
-            if al in (algo, name) or name.startswith(al + "/") or algo.startswith(al + "_") or name.endswith("/" + al):
-                return True
-        return False
+
+        if self.allowed_agents:
+            for allowed in self.allowed_agents:
+                al = allowed.lower()
+                if al in (algo, name) or name.startswith(al + "/") or algo.startswith(al + "_") or name.endswith("/" + al):
+                    return True
+            return False
+
+        return True
+
+    def permits_model(self, model: Model | str) -> bool:
+        if isinstance(model, Model) and model.compatible_paradigms:
+            return self.name in model.compatible_paradigms
+        return True
 
     def permits_environment(self, environment: Environment) -> bool:
-        return True
+        if not environment.compatible_paradigms:
+            return True
+        return self.name in environment.compatible_paradigms
 
     def field_enabled(self, name: str) -> bool:
         if name in self.forbids:
@@ -321,6 +387,19 @@ class ConfigTree:
                     result.append(e)
         return result
 
+    def models_for(self, paradigm: str) -> list[Model]:
+        if paradigm not in self.paradigms:
+            return list(self.models.values())
+        rules = self.paradigms[paradigm]
+        seen: set[int] = set()
+        result: list[Model] = []
+        for m in self.models.values():
+            if id(m) not in seen:
+                seen.add(id(m))
+                if rules.permits_model(m):
+                    result.append(m)
+        return result
+
     def field_enabled(self, paradigm: str, name: str) -> bool:
         if paradigm not in self.paradigms:
             return True
@@ -368,6 +447,11 @@ class ConfigTree:
             for k, v in self.models[model_name].parameters.items()
             if isinstance(v, dict)
         }
+
+    def model_slots(self, model_name: str | None) -> list[str]:
+        if not model_name or model_name not in self.models:
+            return []
+        return self.models[model_name].slots
 
 
 @dataclass(frozen=True)
@@ -547,7 +631,7 @@ class Selection:
         return argv
 
     def command_line(self, **kwargs: Any) -> str:
-        return " ".join(self.command(**kwargs))
+        return shlex.join(self.command(**kwargs))
 
 
 def unique_method_name(existing: Any, agent: str | None, model: str) -> str:
@@ -568,12 +652,19 @@ def unique_method_name(existing: Any, agent: str | None, model: str) -> str:
     return f"{base}_{n}"
 
 
-def add_method(data: dict[str, Any], agent: str | None = None, model: str = "dnn") -> str:
+def add_method(
+    data: dict[str, Any],
+    agent: str | None = None,
+    model: str | None = None,
+    paradigm: Paradigm | None = None,
+) -> str:
     """Add a method to an experiment's `methods` block. Returns its name.
 
     `agent` is omitted for paradigms that declare none: supervised learning has
     no policy to choose actions with, so its methods name an architecture only.
     """
+    if model is None:
+        model = (paradigm.raw.get("default_model") if paradigm else None) or "dnn"
     methods = data.setdefault("methods", {})
     name = unique_method_name(methods, agent, model)
     methods[name] = {"agent": agent, "model": model} if agent else {"model": model}

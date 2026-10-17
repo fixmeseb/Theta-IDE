@@ -3,6 +3,7 @@ defaults:
   - override /env: cartpole
 
 paradigm: online_rl
+eval_episodes: 100
 
 save_dataset: true
 seed: 42

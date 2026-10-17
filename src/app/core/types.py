@@ -12,7 +12,7 @@ class ActionResult:
       - Attribute access: res.action, res.logprob, res.entropy, res.value, res.aux
       - Backward-compatible 4-element unpacking: action, logprob, entropy, value = res
       - Backward-compatible indexing: res[0]
-      - Auxiliary property access: res.blend_entropy
+      - Dynamic auxiliary metric access: res.get_aux("metric_name")
     """
 
     def __init__(
@@ -42,9 +42,13 @@ class ActionResult:
     def __len__(self):
         return 4
 
+    def get_aux(self, key: str, default: Any = None) -> Any:
+        """Retrieve an auxiliary metric or tensor by key."""
+        return self.aux.get(key, default)
+
     @property
     def blend_entropy(self) -> torch.Tensor:
-        """Return blend_entropy if present in aux, else scalar 0.0 on same device as action."""
+        """Backward-compatibility accessor for legacy blend_entropy auxiliary tensor."""
         if "blend_entropy" in self.aux:
             return self.aux["blend_entropy"]
         device = getattr(self.action, "device", None)

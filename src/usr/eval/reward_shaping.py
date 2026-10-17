@@ -382,8 +382,8 @@ class EPRewardShaper:
         if not cql_ckpt_path or not cql_ckpt_path.exists():
             raise FileNotFoundError(f"Could not find a valid CQL checkpoint for V(s) computation at: {ckpt_path}")
 
-        print(f"  Computing V(s) from CQL checkpoint: {cql_ckpt_path}")
-        from src.usr.methods.cql_agent import CQLAgent
+        from src.usr.methods.agent_registry import get_agent_class
+        CQLAgent = get_agent_class("cql")
 
         torch.serialization.add_safe_globals(
             [getattr(sys.modules.get("omegaconf.dictconfig", None), "DictConfig", None)]

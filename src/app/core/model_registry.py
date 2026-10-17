@@ -76,11 +76,15 @@ def get_model_class(model_name: str) -> Any:
     if clean_name in MODEL_REGISTRY:
         return MODEL_REGISTRY[clean_name]
 
+    basename = clean_name.split("/")[-1]
+    if basename in MODEL_REGISTRY:
+        return MODEL_REGISTRY[basename]
+
     # Prefix match if exact match not found
     matches = [
         (prefix, cls)
         for prefix, cls in MODEL_REGISTRY.items()
-        if clean_name == prefix or clean_name.startswith(prefix + "_")
+        if clean_name == prefix or clean_name.startswith(prefix + "_") or basename == prefix or basename.startswith(prefix + "_")
     ]
     if matches:
         return max(matches, key=lambda x: len(x[0]))[1]
@@ -167,16 +171,39 @@ def build_model(
     merged_kwargs = {**model_params, **kwargs}
     clean_name = model_name.lower().strip()
 
-    # Defaults for BlendRL composite actor-critic
-    if clean_name in ("blendrl", "blender", "hybrid"):
-        merged_kwargs.setdefault("actor_mode", "hybrid")
-        merged_kwargs.setdefault("blender_mode", "neural")
-        merged_kwargs.setdefault("blend_function", "softmax")
-        merged_kwargs.setdefault("reasoner", "nsfr")
-        merged_kwargs.setdefault("rules", "default")
-
     # Resolve architecture from MODEL_REGISTRY
     cls_or_fn = get_model_class(clean_name)
+
+    # Support CompositeModelProtocol (plugin-owned submodel resolution and factory)
+    if (
+        isinstance(cls_or_fn, type)
+        and hasattr(cls_or_fn, "get_model_slots")
+        and hasattr(cls_or_fn, "build_from_config")
+    ):
+        slots = cls_or_fn.get_model_slots()
+        submodels = {}
+        for slot in slots:
+            slot_val = merged_kwargs.get(slot.name, slot.default)
+            if slot_val is not None:
+                sub_m = build_model(
+                    slot_val,
+                    env=env,
+                    device=device,
+                    n_actions=n_actions,
+                    obs_dim=obs_dim,
+                )
+                submodels[slot.name] = sub_m
+        res = cls_or_fn.build_from_config(
+            merged_kwargs,
+            env=env,
+            device=device,
+            submodels=submodels,
+            n_actions=n_actions,
+            obs_dim=obs_dim,
+        )
+        if isinstance(res, nn.Module):
+            res = res.to(device)
+        return res
 
     call_kwargs = {}
     if obs_dim is not None:
