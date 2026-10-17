@@ -127,3 +127,95 @@ class TestQueuePanel(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(HAS_PYQT6, "PyQt6 not available in current Python environment")
+class TestQueuePanelRunControls(unittest.TestCase):
+    """The run controls that used to be the menu bar's Run menu."""
+
+    def test_buttons_call_back_and_hide_without_a_callback(self):
+        calls = []
+        panel = QueuePanel(lambda *a: None, lambda *a: None, lambda *a: None, lambda *a: None,
+                           on_launch=lambda: calls.append("launch"), on_add=lambda: calls.append("add"),
+                           on_stop=lambda: calls.append("stop"), on_demo=lambda: calls.append("demo"))
+        for button in (panel.launch_button, panel.add_button, panel.stop_button, panel.demo_button):
+            button.click()
+        self.assertEqual(calls, ["launch", "add", "stop", "demo"])
+        bare = QueuePanel(lambda *a: None, lambda *a: None, lambda *a: None, lambda *a: None)
+        self.assertFalse(bare.launch_button.isVisibleTo(bare))
+
+    def test_names_the_experiment_it_acts_on(self):
+        panel = QueuePanel(lambda *a: None, lambda *a: None, lambda *a: None, lambda *a: None)
+        panel.set_experiment("csc510/cartpole_demo")
+        self.assertIn("csc510/cartpole_demo", panel.experiment.text())
+        panel.set_experiment(None)
+        self.assertEqual(panel.experiment.text(), "No experiment open")
+
+
+@unittest.skipUnless(HAS_PYQT6, "PyQt6 not available in current Python environment")
+class TestRunControlsInTheWindow(unittest.TestCase):
+    def setUp(self):
+        import tempfile
+        from pathlib import Path
+
+        from frontend.app import Window
+
+        self.temp = tempfile.TemporaryDirectory()
+        self.win = Window(Path(self.temp.name) / "runs")
+
+    def tearDown(self):
+        self.win._quitting = True
+        self.win.close()
+        self.temp.cleanup()
+
+    def test_the_run_menu_moved_to_the_queue_tab_and_its_shortcuts_still_work(self):
+        menus = [a.text() for a in self.win.menuBar().actions()]
+        self.assertNotIn("Run", menus)
+        self.assertEqual(self.win.menu_actions["launch_training"].shortcut().toString(), "F5")
+        self.assertIn(self.win.menu_actions["launch_training"], self.win.actions())
+        panel = self.win.queue_panel
+        self.assertIs(self.win.queue_button, panel.add_button)
+        self.assertIs(self.win.stop_button, panel.stop_button)
+        self.win.update_launch_state()
+        self.assertFalse(panel.stop_button.isEnabled())  # nothing is running
+        self.win.menu_actions["start_demo"].trigger()
+        self.assertIsNotNone(self.win.active)
+        self.assertTrue(panel.stop_button.isEnabled())
+        self.assertFalse(panel.launch_button.isEnabled())
+        panel.stop_button.click()
+        self.assertIsNone(self.win.active)
+
+    def test_the_runs_list_is_in_the_plots_tab_and_leaves_the_monitor_alone(self):
+        from frontend.model import new_run
+
+        sidebar = self.win.monitor.sidebar
+        self.assertTrue(self.win.plot_viewer.isAncestorOf(sidebar))
+        self.assertFalse(self.win.queue_panel.isAncestorOf(sidebar))
+        self.assertFalse(self.win.monitor.isAncestorOf(sidebar))
+        first, second = new_run(self.win.config()), new_run(self.win.config())
+        self.win.runs[:0] = [first, second]
+        self.win.refresh_runs()
+        self.win.select_run(first)
+        self.win.tabs.setCurrentWidget(self.win.plot_viewer)
+        item = sidebar.items[second["id"]]
+        sidebar.tree.itemPressed.emit(item, 0)  # a click plots it
+        sidebar.tree.itemClicked.emit(item, 0)
+        self.assertEqual(sidebar.compared, [second["id"]])
+        self.assertIs(self.win.selected, first)  # the monitor is not driven from the runs list
+        self.assertIs(self.win.tabs.currentWidget(), self.win.plot_viewer)
+
+    def test_double_clicking_a_job_plots_its_run_in_the_plot_viewer(self):
+        from frontend.model import new_run
+
+        run = new_run(self.win.config(), simulated=False)
+        run.update(status="completed", backend={"job_id": "job_1", "experiment_id": "exp_1"})
+        self.win.runs.insert(0, run)
+        self.win.refresh_runs()
+        panel = self.win.queue_panel
+        panel.set_data({"running": False, "active": [], "queued": [],
+                        "finished": [{"job_id": "job_1", "experiment_id": "exp_1", "status": "completed"}]})
+        self.assertEqual(panel.open_button.text(), "Open in Plot Viewer")
+        panel.table.selectRow(0)  # a real double-click selects the row first
+        panel.table.itemDoubleClicked.emit(panel.table.item(0, 1))
+        self.assertIs(self.win.tabs.currentWidget(), self.win.plot_viewer)
+        self.assertEqual(self.win.monitor.sidebar.compared, [run["id"]])

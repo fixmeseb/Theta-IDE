@@ -1,4 +1,5 @@
-"""Job queue tab: the backend's running, queued and recently finished training jobs."""
+"""Job queue tab: where training is started and stopped, and the backend's running, queued and recently
+finished jobs. It took over the old Run menu; the menu's shortcuts (F5, Shift+F5, ...) still work anywhere."""
 import time
 
 from PyQt6.QtCore import Qt
@@ -23,7 +24,8 @@ def clock(seconds):
 class QueuePanel(QWidget):
     """Shows JobManager.queue_state(). Actions call back into the window, which drives the JobManager."""
 
-    def __init__(self, on_move, on_remove, on_open, on_toggle, parent=None):
+    def __init__(self, on_move, on_remove, on_open, on_toggle, on_launch=None, on_add=None, on_stop=None,
+                 on_demo=None, parent=None):
         super().__init__(parent)
         self.on_move, self.on_remove, self.on_open, self.on_toggle = on_move, on_remove, on_open, on_toggle
         self.rows = []  # (kind, job) per table row: kind is "active", "queued" or "finished"
@@ -33,11 +35,25 @@ class QueuePanel(QWidget):
         layout = QVBoxLayout(self)
         layout.setContentsMargins(18, 18, 18, 18)
         layout.addWidget(label("Job queue", "heading"))
-        about = label("Line up experiments with “Add to queue” in the toolbar, then press Start queue. "
-                      "They train one at a time, in order, on this machine, and keep running if you close ThetaIDE.",
-                      "muted")
+        about = label("Launch the open experiment now, or line experiments up with Add to queue and press "
+                      "Start queue. They train one at a time, in order, on this machine, and keep running if you "
+                      "close ThetaIDE.", "muted")
         about.setWordWrap(True)
         layout.addWidget(about)
+
+        run_row = QHBoxLayout()  # the open experiment and what to do with it (the old Run menu)
+        self.experiment = label("No experiment open", "muted")
+        run_row.addWidget(self.experiment, 1)
+        self.launch_button = self.button("Launch now", on_launch)
+        self.launch_button.setObjectName("primary")
+        self.add_button = self.button("Add to queue", on_add)
+        self.stop_button = self.button("Stop", on_stop)
+        self.demo_button = self.button("Start simulated demo", on_demo)
+        self.demo_button.setToolTip("A simulated run that needs no training environment (Ctrl+F5)")
+        for button in (self.launch_button, self.add_button, self.stop_button, self.demo_button):
+            run_row.addWidget(button)
+            button.setVisible(button.property("connected"))
+        layout.addLayout(run_row)
         state_row = QHBoxLayout()
         self.run_button = self.button("Start queue", lambda: self.on_toggle(not self.running))
         state_row.addWidget(self.run_button)
@@ -65,7 +81,8 @@ class QueuePanel(QWidget):
         self.up_button = self.button("Move up", lambda: self.move_selected(-1))
         self.down_button = self.button("Move down", lambda: self.move_selected(1))
         self.remove_button = self.button("Remove from queue", self.remove_selected)
-        self.open_button = self.button("Open in monitor", self.open_selected)
+        self.open_button = self.button("Open in Plot Viewer", self.open_selected)
+        self.open_button.setToolTip("Plot the selected job's run in the Plot Viewer (or double-click the job)")
         for button in (self.up_button, self.down_button, self.remove_button, self.open_button):
             actions.addWidget(button)
         actions.addStretch()
@@ -76,8 +93,15 @@ class QueuePanel(QWidget):
 
     def button(self, text, callback):
         button = QPushButton(text)
-        button.clicked.connect(callback)
+        button.setProperty("connected", callback is not None)
+        if callback is not None:
+            button.clicked.connect(lambda _=False: callback())
         return button
+
+    def set_experiment(self, name, tooltip=""):
+        """The experiment Launch now and Add to queue act on (the one open in the Experiment tab)."""
+        self.experiment.setText(f"Experiment:  {name}" if name else "No experiment open")
+        self.experiment.setToolTip(tooltip)
 
     def selected(self):
         selection_model = self.table.selectionModel()
@@ -153,7 +177,7 @@ class QueuePanel(QWidget):
                                "Press Start queue to begin."
                                + ("  The job already training will finish." if active else ""))
         else:
-            self.state.setText("Queue empty. Add experiments with “Add to queue”.")
+            self.state.setText("Queue empty. Add experiments with Add to queue.")
         self.run_button.setText("Pause queue" if self.running else "Start queue")
         self.run_button.setObjectName("" if self.running else "primary")
         self.run_button.setStyle(self.run_button.style())

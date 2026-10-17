@@ -925,8 +925,10 @@ class TestExperimentPaneWindowIntegration(unittest.TestCase):
         self.assertEqual(self.window.start_button.property("svg_icon"), "launch")
         self.assertEqual(self.window.btn_export.property("svg_icon"), "export")
         self.assertEqual(self.window.btn_toggle_yaml.property("svg_icon"), "raw_yaml")
-        self.assertIsNone(self.window.queue_button)
-        self.assertIsNone(self.window.stop_button)
+        # Add to queue and Stop are not in the experiment pane: they are the Queue tab's run controls
+        self.assertIs(self.window.queue_button, self.window.queue_panel.add_button)
+        self.assertIs(self.window.stop_button, self.window.queue_panel.stop_button)
+        self.assertFalse(tree.isAncestorOf(self.window.queue_button) or tree.isAncestorOf(self.window.stop_button))
 
         # Header layout widgets check
         header_widgets = [

@@ -52,6 +52,14 @@ SYSTEM_LABELS = {
 }
 LEVEL_MARKS = {"error": "✖", "warning": "⚠", "info": "●"}
 MAX_LOG_LINES = 20000
+SPEED_EASING = 0.7  # share of the previous speed kept at each reading: the status strip's speed is eased
+INSPECTOR_HEIGHT = 190  # px the point inspector opens to on the first hover
+
+
+def latest_problem(lives: dict[str, LiveRun]) -> tuple[str, dict] | None:
+    """(agent, event) of the newest warning or error any agent reported, or None."""
+    problems = [(agent, e) for agent, e in merged(lives, "events") if e.get("level") in ("warning", "error")]
+    return problems[-1] if problems else None
 
 
 def _system_title(key: str) -> str:
@@ -77,21 +85,51 @@ def busiest(lives: dict[str, LiveRun]) -> LiveRun | None:
 
 
 class StatusStrip(QWidget):
-    """Status · elapsed · speed · time left · last update, for the selected run."""
+    """Status · (the run's name) · elapsed · speed · time left, for the selected run.
+
+    Speed and time left show while the run trains; "Updated" when it has gone quiet, or for a finished run.
+    """
 
     def __init__(self, parent=None):
         super().__init__(parent)
         row = QHBoxLayout(self)
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(18)
+        self._row = row
         self.badge = label("", "badge")
         row.addWidget(self.badge)
+        row.addStretch()
         self.fields: dict[str, object] = {}
+        self.captions: dict[str, object] = {}
         for key, caption in (("elapsed", "Elapsed"), ("speed", "Speed"), ("eta", "Time left"), ("updated", "Updated")):
-            row.addWidget(label(caption, "muted"))
+            self.captions[key] = label(caption, "muted")
+            row.addWidget(self.captions[key])
             self.fields[key] = label("—")
             row.addWidget(self.fields[key])
-        row.addStretch()
+        self._speed: float | None = None  # smoothed speed of the run in `_speed_of`
+        self._speed_of: LiveRun | None = None
+
+    def _smoothed_rate(self, latest: LiveRun | None, live: bool) -> float | None:
+        """The run's speed, eased toward each new reading so the number does not jitter every second."""
+        rate = latest.rate() if latest is not None and live else None
+        if rate and self._speed and latest is self._speed_of:
+            rate = SPEED_EASING * self._speed + (1 - SPEED_EASING) * rate
+        self._speed, self._speed_of = rate, latest
+        return rate
+
+    def add_title(self, *widgets: QWidget):
+        """Put `widgets` (the run's name and description) after the badge, before the numbers."""
+        for i, widget in enumerate(widgets):
+            self._row.insertWidget(1 + i, widget)
+
+    def add_trailing(self, widget: QWidget):
+        """Put `widget` (e.g. buttons) at the end of the row."""
+        self._row.addWidget(widget)
+
+    def _show_fields(self, *keys: str):
+        for key in self.fields:
+            self.captions[key].setVisible(key in keys)
+            self.fields[key].setVisible(key in keys)
 
     def show_run(self, status: str, lives: dict[str, LiveRun], started: float | None, live: bool, now=None):
         now = time.time() if now is None else now
@@ -104,9 +142,14 @@ class StatusStrip(QWidget):
             started = (latest.start.get("run") or {}).get("started")
         end = latest.finish.get("t") if latest is not None and latest.finish else None
         self.fields["elapsed"].setText(format_duration((end or now) - started) if started and (live or end) else "—")
-        rate = latest.rate() if latest is not None and live else None
+        rate = self._smoothed_rate(latest, live)
         self.fields["speed"].setText(f"{rate:,.0f} steps/s" if rate else "—")
-        self.fields["eta"].setText(format_duration(latest.eta_seconds()) if latest is not None and live else "—")
+        eta = None
+        if latest is not None and live and rate and latest.budget and latest.progress() is not None:
+            eta = max(0.0, (latest.budget - latest.progress()) / rate)
+            if eta >= 90:  # over a minute and a half, tens of seconds are noise
+                eta = round(eta / 10) * 10
+        self.fields["eta"].setText(format_duration(eta))
         if latest is None or latest.last_update is None:
             self.fields["updated"].setText("—")
         elif live:
@@ -114,6 +157,10 @@ class StatusStrip(QWidget):
             self.fields["updated"].setText(f"{format_duration(ago)} ago" + ("  ⚠ no new data" if stalled else ""))
         else:
             self.fields["updated"].setText(datetime.fromtimestamp(latest.last_update).strftime("%Y-%m-%d %H:%M"))
+        if live:
+            self._show_fields("elapsed", "speed", "eta", *(("updated",) if stalled else ()))
+        else:
+            self._show_fields("elapsed", "updated")
 
 
 # ── Charts: every metric each agent logged ───────────────────────────────────
@@ -154,10 +201,21 @@ class PointInspector(QWidget):
         self.table.setAlternatingRowColors(True)
         layout.addWidget(self.table, 1)
         self.x: float | None = None
+        self._fold()  # until a point is hovered: an empty table would only take the charts' room
+
+    def _fold(self):
+        self.table.hide()
+        self.setMaximumHeight(self.caption.sizeHint().height() + 12)
+
+    def _unfold(self):
+        self.setMaximumHeight(16777215)  # QWIDGETSIZE_MAX
+        self.table.show()
 
     def show_point(self, x: float, points: Points, colors: dict[str, str], axis_name: str):
         """Fill the table for step `x` from each series' points."""
         self.x = x
+        if self.table.isHidden():
+            self._unfold()
         labels = list(points)
         metrics = [
             m
@@ -197,16 +255,39 @@ class PointInspector(QWidget):
         self.caption.setText(f"{axis_name} = {x:,.0f}  ·  {len(metrics)} metrics across {len(labels)} series{note}")
 
 
+def budget_extent(lives: dict[str, LiveRun], axis: str) -> float | None:
+    """The x-extent to fix the charts to: the largest training budget, while every run is within it.
+
+    Fixing it keeps a live curve from being squeezed sideways each time it grows. Runs read from disk
+    have no budget, and epochs-based ones are not measured in transitions: those charts fit the data.
+    """
+    if axis != "transitions":
+        return None
+    budgets = [live.budget for live in lives.values() if live.budget]
+    if not budgets:
+        return None
+    reached = max((live.progress() or 0.0 for live in lives.values()), default=0.0)
+    return float(max(budgets)) if reached <= max(budgets) else None
+
+
 class ChartsView(QWidget):
     """One chart per logged metric, grouped by prefix in folding sections, one series per agent (or run),
-    with a point inspector below listing every metric of every series at the hovered step."""
+    with a point inspector below listing every metric of every series at the hovered step.
 
-    def __init__(self, parent=None):
+    `header` (e.g. the Overview's cards) scrolls with the charts, above them. `lead` is (group, widget): a
+    chart of the caller's drawn first in that group's section while a single run is shown; metrics in
+    `exclude` are then left out, because it draws them. Comparing runs, every metric is charted here.
+    `toolbar` sits on the first section's heading row and `group_columns` sets a section's columns.
+    """
+
+    def __init__(self, parent=None, header: QWidget | None = None, lead=None, toolbar: QWidget | None = None,
+                 group_columns: dict[str, int] | None = None, show_caption: bool = True):
         super().__init__(parent)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 6, 0, 0)
         top = QHBoxLayout()
         self.caption = label("", "muted")
+        self.caption.setVisible(show_caption)
         top.addWidget(self.caption, 1)
         self.show_all = QPushButton("Show all plots")
         self.show_all.clicked.connect(self._show_all)
@@ -214,7 +295,7 @@ class ChartsView(QWidget):
         top.addWidget(self.show_all)
         layout.addLayout(top)
         self.grid = PlotGrid()
-        self.grid.configure(collapsible=True)
+        self.grid.configure(collapsible=True, header=header, lead=lead, toolbar=toolbar, group_columns=group_columns)
         self.grid.hide_requested.connect(self._hide)
         self.grid.point_hovered.connect(self._hovered)
         self.inspector = PointInspector()
@@ -222,35 +303,48 @@ class ChartsView(QWidget):
         split.addWidget(self.grid)
         split.addWidget(self.inspector)
         split.setStretchFactor(0, 1)
-        split.setSizes([520, 190])
+        split.setCollapsible(0, False)
+        split.setSizes([900, self.inspector.maximumHeight()])  # only its caption until a point is hovered
         layout.addWidget(split, 1)
+        self.split = split
         self.hidden: set[str] = set()
+        self.exclude: set[str] = set()
         self.smoothing = 0.0
         self.points: Points = {}
         self.axis_name = "step"
         self._lives: dict[str, LiveRun] = {}
         self._colors: dict[str, str] | None = None
+        self._live = False
         self._series_colors: dict[str, str] = {}
+        self.grid.show_metrics([], "Metrics appear here as the run logs them.")  # the header, before any data
 
     def _hide(self, metric):
         self.hidden.add(metric)
-        self.show_lives(self._lives, self._colors)
+        self.show_lives(self._lives, self._colors, self._live)
 
     def _show_all(self):
         self.hidden.clear()
-        self.show_lives(self._lives, self._colors)
+        self.show_lives(self._lives, self._colors, self._live)
 
     def _hovered(self, x: float):
+        folded = self.inspector.table.isHidden()
         self.inspector.show_point(x, self.points, self._series_colors, self.axis_name)
+        if folded:  # the first hover opens the table under the charts; drag the handle for more rows
+            total = sum(self.split.sizes())
+            self.split.setSizes([max(200, total - INSPECTOR_HEIGHT), INSPECTOR_HEIGHT])
 
     def set_smoothing(self, factor: float):
         self.smoothing = factor
         for chart in self.grid.charts().values():
             chart.set_smoothing(factor)
 
-    def show_lives(self, lives: dict[str, LiveRun], colors: dict[str, str] | None = None):
-        """One series per entry of `lives` (label -> LiveRun), in `colors[label]` when given."""
-        self._lives, self._colors = lives, colors
+    def show_lives(self, lives: dict[str, LiveRun], colors: dict[str, str] | None = None, live: bool = False):
+        """One series per entry of `lives` (label -> LiveRun), in `colors[label]` when given.
+
+        `colors` is given when several runs are compared; `live` draws for a run still training: the
+        x-axis fixed to its budget, a y-axis that only grows, and each curve's newest point marked.
+        """
+        self._lives, self._colors, self._live = lives, colors, live
         rows = {name: live.rows for name, live in lives.items()}
         axis = "transitions" if any("transitions" in r for rs in rows.values() for r in rs) else "step"
         self.axis_name = "environment steps" if axis == "transitions" else "logged step"
@@ -276,17 +370,26 @@ class ChartsView(QWidget):
                 for key in row:
                     if key not in COUNTERS:
                         metrics.setdefault(key)
-        visible = [m for m in metrics if m not in self.hidden]
-        hidden = len(metrics) - len(visible)
+        shown = [m for m in metrics if m not in self.hidden]
+        hidden = len(metrics) - len(shown)
+        # Comparing runs, the lead chart (the selected run's alone) steps aside and every metric is charted.
+        comparing = colors is not None
+        self.grid.lead_hidden = comparing
+        visible = shown if comparing or self.grid.lead is None else [m for m in shown if m not in self.exclude]
         self.show_all.setVisible(bool(hidden))
         self.show_all.setText(f"Show all plots ({hidden} hidden)")
         if not metrics:
             empty = "Metrics appear here as the run logs them."
-        else:
+        elif not shown:
             empty = "Every plot is hidden."
-        self.grid.set_metrics(visible, empty)
+        else:
+            empty = ""  # the rest are drawn by the lead chart
+        self.grid.show_metrics(visible, empty)
         names = ", ".join(lives) or "no agents yet"
         self.caption.setText(f"{len(metrics)} metrics  ·  x-axis: {self.axis_name}  ·  {names}")
+        xmax = budget_extent(lives, axis)
+        # Of a live run, the methods still training: a pipeline's finished methods stop growing.
+        training = {name for name, each in lives.items() if live and not each.is_finished()}
         for metric, chart in self.grid.charts().items():
             series = []
             for name in rows:
@@ -295,7 +398,10 @@ class ChartsView(QWidget):
                     series.append((name, thin(chart_points(points, metric), metric), self._series_colors[name]))
             chart.set_metric(metric, chart_title(metric))
             chart.smoothing = self.smoothing
-            chart.set_series(series)
+            chart.hold_y = live
+            chart.live_series = training
+            chart.show_future = live and xmax is not None  # a stopped run will not reach the rest
+            chart.set_series(series, xmax)
         if self.inspector.x is not None:  # keep the inspected step current as new values arrive
             self.inspector.show_point(self.inspector.x, self.points, self._series_colors, self.axis_name)
 

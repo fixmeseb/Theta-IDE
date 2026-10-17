@@ -29,39 +29,24 @@ class TestRunNavigator(unittest.TestCase):
         self.window.close()
         self.temp_dir.cleanup()
 
-    def test_run_combo_initial_population(self):
-        """Ensure run_combo has all loaded runs and selection matches."""
-        self.assertGreaterEqual(self.window.run_combo.count(), 1)
-        self.assertEqual(self.window.run_combo.count(), len(self.window.runs))
-        current_data = self.window.run_combo.currentData()
-        self.assertEqual(current_data, self.window.selected["id"])
-
-    def test_navigation_prev_next(self):
-        """Test Prev and Next buttons navigate through runs."""
-        # Ensure we have at least 2 runs
-        if len(self.window.runs) < 2:
-            r2 = new_run(Config(name="extra_run", seed=99))
-            self.window.runs.append(r2)
-            self.window.refresh_runs()
-
-        total = self.window.run_combo.count()
-        self.assertGreaterEqual(total, 2)
-
-        # Select index 0
-        self.window.run_combo.setCurrentIndex(0)
-        self.assertFalse(self.window.btn_prev_run.isEnabled())
-        self.assertTrue(self.window.btn_next_run.isEnabled())
-
-        # Click Next
-        self.window.select_next_run()
-        self.assertEqual(self.window.run_combo.currentIndex(), 1)
-        self.assertEqual(self.window.selected["id"], self.window.runs[1]["id"])
-        self.assertTrue(self.window.btn_prev_run.isEnabled())
-
-        # Click Prev
-        self.window.select_prev_run()
-        self.assertEqual(self.window.run_combo.currentIndex(), 0)
-        self.assertEqual(self.window.selected["id"], self.window.runs[0]["id"])
+    def test_the_runs_list_lists_every_run_and_clicking_one_plots_it(self):
+        """The runs list plots runs; the monitor keeps showing the most recent one."""
+        sidebar = self.window.monitor.sidebar
+        self.assertGreaterEqual(len(sidebar.items), 1)
+        self.assertEqual(set(sidebar.items), {run["id"] for run in self.window.runs})
+        self.assertIs(self.window.selected, self.window.latest_run())
+        shown = self.window.selected
+        extra = new_run(Config(name="extra_run", seed=99))
+        self.window.runs.append(extra)
+        self.window.refresh_runs()
+        item = sidebar.items[extra["id"]]
+        sidebar.tree.itemPressed.emit(item, 0)
+        sidebar.tree.itemClicked.emit(item, 0)
+        self.assertEqual(sidebar.compared, [extra["id"]])
+        self.assertIs(self.window.selected, shown)
+        sidebar.tree.itemPressed.emit(item, 0)  # a second click unticks it
+        sidebar.tree.itemClicked.emit(item, 0)
+        self.assertEqual(sidebar.compared, [])
 
     def test_smoothing_slider(self):
         """Test smoothing slider updates label and chart smoothing factors."""
@@ -72,7 +57,7 @@ class TestRunNavigator(unittest.TestCase):
         slider.setValue(60)
         self.assertIn("60%", self.window.smoothing_label.text())
         self.assertAlmostEqual(self.window.reward_chart.smoothing, 0.6, places=2)
-        self.assertAlmostEqual(self.window.loss_chart.smoothing, 0.6, places=2)
+        self.assertAlmostEqual(self.window.monitor.charts_view.smoothing, 0.6, places=2)
 
     def test_baseline_pinning_and_overlay(self):
         """Test pinning a run overlays its metrics when viewing another run."""
@@ -103,9 +88,8 @@ class TestRunNavigator(unittest.TestCase):
         # Switch to run 2
         self.window.select_run(run2)
         self.assertFalse(self.window.btn_pin_baseline.isChecked())
-        # Baseline series should now be present on both charts!
+        # The baseline is now overlaid on the headline chart
         self.assertEqual(len(self.window.reward_chart.baseline_series), 1)
-        self.assertEqual(len(self.window.loss_chart.baseline_series), 1)
         b_name, b_metrics, b_color = self.window.reward_chart.baseline_series[0]
         self.assertIn("baseline", b_name)
         self.assertEqual(len(b_metrics), 2)
@@ -117,32 +101,10 @@ class TestRunNavigator(unittest.TestCase):
         self.window.select_run(run2)
         self.assertEqual(len(self.window.reward_chart.baseline_series), 0)
 
-    def test_live_jump_visibility(self):
-        """Test 'Jump to Live' chip appears when inspecting historical run during active training."""
-        run1 = self.window.runs[0]
-        run2 = new_run(Config(name="live_run", seed=77))
-        self.window.runs.insert(0, run2)
-        self.window.active = run2
-
-        # Select the active run: chip should be hidden
-        self.window.select_run(run2)
-        self.assertTrue(self.window.btn_live_jump.isHidden())
-
-        # Select the historical run: chip should appear
-        self.window.select_run(run1)
-        self.assertFalse(self.window.btn_live_jump.isHidden())
-        self.assertIn("Jump to live", self.window.btn_live_jump.text())
-
-        # Clicking Jump to Live snaps back to active run
-        self.window.jump_to_live_run()
-        self.assertEqual(self.window.selected, run2)
-        self.assertTrue(self.window.btn_live_jump.isHidden())
-
-    def test_storage_label_shows_persistence(self):
-        """Verify storage_label indicates disk logs and jobs.db."""
+    def test_the_run_title_says_where_the_run_is_stored(self):
+        """Hovering the run's name tells where its records are kept."""
         self.window.render_run()
-        text = self.window.storage_label.text()
-        self.assertIn("jobs.db", text)
+        self.assertIn("jobs.db", self.window.run_title.toolTip())
 
     def test_job_signals_update_monitor(self):
         """Job signals (output, metrics, hardware) from ppo_blendrl_human_neural update the monitor."""
@@ -169,7 +131,7 @@ class TestRunNavigator(unittest.TestCase):
         self.assertEqual(len(run["metrics"]), 2)
         self.assertEqual(run["metrics"][0]["reward"], 78.5)
         self.assertEqual(self.window.reward_card.value.text(), "78.5")
-        self.assertIn("15.2%", self.window.monitor_note.text())
+        self.assertIn("15.2%", self.window.monitor.view_buttons["System"].toolTip())
 
 
 if __name__ == "__main__":
