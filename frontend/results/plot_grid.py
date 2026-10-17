@@ -145,18 +145,30 @@ class PlotGrid(QScrollArea):
         return self.lead[0] if self.lead is not None and not self.lead_hidden else None
 
     def _clear(self):
-        """Take every widget out of the grid; delete the ones made for the last layout (headings)."""
+        """Take every widget out of the grid; delete the ones made for the last layout (headings).
+
+        Each widget is hidden before it is detached. Adding a widget to a layout queues a call that shows
+        it; when the grid is laid out again before that call runs (a run's metrics arriving right after
+        "Loading metrics…"), the call would show the detached, parentless widget as a window of its own.
+        """
         keep = {id(card) for card in self.cards.values()}
         keep |= {id(w) for w in (self.header, self.empty, self.lead[1] if self.lead else None) if w is not None}
         if self.toolbar is not None:
+            self.toolbar.hide()
             self.toolbar.setParent(None)  # it lives on in the next layout's heading row
         while self.grid.count():
             widget = self.grid.takeAt(0).widget()
             if widget is None:
                 continue
+            widget.hide()
             widget.setParent(None)
             if id(widget) not in keep:
                 widget.deleteLater()
+
+    def _place(self, widget: QWidget, row: int, column: int, row_span: int, column_span: int):
+        """Put `widget` in the grid and show it (_clear hid it, and a layout does not show a hidden widget)."""
+        self.grid.addWidget(widget, row, column, row_span, column_span)
+        widget.show()
 
     def _heading(self, group: str, count: int, folded: bool, first: bool) -> QWidget:
         if self.collapsible:
@@ -195,11 +207,11 @@ class PlotGrid(QScrollArea):
             self.grid.setColumnStretch(c, 1 if c < columns else 0)
         row = 0
         if self.header is not None:
-            self.grid.addWidget(self.header, row, 0, 1, columns)
+            self._place(self.header, row, 0, 1, columns)
             row += 1
         if not metrics and lead is None:
             self.empty.setText(empty_text)
-            self.grid.addWidget(self.empty, row, 0, 1, columns)
+            self._place(self.empty, row, 0, 1, columns)
             self.grid.setRowStretch(row, 1)
             return
         for metric in metrics:
@@ -208,14 +220,14 @@ class PlotGrid(QScrollArea):
             focused = self.focus if self.focus in metrics else metrics[0]
             card = self.cards[focused]
             card.chart.setMinimumHeight(HERO_HEIGHT)
-            self.grid.addWidget(card, row, 0, 1, columns)
+            self._place(card, row, 0, 1, columns)
             self.grid.setRowStretch(row, 1)
             return
         rest = list(metrics)
         if self.hero in metrics:
             card = self.cards[self.hero]
             card.chart.setMinimumHeight(HERO_HEIGHT)
-            self.grid.addWidget(card, row, 0, 1, columns)
+            self._place(card, row, 0, 1, columns)
             row += 1
             rest.remove(self.hero)
         groups = group_metrics(rest)
@@ -226,7 +238,7 @@ class PlotGrid(QScrollArea):
             if group == lead:
                 cells.insert(0, self.lead[1])
             folded = self.collapsible and group in self.collapsed
-            self.grid.addWidget(self._heading(group, len(cells), folded, index == 0), row, 0, 1, columns)
+            self._place(self._heading(group, len(cells), folded, index == 0), row, 0, 1, columns)
             row += 1
             if folded:
                 continue
@@ -236,7 +248,7 @@ class PlotGrid(QScrollArea):
             for i, cell in enumerate(cells):
                 if isinstance(cell, ChartCard):
                     cell.chart.setMinimumHeight(160 if per_row > 3 else 180 if per_row > 2 else 220)
-                self.grid.addWidget(cell, row + i // per_row, (i % per_row) * span, 1, columns if alone else span)
+                self._place(cell, row + i // per_row, (i % per_row) * span, 1, columns if alone else span)
             row += (len(cells) + per_row - 1) // per_row
         self.grid.setRowStretch(row, 1)
 

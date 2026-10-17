@@ -650,3 +650,28 @@ def test_window_loads_results_runs_into_the_builder_only_when_it_has_their_confi
             assert window.tabs.currentWidget() is window.config_panel
         finally:
             window.close()
+
+
+def test_a_quick_relayout_does_not_open_the_empty_label_as_a_window():
+    """Metrics arriving right after "Loading metrics…" must not leave that label floating in its own window.
+
+    Adding a widget to a visible layout queues a call that shows it. If the grid was laid out again before
+    that call ran, the call used to show the detached, parentless label as a top-level window.
+    """
+    from frontend.results.plot_grid import PlotGrid
+
+    grid = PlotGrid()
+    grid.show()
+    app.processEvents()
+    grid.set_metrics([], "Loading metrics…")  # queues the label's show…
+    grid.set_metrics(["eval/reward"])  # …and the metrics arrive before it runs
+    app.processEvents()
+    floating = [w for w in app.topLevelWidgets() if w.isVisible() and w is not grid and w.parent() is None
+                and getattr(w, "text", lambda: "")() == "Loading metrics…"]
+    assert floating == []
+    assert not grid.empty.isVisible() and grid.cards["eval/reward"].isVisible()
+    grid.set_metrics([], "Nothing to plot")  # and the label still shows when it is placed again
+    app.processEvents()
+    assert grid.empty.isVisible() and grid.empty.parent() is grid.body
+    grid.close()
+    grid.deleteLater()
