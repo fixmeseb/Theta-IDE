@@ -88,6 +88,12 @@ def normalize_menu_shortcut(shortcut_str: str) -> str:
     return re.sub(r"(?i)\b(cmd|command)\b", "Ctrl", str(shortcut_str).strip())
 
 
+def launch_buttons(window):
+    """Buttons that launch the open experiment now: the experiment tree's and the Queue tab's."""
+    panel = getattr(window, "queue_panel", None)
+    return [b for b in (window.start_button, panel and panel.launch_button) if b is not None]
+
+
 class Window(QMainWindow):
     def __init__(self, data_dir, progress=None):
         """`progress(message, fraction)` reports startup steps (the splash screen shows them)."""
@@ -216,7 +222,7 @@ class Window(QMainWindow):
         if self.runs:
             self.select_run(self.runs[0])
         self.log("ThetaIDE ready. Launch trains on this machine with run_pipeline.py; "
-                 "Run → Start simulated demo needs no training environment.")
+                 "Queue → Start simulated demo needs no training environment.")
         self.request_schema(apply_defaults=True)
         self.reconnect_live_run()
         for error in errors:
@@ -425,10 +431,18 @@ class Window(QMainWindow):
 
         # 5. Plot Viewer
         self.plot_viewer = PlotViewer()
-        self.tabs.addTab(self.plot_viewer, "Plot viewer", "plots", "Plots", tab_id="plots")
+        # The runs list: the runs ticked in it are plotted together here. Past runs are viewed in this tab;
+        # the Training monitor shows only the current or most recent run.
+        self.plot_viewer.add_runs_list(self.monitor.sidebar)
+        self.monitor.sidebar.compare_changed.connect(self.plot_ticked_runs)
+        self.tabs.addTab(self.plot_viewer, "Plot Viewer", "plots", "Plots", tab_id="plots")
 
         # 6. Job Queue Panel
-        self.queue_panel = QueuePanel(self.move_queued, self.remove_queued, self.open_job, self.set_queue_running)
+        self.queue_panel = QueuePanel(self.move_queued, self.remove_queued, self.open_job, self.set_queue_running,
+                                      on_launch=self.launch_training, on_add=self.add_to_queue,
+                                      on_stop=self.stop_run, on_demo=self.start_demo)
+        self.queue_button = self.queue_panel.add_button
+        self.stop_button = self.queue_panel.stop_button
         self.tabs.addTab(self.queue_panel, "Job queue", "queue", "Queue", tab_id="queue")
 
         # 8. Terminal Panel
@@ -518,10 +532,12 @@ class Window(QMainWindow):
             self.active_config_path = None
             self.active_config_rel_path = None
             self.current_experiment = None
-            if self.start_button is not None:
-                self.start_button.setEnabled(False)
+            for button in launch_buttons(self):
+                button.setEnabled(False)
             if self.queue_button is not None:
                 self.queue_button.setEnabled(False)
+            if hasattr(self, "queue_panel"):
+                self.queue_panel.set_experiment(None)
             return
 
         self.active_config_path = viewer.current_path
@@ -1192,7 +1208,7 @@ class Window(QMainWindow):
             self.addAction(action)
             self.menu_actions[aid] = action
 
-        run_menu = self.menuBar().addMenu("Run")
+        # Training is started and stopped from the Queue tab; its shortcuts stay window-wide.
         for aid, title, default_sc, callback in (
             ("launch_training", "Launch training", "F5", self.launch_training),
             ("stop_run", "Stop", "Shift+F5", self.stop_run),
@@ -1209,7 +1225,6 @@ class Window(QMainWindow):
                 action.setShortcut(QKeySequence(sc_norm))
             action.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
             action.triggered.connect(callback)
-            run_menu.addAction(action)
             self.addAction(action)
             self.menu_actions[aid] = action
         view_menu = self.menuBar().addMenu("View")
@@ -1251,7 +1266,7 @@ class Window(QMainWindow):
         view_menu.addAction("Workflows", lambda: self.tabs.setCurrentWidget(self.workflows_panel))
         view_menu.addAction("Training monitor", lambda: self.tabs.setCurrentWidget(self.monitor_panel))
         view_menu.addAction("Results browser", lambda: self.tabs.setCurrentWidget(self.results_panel))
-        view_menu.addAction("Plot viewer", lambda: self.tabs.setCurrentWidget(self.plot_viewer))
+        view_menu.addAction("Plot Viewer", lambda: self.tabs.setCurrentWidget(self.plot_viewer))
         if hasattr(self, "tabs") and "tensorboard" in self.tabs.tabs:
             view_menu.addAction("TensorBoard", self.show_tensorboard)
         view_menu.addAction("Job queue", lambda: self.tabs.setCurrentWidget(self.queue_panel))
@@ -1710,8 +1725,8 @@ class Window(QMainWindow):
         has_experiment = bool(getattr(self, "current_experiment", None))
         missing_components = Window.check_missing_components(self) if has_experiment else []
         ready = idle and self.compose_valid and has_experiment and not missing_components
-        if self.start_button is not None:
-            self.start_button.setEnabled(ready)
+        for button in launch_buttons(self):  # the experiment tree's and the Queue tab's
+            button.setEnabled(ready)
         if self.queue_button is not None:
             self.queue_button.setEnabled(self.compose_valid and has_experiment and not missing_components)
         if self.stop_button is not None:
@@ -1742,10 +1757,19 @@ class Window(QMainWindow):
             exp_name = getattr(self, "current_experiment", "experiment")
             tip = f"Train {exp_name} through the backend (F5)"
             btn_text = "Launch training"
-        if self.start_button is not None:
-            self.start_button.setToolTip(tip)
-            if hasattr(self.start_button, "setText"):
-                self.start_button.setText(btn_text)
+        for button in launch_buttons(self):
+            button.setToolTip(tip)
+        # Only the experiment tree's button says why in its text; the Queue tab's stays "Launch now"
+        # (a reason such as "Missing component: nsfr" does not fit it) and says why in its tooltip.
+        if self.start_button is not None and hasattr(self.start_button, "setText"):
+            self.start_button.setText(btn_text)
+        if hasattr(self, "queue_panel"):
+            self.queue_panel.set_experiment(getattr(self, "current_experiment", None),
+                                            getattr(self, "active_config_rel_path", "") or "")
+            self.queue_panel.stop_button.setToolTip("Stop the active run (Shift+F5)" if not idle else "No run is active")
+            self.queue_panel.add_button.setToolTip(
+                tip.replace("Cannot run", "Cannot queue") if not ready and idle
+                else f"Add {getattr(self, 'current_experiment', 'the experiment')} to the queue (Ctrl+Shift+Q)")
         if getattr(self, "state_label", None) is not None:
             run = self.active
             if run is None:
@@ -1788,8 +1812,8 @@ class Window(QMainWindow):
         experiment_id = self.unique_experiment_id(config.name, is_recover=is_recover)
         overrides = self.config_viewer.get_overrides() if hasattr(self, "config_viewer") else config.overrides()
         overrides = [o for o in overrides if not o.startswith("++experiment_id=")] + [f"++experiment_id='{experiment_id}'"]
-        if self.start_button is not None:
-            self.start_button.setEnabled(False)
+        for button in launch_buttons(self):
+            button.setEnabled(False)
         self.log(f"Launching {experiment_id}:\n  python run_pipeline.py {exp_target} {' '.join(overrides)}")
         try:
             job = self.jobs.launch(exp_target, overrides)
@@ -2089,13 +2113,26 @@ class Window(QMainWindow):
         except KeyError:
             self.log("Remove failed: that job no longer exists.")
 
+    def plot_ticked_runs(self, run_ids):
+        """The runs list's ticks changed: draw those runs in the Plot Viewer (loading their curves if needed)."""
+        for run_id in run_ids:
+            run = self.by_id(run_id)
+            if run is not None:
+                self.load_disk_metrics(run)  # command-line runs load their curves on first use
+        self.plot_viewer.set_compared(run_ids, self.monitor.sidebar.colors())
+
     def open_job(self, job_id):
+        """Queue → double-click (or Open in Plot Viewer): plot that job's run in the Plot Viewer."""
         run = next((r for r in self.runs if not r["simulated"] and r["backend"].get("job_id") == job_id), None)
         if run is None:
             self.statusBar().showMessage("That job has no run record in this workspace.", 5000)
             return
-        self.select_run(run)
-        self.tabs.setCurrentWidget(self.monitor_panel)
+        self.monitor.sidebar.tick(run["id"])
+        self.tabs.setCurrentWidget(self.plot_viewer)
+
+    def latest_run(self):
+        """The run the Training monitor shows: the one training now, else the most recent one."""
+        return self.active or (self.runs[0] if self.runs else None)
 
     # ── Simulated demo (no training environment needed) ──────────────────────
 
@@ -2172,15 +2209,6 @@ class Window(QMainWindow):
         if hasattr(self, "monitor"):
             self.monitor.render()
 
-    def select_prev_run(self):
-        self.monitor.select_prev_run()
-
-    def select_next_run(self):
-        self.monitor.select_next_run()
-
-    def jump_to_live_run(self):
-        self.monitor.jump_to_live_run()
-
     def toggle_pin_baseline(self):
         self.monitor.toggle_pin_baseline()
 
@@ -2249,7 +2277,7 @@ class Window(QMainWindow):
 
         # Sync the Monitor's run selector
         if hasattr(self, "monitor"):
-            self.monitor.set_runs(self.runs, self.selected)
+            self.monitor.set_runs(self.runs)
 
     def request_disk_runs(self):
         """List every results/logs folder (catalog.list_runs on the background thread)."""
@@ -2280,6 +2308,8 @@ class Window(QMainWindow):
         if self.selected is not None and not any(run is self.selected for run in self.runs):
             self.selected = None  # its folder was deleted
         self.refresh_runs()
+        if self.selected is None and self.latest_run() is not None:
+            self.select_run(self.latest_run())
 
     def update_disk_status(self):
         if not hasattr(self, "disk_status"):
@@ -2323,7 +2353,7 @@ class Window(QMainWindow):
 
     def view_selected_plot(self):
         if self.selected:
-            self.plot_viewer.show_run(self.selected["id"])
+            self.monitor.sidebar.tick(self.selected["id"])  # the plot draws the ticked runs
         self.tabs.setCurrentWidget(self.plot_viewer)
 
     def tree_selected(self, item, _):

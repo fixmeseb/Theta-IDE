@@ -148,6 +148,21 @@ class SortableItem(QTableWidgetItem):
         return self.key < other.key
 
 
+class ElidedLabel(QLabel):
+    """A one-line label that ends in … when it is given less width than its text needs."""
+
+    def minimumSizeHint(self):
+        hint = super().minimumSizeHint()
+        hint.setWidth(min(hint.width(), 60))
+        return hint
+
+    def paintEvent(self, event):
+        painter = QPainter(self)
+        text = self.fontMetrics().elidedText(self.text(), Qt.TextElideMode.ElideRight, self.contentsRect().width())
+        painter.setPen(self.palette().color(self.foregroundRole()))
+        painter.drawText(self.contentsRect(), int(self.alignment() | Qt.AlignmentFlag.AlignVCenter), text)
+
+
 class MetricCard(QFrame):
     def __init__(self, title, subtitle):
         super().__init__()

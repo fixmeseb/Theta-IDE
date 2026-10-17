@@ -1,8 +1,9 @@
-"""Runs sidebar: every run at a glance; click one to show it, tick others to overlay them.
+"""Runs list (in the Plots tab): every run at a glance; click or tick runs to plot them together in
+the Plot Viewer. The Training monitor is not driven from here: it shows the current or most recent run.
 
 Live and queued runs come first, then the rest in the app's order (newest first). Each row has a status
-mark, the run's name and seed, a small reward curve with the latest reward, and a checkbox. The selected
-run is always drawn; ticked runs are overlaid on its Charts and System views in their dot's color.
+mark, the run's name and seed, a small reward curve with the latest reward, and a checkbox. Ticked runs
+are drawn in the Plot Viewer in their row's color.
 """
 
 from __future__ import annotations
@@ -13,7 +14,9 @@ from PyQt6.QtWidgets import (
     QHeaderView,
     QLineEdit,
     QPushButton,
+    QStyle,
     QStyledItemDelegate,
+    QStyleOptionViewItem,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -28,7 +31,9 @@ PALETTE = ("#b8bb26", "#83a598", "#fabd2f", "#d3869b", "#8ec07c", "#fe8019", "#f
 RUN_ID = Qt.ItemDataRole.UserRole
 TREND = Qt.ItemDataRole.UserRole + 1  # list of reward values, oldest first
 COLOR = Qt.ItemDataRole.UserRole + 2
+DETAIL = Qt.ItemDataRole.UserRole + 3  # the row's second line: how far along the run is
 TREND_POINTS = 60  # at most this many points per sparkline
+ROW_HEIGHT = 40  # two lines: the run, then its detail
 STATUS_MARKS = {
     "completed": "✓",
     "failed": "✗",
@@ -58,6 +63,46 @@ def reward_trend(run) -> list[float]:
     return values
 
 
+def run_detail(run) -> str:
+    """'training · 62%', 'done', 'queued'…: the second line of a run's row."""
+    status = run.get("status", "")
+    if status in LIVE_STATUSES:
+        budget = (run.get("backend") or {}).get("effective_timesteps")
+        step = max((m.get("step") or 0 for m in run.get("metrics") or []), default=0)
+        return f"training · {min(100, round(100 * step / budget))}%" if budget and step else "starting"
+    return {"completed": "done"}.get(status, status)
+
+
+class RunRowDelegate(QStyledItemDelegate):
+    """The first column on two lines: the run (with its checkbox), then its detail in muted text."""
+
+    def initStyleOption(self, option, index):
+        super().initStyleOption(option, index)
+        option.displayAlignment = Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop
+
+    def paint(self, painter: QPainter, option, index):
+        option.rect = option.rect.adjusted(0, 3, 0, 0)  # the first line a little off the top edge
+        super().paint(painter, option, index)
+        detail = index.data(DETAIL)
+        if not detail:
+            return
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        widget = option.widget
+        style = widget.style() if widget is not None else None
+        text = style.subElementRect(QStyle.SubElement.SE_ItemViewItemText, opt, widget) if style else opt.rect
+        painter.save()
+        painter.setPen(QColor(theme_color("muted")))
+        painter.setFont(QFont("Segoe UI", 8))
+        painter.drawText(QRectF(text.left() + 4, option.rect.top() + 19, text.width() - 4, 16),
+                         Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, detail)
+        painter.restore()
+
+    def sizeHint(self, option, index):
+        hint = super().sizeHint(option, index)
+        return QSize(hint.width(), ROW_HEIGHT if index.data(RUN_ID) else hint.height())
+
+
 class TrendDelegate(QStyledItemDelegate):
     """Draws a run's reward sparkline and latest value in the second column."""
 
@@ -66,7 +111,8 @@ class TrendDelegate(QStyledItemDelegate):
         values = index.data(TREND) or []
         if not values:
             return
-        rect = QRectF(option.rect).adjusted(4, 5, -4, -5)
+        middle = option.rect.center().y()  # a sparkline of one line's height, centred on the two-line row
+        rect = QRectF(option.rect.left() + 4, middle - 8, option.rect.width() - 8, 16)
         text_width = 44
         area = QRectF(rect.left(), rect.top(), max(10.0, rect.width() - text_width - 6), rect.height())
         painter.save()
@@ -94,13 +140,16 @@ class TrendDelegate(QStyledItemDelegate):
         painter.restore()
 
     def sizeHint(self, option, index):
-        return QSize(120, 26)
+        return QSize(120, ROW_HEIGHT if index.data(RUN_ID) or index.data(TREND) else 26)
 
 
 class RunsSidebar(QWidget):
-    """Lists runs; `run_chosen` when one is clicked, `compare_changed` when the ticked set changes."""
+    """Lists runs; `compare_changed` when the ticked set (what the Plot Viewer draws) changes.
 
-    run_chosen = pyqtSignal(str)  # run id
+    Clicking a row ticks or unticks it, like its checkbox. Which run the Training monitor shows is not
+    chosen here: it follows the run training now, or the most recent one.
+    """
+
     compare_changed = pyqtSignal(list)  # ids of the ticked runs, in the order they were ticked
 
     def __init__(self, parent=None):
@@ -120,28 +169,30 @@ class RunsSidebar(QWidget):
         self.tree.setHeaderHidden(True)
         self.tree.setRootIsDecorated(False)
         self.tree.setIndentation(0)
+        self.tree.setItemDelegateForColumn(0, RunRowDelegate(self.tree))
         self.tree.setItemDelegateForColumn(1, TrendDelegate(self.tree))
         self.tree.header().setStretchLastSection(False)
         self.tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self.tree.header().setSectionResizeMode(1, QHeaderView.ResizeMode.Fixed)
         self.tree.setColumnWidth(1, 120)
-        self.tree.currentItemChanged.connect(self._current_changed)
         self.tree.itemChanged.connect(self._item_changed)
+        self.tree.itemPressed.connect(self._pressed)
+        self.tree.itemClicked.connect(self._clicked)
         layout.addWidget(self.tree, 1)
-        self.clear_button = QPushButton("Clear comparison")
-        self.clear_button.setToolTip("Untick every run overlaid on the selected one")
+        self.clear_button = QPushButton("Clear plot")
+        self.clear_button.setToolTip("Untick every run, taking them off the plot")
         self.clear_button.clicked.connect(self.clear_comparison)
         self.clear_button.hide()
         layout.addWidget(self.clear_button)
         self.items: dict[str, QTreeWidgetItem] = {}
         self.compared: list[str] = []  # ticked run ids, in tick order
-        self.selected_id: str | None = None
         self._filling = False
+        self._press = None  # (item, its check state) when the mouse went down on a row
 
     # ── Filling ──────────────────────────────────────────────────────────────
 
-    def set_runs(self, runs, selected=None):
-        """Rebuild the list: live and queued runs first, then the rest. Ticks and selection are kept."""
+    def set_runs(self, runs):
+        """Rebuild the list: live and queued runs first, then the rest. Ticks are kept."""
         self._filling = True
         self.tree.clear()
         self.items = {}
@@ -164,11 +215,9 @@ class RunsSidebar(QWidget):
                 item.setCheckState(0, Qt.CheckState.Checked if run["id"] in self.compared else Qt.CheckState.Unchecked)
                 self.items[run["id"]] = item
                 self._fill(item, run)
-        self.selected_id = selected["id"] if selected else self.selected_id
         self._paint_colors()
         self._apply_filter(self.filter.text())
         self._filling = False
-        self.select(self.selected_id)
         self.clear_button.setVisible(bool(self.compared))
 
     def _fill(self, item, run):
@@ -176,8 +225,9 @@ class RunsSidebar(QWidget):
         seed_text = f"  (seed {seed})" if seed is not None else ""
         item.setText(0, f"{status_mark(run.get('status', ''))}  {run_label(run)}{seed_text}")
         item.setToolTip(
-            0, f"{run_label(run)} · {run.get('status', '')}\nClick to show it; tick to overlay it on the shown run."
+            0, f"{run_label(run)} · {run.get('status', '')}\nClick or tick it to plot it in the Plot Viewer."
         )
+        item.setData(0, DETAIL, run_detail(run))
         item.setData(1, TREND, reward_trend(run))
 
     def update_run(self, run):
@@ -189,18 +239,16 @@ class RunsSidebar(QWidget):
             self._filling = False
 
     def colors(self) -> dict[str, str]:
-        """run id -> color: the selected run first, then the ticked runs in tick order."""
-        order = [self.selected_id] if self.selected_id else []
-        order += [run_id for run_id in self.compared if run_id != self.selected_id]
-        return {run_id: PALETTE[i % len(PALETTE)] for i, run_id in enumerate(order)}
+        """run id -> color of the ticked runs, in tick order: their curves in the Plots tab."""
+        return {run_id: PALETTE[i % len(PALETTE)] for i, run_id in enumerate(self.compared)}
 
     def _paint_colors(self):
         colors = self.colors()
         filling, self._filling = self._filling, True  # recoloring fires itemChanged: not a tick
         for run_id, item in self.items.items():
-            color = colors.get(run_id)
-            item.setData(1, COLOR, color or theme_color("comment"))
-            item.setForeground(0, QColor(color) if color else QColor(theme_color("text")))
+            color = colors.get(run_id)  # resolved through the theme, as the Plot viewer draws its curve
+            item.setData(1, COLOR, theme_color(color) if color else theme_color("comment"))
+            item.setForeground(0, QColor(theme_color(color) if color else theme_color("text")))
         self._filling = filling
 
     def _apply_filter(self, text):
@@ -210,24 +258,17 @@ class RunsSidebar(QWidget):
 
     # ── Selection and comparison ─────────────────────────────────────────────
 
-    def select(self, run_id):
-        """Highlight `run_id` as the shown run, without signalling."""
-        self.selected_id = run_id
-        item = self.items.get(run_id)
-        self._filling = True
-        if item is not None:
-            self.tree.setCurrentItem(item)
-        self._filling = False
-        self._paint_colors()
+    def _pressed(self, item, _column):
+        self._press = (item, item.checkState(0))
 
-    def _current_changed(self, current, _previous):
-        if self._filling or current is None:
+    def _clicked(self, item, _column):
+        """A click on the row (not its checkbox, which Qt already toggled) ticks or unticks it."""
+        press, self._press = self._press, None
+        if press is None or press[0] is not item or not item.data(0, RUN_ID):
             return
-        run_id = current.data(0, RUN_ID)
-        if run_id and run_id != self.selected_id:
-            self.selected_id = run_id
-            self._paint_colors()
-            self.run_chosen.emit(run_id)
+        if item.checkState(0) == press[1]:
+            checked = item.checkState(0) == Qt.CheckState.Checked
+            item.setCheckState(0, Qt.CheckState.Unchecked if checked else Qt.CheckState.Checked)
 
     def _item_changed(self, item, column):
         if self._filling or column != 0:
@@ -243,6 +284,12 @@ class RunsSidebar(QWidget):
         self._paint_colors()
         self.clear_button.setVisible(bool(self.compared))
         self.compare_changed.emit(list(self.compared))
+
+    def tick(self, run_id):
+        """Tick `run_id` (it is plotted), as a click on its checkbox would."""
+        item = self.items.get(run_id)
+        if item is not None and item.checkState(0) != Qt.CheckState.Checked:
+            item.setCheckState(0, Qt.CheckState.Checked)
 
     def clear_comparison(self):
         self._filling = True

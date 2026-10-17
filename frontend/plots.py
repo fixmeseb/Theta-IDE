@@ -8,7 +8,7 @@ from PyQt6.QtCore import Qt, QRectF, QPointF
 from PyQt6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen, QPixmap
 from PyQt6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QComboBox, QPushButton, QFileDialog,
-    QMessageBox, QStackedWidget, QGraphicsView, QGraphicsScene,
+    QMessageBox, QStackedWidget, QGraphicsView, QGraphicsScene, QSplitter,
 )
 from .widgets import label
 from .theme import theme_color
@@ -71,6 +71,7 @@ class PlotCanvas(QWidget):
         self.auto_fit = True
         self.drag = None
         self.hover = None
+        self.empty_text = "No plottable points yet.\nStart a demo run or open a metrics CSV."
 
     def area(self):
         return QRectF(76, 38, max(1, self.width() - 124), max(1, self.height() - 140))
@@ -197,11 +198,27 @@ class PlotCanvas(QWidget):
         p.restore()
         if not any(data for _, data, _ in self.series):
             p.setPen(QColor(theme_color("muted")))
-            p.drawText(a, Qt.AlignmentFlag.AlignCenter, "No plottable points yet.\nStart a demo run or open a metrics CSV.")
+            p.drawText(a, Qt.AlignmentFlag.AlignCenter, self.empty_text)
+        self._draw_legend(p, a)
+
+    def _draw_legend(self, p, a):
+        """One entry per series, side by side, on up to two rows below the axis; '+N more' if they don't fit."""
+        metrics = p.fontMetrics()
+        x, row, rows, gap = a.left(), 0, 2, 24
         for i, (name, _, color) in enumerate(self.series):
+            text = f"●  {name}"
+            width = metrics.horizontalAdvance(text)
+            if x > a.left() and x + width > a.right():
+                x, row = a.left(), row + 1
+            if row >= rows:
+                p.setPen(QColor(theme_color("muted")))
+                p.drawText(QRectF(a.left(), self.height() - 46 + (rows - 1) * 19, a.width(), 19),
+                           Qt.AlignmentFlag.AlignRight, f"+{len(self.series) - i} more")
+                return
             p.setPen(QColor(theme_color(color)))
-            p.drawText(QRectF(a.left(), self.height() - 43 + i * 19, a.width(), 19),
-                       Qt.AlignmentFlag.AlignLeft, f"●  {name}")
+            p.drawText(QRectF(x, self.height() - 46 + row * 19, min(width, a.width()) + 2, 19),
+                       Qt.AlignmentFlag.AlignLeft, metrics.elidedText(text, Qt.TextElideMode.ElideRight, int(a.width())))
+            x += width + gap
 
 
 class ImageCanvas(QGraphicsView):
@@ -239,14 +256,29 @@ class ImageCanvas(QGraphicsView):
 
 
 class PlotViewer(QWidget):
+    """Plots the runs ticked in the runs list (at its left) together, or a CSV / image opened from disk.
+
+    There is no source picker: what is drawn is exactly what is ticked. An opened file is shown until the
+    ticks change, and then the ticked runs are drawn again.
+    """
+
     def __init__(self):
         super().__init__()
         self.runs = []
-        self.imports = {}
-        self.signature = None
+        self.compared: list[str] = []  # runs ticked in the runs list, in tick order
+        self.compared_colors: dict[str, str] = {}
+        self.imported = None  # (name, columns or QPixmap) of the file opened last, while it is shown
         layout = QVBoxLayout(self)
         layout.setContentsMargins(18, 18, 18, 18)
-        layout.addWidget(label("Plot viewer", "heading"))
+        layout.addWidget(label("Plot Viewer", "heading"))
+        # The runs list (add_runs_list) at the left, the plot and its controls beside it
+        self.body = QSplitter(Qt.Orientation.Horizontal)
+        self.body.setChildrenCollapsible(False)
+        main = QWidget()
+        outer, layout = layout, QVBoxLayout(main)
+        layout.setContentsMargins(0, 0, 0, 0)
+        self.body.addWidget(main)
+        outer.addWidget(self.body, 1)
         tools = QHBoxLayout()
         for text, callback in (("Open CSV / image…", self.open_file), ("+", lambda: self.current_canvas().zoom(.8)),
                                ("−", lambda: self.current_canvas().zoom(1.25)),
@@ -259,22 +291,8 @@ class PlotViewer(QWidget):
             tools.addWidget(button)
         tools.addStretch()
         layout.addLayout(tools)
-        sources = QHBoxLayout()
-        self.source, self.compare = QComboBox(), QComboBox()
-        for combo in (self.source, self.compare):
-            combo.setMinimumWidth(100)
-            combo.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon)
-            combo.setMinimumContentsLength(12)
-        sources.addWidget(label("Source", "muted"))
-        sources.addWidget(self.source, 1)
-        sources.addWidget(label("Overlay", "muted"))
-        sources.addWidget(self.compare, 1)
-        sources.addStretch()
-        layout.addLayout(sources)
         axes = QHBoxLayout()
         self.xaxis, self.yaxis = QComboBox(), QComboBox()
-        for combo in (self.source, self.compare):
-            combo.setMaximumWidth(420)
         for combo in (self.xaxis, self.yaxis):
             combo.setMaximumWidth(240)
         axes.addWidget(label("X", "muted"))
@@ -285,6 +303,7 @@ class PlotViewer(QWidget):
         layout.addLayout(axes)
         self.stack = QStackedWidget()
         self.canvas, self.image = PlotCanvas(), ImageCanvas()
+        self.canvas.empty_text = "Tick runs in the list to plot them,\nor open a metrics CSV."
         self.stack.addWidget(self.canvas)
         self.stack.addWidget(self.image)
         layout.addWidget(self.stack, 1)
@@ -292,88 +311,86 @@ class PlotViewer(QWidget):
         self.caption.setWordWrap(True)
         layout.addWidget(self.caption)
         layout.addWidget(label("Scroll to zoom · Drag to pan · Double-click to fit · Hover a curve to inspect", "muted"))
-        self.source.currentIndexChanged.connect(self.source_changed)
-        self.compare.currentIndexChanged.connect(self.redraw)
         self.xaxis.currentTextChanged.connect(self.redraw)
         self.yaxis.currentTextChanged.connect(self.redraw)
+        self.refresh()
+
+    def add_runs_list(self, runs_list, width=300):
+        """Place the runs list at the left: its ticks choose what is plotted (and a click, the monitor's run)."""
+        self.body.insertWidget(0, runs_list)
+        self.body.setStretchFactor(1, 1)
+        self.body.setSizes([width, 1000])
 
     def current_canvas(self):
         return self.stack.currentWidget()
 
     def update_runs(self, runs):
+        """The app's runs changed (a new one, new metrics): redraw the ticked ones, keeping the view."""
         self.runs = runs
-        ids = tuple(run["id"] for run in runs)
-        if ids != self.signature:
-            self.signature = ids
-            self.populate_sources()
-        else:
-            self.redraw(reset=False)
+        if self.imported is None:
+            self.refresh(reset=False)
 
-    def populate_sources(self):
-        old = self.source.currentData()
-        overlay = self.compare.currentData()
-        self.source.blockSignals(True)
-        self.compare.blockSignals(True)
-        self.source.clear()
-        self.compare.clear()
-        self.compare.addItem("None", None)
-        for run in self.runs:
-            title = f"{run['config']['name']} · {run['id']}"
-            self.source.addItem(title, run["id"])
-            self.compare.addItem(title, run["id"])
-        for key, (title, _) in self.imports.items():
-            self.source.addItem(title, key)
-        index = self.source.findData(old)
-        self.source.setCurrentIndex(index if index >= 0 else 0)
-        self.compare.setCurrentIndex(max(0, self.compare.findData(overlay)))
-        self.source.blockSignals(False)
-        self.compare.blockSignals(False)
-        self.source_changed()
+    def set_compared(self, run_ids, colors):
+        """The ticks changed: plot exactly the ticked runs, each in its row's color."""
+        self.compared, self.compared_colors = list(run_ids), dict(colors)
+        self.imported = None
+        self.refresh()
 
-    def data_for(self, key):
-        if key in self.imports:
-            return self.imports[key]
+    def data_for(self, run_id):
         for run in self.runs:
-            if run["id"] == key:
+            if run["id"] == run_id:
                 source = "simulated" if run.get("simulated", True) else "trained"
                 return f"{run['config']['name']} [{run['id']}] · {source}", {
                     field: [m.get(field) for m in run["metrics"]]
                     for field in ["step"] + sorted({k for m in run["metrics"] for k in m} - {"step"})}
-        return "No source", {}
+        return None
 
-    def source_changed(self, *_):
-        _, data = self.data_for(self.source.currentData())
-        is_image = isinstance(data, QPixmap)
-        self.stack.setCurrentIndex(1 if is_image else 0)
-        for widget in (self.xaxis, self.yaxis, self.compare):
-            widget.setEnabled(not is_image)
-        if is_image:
+    def sources(self):
+        """(name, columns, color) of everything to draw: the opened CSV, or the ticked runs."""
+        if self.imported is not None:
+            name, data = self.imported
+            return [(name, data, "#b8bb26")]
+        found = []
+        for run_id in self.compared:
+            entry = self.data_for(run_id)
+            if entry is not None:
+                found.append((*entry, self.compared_colors.get(run_id, "#b8bb26")))
+        return found
+
+    def refresh(self, reset=True):
+        """Show what is chosen: an opened image, or curves; the axis lists offer every column of the sources."""
+        if self.imported is not None and isinstance(self.imported[1], QPixmap):
+            data = self.imported[1]
+            self.stack.setCurrentIndex(1)
+            self.xaxis.setEnabled(False)
+            self.yaxis.setEnabled(False)
             self.image.load(data)
-            self.caption.setText(f"Local image · {data.width()} × {data.height()} pixels")
+            self.caption.setText(f"Local image · {data.width()} × {data.height()} pixels · tick a run to go back")
             return
+        self.stack.setCurrentIndex(0)
+        self.xaxis.setEnabled(True)
+        self.yaxis.setEnabled(True)
+        columns = list(dict.fromkeys(column for _, data, _ in self.sources() for column in data))
         for combo, preferred in ((self.xaxis, "step"), (self.yaxis, "reward")):
+            if [combo.itemText(i) for i in range(combo.count())] == columns:
+                continue
             previous = combo.currentText()
             combo.blockSignals(True)
             combo.clear()
-            combo.addItems(list(data))
-            choice = previous if previous in data else preferred
+            combo.addItems(columns)
+            choice = previous if previous in columns else preferred
             index = combo.findText(choice)
-            combo.setCurrentIndex(index if index >= 0 else min(1 if combo is self.yaxis else 0, len(data) - 1))
+            combo.setCurrentIndex(index if index >= 0 else min(1 if combo is self.yaxis else 0, len(columns) - 1))
             combo.blockSignals(False)
-        self.redraw()
+        self.redraw(reset=reset)
 
     def redraw(self, *_, reset=True):
-        name, data = self.data_for(self.source.currentData())
-        if isinstance(data, QPixmap):
+        if self.imported is not None and isinstance(self.imported[1], QPixmap):
             return
         x, y = self.xaxis.currentText(), self.yaxis.currentText()
         series = []
         warnings = []
-        sources = [(name, data, "#b8bb26")]
-        if self.compare.currentData() and self.compare.currentData() != self.source.currentData():
-            other_name, other_data = self.data_for(self.compare.currentData())
-            sources.append((other_name, other_data, "#83a598"))
-        for title, columns, color in sources:
+        for title, columns, color in self.sources():
             if x not in columns or y not in columns:
                 warnings.append(f"{title}: chosen axes unavailable")
                 continue
@@ -381,14 +398,11 @@ class PlotViewer(QWidget):
             series.append((title, pairs, color))
         self.canvas.set_data(series, x, y, reset=reset)
         count = sum(len(points) for _, points, _ in series)
-        imported = self.source.currentData() in self.imports
-        provenance = "Imported CSV · session only" if imported else "Run metrics"
+        if self.imported is not None:
+            provenance = "Imported CSV · session only · tick a run to go back"
+        else:
+            provenance = f"{len(series)} run{'s' * (len(series) != 1)}"
         self.caption.setText(f"{provenance} · {count:,} points" + (" · " + "; ".join(warnings) if warnings else ""))
-
-    def show_run(self, run_id):
-        index = self.source.findData(run_id)
-        if index >= 0:
-            self.source.setCurrentIndex(index)
 
     def open_path(self, path):
         path = Path(path)
@@ -398,10 +412,8 @@ class PlotViewer(QWidget):
             data = QPixmap(str(path))
             if data.isNull():
                 raise ValueError("Could not read that image. Choose a PNG, JPEG, or BMP file.")
-        key = "file:" + str(path.resolve())
-        self.imports[key] = path.name, data
-        self.populate_sources()
-        self.source.setCurrentIndex(self.source.findData(key))
+        self.imported = path.name, data
+        self.refresh()
 
     def open_file(self):
         path, _ = QFileDialog.getOpenFileName(self, "Open plot or metrics", "",

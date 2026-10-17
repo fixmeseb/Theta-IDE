@@ -12,21 +12,21 @@ from PyQt6.QtWidgets import (
     QComboBox,
     QFrame,
     QHBoxLayout,
-    QProgressBar,
     QPushButton,
+    QSizePolicy,
     QSlider,
-    QSplitter,
-    QTabWidget,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from ..charts import Chart
-from ..model import FINAL_STATUSES, LIVE_STATUSES, METRIC_COLUMNS, available_metrics, latest
+from ..model import LIVE_STATUSES, METRIC_COLUMNS, available_metrics, latest
 from ..results.metrics_catalog import describe, group_sort_key, metric_group
-from ..widgets import MetricCard, SmoothScrollArea, label
-from .live_view import ChartsView, FeedView, FilesView, LogView, StatusStrip, SystemView
-from .runs_sidebar import RunsSidebar, run_label
+from ..widgets import ElidedLabel, MetricCard, label
+from .live_view import ChartsView, FeedView, FilesView, LogView, StatusStrip, SystemView, latest_problem
+from .pipeline_strip import PipelineStrip
+from .runs_sidebar import RunsSidebar
 
 if TYPE_CHECKING:
     from ..app import Window
@@ -43,7 +43,8 @@ SECOND_METRICS = {
 # Highest possible evaluation reward per environment, drawn as the reward chart's ceiling.
 ENV_MAX_REWARD = {"cartpole": 500}
 OVERVIEW_REWARD_HEIGHT = 300  # px: the Overview's charts never shrink below these; the tab scrolls instead
-OVERVIEW_SECOND_HEIGHT = 240
+SECTION_COLUMNS = {"losses": 4}  # losses are small multiples, four to a row; other sections have two
+SIDEBAR_MIN_WIDTH = 250
 LIVE_REFRESH_MS = 400  # the live views redraw at most this often while records stream in
 # Shown in the reward chart, so not offered for the second one.
 _REWARD_KEYS = {"reward", "reward_std"}
@@ -150,136 +151,152 @@ class MonitorPanel(QWidget):
 
     # Widgets the host window also exposes under the same names (existing code and tests use them).
     EXPOSED = (
-        "smoothing_label", "smoothing_slider", "run_combo", "btn_prev_run", "btn_next_run", "btn_live_jump",
-        "btn_pin_baseline", "run_title", "run_caption", "storage_label", "reward_card", "loss_card", "steps_card",
-        "progress", "reward_chart", "loss_chart", "metric_select", "monitor_note",
+        "smoothing_label", "smoothing_slider", "btn_pin_baseline", "run_title", "run_caption", "reward_card",
+        "loss_card", "steps_card", "reward_chart", "metric_select",
     )
+    # The views besides the workspace, opened from the status row in its place.
+    VIEW_NAMES = ("System", "Logs", "Feed", "Files")
 
     def __init__(self, host: Window):
         super().__init__()
         self.host = host
         self.second_metric = "loss"
-        # Runs sidebar on the left; everything about the shown run on the right.
+        # The runs list lives in the Plots tab (the window places it there): its ticks choose what the Plot
+        # Viewer draws. This panel shows only the current or most recent run (host.selected).
         self.sidebar = RunsSidebar()
-        self.sidebar.run_chosen.connect(self._sidebar_chose)
-        self.sidebar.compare_changed.connect(lambda _ids: self.live_changed())
         content = QWidget()
         layout = QVBoxLayout(content)
-        layout.setContentsMargins(12, 0, 0, 0)
-        layout.setSpacing(14)
-        # Eyebrow row with curve smoothing slider
-        eyebrow_row = QHBoxLayout()
-        eyebrow_row.addWidget(label("EXPERIMENT / OVERVIEW", "eyebrow"))
-        eyebrow_row.addStretch()
+        layout.setContentsMargins(16, 0, 0, 0)
+        layout.setSpacing(12)
+
+        # One status row: badge, the run's name and description, its numbers, and the other views.
+        self.status_strip = StatusStrip()
+        # Long names give way first, ending in … (the full text is on the tooltip), so the row fits.
+        self.run_title = ElidedLabel("Your next experiment")
+        self.run_title.setObjectName("heading")
+        self.run_caption = ElidedLabel("Configure an experiment, then launch training.")
+        self.run_caption.setObjectName("muted")
+        for widget in (self.run_title, self.run_caption):
+            widget.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+        self.status_strip.add_title(self.run_title, self.run_caption)
+        view_buttons = QWidget()
+        view_row = QHBoxLayout(view_buttons)
+        view_row.setContentsMargins(8, 0, 0, 0)
+        view_row.setSpacing(4)
+        self.view_buttons: dict[str, QPushButton] = {}
+        for name in self.VIEW_NAMES:
+            button = QPushButton(name)
+            button.setObjectName("monitorViewButton")
+            button.setCheckable(True)
+            button.setToolTip(f"Show {name} in place of the charts; click again to go back")
+            button.clicked.connect(lambda checked, n=name: self.show_view(n if checked else "Overview"))
+            view_row.addWidget(button)
+            self.view_buttons[name] = button
+        self.status_strip.add_trailing(view_buttons)
+        layout.addWidget(self.status_strip)
+
+        # The run's methods in training order; clicking one shows only its curves.
+        self.pipeline_strip = PipelineStrip()
+        self.pipeline_strip.segment_clicked.connect(self.focus_agent)
+        self.pipeline_strip.hide()
+        layout.addWidget(self.pipeline_strip)
+        self.focused_agent: str | None = None
+        self._focus_run_id: str | None = None  # the run whose method is focused
+
+        # Cards, then sections of charts. The headline (reward) chart is the first chart of its section.
+        cards = QWidget()
+        row = QHBoxLayout(cards)
+        row.setContentsMargins(0, 0, 0, 4)
+        row.setSpacing(12)
+        self.reward_card = MetricCard("EPISODE REWARD", "synthetic evaluation / mean")
+        self.loss_card = MetricCard("TRAINING LOSS", "total loss across minibatches")
+        self.steps_card = MetricCard("TIMESTEPS", "configured training budget")
+        for card in (self.reward_card, self.loss_card, self.steps_card):
+            row.addWidget(card, 1)  # equal widths, whatever the second card's selector needs
+        self.metric_select = QComboBox()
+        self.metric_select.setToolTip("Metric shown in this card")
+        # Re-measure when the choices change: other engines' metric names are longer than PPO's.
+        self.metric_select.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
+        self.metric_select.currentIndexChanged.connect(self.second_metric_changed)
+        title_row = QHBoxLayout()
+        self.loss_card.layout().removeWidget(self.loss_card.title)
+        title_row.addWidget(self.loss_card.title)
+        title_row.addStretch()
+        title_row.addWidget(self.metric_select)
+        self.loss_card.layout().insertLayout(0, title_row)
+        self.reward_chart = Chart("reward", "Episode reward  ·  mean ± 1 std over evaluation episodes",
+                                  band="reward_std")
+        self.reward_chart.setMinimumHeight(OVERVIEW_REWARD_HEIGHT)
+        self.reward_card_frame = QFrame()  # framed like the charts beside it
+        self.reward_card_frame.setObjectName("resultsChartCard")
+        frame_layout = QVBoxLayout(self.reward_card_frame)
+        frame_layout.setContentsMargins(0, 0, 0, 0)
+        frame_layout.addWidget(self.reward_chart)
+        # Smoothing and the baseline pin sit on the first section's heading row.
+        toolbar = QWidget()
+        tools = QHBoxLayout(toolbar)
+        tools.setContentsMargins(0, 0, 0, 0)
+        tools.setSpacing(10)
         self.smoothing_label = label("Smoothing: 0%", "muted")
-        eyebrow_row.addWidget(self.smoothing_label)
+        tools.addWidget(self.smoothing_label)
         self.smoothing_slider = QSlider(Qt.Orientation.Horizontal)
         self.smoothing_slider.setRange(0, 95)
         self.smoothing_slider.setValue(0)
         self.smoothing_slider.setFixedWidth(110)
         self.smoothing_slider.setToolTip("Exponential moving average smoothing for training curves (0% = raw)")
         self.smoothing_slider.valueChanged.connect(self.on_smoothing_changed)
-        eyebrow_row.addWidget(self.smoothing_slider)
-        layout.addLayout(eyebrow_row)
-
-        # Run navigator toolbar: Run selector combo, prev/next, jump to live, pin baseline
-        nav_row = QHBoxLayout()
-        nav_row.setSpacing(8)
-        self.run_combo = QComboBox()
-        self.run_combo.setMinimumWidth(320)
-        self.run_combo.setToolTip("Select any current or past experiment run to inspect")
-        self.run_combo.currentIndexChanged.connect(self.on_run_combo_changed)
-        nav_row.addWidget(self.run_combo, 1)
-
-        self.btn_prev_run = QPushButton("Previous")
-        self.btn_prev_run.setToolTip("View previous experiment run in history")
-        self.btn_prev_run.clicked.connect(self.select_prev_run)
-        nav_row.addWidget(self.btn_prev_run)
-
-        self.btn_next_run = QPushButton("Next")
-        self.btn_next_run.setToolTip("View next experiment run in history")
-        self.btn_next_run.clicked.connect(self.select_next_run)
-        nav_row.addWidget(self.btn_next_run)
-
-        self.btn_live_jump = QPushButton("Jump to live")
-        self.btn_live_jump.setToolTip("Return view to the currently training run")
-        self.btn_live_jump.clicked.connect(self.jump_to_live_run)
-        self.btn_live_jump.hide()
-        nav_row.addWidget(self.btn_live_jump)
-
+        tools.addWidget(self.smoothing_slider)
         self.btn_pin_baseline = QPushButton("Pin as baseline")
         self.btn_pin_baseline.setCheckable(True)
         self.btn_pin_baseline.setToolTip("Pin this run to overlay as a dashed baseline curve on other runs")
         self.btn_pin_baseline.clicked.connect(self.toggle_pin_baseline)
-        nav_row.addWidget(self.btn_pin_baseline)
-
-        layout.addLayout(nav_row)
-
-        self.run_title = label("Your next experiment", "heading")
-        layout.addWidget(self.run_title)
-
-        caption_row = QHBoxLayout()
-        self.run_caption = label("Configure an experiment, then launch training.", "muted")
-        caption_row.addWidget(self.run_caption, 1)
-        self.storage_label = label("results/logs/  ·  results/jobs/jobs.db", "muted")
-        caption_row.addWidget(self.storage_label)
-        layout.addLayout(caption_row)
-        self.status_strip = StatusStrip()
-        layout.addWidget(self.status_strip)
-        row = QHBoxLayout()
-        self.reward_card = MetricCard("EPISODE REWARD", "synthetic evaluation / mean")
-        self.loss_card = MetricCard("TRAINING LOSS", "total loss across minibatches")
-        self.steps_card = MetricCard("TIMESTEPS", "configured training budget")
-        for card in (self.reward_card, self.loss_card, self.steps_card):
-            row.addWidget(card)
-        self.progress = QProgressBar()
-        self.progress.setTextVisible(False)
-        self.progress.setFixedHeight(5)
-        layout.addWidget(self.progress)
-        # Overview keeps the cards and the two headline charts; the other tabs are the live views.
-        self.views = QTabWidget()
-        self.views.setDocumentMode(True)
-        overview = QWidget()
-        overview_layout = QVBoxLayout(overview)
-        overview_layout.setContentsMargins(0, 8, 0, 0)
-        overview_layout.setSpacing(14)
-        overview_layout.addLayout(row)
-        self.reward_chart = Chart("reward", "Episode reward  ·  mean ± 1 std over evaluation episodes",
-                                  band="reward_std")
-        self.loss_chart = Chart(self.second_metric, SECOND_METRICS[self.second_metric][1], zero_based=False)
-        self.metric_select = QComboBox()
-        self.metric_select.setToolTip("Metric shown in this chart and the second card")
-        # Re-measure when the choices change: other engines' metric names are longer than PPO's.
-        self.metric_select.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
-        self.metric_select.currentIndexChanged.connect(self.second_metric_changed)
-        self.loss_chart.set_corner_widget(self.metric_select)
-        # Tall enough to read: on a short window the tab scrolls rather than squashing the charts.
-        self.reward_chart.setMinimumHeight(OVERVIEW_REWARD_HEIGHT)
-        self.loss_chart.setMinimumHeight(OVERVIEW_SECOND_HEIGHT)
-        overview_layout.addWidget(self.reward_chart, 3)
-        overview_layout.addWidget(self.loss_chart, 2)
-        self.overview_scroll = SmoothScrollArea()
-        self.overview_scroll.setWidgetResizable(True)
-        self.overview_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        tools.addWidget(self.btn_pin_baseline)
+        self.charts_view = ChartsView(header=cards, lead=("eval", self.reward_card_frame), toolbar=toolbar,
+                                      group_columns=SECTION_COLUMNS, show_caption=False)
+        self.overview_scroll = self.charts_view.grid  # cards and every chart scroll together
+        # The headline card already shows the latest value, so its chart's section starts folded away;
+        # clicking the heading shows it, and it stays shown from then on.
+        self._lead_groups_seen = {"eval"}
+        self.charts_view.grid.collapsed.add("eval")
+        self.charts_view.grid.relayout()  # ChartsView already laid the empty grid out, with the section open
         self.overview_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.overview_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        self.overview_scroll.setWidget(overview)
-        self.views.addTab(self.overview_scroll, "Overview")
-        self.charts_view = ChartsView()
         self.system_view = SystemView()
         self.log_view = LogView()
         self.feed_view = FeedView()
         self.files_view = FilesView()
-        for view, title in (
-            (self.charts_view, "Charts"),
-            (self.system_view, "System"),
-            (self.log_view, "Logs"),
-            (self.feed_view, "Feed"),
-            (self.files_view, "Files"),
-        ):
-            self.views.addTab(view, title)
+        self.views = QStackedWidget()
+        self._views = {"Overview": self.charts_view, "System": self.system_view, "Logs": self.log_view,
+                       "Feed": self.feed_view, "Files": self.files_view}
+        for view in self._views.values():
+            self.views.addWidget(view)
         self.views.currentChanged.connect(lambda _: self.refresh_live())
         layout.addWidget(self.views, 1)
+
+        # Bottom row: the newest warning (with the log), or what the run is waiting for; plugin buttons.
+        bottom = QHBoxLayout()
+        self.problem_bar = QFrame()
+        self.problem_bar.setObjectName("monitorProblemBar")
+        problem_row = QHBoxLayout(self.problem_bar)
+        problem_row.setContentsMargins(10, 4, 4, 4)
+        self.problem_text = label("", "muted")
+        self.problem_text.setWordWrap(True)
+        problem_row.addWidget(self.problem_text, 1)
+        self.open_log = QPushButton("Open log")
+        self.open_log.setToolTip("Show the pipeline's output")
+        self.open_log.clicked.connect(lambda: self.show_view("Logs"))
+        problem_row.addWidget(self.open_log)
+        self.problem_bar.hide()
+        bottom.addWidget(self.problem_bar, 1)
+        if hasattr(host, "extension_slots") and host.extension_slots is not None:
+            from ..plugins.slots import ExtensionSlotWidget
+            slot = host.extension_slots.get_slot("monitor.footer")
+            if slot:
+                self.footer_slot_widget = ExtensionSlotWidget(slot)
+                bottom.addWidget(self.footer_slot_widget)
+        layout.addLayout(bottom)
+        self.status_note: str | None = None  # what the run is waiting for, when that is worth saying
+
         # Records can arrive many times a second: redraw the live views at most a few times a second,
         # and tick the status strip ("updated 3 s ago") once a second.
         self._refresh_timer = QTimer(self)
@@ -293,105 +310,29 @@ class MonitorPanel(QWidget):
         self._log_run_id = None
         root = QVBoxLayout(self)
         root.setContentsMargins(20, 18, 20, 14)
-        self.splitter = QSplitter(Qt.Orientation.Horizontal)
-        self.splitter.addWidget(self.sidebar)
-        self.splitter.addWidget(content)
-        self.splitter.setStretchFactor(1, 1)
-        self.splitter.setSizes([300, 1100])
-        root.addWidget(self.splitter)
-        self.monitor_note = label("", "muted")
-        self.monitor_note.setWordWrap(True)
-        monitor_footer = QHBoxLayout()
-        monitor_footer.addWidget(self.monitor_note, 1)
-        if hasattr(host, "extension_slots") and host.extension_slots is not None:
-            from ..plugins.slots import ExtensionSlotWidget
-            slot = host.extension_slots.get_slot("monitor.footer")
-            if slot:
-                self.footer_slot_widget = ExtensionSlotWidget(slot)
-                monitor_footer.addWidget(self.footer_slot_widget)
-        layout.addLayout(monitor_footer)
+        self.sidebar.setMinimumWidth(SIDEBAR_MIN_WIDTH)
+        root.addWidget(content)
+
+    def show_view(self, name: str):
+        """Show one of the views ("Overview" is the charts workspace) and mark its button."""
+        self.views.setCurrentWidget(self._views[name])
+        for each, button in self.view_buttons.items():
+            button.setChecked(each == name)
 
     # ── Run navigation ───────────────────────────────────────────────────────
 
-    def set_runs(self, runs, selected):
-        """Refill the run selector and the runs sidebar, keeping the selected run highlighted."""
-        self.sidebar.set_runs(runs, selected)
-        self.run_combo.blockSignals(True)
-        self.run_combo.clear()
-        for run in runs:
-            config = run["config"]
-            status = run.get("status", "")
-            if status in LIVE_STATUSES:
-                icon = "● "
-            elif status == "completed":
-                icon = "✓ "
-            elif status in ("failed", "interrupted", "stopped"):
-                icon = "✗ "
-            else:
-                icon = "○ "
-            last_reward = latest(run, "reward")
-            rew_str = f"  ·  {last_reward:.1f} rew" if last_reward is not None else ""
-            seed_str = f" (seed {config['seed']})"
-            self.run_combo.addItem(f"{icon}{run_display_name(run)}{seed_str}{rew_str}", run["id"])
-        if selected:
-            self._highlight(selected)
-        self.run_combo.blockSignals(False)
-        self.update_nav_buttons()
+    def set_runs(self, runs, selected=None):
+        """Refill the runs list (its ticks are kept)."""
+        self.sidebar.set_runs(runs)
 
     def show_selected(self, run):
-        """Point the run selector at `run` without re-triggering a selection."""
+        """`run` is now the one shown here."""
         if run and run.get("id") != self._log_run_id:
             self._log_run_id = None  # its output may have grown while another run was shown: read it again
-        if run:
-            self.sidebar.select(run["id"])
-        self.run_combo.blockSignals(True)
-        self._highlight(run)
-        self.run_combo.blockSignals(False)
-        self.update_nav_buttons()
-
-    def _highlight(self, run):
-        for idx in range(self.run_combo.count()):
-            if self.run_combo.itemData(idx) == run["id"]:
-                self.run_combo.setCurrentIndex(idx)
-                break
-
-    def update_nav_buttons(self):
-        idx = self.run_combo.currentIndex()
-        self.btn_prev_run.setEnabled(idx > 0)
-        self.btn_next_run.setEnabled(0 <= idx < self.run_combo.count() - 1)
-
-    def on_run_combo_changed(self, index):
-        if index < 0:
-            return
-        run_id = self.run_combo.itemData(index)
-        if not run_id:
-            return
-        target_run = self.host.by_id(run_id)
-        if target_run and target_run != self.host.selected:
-            self.host.select_run(target_run)
-
-    def select_prev_run(self):
-        idx = self.run_combo.currentIndex()
-        if idx > 0:
-            self.run_combo.setCurrentIndex(idx - 1)
-
-    def select_next_run(self):
-        idx = self.run_combo.currentIndex()
-        if idx < self.run_combo.count() - 1:
-            self.run_combo.setCurrentIndex(idx + 1)
-
-    def _sidebar_chose(self, run_id):
-        run = self.host.by_id(run_id)
-        if run is not None and run is not self.host.selected:
-            self.host.select_run(run)
 
     def update_run_row(self, run):
         """A run's metrics or status changed: refresh its sidebar row."""
         self.sidebar.update_run(run)
-
-    def jump_to_live_run(self):
-        if self.host.active:
-            self.host.select_run(self.host.active)
 
     def toggle_pin_baseline(self):
         host = self.host
@@ -406,11 +347,10 @@ class MonitorPanel(QWidget):
         self.smoothing_label.setText(f"Smoothing: {value}%")
         factor = value / 100.0
         self.reward_chart.set_smoothing(factor)
-        self.loss_chart.set_smoothing(factor)
         self.charts_view.set_smoothing(factor)
 
     def sync_metric_select(self, run):
-        """Offer every second-chart metric this run has; keep the user's choice when available."""
+        """Offer every second-card metric this run has; keep the user's choice when available."""
         available = second_metric_choices(run)
         chosen = self.second_metric if self.second_metric in available else available[0]
         self.metric_select.blockSignals(True)
@@ -419,7 +359,6 @@ class MonitorPanel(QWidget):
             self.metric_select.addItem(second_metric_text(key)[1], key)
         self.metric_select.setCurrentIndex(available.index(chosen))
         self.metric_select.blockSignals(False)
-        self.loss_chart.position_corner()
         return chosen
 
     def second_metric_changed(self, index):
@@ -429,7 +368,7 @@ class MonitorPanel(QWidget):
             self.render()
 
     def show_hardware(self, hw):
-        """Live CPU and memory use of the training process (and its children, when reported), in the footer."""
+        """Live CPU and memory use of the training process (and its children, when reported), on the System button."""
         children = int(hw.get("children") or 0)
         processes = f" across {children + 1} processes" if children else ""
         parts = [f"CPU {hw['cpu_percent']:.1f}%{processes}", f"Process RAM {hw.get('memory_mb', 0):.0f} MB"]
@@ -438,7 +377,9 @@ class MonitorPanel(QWidget):
             parts.append(f"GPU memory {gpu:.0f} MB")
         if hw.get("host_cpu_percent") is not None:
             parts.append(f"Machine CPU {hw['host_cpu_percent']:.0f}%")
-        self.monitor_note.setText("System: " + "  •  ".join(parts))
+        button = self.view_buttons["System"]
+        button.setText(f"System · CPU {hw['cpu_percent']:.0f}%")
+        button.setToolTip("  •  ".join(parts) + "\nClick for CPU, memory and GPU memory over time")
 
     def show_comparison(self, series):
         """Overlay several runs' reward curves (the Results browser's multi-selection)."""
@@ -453,27 +394,21 @@ class MonitorPanel(QWidget):
         metrics = run["metrics"]
         live = not run["simulated"]
         title = run_display_name(run)
+        details = [run.get("paradigm") or config.get("env") or "?", f"seed {config['seed']}"]
         if run.get("origin") == "cli":  # found in results/logs: no app job, and any environment or method
-            source = "COMMAND LINE"
-        else:
-            source = f"LIVE · job {run['backend']['job_id'][:8]}" if live else "SIMULATED"
-        setup = run_setup_label(run, config)
+            details.append("command line")
+        elif not live:
+            details.append("simulated")
         self.run_title.setText(title)
-        self.run_caption.setText(f"{setup}  /  seed {config['seed']}   •   {run['status'].upper()}   •   {source}")
+        self.run_caption.setText("  ·  ".join(details))
         if live:
             where = f"results/logs/{run['backend']['group']}/{run['backend']['experiment_id']}/"
-            self.storage_label.setText(f"{where}  ·  results/jobs/jobs.db")
+            stored = f"{where}  ·  results/jobs/jobs.db"
         else:
-            self.storage_label.setText("Simulated demo run (in-memory)  ·  results/jobs/jobs.db")
-
-        # Update Live Jump button
-        if host.active and host.selected != host.active:
-            live_id = run_display_name(host.active)
-            chip_text = f"Jump to live ({live_id[:14]}…)" if len(live_id) > 14 else f"Jump to live ({live_id})"
-            self.btn_live_jump.setText(chip_text)
-            self.btn_live_jump.show()
-        else:
-            self.btn_live_jump.hide()
+            where, stored = "", "Simulated demo run (in-memory)  ·  results/jobs/jobs.db"
+        about = f"{run_setup_label(run, config)}\n{stored}"
+        self.run_title.setToolTip(about)
+        self.run_caption.setToolTip(about)
 
         # Update Pin Baseline button
         baseline = host.pinned_baseline_run
@@ -492,11 +427,8 @@ class MonitorPanel(QWidget):
             self.btn_pin_baseline.setText(f"Replace baseline ({label_name})")
             self.btn_pin_baseline.setToolTip(f"Baseline '{p_name}' is pinned. Click to replace it with this run.")
 
-        self.update_nav_buttons()
-
-        reward = latest(run, "reward")
         second = self.sync_metric_select(run)
-        card_title, chart_title, subtitle, fmt = second_metric_text(second)
+        card_title, _, subtitle, fmt = second_metric_text(second)
         second_value = latest(run, second)
         step = max((m["step"] for m in metrics), default=0)
         requested = config["total_timesteps"]
@@ -505,6 +437,15 @@ class MonitorPanel(QWidget):
         budget = (run["backend"].get("effective_timesteps") or max(step, requested)) if live else requested
         head_key, head_info = headline_metric(run, config)
         head_value = latest(run, head_key)
+        # The headline chart leads its metric's section and draws that metric, so the grid leaves it out.
+        head_column = METRIC_COLUMNS.get(head_key, head_key)
+        self.charts_view.exclude = {head_column} | ({"eval/reward_std"} if head_key == "reward" else set())
+        lead_group = metric_group(head_column)
+        if self.charts_view.grid.lead is None or self.charts_view.grid.lead[0] != lead_group:
+            self.charts_view.grid.lead = (lead_group, self.reward_card_frame)
+            if lead_group not in self._lead_groups_seen:
+                self._lead_groups_seen.add(lead_group)
+                self.charts_view.grid.collapsed.add(lead_group)
         self.reward_card.title.setText(head_info.label.upper())
         self.reward_card.value.setText(
             "—" if head_value is None else format(head_value, head_info.fmt)
@@ -514,11 +455,7 @@ class MonitorPanel(QWidget):
         self.loss_card.subtitle.setText(subtitle if live else "synthetic training loss")
         env_steps = measures_environment_steps(run)
         self.steps_card.value.setText(f"{step:,}")
-        if env_steps:
-            self.progress.setValue(min(100, round(100 * step / max(1, budget))))
-        else:
-            # Nothing to measure against: a step budget is not this run's extent.
-            self.progress.setValue(100 if run["status"] in FINAL_STATUSES else 0)
+        note = None  # only what the run is waiting for: where its files are is on the title's tooltip
         if live:
             self.reward_card.subtitle.setText(
                 "evaluation / mean episode reward" if head_key == "reward" else head_info.name
@@ -528,7 +465,6 @@ class MonitorPanel(QWidget):
                 f"of {budget:,} environment steps{rounding}" if env_steps
                 else "optimizer steps · this paradigm trains by epochs"
             )
-            where = f"results/logs/{run['backend']['group']}/{run['backend']['experiment_id']}/"
             if run["status"] == "queued":
                 position = run.get("queue_position")
                 ahead = f"position {position + 1}" if position is not None else "waiting"
@@ -543,17 +479,10 @@ class MonitorPanel(QWidget):
             elif run["status"] == "incomplete":
                 note = (f"Metrics from {where} · this run was started outside the app and has no recorded end "
                         "time: it may still be training, or it stopped early.")
-            elif run["status"] in FINAL_STATUSES:
-                note = f"Final metrics from {where}"
-                if run["status"] == "completed":
-                    note += f" · plots in results/plots/{run['backend']['group']}/{run['backend']['experiment_id']}/"
-            else:
-                note = f"Live metrics from {where} · updated every second while training."
-            self.monitor_note.setText(f"●  {note}")
         else:
             self.reward_card.subtitle.setText("synthetic evaluation / mean")
             self.steps_card.subtitle.setText("configured training budget")
-            self.monitor_note.setText("●  Selected run     •     Synthetic metrics / frontend demonstration")
+        self.status_note = note
         # Fit the data when the budget is not what this run is measured against,
         # or the curve lands in the leftmost few percent of the chart.
         xmax = budget if (live and env_steps) else None
@@ -562,21 +491,22 @@ class MonitorPanel(QWidget):
             head_key,
             "Episode reward  ·  mean ± 1 std over evaluation episodes" if has_spread else head_info.label,
         )
+        # Drawn like the charts beside it: while the run trains, its y-axis only grows and its newest point is marked.
+        training = self._run_is_live(run)
+        self.reward_chart.hold_y = training
+        self.reward_chart.show_future = training and xmax is not None
+        self.reward_chart.live_series = {title} if training else set()
         # The ceiling is the environment's best possible return, which means nothing
         # for a loss: let the chart fit what the run actually logged.
         ceiling = ENV_MAX_REWARD.get(config["env"]) if head_key == "reward" else None
         self.reward_chart.set_series([(title, metrics, "#b8bb26")], xmax, ceiling)
-        self.loss_chart.set_metric(second, chart_title)
-        self.loss_chart.set_series([(title, metrics, "#83a598")], xmax)
 
         # Baseline overlay
         if baseline and baseline is not run:
             b_title = f"{run_display_name(baseline)} (baseline)"
             self.reward_chart.set_baseline_series([(b_title, baseline["metrics"], "#d3869b")])
-            self.loss_chart.set_baseline_series([(b_title, baseline["metrics"], "#d3869b")])
         else:
             self.reward_chart.set_baseline_series([])
-            self.loss_chart.set_baseline_series([])
         self.sidebar.update_run(run)
         self.live_changed()
 
@@ -596,13 +526,26 @@ class MonitorPanel(QWidget):
         if not run:
             return
         view = self.views.currentWidget()
-        # A finished run's files are read only when a live view needs them, not just to show the Overview.
-        lives = self.host.live_for_run(run, load=view is not self.views.widget(0))
+        lives = self.host.live_for_run(run, load=True)  # the Overview charts every metric, so it reads them all
         live = self._run_is_live(run)
+        if self.focused_agent and run["id"] != self._focus_run_id:  # another run: its methods are others
+            self.focused_agent = self.pipeline_strip.focused = None
         self.status_strip.show_run(run.get("status", ""), lives, None, live)
-        if view is self.charts_view or view is self.system_view:
-            series, colors = self.compared_series(run, lives)
-            view.show_lives(series, colors)
+        self.pipeline_strip.show_run(list((run.get("backend") or {}).get("agents") or []), lives)
+        # The bottom bar: the newest warning or error (with the log), else what the run is waiting for.
+        problem = latest_problem(lives)
+        if problem is not None:
+            agent, event = problem
+            mark = "✖" if event.get("level") == "error" else "⚠"
+            self.problem_text.setText(f"{mark}  {agent}: {event.get('message', '')}")
+        elif self.status_note:
+            self.problem_text.setText(f"●  {self.status_note}")
+        self.open_log.setVisible(problem is not None)
+        self.problem_bar.setVisible(problem is not None or bool(self.status_note))
+        if view is self.charts_view:
+            view.show_lives(self.shown_lives(lives), None, live)
+        elif view is self.system_view:
+            view.show_lives(self.shown_lives(lives))
         elif view is self.feed_view:
             self.feed_view.show_lives(lives)
         elif view is self.files_view:
@@ -612,26 +555,20 @@ class MonitorPanel(QWidget):
             lines, empty = self.host.log_lines_for_run(run)
             self.log_view.set_lines(lines, empty)
 
-    def compared_series(self, run, lives):
-        """(label -> LiveRun, label -> color) for the shown run plus every run ticked in the sidebar.
+    def shown_lives(self, lives):
+        """The shown run's agents, or only the one whose pipeline-strip segment was clicked.
 
-        With nothing ticked this is the shown run's agents, labelled by agent and colored by default.
+        Runs ticked in the runs list are not drawn here: they are compared in the Plots tab.
         """
-        others = [self.host.by_id(run_id) for run_id in self.sidebar.compared if run_id != run["id"]]
-        others = [other for other in others if other is not None]
-        if not others:
-            return lives, None
-        colors_by_run = self.sidebar.colors()
-        series, colors = {}, {}
-        for each in [run, *others]:
-            each_lives = lives if each is run else self.host.live_for_run(each, load=True)
-            for agent, live in each_lives.items():
-                name = run_label(each) if len(each_lives) == 1 else f"{run_label(each)} · {agent}"
-                if name in series:  # two runs with the same experiment name
-                    name = f"{name} ({each['id'][:4]})"
-                series[name] = live
-                colors[name] = colors_by_run.get(each["id"])
-        return series, colors
+        if self.focused_agent in lives:
+            return {self.focused_agent: lives[self.focused_agent]}
+        return lives
+
+    def focus_agent(self, agent: str):
+        """Show only `agent`'s curves of the selected run ("" shows every agent again)."""
+        self.focused_agent = agent or None
+        self._focus_run_id = (self.host.selected or {}).get("id")
+        self.refresh_live()
 
     def append_log(self, run, lines):
         """New output of `run`: shown at once if its log is the one loaded (otherwise read when opened)."""
