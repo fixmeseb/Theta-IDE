@@ -317,42 +317,126 @@ def _validate_methods_for_paradigm(cfg: Any, paradigm_name: str, paradigm_def: d
                     f"which is forbidden in paradigm '{paradigm_name}'. Forbidden agents: {forbidden_agents}."
                 )
 
-        # Paradigms requiring agents (e.g. online_rl, offline_rl)
-        if allowed_agents:
-            if not agent_algo:
-                raise ConfigurationError(
-                    f"[ConfigurationError] Paradigm '{paradigm_name}' requires an agent harness (allowed: {allowed_agents}), "
-                    f"but method '{method_name}' has no 'agent' declared."
-                )
-            clean_algo = agent_algo.lower().replace("-", "_")
-            in_allowed = any(
-                clean_algo == a.lower()
-                or clean_algo.startswith(a.lower() + "_")
-                or clean_algo.startswith(a.lower() + "/")
-                or clean_algo.endswith("/" + a.lower())
-                for a in allowed_agents
+        # Check if paradigm requires an agent harness (e.g. constraints.requires.agent: required or allowed_agents)
+        requires_agent = (
+            allowed_agents is not None and len(allowed_agents) > 0
+        ) or (
+            paradigm_def.get("constraints", {}).get("requires", {}).get("agent") == "required"
+        )
+
+        if requires_agent and not agent_algo:
+            allowed_str = f" (allowed: {allowed_agents})" if allowed_agents else ""
+            raise ConfigurationError(
+                f"[ConfigurationError] Paradigm '{paradigm_name}' requires an agent harness{allowed_str}, "
+                f"but method '{method_name}' has no 'agent' declared."
             )
-            if not in_allowed:
+
+        if agent_algo:
+            # 1. Query agent-declared supported paradigms
+            agent_paradigms = _get_agent_supported_paradigms(agent_algo)
+            if agent_paradigms is not None:
+                if paradigm_name.lower() not in agent_paradigms:
+                    raise ConfigurationError(
+                        f"[ConfigurationError] Method '{method_name}' uses agent '{agent_algo}', "
+                        f"which is not allowed in paradigm '{paradigm_name}'."
+                    )
+            elif allowed_agents:
+                # 2. Fallback to paradigm allowed_agents if defined
+                clean_algo = agent_algo.lower().replace("-", "_")
+                in_allowed = any(
+                    clean_algo == a.lower()
+                    or clean_algo.startswith(a.lower() + "_")
+                    or clean_algo.startswith(a.lower() + "/")
+                    or clean_algo.endswith("/" + a.lower())
+                    for a in allowed_agents
+                )
+                if not in_allowed:
+                    raise ConfigurationError(
+                        f"[ConfigurationError] Method '{method_name}' uses agent '{agent_algo}', "
+                        f"which is not allowed in paradigm '{paradigm_name}'. Allowed agents: {allowed_agents}."
+                    )
+            else:
+                # 3. Agent has no explicit paradigms and paradigm has no allowed_agents.
+                # Ensure the agent actually exists in registry or configs.
+                if not _agent_exists(agent_algo):
+                    raise ConfigurationError(
+                        f"[ConfigurationError] Method '{method_name}' uses agent '{agent_algo}', "
+                        f"which is not allowed in paradigm '{paradigm_name}'."
+                    )
+
+
+def _get_agent_supported_paradigms(agent_algo: str) -> list[str] | None:
+    """Query supported paradigms from agent class or config YAML."""
+    clean_algo = agent_algo.lower().replace("-", "_")
+    try:
+        from src.usr.methods.agent_registry import AGENT_REGISTRY, auto_discover
+        if not AGENT_REGISTRY:
+            auto_discover()
+        agent_cls = AGENT_REGISTRY.get(clean_algo) or AGENT_REGISTRY.get(agent_algo)
+        if agent_cls is not None and hasattr(agent_cls, "get_supported_paradigms"):
+            return [str(p).lower() for p in agent_cls.get_supported_paradigms()]
+    except Exception:
+        pass
+
+    # Search config files in in/config/agent/
+    agent_dir = Path("in/config/agent")
+    if agent_dir.exists():
+        for p in [
+            agent_dir / f"{agent_algo}.yaml",
+            agent_dir / f"{agent_algo.replace('_', '/')}.yaml",
+            agent_dir / f"{clean_algo}.yaml",
+        ]:
+            if p.is_file():
                 try:
-                    from src.usr.methods.agent_registry import AGENT_REGISTRY, auto_discover
-                    if not AGENT_REGISTRY:
-                        auto_discover()
-                    agent_cls = AGENT_REGISTRY.get(clean_algo) or AGENT_REGISTRY.get(agent_algo)
-                    if agent_cls is not None:
-                        if hasattr(agent_cls, "get_supported_paradigms"):
-                            supported = [p.lower() for p in agent_cls.get_supported_paradigms()]
-                            if paradigm_name.lower() in supported:
-                                in_allowed = True
-                        else:
-                            in_allowed = True
+                    data = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+                    paradigms = data.get("paradigms") or data.get("compatible_paradigms")
+                    if paradigms:
+                        if isinstance(paradigms, list):
+                            return [str(x).lower() for x in paradigms]
+                        return [str(paradigms).lower()]
                 except Exception:
                     pass
 
-            if not in_allowed:
-                raise ConfigurationError(
-                    f"[ConfigurationError] Method '{method_name}' uses agent '{agent_algo}', "
-                    f"which is not allowed in paradigm '{paradigm_name}'. Allowed agents: {allowed_agents}."
-                )
+        # Glob match for nested paths like in/config/agent/sb3/ppo.yaml
+        for y in agent_dir.rglob("*.yaml"):
+            if y.stem.lower() in (clean_algo, agent_algo.lower()):
+                try:
+                    data = yaml.safe_load(y.read_text(encoding="utf-8")) or {}
+                    paradigms = data.get("paradigms") or data.get("compatible_paradigms")
+                    if paradigms:
+                        if isinstance(paradigms, list):
+                            return [str(x).lower() for x in paradigms]
+                        return [str(paradigms).lower()]
+                except Exception:
+                    pass
+    return None
+
+
+def _agent_exists(agent_algo: str) -> bool:
+    """Check whether an agent is known to the registry or has a config file."""
+    clean_algo = agent_algo.lower().replace("-", "_")
+    try:
+        from src.usr.methods.agent_registry import AGENT_REGISTRY, auto_discover
+        if not AGENT_REGISTRY:
+            auto_discover()
+        if clean_algo in AGENT_REGISTRY or agent_algo in AGENT_REGISTRY:
+            return True
+    except Exception:
+        pass
+
+    agent_dir = Path("in/config/agent")
+    if agent_dir.exists():
+        for p in [
+            agent_dir / f"{agent_algo}.yaml",
+            agent_dir / f"{agent_algo.replace('_', '/')}.yaml",
+            agent_dir / f"{clean_algo}.yaml",
+        ]:
+            if p.is_file():
+                return True
+        for y in agent_dir.rglob("*.yaml"):
+            if y.stem.lower() in (clean_algo, agent_algo.lower()):
+                return True
+    return False
 
 
 def _validate_offline_dataset_paths(cfg: Any, notices: list[str]) -> None:

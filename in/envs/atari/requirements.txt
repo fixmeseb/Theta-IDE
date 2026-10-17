@@ -1,3 +1,0 @@
-gymnasium[atari]
-ale-py
-opencv-python

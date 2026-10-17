@@ -456,7 +456,18 @@ class Window(QMainWindow):
         default_exp = "experiment/cartpole/quick_test.yaml"
         if not (self.config_tree.root_dir / default_exp).exists():
             default_exp = "experiment/thetaide/cartpole_ppo_reference.yaml"
-        self.config_tree.select_file(default_exp)
+        if not (self.config_tree.root_dir / default_exp).exists():
+            exp_dir = self.config_tree.root_dir / "experiment"
+            candidates = sorted(
+                p for p in exp_dir.rglob("*.yaml")
+                if not p.name.startswith("_") and p.is_file()
+            ) if exp_dir.is_dir() else []
+            if candidates:
+                default_exp = str(candidates[0].relative_to(self.config_tree.root_dir))
+            else:
+                default_exp = None
+        if default_exp:
+            self.config_tree.select_file(default_exp)
 
     def toggle_yaml_preview(self, checked=None):
         if checked is None:
@@ -986,6 +997,9 @@ class Window(QMainWindow):
         dialog.exec()
 
     def _on_hub_component_changed(self, component_id: str, action: str):
+        from .config_viewer import invalidate_config_tree
+        invalidate_config_tree()
+
         comp = self.hub_client.get_component(component_id) if hasattr(self, "hub_client") else None
 
         # Determine target category folder in in/config/ (e.g. "agent", "model", "env", "experiment")
@@ -1043,9 +1057,9 @@ class Window(QMainWindow):
         self.save_layout()
         self.statusBar().showMessage(f"Hub {action} finished: {component_id}", 4000)
 
-    def open_hub(self, initial_kind: str | None = None):
+    def open_hub(self, initial_kind: str | None = None, mode: str = "plugins"):
         if hasattr(self, "hub_client"):
-            dialog = HubDialog(self.hub_client, initial_kind=initial_kind, parent=self)
+            dialog = HubDialog(self.hub_client, initial_kind=initial_kind, mode=mode, parent=self)
             dialog.exec()
 
     def update_pane_sliders_state(self):
@@ -1535,7 +1549,11 @@ class Window(QMainWindow):
             self.preview_errors.setText("\n".join(messages))
             self.preview_errors.show()
             self.builder_status.setObjectName("configError")
-            self.builder_status.setText("✗ " + messages[0].splitlines()[0])
+            missing = self.check_missing_components()
+            if missing:
+                self.builder_status.setText(f"✗ Missing component: {', '.join(missing)}")
+            else:
+                self.builder_status.setText("✗ " + messages[0].splitlines()[0])
         self.update_launch_state()
         self.builder_status.setStyle(self.builder_status.style())
 
@@ -1614,32 +1632,120 @@ class Window(QMainWindow):
             self.statusBar().showMessage(f"Could not save run: {exc}", 12000)
             return False
 
+    def check_missing_components(self) -> list[str]:
+        """Check if current experiment references any missing agent, model, or environment."""
+        if not getattr(self, "current_experiment", None):
+            return []
+
+        missing = []
+        ct = getattr(self, "config_tree", None)
+        tree = getattr(ct, "tree_model", None) if ct is not None else None
+        if tree is None:
+            try:
+                from frontend.config_model import config_tree
+                tree = config_tree()
+            except Exception:
+                tree = None
+
+        # 1. Check from compose errors if any
+        compose_err = getattr(self, "compose_error", "") or ""
+        import re
+        find_matches = re.findall(r"Could not find '(agent|model|env|paradigms)/([^']+)'", compose_err)
+        for cat, name in find_matches:
+            missing.append(f"{cat}: {name}")
+
+        # 2. Check from current viewer or experiment file
+        viewer = getattr(self, "config_viewer", None)
+        if viewer and getattr(viewer, "raw_data", None):
+            data = viewer.raw_data
+            # Environment check
+            env_val = viewer._get_explicit_env() or viewer._get_base_env()
+            if env_val and tree:
+                env_exists = (
+                    env_val in tree.environments
+                    or any(e.name == env_val for e in tree.environments.values())
+                    or (tree.config_root / "env" / f"{env_val}.yaml").is_file()
+                )
+                if not env_exists:
+                    missing.append(f"environment: {env_val}")
+
+            # Methods check
+            methods = data.get("methods", {})
+            if isinstance(methods, dict):
+                for m_name, m_spec in methods.items():
+                    if not isinstance(m_spec, dict):
+                        continue
+                    ag = m_spec.get("agent")
+                    if isinstance(ag, dict):
+                        ag = ag.get("algorithm") or ag.get("name")
+                    if ag and tree:
+                        ag_str = str(ag)
+                        ag_exists = (
+                            ag_str in tree.agents
+                            or any(a.name == ag_str or a.algorithm == ag_str for a in tree.agents.values())
+                            or (tree.config_root / "agent" / f"{ag_str}.yaml").is_file()
+                        )
+                        if not ag_exists:
+                            missing.append(f"algorithm: {ag_str}")
+
+                    mo = m_spec.get("model")
+                    if isinstance(mo, dict):
+                        mo = next(iter(mo)) if mo else None
+                    if mo and tree:
+                        mo_str = str(mo)
+                        mo_stem = mo_str.split("/")[-1]
+                        mo_exists = (
+                            mo_str in tree.models
+                            or mo_stem in tree.models
+                            or (tree.config_root / "model" / f"{mo_str}.yaml").is_file()
+                            or (tree.config_root / "model" / "basics" / f"{mo_stem}.yaml").is_file()
+                        )
+                        if not mo_exists:
+                            missing.append(f"model: {mo_str}")
+
+        return list(dict.fromkeys(missing))
+
     def update_launch_state(self):
         idle = self.active is None
         has_experiment = bool(getattr(self, "current_experiment", None))
-        ready = idle and self.compose_valid and has_experiment
+        missing_components = Window.check_missing_components(self) if has_experiment else []
+        ready = idle and self.compose_valid and has_experiment and not missing_components
         if self.start_button is not None:
             self.start_button.setEnabled(ready)
         if self.queue_button is not None:
-            self.queue_button.setEnabled(self.compose_valid and has_experiment)
+            self.queue_button.setEnabled(self.compose_valid and has_experiment and not missing_components)
         if self.stop_button is not None:
             self.stop_button.setEnabled(not idle)
         if not idle:
             tip = "Cannot run: A run is currently active. Stop it before launching another."
+            btn_text = "Running..."
         elif not has_experiment:
             rel = getattr(self, "active_config_rel_path", "") or ""
             if rel and Path(rel).name.startswith("_"):
                 tip = "Cannot run: Base templates (_base.yaml) cannot be run directly. Select an experiment."
             else:
                 tip = "Cannot run: Select an experiment configuration from the experiment tree."
+            btn_text = "No experiment"
+        elif missing_components:
+            missing_str = ", ".join(missing_components)
+            tip = f"Cannot run: Missing component ({missing_str}). Install it via Component Hub."
+            btn_text = f"Missing component: {missing_components[0]}"
+            if getattr(self, "builder_status", None) is not None:
+                self.builder_status.setObjectName("configError")
+                self.builder_status.setText(f"✗ Missing component: {missing_str}")
+                self.builder_status.setStyle(self.builder_status.style())
         elif not self.compose_valid:
             err = getattr(self, "compose_error", None) or "This configuration has not passed pipeline validation."
             tip = f"Cannot run: {err}"
+            btn_text = "Validation failed"
         else:
             exp_name = getattr(self, "current_experiment", "experiment")
             tip = f"Train {exp_name} through the backend (F5)"
+            btn_text = "Launch training"
         if self.start_button is not None:
             self.start_button.setToolTip(tip)
+            if hasattr(self.start_button, "setText"):
+                self.start_button.setText(btn_text)
         if getattr(self, "state_label", None) is not None:
             run = self.active
             if run is None:
@@ -1663,6 +1769,10 @@ class Window(QMainWindow):
     def launch_training(self):
         if self.active:
             self.statusBar().showMessage("A run is already active. Stop it before launching another.", 4000)
+            return
+        missing = self.check_missing_components()
+        if missing:
+            self.statusBar().showMessage(f"Cannot run: Missing component ({', '.join(missing)})", 6000)
             return
         if not self.compose_valid:
             self.statusBar().showMessage("Fix config errors before launching.", 5000)
@@ -1885,6 +1995,10 @@ class Window(QMainWindow):
         return name
 
     def add_to_queue(self):
+        missing = self.check_missing_components()
+        if missing:
+            self.statusBar().showMessage(f"Cannot queue: Missing component ({', '.join(missing)})", 6000)
+            return
         if not self.compose_valid:
             self.statusBar().showMessage("Fix config errors before queueing.", 5000)
             return

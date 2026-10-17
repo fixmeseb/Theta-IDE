@@ -46,7 +46,7 @@ nodes:
     paradigm: online_rl
     experiment_ref: cartpole/quick_test
     overrides:
-    - env=mountaincar
+    - env=gym_classic_control/mountaincar
     - ++train.freeze_backbone=false
     pos:
     - 440

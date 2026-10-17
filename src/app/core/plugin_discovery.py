@@ -84,7 +84,13 @@ def load_all_plugins(force_reload: bool = False) -> Dict[str, Dict[str, Any]]:
         if isinstance(model_cls, type):
             register_model(name)(model_cls)
 
-    # 2. Register discovered components into paradigm loader
+    # 2. Register discovered agents / algorithms
+    from src.usr.methods.agent_registry import register_agent
+    for name, agent_cls in results.get("agents", {}).items():
+        if isinstance(agent_cls, type):
+            register_agent(name)(agent_cls)
+
+    # 3. Register discovered components into paradigm loader
     from src.app.core.paradigm_loader import register_component
     for name, comp_cls in results.get("datamodules", {}).items():
         if isinstance(comp_cls, type):

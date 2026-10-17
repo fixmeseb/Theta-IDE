@@ -1,4 +1,0 @@
-left:1:image
-right:1:image
-logic_agent:1:image
-neural_agent:1:image

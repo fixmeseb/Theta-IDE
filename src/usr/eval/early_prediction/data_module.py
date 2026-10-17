@@ -151,8 +151,8 @@ class EPSepsisDataModule(L.LightningDataModule, BaseDataModule):
         _, self.input_dim = self.get_training_sequences()
 
     def _compute_cql_v_values(self, checkpoint: str) -> np.ndarray:
-        """Load CQL agent and compute V(s) = max_a Q(s, a) across all trajectory states."""
-        from src.usr.methods.cql_agent import CQLAgent
+        from src.usr.methods.agent_registry import get_agent_class
+        CQLAgent = get_agent_class("cql")
 
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         checkpoint_arg = Path(checkpoint)

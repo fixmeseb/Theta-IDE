@@ -209,6 +209,8 @@ class ComponentExporter:
 
         # Check candidate locations under in/config/
         target_str = str(target).replace("\\", "/").strip()
+        if target_str.startswith("in/config/"):
+            target_str = target_str[len("in/config/"):]
         if not target_str.endswith((".yaml", ".yml")):
             target_str_yaml = f"{target_str}.yaml"
         else:
@@ -219,6 +221,12 @@ class ComponentExporter:
             cfg = self.workspace_root / "in" / "config" / prefix / target_str_yaml
             if cfg.is_file():
                 return cfg, cfg.relative_to(self.workspace_root).as_posix()
+
+        # Check recursively in in/config
+        target_name = Path(target_str_yaml).name
+        found = list((self.workspace_root / "in" / "config").rglob(target_name))
+        if found:
+            return found[0], found[0].relative_to(self.workspace_root).as_posix()
 
         # Fallback to direct path in/config/<target_str_yaml>
         cfg_fallback = self.workspace_root / "in" / "config" / target_str_yaml
@@ -268,6 +276,7 @@ class ComponentExporter:
     ) -> Dict[str, Any]:
         """Generate a valid schema-compliant .theta_component.json manifest."""
         manifest: Dict[str, Any] = dict(existing_meta)
+        manifest.pop("target_dir", None)
         manifest["id"] = comp_id
         manifest["name"] = existing_meta.get("name") or comp_name
         manifest["kind"] = existing_meta.get("kind") or kind
@@ -292,9 +301,23 @@ class ComponentExporter:
 
         if cfg_rels:
             manifest["config_path"] = cfg_rels[0]
-            manifest["config_paths"] = cfg_rels
-
         manifest["compatibility"] = existing_meta.get("compatibility") or {"theta": ">=2.0.0"}
+
+        # Extract and preserve supported paradigms
+        paradigms = existing_meta.get("paradigms") or existing_meta.get("compatible_paradigms")
+        if not paradigms and config_files:
+            try:
+                primary_cfg_content = yaml.safe_load(config_files[0].read_text(encoding="utf-8")) or {}
+                if isinstance(primary_cfg_content, dict):
+                    # Check top-level or env / agent sub-dict
+                    paradigms = primary_cfg_content.get("paradigms") or primary_cfg_content.get("compatible_paradigms")
+                    if not paradigms and isinstance(primary_cfg_content.get("env"), dict):
+                        paradigms = primary_cfg_content["env"].get("paradigms")
+            except Exception:
+                pass
+        if paradigms:
+            manifest["paradigms"] = paradigms
+
         return manifest
 
     def _generate_readme(

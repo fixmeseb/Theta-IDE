@@ -34,6 +34,8 @@ COMPONENT_MANIFEST_SCHEMA: Dict[str, Any] = {
                 "evaluator",
                 "experiment",
                 "plugin",
+                "suite",
+                "package",
             ],
             "description": "Component archetype.",
         },
@@ -78,6 +80,11 @@ COMPONENT_MANIFEST_SCHEMA: Dict[str, Any] = {
             "type": "string",
             "description": "ISO-8601 timestamp of package creation.",
         },
+        "paradigms": {
+            "type": "array",
+            "items": {"type": "string"},
+            "description": "Learning paradigms compatible with this component (e.g. ['online_rl', 'offline_rl', 'supervised']).",
+        },
     },
 }
 
@@ -92,6 +99,8 @@ VALID_KINDS = {
     "evaluator",
     "experiment",
     "plugin",
+    "suite",
+    "package",
 }
 
 

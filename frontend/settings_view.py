@@ -1299,9 +1299,9 @@ class SettingsView(QWidget):
         header_row.addWidget(label("Community Plugins & Extensions", "cardTitle"), 1)
 
         btn_browse_hub = QPushButton("Browse Community Hub…")
-        btn_browse_hub.setToolTip("Explore and install community plugins, RL methods, and models")
+        btn_browse_hub.setToolTip("Explore and install community plugins and extensions")
         btn_browse_hub.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_browse_hub.clicked.connect(lambda: self.window.open_hub("plugin"))
+        btn_browse_hub.clicked.connect(lambda: self.window.open_hub("plugin", mode="plugins"))
         header_row.addWidget(btn_browse_hub)
         pc_layout.addLayout(header_row)
 

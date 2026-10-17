@@ -179,7 +179,8 @@ def load_policy_agent(ckpt_path, device):
     torch.serialization.add_safe_globals([getattr(sys.modules.get("omegaconf.dictconfig", None), "DictConfig", None)])
 
     try:
-        from src.usr.methods.cql_agent import CQLAgent
+        from src.usr.methods.agent_registry import get_agent_class
+        CQLAgent = get_agent_class("cql")
 
         agent = CQLAgent.load_from_checkpoint(str(ckpt_path), map_location=device, weights_only=False)
         agent.eval()

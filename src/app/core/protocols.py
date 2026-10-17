@@ -270,3 +270,51 @@ class EvaluationHookProtocol(Protocol):
         """Return aggregated epoch-level evaluation metrics."""
         ...
 
+
+class StandardModelActorCriticWrapper(nn.Module):
+    """Transparent adapter allowing standard PyTorch models (with only forward())
+    to operate seamlessly with Actor-Critic algorithms like PPO without forcing models
+    to hardcode RL-specific protocol methods."""
+
+    def __init__(self, backbone: nn.Module, obs_dim: int = 4, n_actions: int = 2):
+        super().__init__()
+        self.backbone = backbone
+        self.n_actions = n_actions
+        self.critic = nn.Sequential(
+            nn.Linear(obs_dim, 64),
+            nn.ReLU(),
+            nn.Linear(64, 1),
+        )
+
+    def forward(self, obs: torch.Tensor, **kwargs: Any) -> torch.Tensor:
+        return self.backbone(obs, **kwargs)
+
+    def get_value(self, obs: torch.Tensor, **kwargs: Any) -> torch.Tensor:
+        if hasattr(self.backbone, "get_value"):
+            return self.backbone.get_value(obs, **kwargs)
+        return self.critic(obs.float().reshape(obs.shape[0], -1))
+
+    def get_action_and_value(self, obs: torch.Tensor, action: torch.Tensor = None) -> Any:
+        from src.app.core.types import ActionResult
+        from torch.distributions.categorical import Categorical
+
+        if hasattr(self.backbone, "get_action_and_value"):
+            return self.backbone.get_action_and_value(obs, action=action)
+        logits = self.backbone(obs.float().reshape(obs.shape[0], -1))
+        probs = Categorical(logits=logits)
+        if action is None:
+            action = probs.sample()
+        value = self.get_value(obs)
+        return ActionResult(
+            action=action,
+            logprob=probs.log_prob(action),
+            entropy=probs.entropy(),
+            value=value,
+        )
+
+    def get_action_probs(self, obs: torch.Tensor) -> torch.Tensor:
+        if hasattr(self.backbone, "get_action_probs"):
+            return self.backbone.get_action_probs(obs)
+        logits = self.backbone(obs.float().reshape(obs.shape[0], -1))
+        return torch.softmax(logits, dim=-1)
+

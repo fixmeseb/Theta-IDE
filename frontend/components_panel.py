@@ -312,7 +312,7 @@ class ComponentsPanel(QWidget):
                     p = item.parent
                     if p.is_dir() and not any(p.iterdir()):
                         in_cfg = (self.components_tree.root_dir).resolve()
-                        if p != in_cfg and in_cfg in p.parents:
+                        if p != in_cfg and p.parent != in_cfg and in_cfg in p.parents:
                             p.rmdir()
             except Exception as exc:
                 self.log_fn(f"Error removing {item}: {exc}")
@@ -356,15 +356,22 @@ class ComponentsPanel(QWidget):
             return self.hub_client
         w = self.window()
         if hasattr(w, "hub_client") and w.hub_client is not None:
-            return w.hub_client
+            self.hub_client = w.hub_client
+            return self.hub_client
         parent = self.parent()
         if parent is not None and hasattr(parent, "hub_client") and parent.hub_client is not None:
-            return parent.hub_client
-        workspace_dir = Path.cwd()
-        data_dir = Path.home() / ".thetaide"
+            self.hub_client = parent.hub_client
+            return self.hub_client
+        workspace_dir = (
+            self.components_tree.root_dir.parent.parent
+            if hasattr(self, "components_tree") and self.components_tree.root_dir
+            else Path(__file__).resolve().parents[2]
+        )
+        data_dir = workspace_dir / ".thetaide"
         self.hub_client = HubClient(
             workspace_dir=workspace_dir,
             data_dir=data_dir,
+            on_change_callback=lambda comp_id, act: self.reload_components(),
         )
         return self.hub_client
 
@@ -377,6 +384,7 @@ class ComponentsPanel(QWidget):
         self.hub_view = HubView(
             client=client,
             initial_kind=None,
+            mode="components",
             close_button_text="Back to Parameters",
             parent=self,
         )

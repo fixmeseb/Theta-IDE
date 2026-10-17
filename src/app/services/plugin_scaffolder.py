@@ -31,6 +31,7 @@ class ScaffoldOptions:
     version: str = "0.1.0"
     description: str = ""
     is_composite: bool = False  # For models: generates ModelSlot and CompositeModelProtocol
+    paradigms: List[str] = field(default_factory=list)  # Supported paradigms (e.g. ['online_rl'])
     output_dir: Optional[Path] = None
 
 
@@ -228,11 +229,15 @@ from . import {name}_model  # noqa: F401
         created.append(init_file)
 
         # 3. Base config in in/config/model/<name>.yaml
+        paradigms = opts.paradigms or ["online_rl", "offline_rl", "supervised"]
+        paradigms_yaml = "\n".join(f"  - {p}" for p in paradigms)
         cfg_file = self.workspace_root / "in" / "config" / "model" / f"{name}.yaml"
         cfg_file.parent.mkdir(parents=True, exist_ok=True)
         if opts.is_composite:
             cfg_yaml = f"""# Default composite configuration for {name}
 type: {name}
+paradigms:
+{paradigms_yaml}
 encoder:
   type: dnn
   hidden_sizes: [128, 128]
@@ -243,13 +248,14 @@ head:
         else:
             cfg_yaml = f"""# Default configuration for {name}
 type: {name}
+paradigms:
+{paradigms_yaml}
 hidden_sizes: [64, 64]
 """
         cfg_file.write_text(cfg_yaml, encoding="utf-8")
         created.append(cfg_file)
 
-        # 4. Manifest .theta_component.json
-        meta_file = target_dir / ".theta_component.json"
+        # 4. Manifest .theta_component.json & plugin.json
         meta = {
             "id": name,
             "name": class_name,
@@ -261,9 +267,15 @@ hidden_sizes: [64, 64]
             "target_path": f"src/usr/models/{name}",
             "config_path": f"in/config/model/{name}.yaml",
             "compatibility": {"theta": ">=2.0.0"},
+            "paradigms": paradigms,
         }
+        meta_file = target_dir / ".theta_component.json"
         meta_file.write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
         created.append(meta_file)
+
+        plugin_json_file = target_dir / "plugin.json"
+        plugin_json_file.write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
+        created.append(plugin_json_file)
 
         # 5. pyproject.toml for standard entry points
         pyproject_file = target_dir / "pyproject.toml"
@@ -289,10 +301,13 @@ dependencies = ["torch>=2.0.0"]
         class_name = "".join(part.capitalize() for part in name.split("_")) + "Agent"
         desc = opts.description or f"Custom {name} RL algorithm for Theta-IDE."
 
+        paradigms = opts.paradigms or ["online_rl"]
+        paradigms_yaml = "\n".join(f"  - {p}" for p in paradigms)
+
         # 1. Python agent implementation
         code_file = target_dir / f"{name}_agent.py"
         code_content = f'''"""Custom {class_name} reinforcement learning algorithm."""
-from typing import Any, Dict
+from typing import Any, Dict, List
 import lightning as L
 import torch
 import torch.optim as optim
@@ -305,6 +320,11 @@ from src.usr.methods.agent_registry import register_agent
 @register_agent("{name}")
 class {class_name}(L.LightningModule):
     """Pluggable RL agent extending PyTorch Lightning."""
+
+    @classmethod
+    def get_supported_paradigms(cls) -> List[str]:
+        """Declare which learning paradigms this algorithm supports."""
+        return {repr(paradigms)}
 
     def __init__(self, cfg: Any, env: Any = None, **kwargs: Any):
         super().__init__()
@@ -353,6 +373,8 @@ class {class_name}(L.LightningModule):
         cfg_yaml = f"""# Default algorithm hyperparameters for {name}
 algorithm: {name}
 agent: {name}
+paradigms:
+{paradigms_yaml}
 lr: 0.0003
 batch_size: 64
 gamma: 0.99
@@ -361,8 +383,7 @@ epochs: 10
         cfg_file.write_text(cfg_yaml, encoding="utf-8")
         created.append(cfg_file)
 
-        # 4. Manifest
-        meta_file = target_dir / ".theta_component.json"
+        # 4. Manifest .theta_component.json & plugin.json
         meta = {
             "id": name,
             "name": class_name,
@@ -374,9 +395,15 @@ epochs: 10
             "target_path": f"src/usr/methods/{name}",
             "config_path": f"in/config/agent/{name}.yaml",
             "compatibility": {"theta": ">=2.0.0"},
+            "paradigms": paradigms,
         }
+        meta_file = target_dir / ".theta_component.json"
         meta_file.write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
         created.append(meta_file)
+
+        plugin_json_file = target_dir / "plugin.json"
+        plugin_json_file.write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
+        created.append(plugin_json_file)
 
         # 5. pyproject.toml
         pyproject_file = target_dir / "pyproject.toml"
@@ -401,6 +428,9 @@ dependencies = ["torch>=2.0.0", "lightning>=2.0.0"]
 
         class_name = "".join(part.capitalize() for part in name.split("_")) + "EnvironmentPlugin"
         desc = opts.description or f"Custom {name} simulator & grounding environment for Theta-IDE."
+
+        paradigms = opts.paradigms or ["online_rl"]
+        paradigms_yaml = "\n".join(f"  - {p}" for p in paradigms)
 
         # 1. Environment implementation adhering to EnvironmentPluginProtocol
         env_file = target_dir / "env.py"
@@ -436,6 +466,10 @@ class {class_name}(EnvironmentPluginProtocol):
     """Environment plugin contract implementation."""
 
     @classmethod
+    def get_supported_paradigms(cls) -> List[str]:
+        return {repr(paradigms)}
+
+    @classmethod
     def make_env(cls, env_id: str = "{name}", **kwargs: Any) -> gym.Env:
         return {name.capitalize()}GymEnv(**kwargs)
 
@@ -465,6 +499,8 @@ class {class_name}(EnvironmentPluginProtocol):
         cfg_yaml = f"""# @package _global_
 env:
   name: {name}
+  paradigms:
+{paradigms_yaml}
   monitor_metric: "eval/reward"
   preprocess_on_load: false
   num_envs: 4
@@ -496,9 +532,14 @@ env:
             "target_path": f"in/envs/{name}",
             "config_path": f"in/config/env/{name}.yaml",
             "compatibility": {"theta": ">=2.0.0"},
+            "paradigms": paradigms,
         }
         meta_file.write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
         created.append(meta_file)
+
+        plugin_json_file = target_dir / "plugin.json"
+        plugin_json_file.write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
+        created.append(plugin_json_file)
 
         return ScaffoldResult(success=True, component_id=name, target_dir=target_dir, created_files=created)
 
@@ -509,10 +550,11 @@ env:
 
         class_name = "".join(part.capitalize() for part in name.split("_")) + "DataModule"
         desc = opts.description or f"Custom {name} DataModule for Theta-IDE."
+        paradigms = opts.paradigms or ["offline_rl", "supervised"]
 
         code_file = target_dir / f"{name}_data_module.py"
         code_content = f'''"""Custom DataModule adhering to DataModulePluginProtocol."""
-from typing import Any
+from typing import Any, List
 import lightning as L
 import torch
 from torch.utils.data import DataLoader, Dataset
@@ -535,6 +577,10 @@ class {name.capitalize()}Dataset(Dataset):
 @register_component("{class_name}")
 class {class_name}(L.LightningDataModule, DataModulePluginProtocol, TrajectorySamplerProtocol):
     """Custom data module providing training batches and trajectory window sampling."""
+
+    @classmethod
+    def get_supported_paradigms(cls) -> List[str]:
+        return {repr(paradigms)}
 
     def __init__(self, batch_size: int = 64, **kwargs: Any):
         super().__init__()
@@ -573,9 +619,14 @@ class {class_name}(L.LightningDataModule, DataModulePluginProtocol, TrajectorySa
             "created_at": datetime.now(timezone.utc).isoformat(),
             "target_path": f"src/usr/data/{name}",
             "compatibility": {"theta": ">=2.0.0"},
+            "paradigms": paradigms,
         }
         meta_file.write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
         created.append(meta_file)
+
+        plugin_json_file = target_dir / "plugin.json"
+        plugin_json_file.write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
+        created.append(plugin_json_file)
 
         return ScaffoldResult(success=True, component_id=name, target_dir=target_dir, created_files=created)
 
@@ -586,15 +637,20 @@ class {class_name}(L.LightningDataModule, DataModulePluginProtocol, TrajectorySa
 
         class_name = "".join(part.capitalize() for part in name.split("_")) + "Evaluator"
         desc = opts.description or f"Custom {name} evaluation & verification hook for Theta-IDE."
+        paradigms = opts.paradigms or ["online_rl", "offline_rl", "supervised"]
 
         code_file = target_dir / f"{name}_evaluator.py"
         code_content = f'''"""Custom evaluator adhering to EvaluationHookProtocol."""
-from typing import Any, Dict
+from typing import Any, Dict, List
 from src.app.core.protocols import EvaluationHookProtocol
 
 
 class {class_name}(EvaluationHookProtocol):
     """Evaluates agent safety, verification bounds, or saliency attributions."""
+
+    @classmethod
+    def get_supported_paradigms(cls) -> List[str]:
+        return {repr(paradigms)}
 
     def __init__(self, **kwargs: Any):
         self.step_metrics: list[float] = []
@@ -629,8 +685,13 @@ class {class_name}(EvaluationHookProtocol):
             "created_at": datetime.now(timezone.utc).isoformat(),
             "target_path": f"src/usr/eval/{name}",
             "compatibility": {"theta": ">=2.0.0"},
+            "paradigms": paradigms,
         }
         meta_file.write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
         created.append(meta_file)
+
+        plugin_json_file = target_dir / "plugin.json"
+        plugin_json_file.write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
+        created.append(plugin_json_file)
 
         return ScaffoldResult(success=True, component_id=name, target_dir=target_dir, created_files=created)

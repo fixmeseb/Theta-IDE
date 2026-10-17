@@ -711,6 +711,10 @@ class ConfigViewer(QWidget):
 
     INHERIT = "(inherit from base)"
 
+    @property
+    def tree(self):
+        return config_tree()
+
     def __init__(self, settings_manager=None, parent=None):
         if isinstance(settings_manager, QWidget) and parent is None:
             parent = settings_manager
@@ -1535,8 +1539,13 @@ class ConfigViewer(QWidget):
                     self.combo_env.setCurrentText(curr_text)
                 else:
                     base_e = self._get_base_env()
-                    if base_e and base_e in allowed:
+                    if base_e:
+                        if base_e not in allowed:
+                            self.combo_env.addItem(base_e, base_e)
                         self.combo_env.setCurrentText(base_e)
+                    elif curr_text and curr_text not in ("", "— Select Environment —"):
+                        self.combo_env.addItem(curr_text, curr_text)
+                        self.combo_env.setCurrentText(curr_text)
                     else:
                         self.combo_env.setCurrentIndex(0)
                 self.combo_env.blockSignals(False)
@@ -1549,7 +1558,10 @@ class ConfigViewer(QWidget):
             else:
                 allowed_init = []
             self.combo_env.addItems(allowed_init)
-            if base_env and base_env in allowed_init:
+            if base_env:
+                if base_env not in allowed_init:
+                    self.combo_env.addItem(base_env, base_env)
+                    self.combo_env.setToolTip(f"Missing component: Environment '{base_env}' is not installed in in/config/env/. Install it via Component Hub.")
                 self.combo_env.setCurrentText(base_env)
             else:
                 self.combo_env.setCurrentIndex(0)
@@ -1592,7 +1604,10 @@ class ConfigViewer(QWidget):
                 allowed_envs = [e.name for e in tree.environments_for(self.combo_paradigm.currentText())]
                 self.combo_env.addItems(allowed_envs)
                 explicit_env = self._get_explicit_env()
-                if explicit_env and explicit_env in allowed_envs and explicit_env != inherited_env:
+                if explicit_env and explicit_env != inherited_env:
+                    if explicit_env not in allowed_envs:
+                        self.combo_env.addItem(explicit_env, explicit_env)
+                        self.combo_env.setToolTip(f"Missing component: Environment '{explicit_env}' is not installed in in/config/env/. Install it via Component Hub.")
                     self.combo_env.setCurrentText(explicit_env)
                 else:
                     self.combo_env.setCurrentIndex(0)
@@ -1627,7 +1642,7 @@ class ConfigViewer(QWidget):
             if needs_env_prompt:
                 if "env" in data:
                     exp_env = self._get_explicit_env()
-                    if not exp_env or exp_env not in allowed_envs:
+                    if not exp_env:
                         if self.combo_env.findText("— Select Environment —") == -1:
                             self.combo_env.insertItem(1, "— Select Environment —", None)
                             self.combo_env.setCurrentIndex(1)
@@ -2237,10 +2252,20 @@ class ConfigViewer(QWidget):
                     if agent_val:
                         if agent_val not in permitted:
                             txt_agent.insertItem(0, agent_val)
-                            txt_agent.setToolTip(
-                                f"'{agent_val}' is not permitted by {paradigm} "
-                                f"(allowed: {', '.join(permitted) or 'none declared'})"
+                            is_missing = not (
+                                tree and (
+                                    agent_val in tree.agents
+                                    or any(a.name == agent_val or a.algorithm == agent_val for a in tree.agents.values())
+                                    or (tree.config_root / "agent" / f"{agent_val}.yaml").is_file()
+                                )
                             )
+                            if is_missing:
+                                txt_agent.setToolTip(f"Missing component: Algorithm '{agent_val}' is not installed in in/config/agent/. Install it via Component Hub.")
+                            else:
+                                txt_agent.setToolTip(
+                                    f"'{agent_val}' is not permitted by {paradigm} "
+                                    f"(allowed: {', '.join(permitted) or 'none declared'})"
+                                )
                         else:
                             txt_agent.setToolTip(f"Agents permitted by {paradigm}")
                         txt_agent.setCurrentText(agent_val)
@@ -2283,18 +2308,14 @@ class ConfigViewer(QWidget):
                         )
 
                         agent_defaults = dict(tree.agent_hyperparameters(agent_val)) if (tree and agent_val) else {}
-                        agent_param_keys = set(agent_defaults.keys())
-                        agent_param_keys = agent_param_keys - set(TRAINING_HYPERPARAMETERS) - {"algorithm", "name", "type"}
-                        if agent_val == "cql":
-                            agent_param_keys.update(["cql_alpha", "soft_target_tau", "use_actor", "target_entropy", "cql_weight"])
-                        elif agent_val == "ppo":
-                            agent_param_keys.update(["clip_coef", "clip_range", "ent_coef", "vf_coef", "gae_lambda", "num_steps", "num_envs", "update_epochs", "max_grad_norm", "target_kl"])
-                        elif agent_val == "iql":
-                            agent_param_keys.update(["expectile", "temperature", "soft_target_tau"])
+                        agent_param_keys = set(agent_defaults.keys()) - set(TRAINING_HYPERPARAMETERS) - {"algorithm", "name", "type"}
 
                         # 1. Overridden keys in m_spec
+                        _m_raw = m_spec.get("model", "")
+                        _m_name = next(iter(_m_raw)) if isinstance(_m_raw, dict) and _m_raw else str(_m_raw or "")
+                        known_model_slots = set(tree.model_slots(_m_name)) if (tree and _m_name in tree.models) else set()
                         for ak, av in list(m_spec.items()):
-                            if ak in ("agent", "model", "neural", "symbolic", "blender", "base"):
+                            if ak in ("agent", "model", "base") or ak in known_model_slots:
                                 continue
                             if ak in agent_param_keys or (agent_val and ak.startswith(f"{agent_val}_")):
                                 agent_keys_present.add(ak)
@@ -2377,10 +2398,22 @@ class ConfigViewer(QWidget):
                     if model_name:
                         if model_name not in known:
                             txt_model.insertItem(0, model_name)
+                            mo_stem = model_name.split("/")[-1]
+                            is_missing = not (
+                                tree and (
+                                    model_name in tree.models
+                                    or mo_stem in tree.models
+                                    or (tree.config_root / "model" / f"{model_name}.yaml").is_file()
+                                    or (tree.config_root / "model" / "basics" / f"{mo_stem}.yaml").is_file()
+                                )
+                            )
+                            if is_missing:
+                                txt_model.setToolTip(f"Missing component: Model '{model_name}' is not installed in in/config/model/. Install it via Component Hub.")
+                            else:
+                                txt_model.setToolTip("Architectures defined in in/config/model/")
+                        else:
+                            txt_model.setToolTip("Architectures defined in in/config/model/")
                         txt_model.setCurrentText(model_name)
-                    else:
-                        txt_model.setCurrentIndex(-1)
-                    txt_model.setToolTip("Architectures defined in in/config/model/")
 
                     def _on_model_changed(v, mn=m_name, cur_mn=model_name):
                         if self._block_updates or v == cur_mn:
@@ -2394,7 +2427,7 @@ class ConfigViewer(QWidget):
                                 ms["model"] = v
                         else:
                             ms["model"] = v
-                            prev_slots = tree.model_slots(cur_mn) if (tree and cur_mn in tree.models) else ("neural", "symbolic", "blender")
+                            prev_slots = tree.model_slots(cur_mn) if (tree and cur_mn in tree.models) else []
                             for sk in prev_slots:
                                 ms.pop(sk, None)
                         self._mark_dirty()
@@ -2412,6 +2445,7 @@ class ConfigViewer(QWidget):
                 model_keys_present = set()
                 model_rows = []
                 btn_add_mp = None
+                known_slots = []
 
                 if model_name:
                     is_composite_model = bool(
@@ -2469,180 +2503,72 @@ class ConfigViewer(QWidget):
 
                         for s_name, s_val in list(subcomps_present.items()):
                             sub_params = {}
-                            if isinstance(s_val, dict):
-                                if s_name == "symbolic" and any(k in ("cew", "nsfr", "neumann") for k in s_val):
-                                    inner_r = next(k for k in ("cew", "nsfr", "neumann") if k in s_val)
-                                    sub_params = s_val[inner_r] if isinstance(s_val[inner_r], dict) else {}
+                            cur_type = ""
+                            if isinstance(s_val, str):
+                                cur_type = s_val
+                            elif isinstance(s_val, dict):
+                                # Detect if submodel is nested under a model name key (e.g. {nsfr: {rules: default}})
+                                nested_model_key = next((k for k in s_val if (tree and k in tree.models)), None)
+                                if nested_model_key:
+                                    cur_type = nested_model_key
+                                    sub_params = s_val[nested_model_key] if isinstance(s_val[nested_model_key], dict) else {}
                                 else:
-                                    sub_params = {k: v for k, v in s_val.items() if k not in ("type", "architecture", "reasoner", "mode")}
-
-                            if s_name == "neural":
-                                neural_choices = [
-                                    m for m in (sorted(tree.models) if tree else ["dnn", "dueling_resnet", "transformer", "lstm", "cnn", "standard_mlp", "nature_cnn"])
-                                    if (not tree or not tree.models[m].is_composite)
-                                ]
-                                cur_arch = "dnn"
-                                if isinstance(s_val, str):
-                                    cur_arch = s_val
-                                elif isinstance(s_val, dict):
-                                    cur_arch = s_val.get("type") or next((k for k in s_val if k in neural_choices), "dnn")
-
-                                sub_candidates = []
-                                if tree:
-                                    sub_candidates = [k for k in tree.model_parameters(cur_arch).keys() if k not in ("architecture", "type")]
-                                if not sub_candidates:
-                                    sub_candidates = ["hidden_sizes", "activation"]
-                                filtered_sub_cand = [c for c in sub_candidates if c not in sub_params]
-                                btn_add_sub_p = None
-                                if filtered_sub_cand:
-                                    btn_add_sub_p = _make_param_adder_button(
-                                        f"Add {s_name} parameter",
-                                        filtered_sub_cand,
-                                        lambda p, mn=m_name, sn=s_name: self._add_method_subcomponent_param(mn, sn, p),
-                                        parent_widget=sub_card
-                                    )
-
-                                row_arch = QHBoxLayout()
-                                combo_arch = ComboBox()
-                                combo_arch.setMaximumWidth(TEXT_FIELD_WIDTH)
-                                combo_arch.addItems(neural_choices)
-                                if cur_arch not in neural_choices:
-                                    combo_arch.insertItem(0, cur_arch)
-                                combo_arch.setCurrentText(cur_arch)
-                                combo_arch.currentTextChanged.connect(
-                                    lambda v, mn=m_name, sn=s_name: self._on_method_subcomponent_type_changed(mn, sn, v)
-                                )
-                                row_arch.addWidget(combo_arch)
-                                btn_del_sc = _make_subtle_tool_button("close", f"Remove '{s_name}' subcomponent", size=20, icon_size=12)
-                                btn_del_sc.clicked.connect(lambda _, mn=m_name, sn=s_name: self._remove_method_subcomponent(mn, sn))
-                                row_arch.addWidget(btn_del_sc)
-                                if btn_add_sub_p:
-                                    row_arch.addWidget(btn_add_sub_p)
-                                model_rows.append(("Neural Architecture", row_arch))
-
-                            elif s_name == "symbolic":
-                                symbolic_choices = ["nsfr", "neumann", "cew"]
-                                cur_reasoner = "nsfr"
-                                if isinstance(s_val, str):
-                                    cur_reasoner = s_val
-                                elif isinstance(s_val, dict):
-                                    cur_reasoner = next((k for k in ("cew", "nsfr", "neumann") if k in s_val), s_val.get("type", "nsfr"))
-
-                                sub_candidates = []
-                                if tree:
-                                    sub_candidates = [k for k in tree.model_parameters(cur_reasoner).keys() if k not in ("reasoner", "type")]
-                                for standard_p in ("rules", "logic_lr", "valuation", "ecm_dthr", "fyd"):
-                                    if standard_p not in sub_candidates:
-                                        if cur_reasoner == "cew" and standard_p in ("rules", "ecm_dthr", "fyd", "fyd_top_k"):
-                                            sub_candidates.append(standard_p)
-                                        elif cur_reasoner in ("nsfr", "neumann") and standard_p in ("rules", "logic_lr", "valuation"):
-                                            sub_candidates.append(standard_p)
-                                filtered_sub_cand = [c for c in sub_candidates if c not in sub_params]
-                                btn_add_sub_p = None
-                                if filtered_sub_cand:
-                                    btn_add_sub_p = _make_param_adder_button(
-                                        f"Add {s_name} parameter",
-                                        filtered_sub_cand,
-                                        lambda p, mn=m_name, sn=s_name: self._add_method_subcomponent_param(mn, sn, p),
-                                        parent_widget=sub_card
-                                    )
-
-                                row_sym = QHBoxLayout()
-                                combo_sym = ComboBox()
-                                combo_sym.setMaximumWidth(TEXT_FIELD_WIDTH)
-                                combo_sym.addItems(symbolic_choices)
-                                if cur_reasoner not in symbolic_choices:
-                                    combo_sym.insertItem(0, cur_reasoner)
-                                combo_sym.setCurrentText(cur_reasoner)
-                                combo_sym.setToolTip("Symbolic logic reasoner (nsfr, neumann, cew)")
-                                combo_sym.currentTextChanged.connect(
-                                    lambda v, mn=m_name, sn=s_name: self._on_method_subcomponent_type_changed(mn, sn, v)
-                                )
-                                row_sym.addWidget(combo_sym)
-                                btn_del_sc = _make_subtle_tool_button("close", f"Remove '{s_name}' subcomponent", size=20, icon_size=12)
-                                btn_del_sc.clicked.connect(lambda _, mn=m_name, sn=s_name: self._remove_method_subcomponent(mn, sn))
-                                row_sym.addWidget(btn_del_sc)
-                                if btn_add_sub_p:
-                                    row_sym.addWidget(btn_add_sub_p)
-                                model_rows.append(("Logic Module (Symbolic)", row_sym))
-
-                            elif s_name == "blender":
-                                sub_candidates = ["blend_function", "temperature"]
-                                filtered_sub_cand = [c for c in sub_candidates if c not in sub_params]
-                                btn_add_sub_p = None
-                                if filtered_sub_cand:
-                                    btn_add_sub_p = _make_param_adder_button(
-                                        f"Add {s_name} parameter",
-                                        filtered_sub_cand,
-                                        lambda p, mn=m_name, sn=s_name: self._add_method_subcomponent_param(mn, sn, p),
-                                        parent_widget=sub_card
-                                    )
-
-                                row_blender = QHBoxLayout()
-                                combo_bmode = ComboBox()
-                                combo_bmode.setMaximumWidth(TEXT_FIELD_WIDTH)
-                                combo_bmode.addItems(["neural", "logic", "hybrid"])
-                                cur_mode = s_val.get("mode", "neural") if isinstance(s_val, dict) else "neural"
-                                combo_bmode.setCurrentText(cur_mode)
-                                combo_bmode.currentTextChanged.connect(
-                                    lambda v, mn=m_name: self._on_method_subcomponent_param_edited(mn, "blender", "mode", v)
-                                )
-                                row_blender.addWidget(combo_bmode)
-                                btn_del_sc = _make_subtle_tool_button("close", f"Remove '{s_name}' subcomponent", size=20, icon_size=12)
-                                btn_del_sc.clicked.connect(lambda _, mn=m_name, sn=s_name: self._remove_method_subcomponent(mn, sn))
-                                row_blender.addWidget(btn_del_sc)
-                                if btn_add_sub_p:
-                                    row_blender.addWidget(btn_add_sub_p)
-                                model_rows.append(("Blender Mode", row_blender))
-
-                            else:
-                                choices = [
-                                    m for m in (sorted(tree.models) if tree else [])
-                                    if (not tree or not tree.models[m].is_composite)
-                                ]
-                                cur_type = ""
-                                if isinstance(s_val, str):
-                                    cur_type = s_val
-                                elif isinstance(s_val, dict):
                                     cur_type = s_val.get("type", "")
-                                sub_candidates = []
-                                if tree and cur_type:
-                                    sub_candidates = [k for k in tree.model_parameters(cur_type).keys() if k not in ("architecture", "type")]
-                                filtered_sub_cand = [c for c in sub_candidates if c not in sub_params]
-                                btn_add_sub_p = None
-                                if filtered_sub_cand:
-                                    btn_add_sub_p = _make_param_adder_button(
-                                        f"Add {s_name} parameter",
-                                        filtered_sub_cand,
-                                        lambda p, mn=m_name, sn=s_name: self._add_method_subcomponent_param(mn, sn, p),
-                                        parent_widget=sub_card
-                                    )
-                                row_gen = QHBoxLayout()
-                                if choices:
-                                    combo_gen = ComboBox()
-                                    combo_gen.setMaximumWidth(TEXT_FIELD_WIDTH)
-                                    combo_gen.addItems(choices)
-                                    if cur_type and cur_type not in choices:
-                                        combo_gen.insertItem(0, cur_type)
-                                    if cur_type:
-                                        combo_gen.setCurrentText(cur_type)
-                                    combo_gen.currentTextChanged.connect(
-                                        lambda v, mn=m_name, sn=s_name: self._on_method_subcomponent_type_changed(mn, sn, v)
-                                    )
-                                    row_gen.addWidget(combo_gen)
-                                else:
-                                    line_gen = QLineEdit(str(cur_type))
-                                    line_gen.setMaximumWidth(TEXT_FIELD_WIDTH)
-                                    line_gen.textChanged.connect(
-                                        lambda v, mn=m_name, sn=s_name: self._on_method_subcomponent_type_changed(mn, sn, v)
-                                    )
-                                    row_gen.addWidget(line_gen)
-                                btn_del_sc = _make_subtle_tool_button("close", f"Remove '{s_name}' subcomponent", size=20, icon_size=12)
-                                btn_del_sc.clicked.connect(lambda _, mn=m_name, sn=s_name: self._remove_method_subcomponent(mn, sn))
-                                row_gen.addWidget(btn_del_sc)
-                                if btn_add_sub_p:
-                                    row_gen.addWidget(btn_add_sub_p)
-                                model_rows.append((f"{s_name.replace('_', ' ').title()} Module", row_gen))
+                                    sub_params = {k: v for k, v in s_val.items() if k not in ("type", "architecture", "reasoner")}
+
+                            choices = [
+                                m for m in (sorted(tree.models) if tree else [])
+                                if (not tree or not tree.models[m].is_composite)
+                            ]
+
+                            sub_candidates = []
+                            if tree and cur_type and cur_type in tree.models:
+                                sub_candidates = [k for k in tree.model_parameters(cur_type).keys() if k not in ("architecture", "type")]
+                            elif tree and model_name in tree.models:
+                                # Fall back to candidate keys defined in composite model default slot
+                                slot_def = tree.models[model_name].parameters.get(s_name)
+                                if isinstance(slot_def, dict):
+                                    sub_candidates = list(slot_def.keys())
+                            filtered_sub_cand = [c for c in sub_candidates if c not in sub_params]
+                            btn_add_sub_p = None
+                            if filtered_sub_cand:
+                                btn_add_sub_p = _make_param_adder_button(
+                                    f"Add {s_name} parameter",
+                                    filtered_sub_cand,
+                                    lambda p, mn=m_name, sn=s_name: self._add_method_subcomponent_param(mn, sn, p),
+                                    parent_widget=sub_card
+                                )
+
+                            row_gen = QHBoxLayout()
+                            if choices and (cur_type in choices or cur_type or not sub_params):
+                                combo_gen = ComboBox()
+                                combo_gen.setMaximumWidth(TEXT_FIELD_WIDTH)
+                                combo_gen.setToolTip(f"Select {s_name} module architecture")
+                                combo_gen.addItems(choices)
+                                if cur_type and cur_type not in choices:
+                                    combo_gen.insertItem(0, cur_type)
+                                if cur_type:
+                                    combo_gen.setCurrentText(cur_type)
+                                combo_gen.currentTextChanged.connect(
+                                    lambda v, mn=m_name, sn=s_name: self._on_method_subcomponent_type_changed(mn, sn, v)
+                                )
+                                row_gen.addWidget(combo_gen)
+                            elif cur_type:
+                                line_gen = QLineEdit(str(cur_type))
+                                line_gen.setMaximumWidth(TEXT_FIELD_WIDTH)
+                                line_gen.textChanged.connect(
+                                    lambda v, mn=m_name, sn=s_name: self._on_method_subcomponent_type_changed(mn, sn, v)
+                                )
+                                row_gen.addWidget(line_gen)
+
+                            btn_del_sc = _make_subtle_tool_button("close", f"Remove '{s_name}' subcomponent", size=20, icon_size=12)
+                            btn_del_sc.clicked.connect(lambda _, mn=m_name, sn=s_name: self._remove_method_subcomponent(mn, sn))
+                            row_gen.addWidget(btn_del_sc)
+                            if btn_add_sub_p:
+                                row_gen.addWidget(btn_add_sub_p)
+
+                            slot_title = f"{s_name.replace('_', ' ').title()} Module"
+                            model_rows.append((slot_title, row_gen))
 
                             sub_block = IndentedHierarchyBlock(level=2)
                             sub_rows = []
@@ -2661,12 +2587,14 @@ class ConfigViewer(QWidget):
                                 sp_row.addWidget(btn_sp_del)
                                 sub_rows.append((str(sp_k), sp_row))
 
-                            if show_mo_defs:
+                            if show_mo_defs and tree:
                                 def_sub_dict = {}
-                                if s_name == "neural" and tree:
-                                    def_sub_dict = dict(tree.model_parameters(cur_arch if "cur_arch" in locals() else "dnn"))
-                                elif s_name == "symbolic" and tree:
-                                    def_sub_dict = dict(tree.model_parameters(cur_reasoner if "cur_reasoner" in locals() else "nsfr"))
+                                if cur_type and cur_type in tree.models:
+                                    def_sub_dict = dict(tree.model_parameters(cur_type))
+                                elif model_name in tree.models:
+                                    slot_template = tree.models[model_name].parameters.get(s_name)
+                                    if isinstance(slot_template, dict):
+                                        def_sub_dict = dict(slot_template)
                                 for dp_k, dp_v in def_sub_dict.items():
                                     if dp_k not in sub_params and dp_k not in ("architecture", "type", "reasoner", "mode"):
                                         dp_row = QHBoxLayout()
@@ -2937,7 +2865,9 @@ class ConfigViewer(QWidget):
                     row_g.addWidget(lbl_def)
                     train_rows.append(("Discount Factor (γ)", row_g))
 
-                consumed_keys = {"agent", "model", "neural", "symbolic", "blender", "base", "lr", "batch_size", "gamma"}
+                consumed_keys = {"agent", "model", "base", "lr", "batch_size", "gamma"}
+                if known_slots:
+                    consumed_keys.update(known_slots)
                 consumed_keys.update(agent_keys_present)
                 consumed_keys.update(model_keys_present)
 
@@ -4243,12 +4173,14 @@ class ConfigViewer(QWidget):
         if not sub_type:
             if isinstance(m_spec.get(subcomp_name), str):
                 sub_type = m_spec[subcomp_name]
-            elif subcomp_name == "symbolic":
-                sub_type = "nsfr"
-            elif subcomp_name == "neural":
-                sub_type = "dnn"
-            elif subcomp_name == "blender":
-                sub_type = "blender"
+            elif tree and model_name and model_name in tree.models:
+                slot_dict = tree.models[model_name].parameters.get(subcomp_name)
+                if isinstance(slot_dict, dict):
+                    sub_type = slot_dict.get("type") or slot_dict.get("architecture") or subcomp_name
+                    if param_key in slot_dict:
+                        return slot_dict[param_key]
+                elif isinstance(slot_dict, str):
+                    sub_type = slot_dict
 
         if tree and sub_type and sub_type in tree.models:
             model_params = tree.model_parameters(sub_type)
@@ -4325,10 +4257,9 @@ class ConfigViewer(QWidget):
         cur_val = container.get(subcomp_name)
         if isinstance(cur_val, str):
             container[subcomp_name] = new_type
-        elif isinstance(cur_val, dict):
-            old_reasoner = next((r for r in ("cew", "nsfr", "neumann") if r in cur_val), None)
-            if old_reasoner:
-                params = cur_val.pop(old_reasoner)
+            old_submodel = next((k for k in cur_val if (self.tree and k in self.tree.models)), None)
+            if old_submodel:
+                params = cur_val.pop(old_submodel)
                 container[subcomp_name] = {new_type: params if isinstance(params, dict) else {}}
             elif "type" in cur_val:
                 cur_val["type"] = new_type
@@ -4362,11 +4293,12 @@ class ConfigViewer(QWidget):
                 m_spec[subcomp_name] = {"type": m_spec[subcomp_name]}
             target = m_spec[subcomp_name]
 
-        for r_name in ("cew", "nsfr", "neumann"):
-            if r_name in target and isinstance(target[r_name], dict):
-                target[r_name][key] = _parse_yaml_value(value)
-                self._mark_dirty()
-                return
+        if self.tree:
+            for sub_name in self.tree.models:
+                if sub_name in target and isinstance(target[sub_name], dict):
+                    target[sub_name][key] = _parse_yaml_value(value)
+                    self._mark_dirty()
+                    return
 
         target[key] = _parse_yaml_value(value)
         self._mark_dirty()
@@ -4383,12 +4315,13 @@ class ConfigViewer(QWidget):
         if target is None and subcomp_name in m_spec and isinstance(m_spec[subcomp_name], dict):
             target = m_spec[subcomp_name]
         if target is not None:
-            for r_name in ("cew", "nsfr", "neumann"):
-                if r_name in target and isinstance(target[r_name], dict):
-                    target[r_name].pop(key, None)
-                    self._mark_dirty()
-                    self._render_boxes()
-                    return
+            if self.tree:
+                for sub_name in self.tree.models:
+                    if sub_name in target and isinstance(target[sub_name], dict):
+                        target[sub_name].pop(key, None)
+                        self._mark_dirty()
+                        self._render_boxes()
+                        return
             target.pop(key, None)
             self._mark_dirty()
             self._render_boxes()
@@ -4415,17 +4348,23 @@ class ConfigViewer(QWidget):
     def _add_method_param(self, method_name, param_key, value=None):
         if not param_key:
             return
-        if param_key in ("neural", "symbolic", "blender"):
-            self._add_method_subcomponent(method_name, param_key)
-            return
-        if value is None or value == "":
-            value = self._resolve_default_param_value(method_name, param_key)
         methods = self.raw_data.setdefault("methods", {})
         m_spec = methods.setdefault(method_name, {})
+        model_name = None
+        if isinstance(m_spec.get("model"), str):
+            model_name = m_spec["model"]
+        elif isinstance(m_spec.get("model"), dict):
+            model_name = next(iter(m_spec["model"]), None)
+
+        if self.tree and model_name and param_key in self.tree.model_slots(model_name):
+            self._add_method_subcomponent(method_name, param_key)
+            return
+
+        if value is None or value == "":
+            value = self._resolve_default_param_value(method_name, param_key)
         parsed_val = _parse_yaml_value(value)
-        if isinstance(m_spec.get("model"), dict):
-            model_name = next(iter(m_spec["model"]))
-            if param_key in ("blend_q_values", "blend_ent_coef", "actor_mode", "logic_lr", "blender_lr"):
+        if isinstance(m_spec.get("model"), dict) and model_name:
+            if self.tree and model_name in self.tree.models and param_key in self.tree.model_parameters(model_name):
                 m_spec["model"].setdefault(model_name, {})[param_key] = parsed_val
                 self._mark_dirty()
                 self._render_boxes()

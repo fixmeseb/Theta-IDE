@@ -30,7 +30,10 @@ class _Call(QRunnable):
             data, error = self.fn(*self.args), None
         except Exception as exc:  # reported to the caller, like an HTTP error used to be
             data, error = None, str(exc).strip() or type(exc).__name__
-        self.relay.done.emit(data, error)
+        try:
+            self.relay.done.emit(data, error)
+        except RuntimeError:
+            pass
 
 
 class LocalBackend(QObject):

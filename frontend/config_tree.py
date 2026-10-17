@@ -888,8 +888,14 @@ class ConfigTreeWidget(QWidget):
 
             preferred_comp_order = ["agent", "env", "model", "paradigms", "site", "hydra"]
             for cat in preferred_comp_order:
-                if cat in existing_dirs:
-                    self._add_dir_node(self.tree, existing_dirs[cat], expand=False, expanded_set=expanded_paths, has_previous_state=has_previous_state)
+                cat_dir = self.root_dir / cat
+                if not cat_dir.is_dir():
+                    try:
+                        cat_dir.mkdir(parents=True, exist_ok=True)
+                    except OSError:
+                        pass
+                if cat_dir.is_dir():
+                    self._add_dir_node(self.tree, cat_dir, expand=False, expanded_set=expanded_paths, has_previous_state=has_previous_state)
             for name, dir_path in sorted(existing_dirs.items()):
                 if name not in preferred_comp_order and name not in ("experiment", "experiments"):
                     self._add_dir_node(self.tree, dir_path, expand=False, expanded_set=expanded_paths, has_previous_state=has_previous_state)
@@ -900,8 +906,14 @@ class ConfigTreeWidget(QWidget):
             # "all": Top-level directory ordering with experiment first
             preferred_order = ["experiment", "agent", "env", "model", "paradigms", "site", "hydra"]
             for cat in preferred_order:
-                if cat in existing_dirs:
-                    self._add_dir_node(self.tree, existing_dirs[cat], expand=(cat == "experiment"), expanded_set=expanded_paths, has_previous_state=has_previous_state)
+                cat_dir = self.root_dir / cat
+                if not cat_dir.is_dir():
+                    try:
+                        cat_dir.mkdir(parents=True, exist_ok=True)
+                    except OSError:
+                        pass
+                if cat_dir.is_dir():
+                    self._add_dir_node(self.tree, cat_dir, expand=(cat == "experiment"), expanded_set=expanded_paths, has_previous_state=has_previous_state)
             for name, dir_path in sorted(existing_dirs.items()):
                 if name not in preferred_order:
                     self._add_dir_node(self.tree, dir_path, expand=False, expanded_set=expanded_paths, has_previous_state=has_previous_state)

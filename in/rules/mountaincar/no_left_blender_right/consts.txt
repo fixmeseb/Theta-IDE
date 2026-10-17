@@ -1,3 +1,0 @@
-oagent:obj1
-oenv:obj2
-image:img

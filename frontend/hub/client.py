@@ -47,6 +47,7 @@ class HubClient(QObject):
             data_dir=self.data_dir,
             on_change_callback=self._handle_installer_change,
             settings_manager=self.settings_manager,
+            lookup_component_fn=self.get_component,
         )
         if on_change_callback:
             self.componentChanged.connect(on_change_callback)
@@ -95,7 +96,11 @@ class HubClient(QObject):
             candidates = [self.registry_url]
             local_hub_candidates = [
                 self.workspace_dir.resolve().parent / "theta-hub" / "dist" / "index.json",
+                self.workspace_dir.resolve().parent / "theta-hub" / "index.json",
                 Path(__file__).resolve().parents[3] / "theta-hub" / "dist" / "index.json",
+                Path(__file__).resolve().parents[3] / "theta-hub" / "index.json",
+                Path("/Users/cameronegbert/Research/theta-hub/dist/index.json"),
+                Path("/Users/cameronegbert/Research/theta-hub/index.json"),
             ]
             matching_hub = next((p for p in local_hub_candidates if p.is_file()), None)
             if matching_hub is not None:
@@ -163,9 +168,15 @@ class HubClient(QObject):
         def worker():
             try:
                 comps = self.fetch_index_sync(force=force)
-                self.indexLoaded.emit(comps)
+                try:
+                    self.indexLoaded.emit(comps)
+                except RuntimeError:
+                    pass
             except Exception as exc:
-                self.fetchFailed.emit(str(exc))
+                try:
+                    self.fetchFailed.emit(str(exc))
+                except RuntimeError:
+                    pass
 
         thread = threading.Thread(target=worker, daemon=True)
         thread.start()
@@ -207,8 +218,15 @@ class HubClient(QObject):
 
         for comp in self.components:
             # Kind filter
-            if kind and kind.lower() != "all" and comp.kind.lower() != kind.lower():
-                continue
+            if kind and kind.lower() != "all":
+                k = kind.lower()
+                ck = comp.kind.lower()
+                if k in ("suite", "suites", "package") and ck in ("suite", "package"):
+                    pass
+                elif k in ("method", "methods", "agent") and ck in ("method", "agent"):
+                    pass
+                elif ck != k:
+                    continue
 
             # Tag filter
             if tag and tag.lower() not in [t.lower() for t in comp.tags]:

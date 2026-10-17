@@ -59,6 +59,8 @@ class HubComponentCard(QFrame):
         # Kind badge
         kind_colors = {
             "plugin": ("#b16286", "#d3869b"),   # Purple
+            "suite": ("#b16286", "#d3869b"),    # Purple
+            "package": ("#b16286", "#d3869b"),  # Purple
             "method": ("#98971a", "#b8bb26"),   # Green
             "model": ("#458588", "#83a598"),    # Blue
             "env": ("#d79921", "#fabd2f"),      # Yellow/Orange
@@ -319,12 +321,14 @@ class HubView(QWidget):
         self,
         client: HubClient,
         initial_kind: str | None = None,
+        mode: str = "components",  # "components" (no plugins, has suites) | "plugins" (only plugins) | "all"
         close_button_text: str = "Back to Parameters",
         parent=None,
     ):
         super().__init__(parent)
         self.client = client
-        self.active_kind: str | None = initial_kind
+        self.mode = mode
+        self.active_kind: str | None = "plugin" if mode == "plugins" else initial_kind
         self.close_button_text = close_button_text
         self.cards: Dict[str, HubComponentCard] = {}
 
@@ -333,6 +337,14 @@ class HubView(QWidget):
 
         # Load components
         self.client.fetch_index_async()
+
+    def _matches_mode(self, comp: HubComponent) -> bool:
+        """Enforce strict separation between UI plugins and modular components."""
+        if self.mode == "plugins":
+            return comp.kind == "plugin"
+        elif self.mode == "components":
+            return comp.kind != "plugin"
+        return True
 
     def _build_ui(self):
         main_layout = QVBoxLayout(self)
@@ -343,19 +355,23 @@ class HubView(QWidget):
         header = QVBoxLayout()
         header.setSpacing(3)
 
-        eyebrow = QLabel("THETA COMMUNITY HUB")
+        eyebrow_text = "THETA COMMUNITY PLUGINS" if self.mode == "plugins" else "THETA COMPONENT HUB"
+        eyebrow = QLabel(eyebrow_text)
         eyebrow.setObjectName("eyebrow")
         eyebrow.setStyleSheet(f"font-size: 11px; font-weight: 700; letter-spacing: 1px; color: {theme_color('secondary')};")
         header.addWidget(eyebrow)
 
-        title = QLabel("Explore & Install Components")
+        title_text = "Explore & Install Plugins" if self.mode == "plugins" else "Explore & Install Components"
+        title = QLabel(title_text)
         title.setStyleSheet("font-size: 18px; font-weight: 700;")
         header.addWidget(title)
 
-        desc = QLabel(
-            "Discover community plugins, reinforcement learning algorithms, "
-            "symbolic models, and benchmark environments."
+        desc_text = (
+            "Discover community UI extensions, developer plugins, and workspace integrations."
+            if self.mode == "plugins"
+            else "Discover reinforcement learning benchmark suites, algorithm baselines, symbolic models, and environments."
         )
+        desc = QLabel(desc_text)
         desc.setStyleSheet(f"color: {theme_color('muted')}; font-size: 12px;")
         header.addWidget(desc)
         main_layout.addLayout(header)
@@ -365,7 +381,12 @@ class HubView(QWidget):
         search_row.setSpacing(8)
 
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("Search components by name, author, tag, or description…")
+        search_placeholder = (
+            "Search community plugins by name, author, or tag…"
+            if self.mode == "plugins"
+            else "Search components by name, author, tag, or description…"
+        )
+        self.search_input.setPlaceholderText(search_placeholder)
         self.search_input.textChanged.connect(self._apply_filters)
         search_row.addWidget(self.search_input, 1)
 
@@ -394,18 +415,33 @@ class HubView(QWidget):
         pill_row.setSpacing(6)
 
         self.pills = {}
-        kind_options = [
-            ("all", "All Components"),
-            ("plugin", "Plugins"),
-            ("method", "RL Methods"),
-            ("model", "Models"),
-            ("env", "Environments"),
-        ]
+        if self.mode == "components":
+            kind_options = [
+                ("all", "All Components"),
+                ("suite", "Suites"),  # Replaces Plugins tab with Suites tab
+                ("method", "RL Methods"),
+                ("model", "Models"),
+                ("env", "Environments"),
+            ]
+        elif self.mode == "plugins":
+            kind_options = [
+                ("plugin", "All Plugins"),
+            ]
+        else:
+            kind_options = [
+                ("all", "All"),
+                ("plugin", "Plugins"),
+                ("suite", "Suites"),
+                ("method", "RL Methods"),
+                ("model", "Models"),
+                ("env", "Environments"),
+            ]
 
         for kind_id, label_text in kind_options:
             btn = QPushButton(label_text)
             btn.setCheckable(True)
-            if (self.active_kind or "all") == kind_id:
+            default_kind = "plugin" if self.mode == "plugins" else "all"
+            if (self.active_kind or default_kind) == kind_id:
                 btn.setChecked(True)
             btn.clicked.connect(lambda chk, k=kind_id: self._select_kind(k))
             self.pills[kind_id] = btn
@@ -448,7 +484,11 @@ class HubView(QWidget):
         self.client.uninstallFinished.connect(self._on_uninstall_finished)
 
     def _select_kind(self, kind_id: str):
-        self.active_kind = None if kind_id == "all" else kind_id
+        if self.mode == "plugins":
+            self.active_kind = "plugin"
+        else:
+            self.active_kind = None if kind_id == "all" else kind_id
+
         for kid, btn in self.pills.items():
             btn.blockSignals(True)
             btn.setChecked(kid == kind_id)
@@ -456,7 +496,9 @@ class HubView(QWidget):
         self._apply_filters()
 
     def _on_index_loaded(self, components: List[HubComponent]):
-        self.status_label.setText(f"Registry ready · {len(components)} items available")
+        filtered = [c for c in components if self._matches_mode(c)]
+        item_name = "plugins" if self.mode == "plugins" else "components"
+        self.status_label.setText(f"Registry ready · {len(filtered)} {item_name} available")
         self._populate_cards(components)
 
     def _on_fetch_failed(self, error: str):
@@ -470,8 +512,10 @@ class HubView(QWidget):
             card.deleteLater()
         self.cards.clear()
 
-        # Build cards
+        # Build cards for components matching current mode
         for comp in components:
+            if not self._matches_mode(comp):
+                continue
             card = HubComponentCard(comp, self.client, self.card_container)
             self.cards[comp.id] = card
             # Insert before the trailing stretch spacer
@@ -481,11 +525,13 @@ class HubView(QWidget):
 
     def _apply_filters(self):
         query = self.search_input.text()
-        matched = list(self.client.search(query=query, kind=self.active_kind))
+        target_kind = "plugin" if self.mode == "plugins" else self.active_kind
+        matched = list(self.client.search(query=query, kind=target_kind))
+        # Enforce mode filter
+        matched = [c for c in matched if self._matches_mode(c)]
 
         sort_mode = self.sort_combo.currentData() if hasattr(self, "sort_combo") else "default"
         if sort_mode == "uninstalled_first":
-            # False (uninstalled) comes before True (installed)
             matched.sort(key=lambda c: (c.is_installed, c.name.lower()))
         elif sort_mode == "installed_first":
             matched.sort(key=lambda c: (not c.is_installed, c.name.lower()))
@@ -508,8 +554,10 @@ class HubView(QWidget):
             if comp_id not in matched_ids:
                 card.setVisible(False)
 
+        item_name = "plugins" if self.mode == "plugins" else "components"
+        total_mode_count = len([c for c in self.client.components if self._matches_mode(c)])
         self.status_label.setText(
-            f"Showing {visible_count} of {len(self.client.components)} components"
+            f"Showing {visible_count} of {total_mode_count} {item_name}"
         )
 
     def _on_install_progress(self, comp_id: str, percent: int):
@@ -525,6 +573,8 @@ class HubView(QWidget):
                 self.status_label.setText(f"Installed {card.component.name} successfully.")
             else:
                 self.status_label.setText(f"Installation failed: {message}")
+        for other_card in self.cards.values():
+            other_card.update_action_state()
         self._apply_filters()
 
     def _on_uninstall_finished(self, comp_id: str, success: bool, message: str):
@@ -535,15 +585,25 @@ class HubView(QWidget):
                 self.status_label.setText(f"Uninstalled {card.component.name}.")
             else:
                 self.status_label.setText(f"Uninstall failed: {message}")
+        for other_card in self.cards.values():
+            other_card.update_action_state()
         self._apply_filters()
 
 
 class HubDialog(QDialog):
-    """Full-featured marketplace dialog for exploring and installing components."""
+    """Full-featured marketplace dialog for exploring and installing components or plugins."""
 
-    def __init__(self, client: HubClient, initial_kind: str | None = None, parent=None):
+    def __init__(
+        self,
+        client: HubClient,
+        initial_kind: str | None = None,
+        mode: str = "plugins",  # "plugins" for Community Plugins | "components" for Component Hub
+        parent=None,
+    ):
         super().__init__(parent)
-        self.setWindowTitle("Theta Community Hub")
+        self.mode = mode
+        title = "Theta Community Plugins" if mode == "plugins" else "Theta Community Hub"
+        self.setWindowTitle(title)
         self.resize(860, 680)
         self.setMinimumSize(700, 520)
 
@@ -554,6 +614,7 @@ class HubDialog(QDialog):
         self.hub_view = HubView(
             client=client,
             initial_kind=initial_kind,
+            mode=mode,
             close_button_text="Close",
             parent=self,
         )

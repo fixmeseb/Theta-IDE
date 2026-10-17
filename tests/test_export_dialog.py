@@ -18,11 +18,11 @@ def qapp():
 def test_export_dialog_initialization(qapp, tmp_path):
     workspace = Path(__file__).resolve().parents[1]
     dialog = ExportExperimentDialog(
-        experiment_id="cartpole/quick_test",
+        experiment_id="tabular_classification/quick_test",
         workspace_root=workspace,
     )
 
-    assert dialog.experiment_id == "cartpole/quick_test"
+    assert dialog.experiment_id == "tabular_classification/quick_test"
     assert dialog.radio_zip.isChecked()
     assert not dialog.options_card.isHidden()
     assert dialog.edit_dest.text().endswith(".zip")
@@ -33,7 +33,7 @@ def test_export_dialog_initialization(qapp, tmp_path):
 def test_export_dialog_format_toggle(qapp, tmp_path):
     workspace = Path(__file__).resolve().parents[1]
     dialog = ExportExperimentDialog(
-        experiment_id="cartpole/quick_test",
+        experiment_id="tabular_classification/quick_test",
         workspace_root=workspace,
     )
 
@@ -54,7 +54,7 @@ def test_export_dialog_export_zip(qapp, tmp_path):
     out_zip = tmp_path / "exported_cartpole.zip"
 
     dialog = ExportExperimentDialog(
-        experiment_id="cartpole/quick_test",
+        experiment_id="tabular_classification/quick_test",
         workspace_root=workspace,
     )
     dialog.edit_dest.setText(str(out_zip))
@@ -75,7 +75,7 @@ def test_export_dialog_export_yaml(qapp, tmp_path):
 
     sample_yaml = "total_timesteps: 5000\nseed: 99\n"
     dialog = ExportExperimentDialog(
-        experiment_id="cartpole/quick_test",
+        experiment_id="tabular_classification/quick_test",
         workspace_root=workspace,
         raw_yaml_text=sample_yaml,
     )

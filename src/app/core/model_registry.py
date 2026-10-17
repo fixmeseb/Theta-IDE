@@ -76,11 +76,15 @@ def get_model_class(model_name: str) -> Any:
     if clean_name in MODEL_REGISTRY:
         return MODEL_REGISTRY[clean_name]
 
+    basename = clean_name.split("/")[-1]
+    if basename in MODEL_REGISTRY:
+        return MODEL_REGISTRY[basename]
+
     # Prefix match if exact match not found
     matches = [
         (prefix, cls)
         for prefix, cls in MODEL_REGISTRY.items()
-        if clean_name == prefix or clean_name.startswith(prefix + "_")
+        if clean_name == prefix or clean_name.startswith(prefix + "_") or basename == prefix or basename.startswith(prefix + "_")
     ]
     if matches:
         return max(matches, key=lambda x: len(x[0]))[1]

@@ -7,13 +7,6 @@ import numpy as np
 import torch
 
 from src.app.core.utils import load_module
-from src.usr.models.neural.architectures import (
-    CNNActor,
-    NatureCNNActor,
-    NeuralBlenderActor,
-    NeuralBlenderMLP,
-    StandardMLPActor,
-)
 
 logger = logging.getLogger(__name__)
 

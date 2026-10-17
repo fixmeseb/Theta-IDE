@@ -6,6 +6,7 @@ from typing import Optional
 
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDialog,
     QFrame,
@@ -31,6 +32,7 @@ class ScaffoldPluginDialog(QDialog):
         self.workspace_root = Path(workspace_root)
         self.scaffolder = PluginScaffolder(workspace_root=self.workspace_root)
         self.scaffold_result: Optional[ScaffoldResult] = None
+        self.paradigm_boxes: dict[str, QCheckBox] = {}
 
         self.setWindowTitle("Scaffold New Component Plugin")
         self.setMinimumWidth(500)
@@ -77,6 +79,21 @@ class ScaffoldPluginDialog(QDialog):
         self.edit_name.setPlaceholderText("e.g. mamba_policy, soft_actor_critic, drone_sim")
         self.edit_name.textChanged.connect(self._update_preview)
         layout.addWidget(self.edit_name)
+
+        # Paradigms Checkboxes
+        layout.addWidget(label("COMPATIBLE PARADIGMS", "eyebrow"))
+        paradigm_row = QHBoxLayout()
+        paradigm_row.setSpacing(16)
+        for p_id, p_label in [
+            ("online_rl", "Online RL"),
+            ("offline_rl", "Offline RL"),
+            ("supervised", "Supervised"),
+        ]:
+            cb = QCheckBox(p_label)
+            self.paradigm_boxes[p_id] = cb
+            paradigm_row.addWidget(cb)
+        paradigm_row.addStretch()
+        layout.addLayout(paradigm_row)
 
         # Author and Version
         meta_row = QHBoxLayout()
@@ -130,9 +147,24 @@ class ScaffoldPluginDialog(QDialog):
         button_row.addWidget(self.btn_scaffold)
 
         root.addLayout(button_row)
+        self._set_default_paradigms("model")
         self._update_preview()
 
+    def _set_default_paradigms(self, kind: str):
+        defaults = {
+            "model": ["online_rl", "offline_rl", "supervised"],
+            "agent": ["online_rl"],
+            "env": ["online_rl"],
+            "datamodule": ["offline_rl", "supervised"],
+            "evaluator": ["online_rl", "offline_rl", "supervised"],
+        }.get(kind, ["online_rl"])
+
+        for p_id, cb in self.paradigm_boxes.items():
+            cb.setChecked(p_id in defaults)
+
     def _on_kind_changed(self):
+        kind = self.combo_kind.currentData()
+        self._set_default_paradigms(kind)
         self._update_preview()
 
     def _update_preview(self):
@@ -186,11 +218,17 @@ class ScaffoldPluginDialog(QDialog):
             QMessageBox.warning(self, "Invalid Name", "Please enter a valid component name.")
             return
 
+        selected_paradigms = [p for p, cb in self.paradigm_boxes.items() if cb.isChecked()]
+        if not selected_paradigms:
+            QMessageBox.warning(self, "Invalid Selection", "Please select at least one compatible learning paradigm.")
+            return
+
         opts = ScaffoldOptions(
             name=name,
             kind=self.combo_kind.currentData(),
             author=self.edit_author.text().strip() or "Theta Researcher",
             version=self.edit_version.text().strip() or "0.1.0",
+            paradigms=selected_paradigms,
         )
 
         res = self.scaffolder.scaffold(opts)

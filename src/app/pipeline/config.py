@@ -266,7 +266,11 @@ def load_model_base_config(model_name: str, config_dir=None) -> dict:
 
     target = Path(config_dir) / f"{model_name}.yaml"
     if not target.exists():
-        return {}
+        found = list(Path(config_dir).rglob(f"{model_name}.yaml"))
+        if found:
+            target = found[0]
+        else:
+            return {}
     try:
         with open(target) as f:
             data = yaml.safe_load(f)
@@ -537,7 +541,7 @@ def parse_methods_dict(cfg) -> dict[str, dict]:
         is_composite = (
             (model_cls is not None and hasattr(model_cls, "get_model_slots"))
             or (isinstance(base_model_cfg, dict) and any(isinstance(v, dict) for v in base_model_cfg.values()))
-            or m_model_arch in ("blendrl", "blender")
+            or (isinstance(base_model_cfg, dict) and "slots" in base_model_cfg)
         )
 
         if is_composite:
@@ -546,23 +550,14 @@ def parse_methods_dict(cfg) -> dict[str, dict]:
             if model_cls is not None and hasattr(model_cls, "get_model_slots"):
                 declared_slots = list(model_cls.get_model_slots())
 
-            # Fallback slots from base config dictionary keys
+            # Fallback slots from base config dictionary keys or 'slots' list
             slot_names = [s.name for s in declared_slots]
             for k, v in base_model_cfg.items():
-                if isinstance(v, dict) and k not in slot_names and k != "blender":
+                if isinstance(v, dict) and k not in slot_names:
                     from src.app.core.protocols import ModelSlot
 
                     def_t = v.get("type", k)
                     declared_slots.append(ModelSlot(name=k, default=def_t))
-
-            # Backward-compat fallback if blendrl and no slots declared yet
-            if not declared_slots and m_model_arch in ("blendrl", "blender"):
-                from src.app.core.protocols import ModelSlot
-
-                declared_slots = [
-                    ModelSlot(name="neural", default="dnn"),
-                    ModelSlot(name="symbolic", default="nsfr"),
-                ]
 
             # 1. Resolve submodels for each declared slot
             resolved_submodels = []
@@ -575,10 +570,8 @@ def parse_methods_dict(cfg) -> dict[str, dict]:
                     or model_params.get(slot.name)
                     or model_params.get(f"{slot.name}_actor")
                 )
-                if slot.name == "neural" and not raw_sub:
-                    raw_sub = m_dict.get("architecture")
 
-                default_type = slot.default or "dnn"
+                default_type = slot.default or slot.name
                 if isinstance(model_params.get(slot.name), str):
                     default_type = model_params[slot.name]
                 elif isinstance(model_params.get(slot.name), dict) and model_params[slot.name].get("type"):
@@ -591,90 +584,29 @@ def parse_methods_dict(cfg) -> dict[str, dict]:
                     shared_params=shared_params,
                 )
 
-                if slot.name == "neural":
-                    method_hidden = m_dict.get("hidden_sizes") or m_model_sub.get("hidden_sizes")
-                    if method_hidden and "hidden_sizes" not in (raw_sub if isinstance(raw_sub, dict) else {}):
-                        resolved_sub["hidden_sizes"] = method_hidden
-                    resolved_sub["module_type"] = "neural"
-                    if "architecture" in resolved_sub:
-                        model_params["architecture"] = resolved_sub["architecture"]
-                    if "hidden_sizes" in resolved_sub:
-                        model_params["hidden_sizes"] = resolved_sub["hidden_sizes"]
-                elif slot.name == "symbolic":
-                    method_rules = m_dict.get("rules") or m_model_sub.get("rules")
-                    if method_rules and "rules" not in (raw_sub if isinstance(raw_sub, dict) else {}):
-                        resolved_sub["rules"] = method_rules
-                    for cew_k in ("ecm_dthr", "fyd", "fyd_top_k"):
-                        v_cew = m_dict.get(cew_k, m_model_sub.get(cew_k))
-                        if v_cew is not None and cew_k not in (raw_sub if isinstance(raw_sub, dict) else {}):
-                            resolved_sub[cew_k] = v_cew
-                    resolved_sub["module_type"] = resolved_sub.get("type", "nsfr")
-                    if "rules" in resolved_sub:
-                        model_params["rules"] = resolved_sub["rules"]
+                # Merge any base_model_cfg slot defaults if not already present
+                base_slot_def = base_model_cfg.get(slot.name)
+                if isinstance(base_slot_def, dict):
+                    resolved_sub = deep_merge(base_slot_def, resolved_sub)
 
+                resolved_sub["module_type"] = resolved_sub.get("type", slot.name)
                 model_params[slot.name] = resolved_sub
                 resolved_submodels.append(dict(resolved_sub))
                 consumed_keys.update({slot.name, f"{slot.name}_actor"})
 
-            # 2. Blender Actor resolution (for hybrid/blending architectures)
-            raw_blender = (
-                m_model_sub.get("blender")
-                or m_model_sub.get("blender_actor")
-                or m_dict.get("blender")
-                or m_dict.get("blender_actor")
-                or model_params.get("blender")
-                or model_params.get("blender_actor")
-            )
-            default_blender = base_model_cfg.get("blender", {"mode": "neural", "blend_function": "softmax"})
-            shared_blender = {}
-            if isinstance(shared_model, dict) and "blender" in shared_model:
-                shared_blender = shared_model["blender"]
-            elif isinstance(shared_params, dict) and "blender" in shared_params:
-                shared_blender = shared_params["blender"]
-            resolved_blender = deep_merge(default_blender, shared_blender)
-            if isinstance(raw_blender, dict):
-                resolved_blender = deep_merge(resolved_blender, raw_blender)
-            elif isinstance(raw_blender, str):
-                resolved_blender["mode"] = raw_blender
-            b_mode = m_dict.get("blender_mode") or m_model_sub.get("blender_mode")
-            if b_mode:
-                resolved_blender["mode"] = b_mode
-            b_fn = m_dict.get("blend_function") or m_model_sub.get("blend_function")
-            if b_fn:
-                resolved_blender["blend_function"] = b_fn
-
-            model_params["blender"] = resolved_blender
-            model_params["blender_mode"] = resolved_blender.get("mode", "neural")
-            model_params["blend_function"] = resolved_blender.get("blend_function", "softmax")
-
-            # 3. Modules synthesis (for composite multi-module models)
+            # 2. Modules synthesis (for composite multi-module models)
             explicit_modules = m_dict.get("modules") or m_model_sub.get("modules") or model_params.get("modules")
             if explicit_modules:
                 resolved_modules = explicit_modules
                 model_params["explicit_modules"] = True
                 model_params["modules"] = resolved_modules
             elif resolved_submodels:
-                # Place symbolic before neural for blendrl backward-compat order
-                sym_first = sorted(
-                    resolved_submodels,
-                    key=lambda m: 0 if m.get("module_type") in ("nsfr", "neumann", "cew") else 1,
-                )
-                resolved_modules = sym_first
+                resolved_modules = resolved_submodels
                 resolved_mcfg["modules"] = resolved_modules
 
-            consumed_keys.update({
-                "blender",
-                "blender_actor",
-                "modules",
-                "architecture",
-                "hidden_sizes",
-                "rules",
-                "ecm_dthr",
-                "fyd",
-                "fyd_top_k",
-                "blender_mode",
-                "blend_function",
-            })
+            consumed_keys.update({slot.name for slot in declared_slots})
+            consumed_keys.update({f"{slot.name}_actor" for slot in declared_slots})
+            consumed_keys.add("modules")
 
         # Support inheriting tuned parameters from a previous Optuna sweep via from_study
         study_ref = m_dict.get("from_study")

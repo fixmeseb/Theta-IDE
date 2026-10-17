@@ -18,6 +18,7 @@ ENGINE_SCRIPT_MAP = {
     "sb3": "src/usr/methods/sb3_runner.py",
     "stable_baselines3": "src/usr/methods/sb3_runner.py",
     "cleanrl": "src/usr/methods/cleanrl_runner.py",
+    "d3rlpy": "src/usr/methods/d3rlpy/d3rlpy_runner.py",
 }
 
 
@@ -96,6 +97,14 @@ def resolve_engine(
         if engine_name:
             clean_engine = str(engine_name).lower().strip()
             script = ENGINE_SCRIPT_MAP.get(clean_engine, clean_engine)
+            if clean_engine in ("sb3", "stable_baselines3") and not Path(script).exists():
+                alt = Path("src/usr/methods/sb3/sb3_runner.py")
+                if alt.exists():
+                    script = str(alt)
+            elif clean_engine == "d3rlpy" and not Path(script).exists():
+                alt = Path("src/usr/methods/d3rlpy_runner.py")
+                if alt.exists():
+                    script = str(alt)
 
     # Fallback to standard PyTorch Lightning engine
     if not script:

@@ -281,7 +281,7 @@ def test_ppo_agent_wraps_standard_model():
     """Test that StandardModelActorCriticWrapper adapts a pure standard model (only forward()) to RL protocols."""
     import torch
     import torch.nn as nn
-    from src.usr.methods.ppo_agent import StandardModelActorCriticWrapper
+    from src.app.core.protocols import StandardModelActorCriticWrapper
 
     class PureForwardModel(nn.Module):
         def __init__(self):
@@ -303,4 +303,54 @@ def test_ppo_agent_wraps_standard_model():
     probs = wrapper.get_action_probs(obs)
     assert probs.shape == (5, 2)
     assert torch.allclose(probs.sum(dim=-1), torch.ones(5))
+
+
+def test_hub_view_mode_separation_and_suites_tab(qapp):
+    """Verify that Component Hub only shows components and has Suites tab, while Plugin Hub only shows plugins."""
+    from frontend.hub.client import HubClient
+    from frontend.hub.dialog import HubView
+    from frontend.hub.models import HubComponent
+
+    client = HubClient(workspace_dir=Path.cwd(), data_dir=Path.home() / ".thetaide")
+    # Mock components across all kinds
+    client.components = [
+        HubComponent(id="obsidian-notes", name="Obsidian", kind="plugin", version="0.1.0"),
+        HubComponent(id="antigravity", name="Antigravity", kind="plugin", version="0.1.5"),
+        HubComponent(id="dnn", name="DNN", kind="model", version="1.0.0"),
+        HubComponent(id="sb3-suite", name="SB3 Suite", kind="method", version="1.0.0"),
+        HubComponent(id="atari-env", name="Atari", kind="env", version="1.0.0"),
+        HubComponent(id="basic_suite", name="Basic Suite", kind="suite", version="1.0.0"),
+    ]
+
+    # 1. Component Hub (mode="components")
+    view_comp = HubView(client=client, mode="components")
+    view_comp._populate_cards(client.components)
+    comp_kinds = {c.component.kind for c in view_comp.cards.values()}
+    assert "plugin" not in comp_kinds
+    assert "suite" in comp_kinds
+    assert "model" in comp_kinds
+    assert "method" in comp_kinds
+    assert "env" in comp_kinds
+
+    pills_comp = list(view_comp.pills.keys())
+    assert "suite" in pills_comp
+    assert "plugin" not in pills_comp
+    assert pills_comp == ["all", "suite", "method", "model", "env"]
+
+    # 2. Community Plugins Hub (mode="plugins")
+    view_plug = HubView(client=client, mode="plugins")
+    view_plug._populate_cards(client.components)
+    plug_kinds = {c.component.kind for c in view_plug.cards.values()}
+    assert plug_kinds == {"plugin"}
+
+    pills_plug = list(view_plug.pills.keys())
+    assert "plugin" in pills_plug
+    assert "suite" not in pills_plug
+    assert "method" not in pills_plug
+    assert "model" not in pills_plug
+    assert "env" not in pills_plug
+
+    view_comp.deleteLater()
+    view_plug.deleteLater()
+
 

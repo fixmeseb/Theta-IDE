@@ -1,6 +1,0 @@
-# Clinical Expert Weighting model
-architecture: cew
-type: cew
-ecm_dthr: 0.1
-fyd: false
-fyd_top_k: 50

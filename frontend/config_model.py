@@ -61,6 +61,9 @@ class Environment:
                 rel_name = path.stem
 
         env_name = raw.get("name")
+        if not env_name and isinstance(raw.get("env"), dict):
+            env_name = raw["env"].get("name")
+
         if env_name and "/" in env_name:
             chosen_name = env_name
         elif "/" in rel_name:
@@ -68,7 +71,10 @@ class Environment:
         else:
             chosen_name = env_name or rel_name
 
-        paradigms = raw.get("compatible_paradigms")
+        paradigms = raw.get("compatible_paradigms") or raw.get("paradigms")
+        if not paradigms and isinstance(raw.get("env"), dict):
+            paradigms = raw["env"].get("paradigms") or raw["env"].get("compatible_paradigms")
+
         if isinstance(paradigms, list):
             cp = tuple(str(p) for p in paradigms)
         elif isinstance(paradigms, str):
@@ -87,6 +93,7 @@ class Environment:
 class Agent:
     name: str
     algorithm: str
+    compatible_paradigms: tuple[str, ...] = ()
     hyperparameters: Mapping[str, Any] = field(default_factory=dict, repr=False)
     raw: Mapping[str, Any] = field(default_factory=dict, repr=False)
 
@@ -99,10 +106,20 @@ class Agent:
                 name = path.relative_to(root).with_suffix("").as_posix()
             except ValueError:
                 name = path.stem
+
+        paradigms = raw.get("compatible_paradigms") or raw.get("paradigms")
+        if isinstance(paradigms, list):
+            cp = tuple(str(p) for p in paradigms)
+        elif isinstance(paradigms, str):
+            cp = (paradigms,)
+        else:
+            cp = ()
+
         return cls(
             name=name,
             algorithm=raw.get("algorithm") or path.stem,
-            hyperparameters={k: v for k, v in raw.items() if k != "algorithm"},
+            compatible_paradigms=cp,
+            hyperparameters={k: v for k, v in raw.items() if k not in ("algorithm", "paradigms", "compatible_paradigms")},
             raw=raw,
         )
 
@@ -111,6 +128,7 @@ class Agent:
 class Model:
     name: str
     architecture: str
+    compatible_paradigms: tuple[str, ...] = ()
     parameters: Mapping[str, Any] = field(default_factory=dict, repr=False)
     raw: Mapping[str, Any] = field(default_factory=dict, repr=False)
 
@@ -123,10 +141,20 @@ class Model:
                 name = path.relative_to(root).with_suffix("").as_posix()
             except ValueError:
                 name = path.stem
+
+        paradigms = raw.get("compatible_paradigms") or raw.get("paradigms")
+        if isinstance(paradigms, list):
+            cp = tuple(str(p) for p in paradigms)
+        elif isinstance(paradigms, str):
+            cp = (paradigms,)
+        else:
+            cp = ()
+
         return cls(
             name=name,
             architecture=raw.get("architecture") or path.stem,
-            parameters={k: v for k, v in raw.items() if k != "architecture"},
+            compatible_paradigms=cp,
+            parameters={k: v for k, v in raw.items() if k not in ("architecture", "paradigms", "compatible_paradigms")},
             raw=raw,
         )
 
@@ -201,17 +229,36 @@ class Paradigm:
     def permits_agent(self, agent: Agent | str) -> bool:
         algo = (agent.algorithm if isinstance(agent, Agent) else str(agent)).lower()
         name = (agent.name if isinstance(agent, Agent) else str(agent)).lower()
-        if any(f.lower() in (algo, name) or name.startswith(f.lower() + "/") for f in self.forbidden_agents):
+        clean = (algo, name, name.split("/")[-1], algo.split("/")[-1])
+        if any(
+            f.lower() in clean
+            or name.startswith(f.lower() + "/")
+            or name.endswith("/" + f.lower())
+            for f in self.forbidden_agents
+        ):
             return False
-        # An empty allow-list permits no agent at all. supervised declares one
-        # deliberately: it has no policy, so its methods name a model only.
-        if not self.allowed_agents:
+
+        if isinstance(agent, Agent) and agent.compatible_paradigms:
+            return self.name in agent.compatible_paradigms
+
+        # Fallback for agents without explicit compatible_paradigms
+        if "allowed_agents" in self.raw and not self.allowed_agents:
+            # Explicitly declared empty allow list (e.g. supervised)
             return False
-        for allowed in self.allowed_agents:
-            al = allowed.lower()
-            if al in (algo, name) or name.startswith(al + "/") or algo.startswith(al + "_") or name.endswith("/" + al):
-                return True
-        return False
+
+        if self.allowed_agents:
+            for allowed in self.allowed_agents:
+                al = allowed.lower()
+                if al in (algo, name) or name.startswith(al + "/") or algo.startswith(al + "_") or name.endswith("/" + al):
+                    return True
+            return False
+
+        return True
+
+    def permits_model(self, model: Model | str) -> bool:
+        if isinstance(model, Model) and model.compatible_paradigms:
+            return self.name in model.compatible_paradigms
+        return True
 
     def permits_environment(self, environment: Environment) -> bool:
         if not environment.compatible_paradigms:
@@ -338,6 +385,19 @@ class ConfigTree:
                 seen.add(id(e))
                 if rules.permits_environment(e):
                     result.append(e)
+        return result
+
+    def models_for(self, paradigm: str) -> list[Model]:
+        if paradigm not in self.paradigms:
+            return list(self.models.values())
+        rules = self.paradigms[paradigm]
+        seen: set[int] = set()
+        result: list[Model] = []
+        for m in self.models.values():
+            if id(m) not in seen:
+                seen.add(id(m))
+                if rules.permits_model(m):
+                    result.append(m)
         return result
 
     def field_enabled(self, paradigm: str, name: str) -> bool:
