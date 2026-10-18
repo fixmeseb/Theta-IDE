@@ -1102,6 +1102,13 @@ class SettingsView(QWidget):
         row_all_defs.addWidget(self.all_defaults_toggle)
         ec_layout.addLayout(row_all_defs)
 
+        row_layer_editor = QHBoxLayout()
+        row_layer_editor.addWidget(label("Visual Layer Stack Editor (hidden_sizes, hidden_dims)", "muted"), 1)
+        self.layer_editor_toggle = ToggleSlider(checked=getattr(self.window.settings_manager, "visual_layer_editor", True))
+        self.layer_editor_toggle.toggled.connect(self._on_visual_layer_editor_toggled)
+        row_layer_editor.addWidget(self.layer_editor_toggle)
+        ec_layout.addLayout(row_layer_editor)
+
 
         layout.addWidget(exp_card)
 
@@ -1224,6 +1231,10 @@ class SettingsView(QWidget):
     def _on_show_all_default_params_toggled(self, checked: bool):
         if hasattr(self.window, "settings_manager") and self.window.settings_manager:
             self.window.settings_manager.show_all_default_params = checked
+
+    def _on_visual_layer_editor_toggled(self, checked: bool):
+        if hasattr(self.window, "settings_manager") and self.window.settings_manager:
+            self.window.settings_manager.visual_layer_editor = checked
 
 
     def _on_ascii_setting_toggled(self, checked: bool):
@@ -2138,6 +2149,12 @@ class SettingsView(QWidget):
             self.all_defaults_toggle.blockSignals(True)
             self.all_defaults_toggle.setChecked(is_all)
             self.all_defaults_toggle.blockSignals(False)
+
+        if hasattr(self, "layer_editor_toggle") and self.layer_editor_toggle:
+            is_le = bool(sm.get("editor", "visual_layer_editor", default=True))
+            self.layer_editor_toggle.blockSignals(True)
+            self.layer_editor_toggle.setChecked(is_le)
+            self.layer_editor_toggle.blockSignals(False)
 
 
     def _build_terminal_page(self) -> QWidget:

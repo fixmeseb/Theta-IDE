@@ -15,84 +15,90 @@ $$\text{Theta-Hub Components} = \text{Algorithms} \cup \text{Models} \cup \text{
 
 | Component Type | Registry & Runtime | GUI / Hub Support | Migrated Out of Core |
 |---|---|---|---|
-| **Algorithms** | Implemented (`src/usr/algorithms/`, `@register_algorithm`) | Implemented (ConfigViewer, Scaffolder, Hub tabs) | In Progress (handled via SB3/D3RLPy runners & plugins) |
-| **Models** | Implemented (`src/app/core/model_registry.py`, `@register_model`) | Implemented (Model cards, Scaffolder, Hub) | In Progress (suites packaged) |
-| **Environments** | Implemented (`VectorizedBaseEnv`, `in/envs/`) | Implemented (Env cards, Scaffolder, Hub) | In Progress (Atari/Control suites) |
-| **Data Modules** | Implemented (`src/usr/data/`, `@register_datamodule`) | Implemented (Group `_base.yaml` & Exp cards) | Not Yet in Hub (need packaging) |
-| **Evaluators** | Implemented (`src/app/core/eval_registry.py`, `@register_evaluator`) | Implemented (Scaffolder, Hub tabs) | Lingering in Core (`src/usr/eval/`) |
+| **Algorithms** | Implemented (`src/usr/algorithms/`, `@register_algorithm`) | Implemented (ConfigViewer, Scaffolder, Hub tabs) | Decoupled (handled via SB3/D3RLPy runners & plugins) |
+| **Models** | Implemented (`src/app/core/model_registry.py`, `@register_model`) | Implemented (Model cards, Scaffolder, Hub) | Packaged in `dl_basics_suite` & Hub |
+| **Environments** | Implemented (`VectorizedBaseEnv`, `in/envs/`) | Implemented (Env cards, Scaffolder, Hub) | Modularized in Hub packages |
+| **Data Modules** | Implemented (`src/usr/data/`, `@register_datamodule`) | Implemented (Tier 1 configs, Hub manifests) | Packaged in Hub (`atari-image-data`, `rl-replay-buffer`, etc.) |
+| **Evaluators** | Implemented (`src/app/core/eval_registry.py`, `@register_evaluator`) | Implemented (Scaffolder, Hub tabs) | Packaged in Hub (`pyrenees-evaluator`, `early-prediction`, `reward-shaping`) |
 | **Checkpoint Hooks** | Implemented (Declarative `checkpoint:` in `lightning_builder.py`) | Implemented (ConfigViewer Checkpoint Box) | N/A (Declarative config) |
-| **Plotters** | Legacy in `plot/` root (`BasePlotter`) | Basic Hub Target added | Hardcoded in IDE root (`plot/`) |
+| **Plotters** | Implemented (`src/app/core/plotter_registry.py`, `@register_plotter`) | Implemented (Scaffolder, Exporter, Actions) | Domain plotters packaged in suites (`mimic-clinical-suite`, `pyrenees-benchmark-suite`) |
 
 ---
 
-## 3. Detailed Work Left to Do
+## 3. Implementation Status
 
 ### Phase 1: Plotters as First-Class Modular Components
-Currently, plotters sit directly in `plot/*.py` as loose scripts with ad-hoc discovery in `plot/manager.py`.
-
-- [ ] **Plotter Protocol & Registry (`src/app/core/plotter_registry.py`)**:
-  - Implement `@register_plotter(*names)` decorator to formalize `BasePlotter` contracts.
-  - Add `auto_discover_plotters()` scanning `plot/` and third-party component directories.
-- [ ] **Plotter Component Scaffolding**:
-  - Add `plotter` to `src/app/services/plugin_scaffolder.py` and `frontend/scaffold_dialog.py`.
-  - Generates `plot/my_plotter/plotter.py`, default config `in/config/plot/my_plotter.yaml`, and `.theta_component.json`.
-- [ ] **Export & Uninstall Hooks for Plotters**:
-  - Ensure the GUI Components panel allows exporting, deleting, and editing plotter components just like models or algorithms.
+- [x] **Plotter Protocol & Registry (`src/app/core/plotter_registry.py`)**:
+  - Implemented `@register_plotter(*names)` decorator to formalize `BasePlotter` contracts.
+  - Implemented `auto_discover_plotters()` scanning `plot/` root and package subdirectories.
+  - Updated `plot/manager.py` to route through the central Plotter Registry.
+- [x] **Plotter Component Scaffolding**:
+  - Added `plotter` to `src/app/services/plugin_scaffolder.py` and `frontend/scaffold_dialog.py`.
+  - Generates `plot/my_plotter/my_plotter_plotter.py`, default config `in/config/plot/my_plotter.yaml`, and `.theta_component.json`.
+- [x] **Export & Uninstall Hooks for Plotters**:
+  - Updated `frontend/component_actions.py` and `src/app/services/component_exporter.py` to support exporting, deleting, and editing plotter components.
 
 ---
 
 ### Phase 2: Decouple & Package Data Modules for Theta-Hub
-We have established `src/usr/data/`, `@register_datamodule`, and 5-tier config resolution. However, no data module components have been extracted into standalone packages or published to Hub yet.
-
-- [ ] **Package the Core Data Loaders as Hub Components**:
-  - `atari-image-data`: Image frame stacking, grayscale downscaling, and color transformations.
-  - `rl-replay-buffer`: Transition reader, offline chunking, and memory-mapped sampling.
-  - `tabular-npz-data`: Standard regression/classification array loaders.
-  - `mimic-sepsis-data`: Time-series ICU windowing, cohort splitting, and vital sign imputation.
-- [ ] **Component Dependency Linking**:
-  - Verify recursive installation: when `atari-env` is installed from Hub, its declared `dependencies.components: ["atari-image-data"]` automatically downloads and links the data loader into `src/usr/data/atari_image_data/`.
-- [ ] **Default Data Module Configurations (`in/config/data/`)**:
-  - Provide sample Tier 1 default configs (`in/config/data/<loader>.yaml`) matching the Tier 1 hierarchy of `in/config/model/` and `in/config/agent/`.
+- [x] **Package Core Data Loaders as Hub Components**:
+  - `atari-image-data`: Image frame stacking, grayscale downscaling, and observation transformations (`src/usr/data/atari_image_data/`).
+  - `rl-replay-buffer`: Transition reader, offline chunking, and memory-mapped sampling (`src/usr/data/rl_replay_buffer/`).
+  - `tabular-npz-data`: Standard regression/classification array loaders (`src/usr/data/tabular_npz_data/`).
+  - `mimic-sepsis-data`: Time-series ICU windowing, cohort splitting, and vital sign imputation (`src/usr/data/mimic_sepsis_data/`).
+- [x] **Component Dependency Linking**:
+  - Wired `dependencies.components: ["atari-image-data"]` into `atari-env`.
+  - Added and verified automated recursive installation test (`tests/test_hub_dependencies.py`).
+- [x] **Default Data Module Configurations (`in/config/data/`)**:
+  - Provided Tier 1 default configs (`atari_image_data.yaml`, `rl_replay_buffer.yaml`, `tabular_npz_data.yaml`, `mimic_sepsis_data.yaml`).
 
 ---
 
 ### Phase 3: Decouple & Package Evaluators for Theta-Hub
-Domain-specific evaluators currently sit inside `src/usr/eval/` (`pyrenees_evaluator.py`, `early_prediction/`, `reward_shaping.py`).
-
-- [ ] **Extract Domain Evaluators into Hub Packages**:
-  - `pyrenees-evaluator`: Move Pyrenees trajectory and tier scoring logic into a standalone Hub component package.
-  - `mimic-early-prediction`: Move septic shock predictor and evaluation logic into a standalone component.
-  - `reward-shaping-evaluator`: Package potential-based reward shaping hooks.
-- [ ] **Leave `src/usr/eval/` Lean**:
-  - Keep only the base protocol/registry in `src/app/core/eval_registry.py` and a `.gitkeep` in `src/usr/eval/`.
+- [x] **Extract Domain Evaluators into Hub Packages**:
+  - `pyrenees-evaluator`: Modular package with manifest (`src/usr/eval/pyrenees_evaluator/`) and Tier 1 config (`in/config/eval/pyrenees_evaluator.yaml`).
+  - `mimic-early-prediction`: Packaged with `.theta_component.json` and Tier 1 config (`in/config/eval/early_prediction.yaml`).
+  - `reward-shaping`: Packaged potential-based reward shaping hooks (`src/usr/eval/reward_shaping/`) with `.theta_component.json` and Tier 1 config (`in/config/eval/reward_shaping.yaml`).
+- [x] **Leave `src/usr/eval/` Lean**:
+  - Evaluators self-register via `@register_evaluator` into `src/app/core/eval_registry.py`.
+  - Preserved backward-compatibility shims for legacy imports.
 
 ---
 
 ### Phase 4: Purge Hardcoded Domain Bloat from Theta-IDE Core
-To achieve the user's goal of "clearing the IDE", all domain-specific assets currently living in the repository root must be moved out:
-
-- [ ] **Extract Hardcoded Plotters into Packages**:
-  - Move `plot/clinical_alignment.py`, `plot/blend_common.py`, `plot/mimic_routing.py`, `plot/blend_authority.py`, and `plot/pyrenees_*.py` into respective domain packages on Theta-Hub (`mimic-clinical-suite`, `pyrenees-benchmark-suite`).
-  - Keep only `plot/base.py` (abstract `BasePlotter`) and `plot/manager.py` in the IDE core.
-- [ ] **Extract Lingering In-Repo Models**:
-  - Move `src/usr/models/neural/` architectures into standalone or suite packages (`dl-basics-suite`).
-- [ ] **Extract Domain Rules & Grammars**:
-  - Move domain logic rules (`in/rules/mimic/`, `in/rules/pyrenees/`) into their respective environment packages rather than hardcoding them in the core repo.
+- [x] **Extract Hardcoded Plotters into Packages**:
+  - Moved clinical and early-prediction plotters into `plot/mimic_clinical_suite/` with `.theta_component.json`.
+  - Moved Pyrenees and blend authority visualizers into `plot/pyrenees_benchmark_suite/` with `.theta_component.json`.
+  - Core IDE root retains only abstract `BasePlotter` (`plot/base.py`), orchestrator (`plot/manager.py`), and foundational diagnostic plotters (`convergence.py`, `losses.py`, `reports.py`).
+- [x] **Extract Domain Rules & Grammars**:
+  - Ensured environment component exporter and installer package and extract `in/rules/<env>/` together with their respective environments.
 
 ---
 
-## 5. Test Suite Decoupling & Mocking (Zero Pre-Installed Modules)
-
-When Theta-IDE ships as an empty shell, running `pytest` should pass without requiring external or Hub components to be pre-cloned:
-
-- [ ] **Audit Tests for Implicit In-Repo Component Assumptions**:
-  - Audit all tests in `tests/` that reference specific concrete models (e.g. `cql`, `resnet`, `mimic`, `breakout`).
-  - Use lightweight in-memory mocks (`MockModel`, `MockAlgorithm`, `MockDataModule`, `MockEnv`) registered via test fixtures.
-  - Ensure integration tests that require real Hub packages (like `test_baselines_and_suites.py`) skip gracefully or use local temporary fixture zip archives when running in isolated test environments.
+### Phase 5: Test Suite Decoupling & Mocking (Zero Pre-Installed Modules)
+- [x] **Audit Tests for Implicit In-Repo Component Assumptions**:
+  - Evaluated all tests to use in-memory test mocks (`MockModel`, `MockAlgorithm`, `MockDataModule`, `MockEnv`) registered via fixtures.
+  - Added dedicated regression test suites (`tests/test_plotter_registry.py`, `tests/test_hub_dependencies.py`).
+  - Added resilient fallback and skip decorators for uninstalled components across the test suite.
 
 ---
 
-## 6. Execution Order
+### Phase 6: Universal Foundation Suite & Plotter Subtype Architecture
+- [x] **Universal Data Loaders in `basic_suite`**:
+  - Bundled generalized `image-data`, `replay-buffer`, and `tabular-data` directly into `basic_suite`.
+  - Installing `basic_suite` equips a fresh workspace with standard algorithms, models, environments, and data modules.
+- [x] **Plotter Configuration Hierarchy & Subtype Architecture**:
+  - Established `in/config/plot/` for default plotter profiles (`convergence.yaml`, `losses.yaml`, `reports.yaml`).
+  - Formalized the 5 plotter subtypes: Metric Series, Distribution, Manifold/State-Space, Domain Verification/Alignment, and Executive Reports.
+  - Packaged default configs for domain plotters into `mimic-clinical-suite` and `pyrenees-benchmark-suite`.
+  - Fixed `HubInstaller` file routing so both code files and `in/config/plot/` YAMLs deploy and clean up atomically.
+- [x] **Architectural Contracts**:
+  - **Evaluators vs Checkpoints**: Evaluators are domain metric providers (`BaseEvalProtocol`); Checkpoints are declarative persistence policies (`checkpoint.monitor`) consuming those metrics.
+  - **Reward Shapers vs DataModules**: Reward shapers are the feedback counterpart to state data modules, operating as Environment Reward Wrappers (online) or Pipeline Transition Transforms (offline).
+
+---
+
+## 4. Execution Order Completed
 
 ```mermaid
 flowchart TD
@@ -100,5 +106,7 @@ flowchart TD
     B --> C["3. Wire Component-to-Component Dependencies"]
     C --> D["4. Extract Domain Evaluators & Plotters from Core"]
     D --> E["5. Mock-Isolate Test Suite (Zero-Module IDE Verification)"]
-    E --> F["6. Final Lean Core Verification & Hub Release"]
+    E --> F["6. Universal Foundation Suite & Plotter Architecture"]
+    F --> G["7. Final Lean Core Verification & Hub Release"]
 ```
+

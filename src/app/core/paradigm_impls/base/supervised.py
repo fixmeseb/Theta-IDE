@@ -97,11 +97,13 @@ class SupervisedDataModule(L.LightningDataModule, BaseDataModule):
                 self._cfg.get("early_prediction")
                 or (hasattr(self._cfg, "env") and getattr(self._cfg.env, "name", None) == "mimic")
             ):
-                from src.usr.eval.early_prediction.data_module import EPSepsisDataModule
-
-                self._delegate = EPSepsisDataModule(self._cfg)
-                self.input_dim = getattr(self._delegate, "input_dim", 64)
-                return
+                try:
+                    from src.usr.eval.early_prediction.data_module import EPSepsisDataModule
+                    self._delegate = EPSepsisDataModule(self._cfg)
+                    self.input_dim = getattr(self._delegate, "input_dim", 64)
+                    return
+                except ImportError:
+                    pass
 
             # Any other offline dataset: a labelled .npz. Resolved here rather
             # than demanded as a `data_module` key, because that key cannot be

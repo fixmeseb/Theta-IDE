@@ -19,8 +19,8 @@ def qapp():
 @pytest.fixture(autouse=True)
 def _require_plugins():
     tree = config_tree()
-    if not tree.models or not tree.agents:
-        pytest.skip("Component plugins uninstalled; skipping composite viewer tests")
+    if not Path("in/config/experiment/cartpole/final_cartpole.yaml").is_file() or "blendrl" not in tree.models:
+        pytest.skip("cartpole experiment or blendrl model plugin uninstalled; skipping composite viewer tests")
 
 
 def test_config_viewer_loads_cql_benchmark(qapp, tmp_path):

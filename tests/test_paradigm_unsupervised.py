@@ -387,6 +387,8 @@ def test_train_py_resolves_the_autoencoder_from_a_composed_config():
     # refuses to run on top of it, so clear before and after rather than
     # depending on test order.
     GlobalHydra.instance().clear()
+    if not (Path("in/config/model/autoencoder.yaml")).is_file() and not (Path("in/config/model/basics/autoencoder.yaml")).is_file():
+        pytest.skip("autoencoder model is uninstalled")
     mo_override = "model=autoencoder" if (Path("in/config/model/autoencoder.yaml")).is_file() else "model=basics/autoencoder"
     try:
         with initialize_config_dir(config_dir=str(Path("in/config").resolve()), version_base=None):

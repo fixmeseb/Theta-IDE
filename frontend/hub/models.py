@@ -99,6 +99,31 @@ class HubComponent:
             return self.releases[latest_k]
         return None
 
+    @property
+    def suite(self) -> Optional[str]:
+        return self.extra.get("suite")
+
+    @property
+    def hidden(self) -> bool:
+        return bool(self.extra.get("hidden", False))
+
+    @property
+    def is_grouped_component(self) -> bool:
+        """Internal subcomponents that belong to an experiment plugin or foundation suite."""
+        if self.id in ("thetalib", "mimic", "pyrenees"):
+            return False
+        if self.suite in ("thetalib", "mimic", "pyrenees"):
+            return True
+        return self.id in (
+            "standard-figures", "image-data", "replay-buffer", "tabular-data",
+            "mimic-env", "mimic-clinical-suite", "mimic-early-prediction", "reward-shaping", "clinical-timeseries-data",
+            "pyrenees-env", "pyrenees-benchmark-suite", "pyrenees-evaluator",
+        )
+
+    @property
+    def is_thetalib_component(self) -> bool:
+        return self.is_grouped_component
+
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> HubComponent:
         author_raw = data.get("author", "Unknown")

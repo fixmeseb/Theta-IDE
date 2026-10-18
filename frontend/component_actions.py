@@ -125,6 +125,10 @@ def find_component_assets(
         elif rel.startswith("eval/") or rel.startswith("evaluator/"):
             kind = "evaluator"
             candidate_dir = ws / "src" / "usr" / "eval" / comp_id
+        elif rel.startswith("plot/"):
+            kind = "plotter"
+            candidate_dir = ws / "plot" / comp_id
+            candidate_file = ws / "plot" / f"{comp_id}.py"
 
         if candidate_dir and candidate_dir.is_dir():
             code_dir = candidate_dir
@@ -163,6 +167,8 @@ def find_component_assets(
             code_dir / "env.py",
             code_dir / f"{comp_id}_evaluator.py",
             code_dir / f"{comp_id}_datamodule.py",
+            code_dir / f"{comp_id}_plotter.py",
+            code_dir / "plotter.py",
             code_dir / f"{comp_id}.py",
         ]
         for c in named_candidates:

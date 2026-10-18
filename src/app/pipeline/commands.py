@@ -41,6 +41,14 @@ def build_method_overrides(
     Returns:
         list[str]: Hydra override arguments ready to pass to train.py.
     """
+    if hasattr(method_cfg, "items"):
+        from omegaconf import DictConfig, OmegaConf
+
+        if isinstance(method_cfg, DictConfig):
+            method_cfg = OmegaConf.to_container(method_cfg, resolve=True)
+        else:
+            method_cfg = dict(method_cfg)
+
     paradigm = cfg.get("paradigm", "offline_rl") if cfg is not None else "offline_rl"
     # Asked once: a paradigm with no allowed agents drives its methods by model.
     uses_agents = paradigm_uses_agents(paradigm)

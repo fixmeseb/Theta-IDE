@@ -150,3 +150,48 @@ def test_hub_installer_can_install_exported_component(tmp_path, sample_component
     assert any((target_ws / "in" / "config").rglob("dueling_resnet.yaml"))
     assert (target_ws / "src" / "usr" / "models" / "dueling_resnet").is_dir()
     assert (target_ws / "src" / "usr" / "models" / "dueling_resnet" / ".theta_component.json").is_file()
+
+
+def test_export_plotter_component_zip(tmp_path):
+    ws = tmp_path / "workspace"
+    plot_dir = ws / "plot" / "pareto"
+    plot_dir.mkdir(parents=True)
+    cfg_dir = ws / "in" / "config" / "plot"
+    cfg_dir.mkdir(parents=True)
+    cfg_file = cfg_dir / "pareto.yaml"
+    cfg_file.write_text("metrics: ['eval/reward']\n", encoding="utf-8")
+    (plot_dir / "pareto_plotter.py").write_text("# pareto plotter code\n", encoding="utf-8")
+    (plot_dir / ".theta_component.json").write_text(
+        json.dumps({
+            "id": "pareto",
+            "name": "ParetoPlotter",
+            "kind": "plotter",
+            "version": "1.0.0",
+            "target_dir": str(plot_dir),
+            "config_path": "in/config/plot/pareto.yaml",
+        }),
+        encoding="utf-8",
+    )
+
+    exporter = ComponentExporter(workspace_root=ws)
+    out_zip = tmp_path / "pareto_plotter.zip"
+    opts = ComponentExportOptions(
+        export_format="zip",
+        output_path=out_zip,
+        author="Visualizer",
+        version="1.0.0",
+        description="Pareto plotter component",
+    )
+    res = exporter.export(cfg_file, options=opts)
+    assert res.success is True
+    assert res.export_path == out_zip
+    assert out_zip.is_file()
+
+    with zipfile.ZipFile(out_zip, "r") as zf:
+        namelist = zf.namelist()
+        assert ".theta_component.json" in namelist
+        assert any("pareto.yaml" in n for n in namelist)
+        manifest = json.loads(zf.read(".theta_component.json").decode("utf-8"))
+        assert manifest["id"] == "pareto"
+        assert manifest["kind"] == "plotter"
+

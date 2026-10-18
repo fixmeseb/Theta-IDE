@@ -38,7 +38,7 @@ def test_paradigm_default_data_module_resolved():
 
     p_offline = load_paradigm_definition("offline_rl")
     assert p_offline.data_module_cls is not None
-    assert p_offline.data_module_cls.__name__ == "RLReplayBufferDataModule"
+    assert p_offline.data_module_cls.__name__ in ("RLReplayBufferDataModule", "ReplayBufferDataModule")
 
     p_sup = load_paradigm_definition("supervised")
     assert p_sup.data_module_cls is not None

@@ -118,7 +118,16 @@ def main(cfg: DictConfig):
         input_dim = getattr(datamodule, "input_dim", 64)
 
         model_cfg = cfg.get("model", {}) if hasattr(cfg, "get") else getattr(cfg, "model", {})
-        arch_name = str(model_cfg.get("architecture", model_cfg.get("name", "lstm"))).lower()
+        method_name = str(model_cfg.get("name", ""))
+        method_cfg = cfg.get("methods", {}).get(method_name, {}) if hasattr(cfg, "get") else {}
+        arch_name = None
+        if hasattr(method_cfg, "get"):
+            arch_name = method_cfg.get("model")
+        if not arch_name and hasattr(model_cfg, "get"):
+            arch_name = model_cfg.get("architecture") or model_cfg.get("type") or model_cfg.get("arch")
+        if not arch_name:
+            arch_name = model_cfg.get("name", "lstm")
+        arch_name = str(arch_name).lower()
         lr = float(model_cfg.get("lr", cfg.get("lr", 1e-3)))
 
         # Check if an explicit LightningModule component was registered for this architecture
@@ -130,9 +139,16 @@ def main(cfg: DictConfig):
             except KeyError:
                 SupervisedModelCls = None
         if SupervisedModelCls is None:
-            from src.usr.eval.early_prediction.lightning_module import EPSepsisLightningModule
-
-            SupervisedModelCls = EPSepsisLightningModule
+            if "classif" in arch_name or "mlp" in arch_name:
+                from src.app.core.paradigm_impls.base.tabular import TabularClassifierLightningModule
+                SupervisedModelCls = TabularClassifierLightningModule
+            else:
+                try:
+                    from src.usr.eval.early_prediction.lightning_module import EPSepsisLightningModule
+                    SupervisedModelCls = EPSepsisLightningModule
+                except ImportError:
+                    from src.app.core.paradigm_impls.base.tabular import TabularClassifierLightningModule
+                    SupervisedModelCls = TabularClassifierLightningModule
 
         kwargs = {}
         if hasattr(model_cfg, "items"):

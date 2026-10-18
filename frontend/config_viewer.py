@@ -39,13 +39,85 @@ from .config_model import add_method as add_method_to
 from .config_model import remove_method as remove_method_from
 from .sidetabs import svg_icon
 from .theme import theme_color
-from .widgets import ComboBox, DoubleSpinBox, SpinBox, label, SmoothScrollArea, ToggleSlider
+from .widgets import (
+    ComboBox, DoubleSpinBox, SpinBox, label, SmoothScrollArea, ToggleSlider,
+    TagCloudWidget, LayerStackWidget,
+)
+from src.app.services import PROJECT_ROOT
 
 # Forms stay readable on wide windows: the column of boxes stops growing past CONTENT_WIDTH,
 # and fields in label/field rows are capped by kind so a number doesn't get a 1,000px box.
 CONTENT_WIDTH = 960
 NUMBER_FIELD_WIDTH = 140
 TEXT_FIELD_WIDTH = 220
+
+CATEGORICAL_CHOICES = {
+    "activation": ["relu", "gelu", "tanh", "elu", "silu", "sigmoid", "leaky_relu", "identity"],
+    "activation_fn": ["relu", "gelu", "tanh", "elu", "silu", "sigmoid", "leaky_relu", "identity"],
+    "act_fn": ["relu", "gelu", "tanh", "elu", "silu", "sigmoid", "leaky_relu", "identity"],
+    "optimizer": ["adam", "adamw", "sgd", "rmsprop"],
+    "opt": ["adam", "adamw", "sgd", "rmsprop"],
+    "engine": ["sb3", "d3rlpy", "cleanrl", "custom"],
+    "runner": ["sb3", "d3rlpy", "cleanrl", "custom"],
+    "mode": ["min", "max"],
+    "direction": ["min", "max"],
+    "blender_mode": ["gate", "threshold", "hierarchical", "fixed"],
+    "blender": ["gate", "threshold", "hierarchical", "fixed"],
+}
+
+
+def _get_available_paradigms() -> list[str]:
+    """Return all paradigm names defined in in/config/paradigms/*.yaml."""
+    paradigms_dir = PROJECT_ROOT / "in" / "config" / "paradigms"
+    if paradigms_dir.is_dir():
+        names = [p.stem for p in paradigms_dir.glob("*.yaml") if not p.name.startswith(("_", "."))]
+        if names:
+            return sorted(names)
+    return ["online_rl", "offline_rl", "supervised", "unsupervised"]
+
+
+def _get_component_kind(rel_path: str) -> tuple[str, str]:
+    """Return (Category Display Name, Pill Accent Role)."""
+    p = (rel_path or "").lower()
+    if p.startswith("agent/"):
+        return ("Algorithm", "secondary")
+    elif p.startswith("env/"):
+        return ("Environment", "primary")
+    elif p.startswith("model/"):
+        return ("Model", "accent")
+    elif p.startswith("data/"):
+        return ("Data Loader", "number")
+    elif p.startswith("eval/"):
+        return ("Evaluator", "focus")
+    elif p.startswith(("plot/", "plots/")):
+        return ("Figure", "primary_hover")
+    elif p.startswith(("paradigms/", "paradigm/")):
+        return ("Paradigm", "accent")
+    elif p.startswith("site/"):
+        return ("Site Profile", "secondary")
+    elif p.startswith("workflow/"):
+        return ("Workflow", "primary")
+    elif p.startswith(("hydra/", "sweeper/")):
+        return ("Hydra / Sweeper", "muted")
+    parts = Path(rel_path).parts
+    return (parts[0].capitalize() if parts else "Component", "secondary")
+
+
+def _make_categorical_combo(key: str, current_val: Any, on_change) -> ComboBox:
+    combo = ComboBox()
+    options = list(CATEGORICAL_CHOICES.get(key.lower(), []))
+    str_val = str(current_val) if current_val is not None else ""
+    if str_val and str_val not in options:
+        options.insert(0, str_val)
+    for opt in options:
+        combo.addItem(opt)
+    if str_val in options:
+        combo.setCurrentText(str_val)
+    combo.setEditable(True)
+    combo.setMaximumWidth(TEXT_FIELD_WIDTH)
+    combo.currentTextChanged.connect(on_change)
+    return combo
+
 
 SUBTLE_ICON_COLORS = {
     (QIcon.Mode.Normal, QIcon.State.Off): "muted",
@@ -3577,17 +3649,75 @@ class ConfigViewer(QWidget):
             box.add_layout(form)
             self.boxes_layout.addWidget(box)
 
+    def _use_visual_layer_editor(self) -> bool:
+        if self.settings_manager:
+            return getattr(self.settings_manager, "visual_layer_editor", True)
+        return True
+
     def _render_generic_boxes(self):
         """Render clean boxes for modular YAML configs (agent/*.yaml, env/*.yaml, model/*.yaml, etc.)."""
         self.paradigm_badge.hide()
         data = self.raw_data
 
         stem = self.current_path.stem if self.current_path else ""
+        rel_path = str(self.current_rel_path or "")
+
+        # --- Component Overview Header Card ---
+        overview_box = ConfigBox()
+        ov_layout = QVBoxLayout()
+        ov_layout.setContentsMargins(14, 12, 14, 12)
+        ov_layout.setSpacing(8)
+
+        top_row = QHBoxLayout()
+        top_row.setSpacing(10)
+
+        title_lbl = QLabel(stem)
+        title_lbl.setStyleSheet(f"font-size: 15px; font-weight: bold; color: {theme_color('text')};")
+        top_row.addWidget(title_lbl)
+
+        kind_name, pill_color_role = _get_component_kind(rel_path)
+        kind_badge = QLabel(f" {kind_name} ")
+        kind_badge.setStyleSheet(f"""
+            background-color: {theme_color('surface')};
+            color: {theme_color(pill_color_role)};
+            border: 1px solid {theme_color('border')};
+            border-radius: 10px;
+            padding: 2px 8px;
+            font-size: 11px;
+            font-weight: 600;
+        """)
+        top_row.addWidget(kind_badge)
+        top_row.addStretch()
+        ov_layout.addLayout(top_row)
+
+        desc = str(self.raw_data.get("description", "") or "").strip()
+        desc_edit = QLineEdit(desc)
+        desc_edit.setPlaceholderText("Add a brief description for this component...")
+        desc_edit.setStyleSheet(f"""
+            QLineEdit {{
+                background: {theme_color('base')};
+                border: 1px dashed {theme_color('border')};
+                border-radius: 4px;
+                color: {theme_color('text')};
+                font-size: 12px;
+                padding: 4px 8px;
+            }}
+            QLineEdit:focus {{
+                border: 1px solid {theme_color('accent')};
+                background-color: {theme_color('surface')};
+            }}
+        """)
+        desc_edit.textChanged.connect(lambda val: self._on_field_edited("description", val.strip()))
+        ov_layout.addWidget(desc_edit)
+
+        overview_box.add_layout(ov_layout)
+        self.boxes_layout.addWidget(overview_box)
+
         leaf_params = {}
         nested_sections = {}
 
         for k, v in data.items():
-            if k in ("name", "algorithm", "architecture", "reasoner", "experiment_id", "id"):
+            if k in ("name", "algorithm", "architecture", "reasoner", "experiment_id", "id", "description"):
                 continue
             if k in ("type", "env_id") and str(v).lower() == stem.lower():
                 continue
@@ -3618,7 +3748,22 @@ class ConfigViewer(QWidget):
             for k, v in leaf_params.items():
                 row = QHBoxLayout()
                 row.setSpacing(8)
-                if isinstance(v, bool):
+                k_lower = k.lower()
+                if k in ("compatible_paradigms", "paradigms"):
+                    tag_cloud = TagCloudWidget(
+                        tags=v if isinstance(v, list) else ([v] if v else []),
+                        available_options=_get_available_paradigms(),
+                    )
+                    tag_cloud.tagsChanged.connect(lambda tags, key=k: self._on_field_edited(key, tags))
+                    row.addWidget(tag_cloud)
+                elif k in ("hidden_sizes", "hidden_dims", "latent_sizes") and self._use_visual_layer_editor() and isinstance(v, list):
+                    layer_stack = LayerStackWidget(layers=v)
+                    layer_stack.layersChanged.connect(lambda layers, key=k: self._on_field_edited(key, layers))
+                    row.addWidget(layer_stack)
+                elif k_lower in CATEGORICAL_CHOICES:
+                    combo = _make_categorical_combo(k, v, lambda val, key=k: self._on_field_edited(key, val))
+                    row.addWidget(combo)
+                elif isinstance(v, bool):
                     chk = ToggleSlider(checked=v)
                     chk.toggled.connect(lambda val, key=k: self._on_field_edited(key, val))
                     row.addWidget(chk)
@@ -3697,7 +3842,22 @@ class ConfigViewer(QWidget):
             else:
                 row = QHBoxLayout()
                 row.setSpacing(8)
-                if isinstance(v, bool):
+                k_lower = k.lower()
+                if k in ("compatible_paradigms", "paradigms"):
+                    tag_cloud = TagCloudWidget(
+                        tags=v if isinstance(v, list) else ([v] if v else []),
+                        available_options=_get_available_paradigms(),
+                    )
+                    tag_cloud.tagsChanged.connect(lambda tags, p=path + (k,): self._on_generic_path_edited(p, tags))
+                    row.addWidget(tag_cloud)
+                elif k in ("hidden_sizes", "hidden_dims", "latent_sizes") and self._use_visual_layer_editor() and isinstance(v, list):
+                    layer_stack = LayerStackWidget(layers=v)
+                    layer_stack.layersChanged.connect(lambda layers, p=path + (k,): self._on_generic_path_edited(p, layers))
+                    row.addWidget(layer_stack)
+                elif k_lower in CATEGORICAL_CHOICES:
+                    combo = _make_categorical_combo(k, v, lambda val, p=path + (k,): self._on_generic_path_edited(p, val))
+                    row.addWidget(combo)
+                elif isinstance(v, bool):
                     chk = ToggleSlider(checked=v)
                     chk.toggled.connect(lambda val, p=path + (k,): self._on_generic_path_edited(p, val))
                     row.addWidget(chk)

@@ -70,6 +70,7 @@ class ScaffoldPluginDialog(QDialog):
         self.combo_kind.addItem("Environment & Grounding (in/envs/)", "env")
         self.combo_kind.addItem("DataModule & Sampler (src/usr/data/)", "datamodule")
         self.combo_kind.addItem("Evaluator & Verification Hook (src/usr/eval/)", "evaluator")
+        self.combo_kind.addItem("Plotter & Visualization (plot/)", "plotter")
         self.combo_kind.currentIndexChanged.connect(self._on_kind_changed)
         layout.addWidget(self.combo_kind)
 
@@ -157,6 +158,7 @@ class ScaffoldPluginDialog(QDialog):
             "env": ["online_rl"],
             "datamodule": ["offline_rl", "supervised"],
             "evaluator": ["online_rl", "offline_rl", "supervised"],
+            "plotter": ["online_rl", "offline_rl", "supervised"],
         }.get(kind, ["online_rl"])
 
         for p_id, cb in self.paradigm_boxes.items():
@@ -206,6 +208,13 @@ class ScaffoldPluginDialog(QDialog):
                 f"• src/usr/eval/{name}/{name}_evaluator.py",
                 f"• src/usr/eval/{name}/__init__.py",
                 f"• src/usr/eval/{name}/.theta_component.json",
+            ]
+        elif kind in ("plotter", "plot"):
+            lines = [
+                f"• plot/{name}/{name}_plotter.py",
+                f"• plot/{name}/__init__.py",
+                f"• plot/{name}/.theta_component.json",
+                f"• in/config/plot/{name}.yaml",
             ]
         else:
             lines = []

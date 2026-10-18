@@ -130,6 +130,16 @@ def build_model(
         cfg_dict = (
             OmegaConf.to_container(model_spec, resolve=True) if isinstance(model_spec, DictConfig) else dict(model_spec)
         )
+        if "model" in cfg_dict and isinstance(cfg_dict["model"], (dict, str)) and "name" not in cfg_dict:
+            return build_model(
+                cfg_dict["model"],
+                env=env,
+                device=device,
+                n_actions=n_actions,
+                obs_dim=obs_dim,
+                **kwargs,
+            )
+
         # Check standard config naming conventions
         model_name = (
             cfg_dict.get("name")

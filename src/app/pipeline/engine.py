@@ -17,6 +17,10 @@ ENGINE_SCRIPT_MAP = {
     "lightning": "src/app/train.py",
     "sb3": "src/usr/algorithms/sb3_runner.py",
     "stable_baselines3": "src/usr/algorithms/sb3_runner.py",
+    "ppo": "src/usr/algorithms/sb3_runner.py",
+    "dqn": "src/usr/algorithms/sb3_runner.py",
+    "a2c": "src/usr/algorithms/sb3_runner.py",
+    "sac": "src/usr/algorithms/sb3_runner.py",
     "cleanrl": "src/usr/algorithms/cleanrl_runner.py",
     "d3rlpy": "src/usr/algorithms/d3rlpy/d3rlpy_runner.py",
 }

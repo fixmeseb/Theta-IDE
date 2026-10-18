@@ -235,22 +235,42 @@ class ComponentExporter:
     def _fallback_find_assets(self, cfg_path: Path, rel_path: str) -> Dict[str, Any]:
         stem = cfg_path.stem
         kind = "model"
-        if "agent" in rel_path or "method" in rel_path:
-            kind = "agent"
+        if "agent" in rel_path or "method" in rel_path or "algorithm" in rel_path:
+            kind = "algorithm"
         elif "env" in rel_path:
             kind = "env"
+        elif "data" in rel_path or "datamodule" in rel_path:
+            kind = "datamodule"
+        elif "eval" in rel_path or "evaluator" in rel_path:
+            kind = "evaluator"
+        elif "plot" in rel_path or "plotter" in rel_path:
+            kind = "plotter"
 
         code_dir = None
         if kind == "model":
             cd = self.workspace_root / "src" / "usr" / "models" / stem
             if cd.is_dir():
                 code_dir = cd
-        elif kind == "agent":
-            cd = self.workspace_root / "src" / "usr" / "methods" / stem
+        elif kind in ("agent", "algorithm"):
+            cd = self.workspace_root / "src" / "usr" / "algorithms" / stem
+            if not cd.is_dir():
+                cd = self.workspace_root / "src" / "usr" / "methods" / stem
             if cd.is_dir():
                 code_dir = cd
         elif kind == "env":
             cd = self.workspace_root / "in" / "envs" / stem
+            if cd.is_dir():
+                code_dir = cd
+        elif kind == "datamodule":
+            cd = self.workspace_root / "src" / "usr" / "data" / stem
+            if cd.is_dir():
+                code_dir = cd
+        elif kind == "evaluator":
+            cd = self.workspace_root / "src" / "usr" / "eval" / stem
+            if cd.is_dir():
+                code_dir = cd
+        elif kind == "plotter":
+            cd = self.workspace_root / "plot" / stem
             if cd.is_dir():
                 code_dir = cd
 

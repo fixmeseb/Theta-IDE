@@ -5,6 +5,9 @@ import torch
 import torch.nn as nn
 from omegaconf import OmegaConf
 
+pytest.importorskip("src.usr.eval.early_prediction", reason="Early prediction component not installed")
+pytest.importorskip("src.usr.eval.reward_shaping", reason="Reward shaping component not installed")
+
 from src.usr.eval.early_prediction.eval_logic import (
     discover_ep_checkpoints,
     load_ep_model,

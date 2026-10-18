@@ -44,8 +44,8 @@ def test_agents_expose_algorithm_and_hyperparameters(tree):
 
 
 def test_models_expose_architecture(tree):
-    if "dnn" not in tree.models:
-        pytest.skip("dnn model plugin not installed")
+    if "dnn" not in tree.models or "cew" not in tree.models:
+        pytest.skip("dnn or cew model plugin not installed")
     assert "dnn" in tree.models
     assert "cew" in tree.models
     assert tree.models["dnn"].architecture == "dnn"

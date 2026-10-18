@@ -87,8 +87,8 @@ def test_local_components_get_built_in_tags_and_hub_components_their_index_tags(
     assert counts["offline-rl"] >= 2 and list(counts) == sorted(counts, key=lambda t: (-counts[t], t))
 
 
-def test_user_tags_replace_the_defaults():
-    catalog = {c.key: c for c in build_catalog(CONFIG, None, {"env/pyrenees": ["Offline RL", "health"]})}
+def test_user_tags_replace_the_defaults(mock_config_root):
+    catalog = {c.key: c for c in build_catalog(mock_config_root, None, {"env/pyrenees": ["Offline RL", "health"]})}
     assert catalog["env/pyrenees"].tags == ["offline-rl", "health"] and catalog["env/pyrenees"].edited
 
 
