@@ -5,7 +5,7 @@ from pathlib import Path
 
 import yaml
 from PyQt6.QtCore import QByteArray, QMimeData, QPoint, QRect, QSettings, QSize, Qt, pyqtSignal
-from PyQt6.QtGui import QBrush, QColor, QDrag, QFont, QIcon, QPainter, QPen, QPixmap
+from PyQt6.QtGui import QColor, QDrag, QIcon, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -21,8 +21,6 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QStyle,
-    QStyleOptionViewItem,
-    QStyledItemDelegate,
     QToolButton,
     QTreeWidget,
     QTreeWidgetItem,
@@ -41,19 +39,17 @@ from .config_model import (
     unique_method_name,
 )
 from .sidetabs import svg_icon
+from .tree_tools import (  # noqa: F401  (TOOL_ICON_COLORS and GroupItemDelegate are re-exported)
+    TOOL_ICON_COLORS,
+    GroupItemDelegate,
+    TreeHeaderActions,
+    folder_icon,
+    group_heading_font,
+    refresh_tool_icons,
+    style_tool_button,
+)
 from .theme import theme_color
 from .widgets import label
-
-TOOL_ICON_COLORS = {
-    (QIcon.Mode.Normal, QIcon.State.Off): "text",
-    (QIcon.Mode.Active, QIcon.State.Off): "accent",
-    (QIcon.Mode.Selected, QIcon.State.Off): "accent",
-    (QIcon.Mode.Disabled, QIcon.State.Off): "disabled",
-    (QIcon.Mode.Normal, QIcon.State.On): "accent",
-    (QIcon.Mode.Active, QIcon.State.On): "accent",
-    (QIcon.Mode.Selected, QIcon.State.On): "accent",
-    (QIcon.Mode.Disabled, QIcon.State.On): "disabled",
-}
 
 TREE_GEAR_COLORS = {
     (QIcon.Mode.Normal, QIcon.State.Off): "secondary",
@@ -249,58 +245,6 @@ def find_config_root():
         if p.exists() and p.is_dir():
             return p.resolve()
     return (Path(__file__).resolve().parent.parent / "in" / "config").resolve()
-
-
-def group_heading_font(base: QFont) -> QFont:
-    """The bold, larger font of a group heading (cartpole, mimic, ...) in the experiment and results trees."""
-    font = QFont(base)
-    font.setPointSize(max(base.pointSize() + 2, 14) if base.pointSize() > 0 else 14)
-    font.setBold(True)
-    return font
-
-
-def square_tool_button(icon_name: str, tooltip: str = "") -> QToolButton:
-    """A 30 × 30 header button with a themed SVG icon, like the experiment tree's (refresh_icons recolors it)."""
-    button = QToolButton()
-    button.setProperty("svg_icon", icon_name)
-    button.setIcon(svg_icon(icon_name, TOOL_ICON_COLORS))
-    button.setIconSize(QSize(16, 16))
-    button.setFixedSize(30, 30)
-    button.setStyleSheet("padding: 0;")
-    button.setToolTip(tooltip)
-    button.setAccessibleName(tooltip)
-    return button
-
-
-class GroupItemDelegate(QStyledItemDelegate):
-    """Delegate rendering larger text, subtle underline, and extra vertical breathing room for group nodes."""
-
-    def is_group(self, index) -> bool:
-        """Whether `index` is a group heading (the experiment tree marks them in its item data)."""
-        data = index.data(Qt.ItemDataRole.UserRole)
-        return isinstance(data, dict) and bool(data.get("is_group"))
-
-    def initStyleOption(self, option, index):
-        super().initStyleOption(option, index)
-        if self.is_group(index):
-            option.font = group_heading_font(option.font)
-
-    def paint(self, painter, option, index):
-        super().paint(painter, option, index)
-        if self.is_group(index):
-            painter.save()
-            painter.setPen(QPen(QColor("#504945"), 1))
-            y = option.rect.bottom() - 1
-            painter.drawLine(option.rect.left() + 4, y, option.rect.right() - 4, y)
-            painter.restore()
-
-    def sizeHint(self, option, index):
-        opt = QStyleOptionViewItem(option)
-        self.initStyleOption(opt, index)
-        hint = super().sizeHint(opt, index)
-        if self.is_group(index):
-            return QSize(hint.width(), hint.height() + 10)
-        return hint
 
 
 TREE_BUTTON_MIME = "application/x-theta-tree-button"
@@ -580,7 +524,7 @@ class TreeHeaderWidget(QWidget):
             painter.end()
 
 
-class ConfigTreeWidget(QWidget):
+class ConfigTreeWidget(TreeHeaderActions, QWidget):
     """File tree that mirrors in/config/ and allows selecting, duplicating,
 
     and creating experiments in groups.
@@ -718,9 +662,6 @@ class ConfigTreeWidget(QWidget):
 
         self.btn_search = self._tool_button("search", button_id="search")
         self.btn_search.setToolTip("Filter configurations")
-        self.btn_search.setCheckable(True)
-        self.btn_search.setChecked(False)
-        self.btn_search.clicked.connect(self.toggle_search)
 
         if self.mode == "components":
             self.btn_plus = self._tool_button("plus", "+", button_id="plus")
@@ -819,8 +760,7 @@ class ConfigTreeWidget(QWidget):
             placeholder = "Filter configs…"
         self.search.setPlaceholderText(placeholder)
         self.search.textChanged.connect(self.filter_tree)
-        self.search.hide()
-        self.search.installEventFilter(self)
+        self.watch_search()
         layout.addWidget(self.search)
 
         # Tree widget
@@ -944,22 +884,14 @@ class ConfigTreeWidget(QWidget):
 
     def _tool_button(self, icon_name, text=None, button_id=None):
         """Square header button with a themed SVG icon; text, if any, becomes its accessible name."""
-        button = DraggableToolButton(button_id or icon_name)
-        button.setProperty("svg_icon", icon_name)
-        button.setIcon(svg_icon(icon_name, TOOL_ICON_COLORS))
-        button.setIconSize(QSize(16, 16))
-        button.setFixedSize(30, 30)
-        button.setStyleSheet("padding: 0;")
+        button = style_tool_button(DraggableToolButton(button_id or icon_name), icon_name)
         if text:
             button.setAccessibleName(text)
         return button
 
     def refresh_icons(self):
         """Re-render the header and tree icons in the current theme's colors."""
-        for button in self.findChildren(QToolButton):
-            name = button.property("svg_icon")
-            if name:
-                button.setIcon(svg_icon(name, TOOL_ICON_COLORS))
+        refresh_tool_icons(self)
         if hasattr(self, "header_widget"):
             self.header_widget.update()
 
@@ -985,7 +917,7 @@ class ConfigTreeWidget(QWidget):
                         elif dname == "methods":
                             child.setIcon(0, svg_icon("components", TOOL_ICON_COLORS))
                         else:
-                            child.setIcon(0, svg_icon("folder", TOOL_ICON_COLORS))
+                            child.setIcon(0, folder_icon())
                 _update_tree(child)
 
         _update_tree(self.tree)
@@ -1014,7 +946,7 @@ class ConfigTreeWidget(QWidget):
         elif name == "methods":
             node.setIcon(0, svg_icon("components", TOOL_ICON_COLORS))
         else:
-            node.setIcon(0, svg_icon("folder", TOOL_ICON_COLORS))
+            node.setIcon(0, folder_icon())
 
         node.setData(0, Qt.ItemDataRole.UserRole, {
             "type": "dir",
@@ -1150,25 +1082,6 @@ class ConfigTreeWidget(QWidget):
 
         for i in range(self.tree.topLevelItemCount()):
             match_and_filter(self.tree.topLevelItem(i))
-
-    def toggle_search(self, checked: bool | None = None):
-        """Toggle the visibility of the search/filter bar."""
-        if checked is None:
-            checked = self.search.isHidden()
-        self.btn_search.setChecked(checked)
-        self.search.setVisible(checked)
-        if checked:
-            self.search.setFocus()
-            self.search.selectAll()
-        else:
-            self.search.clear()
-
-    def eventFilter(self, obj, event):
-        if obj is self.search and event.type() == event.Type.KeyPress:
-            if event.key() == Qt.Key.Key_Escape:
-                self.toggle_search(False)
-                return True
-        return super().eventFilter(obj, event)
 
     def find_file_item(self, target_rel_path: str):
         """Find the QTreeWidgetItem corresponding to a relative path."""
@@ -1883,14 +1796,6 @@ class ConfigTreeWidget(QWidget):
         action_expand.triggered.connect(self.expand_all)
 
         menu.exec(self.tree.viewport().mapToGlobal(position))
-
-    def collapse_all(self):
-        """Collapse all folders/nodes in the tree."""
-        self.tree.collapseAll()
-
-    def expand_all(self):
-        """Expand all folders/nodes in the tree."""
-        self.tree.expandAll()
 
     def _create_in_specific_group(self, group_name):
         self.prompt_new_in_group(group=group_name)

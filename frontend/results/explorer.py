@@ -1,17 +1,17 @@
 """Run explorer: a checkable tree of group → experiment → agent → version.
 
-It looks like the Experiment tab's tree (frontend/config_tree.py): the same square header buttons
-(reload, collapse all, expand all, search), bold group headings with a rule under them, and folders for
-experiments. Groups are headings only; experiments, agents and versions are ticked.
+It looks and behaves like the Experiment tab's tree, from the same code (frontend/tree_tools.py): the
+square reload / collapse all / expand all / search buttons (Esc closes the search), bold group headings
+with a rule under them, and folders for experiments. Groups are headings only; experiments, agents and
+versions are ticked.
 """
 
 from __future__ import annotations
 
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtWidgets import QHBoxLayout, QLineEdit, QToolButton, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QHBoxLayout, QLineEdit, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget
 
-from ..config_tree import TOOL_ICON_COLORS, GroupItemDelegate, square_tool_button
-from ..sidetabs import svg_icon
+from ..tree_tools import GroupItemDelegate, TreeHeaderActions, folder_icon, refresh_tool_icons, square_tool_button
 from .data import Manifest, Source
 
 _KIND, _DATA = Qt.ItemDataRole.UserRole, Qt.ItemDataRole.UserRole + 1
@@ -27,7 +27,7 @@ class _RunGroupDelegate(GroupItemDelegate):
         return index.data(_KIND) == "group"
 
 
-class RunExplorer(QWidget):
+class RunExplorer(TreeHeaderActions, QWidget):
     """Tick experiments, agents or versions; every ticked leaf is a series source.
 
     An agent is a leaf (its newest version) until its manifest shows more than one version;
@@ -53,18 +53,16 @@ class RunExplorer(QWidget):
         self.btn_expand = square_tool_button("expand_all", "Expand all groups and experiments")
         self.btn_expand.clicked.connect(self.expand_all)
         self.btn_search = square_tool_button("search", "Filter runs")
-        self.btn_search.setCheckable(True)
-        self.btn_search.toggled.connect(self.toggle_search)
         for button in (self.btn_refresh, self.btn_collapse, self.btn_expand, self.btn_search):
             header.addWidget(button)
         header.addStretch(1)
         layout.addLayout(header)
-        self.filter = QLineEdit()
-        self.filter.setPlaceholderText("Filter runs…")
-        self.filter.setClearButtonEnabled(True)
-        self.filter.textChanged.connect(self.apply_filter)
-        self.filter.hide()  # the search button shows it, as in the Experiment tab
-        layout.addWidget(self.filter)
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("Filter runs…")
+        self.search.setClearButtonEnabled(True)
+        self.search.textChanged.connect(self.apply_filter)
+        layout.addWidget(self.search)
+        self.watch_search()  # hidden until the search button shows it, as in the Experiment tab
         self.tree = QTreeWidget()
         self.tree.setItemDelegate(_RunGroupDelegate(self.tree))
         self.tree.setHeaderHidden(True)
@@ -76,30 +74,14 @@ class RunExplorer(QWidget):
         self._collapsed_groups: set[str] = set()  # groups start expanded, as in the Experiment tab
         self._emitting = True
 
-    # ── Header buttons ───────────────────────────────────────────────────────
-
-    def toggle_search(self, on: bool):
-        self.filter.setVisible(on)
-        if on:
-            self.filter.setFocus()
-        else:
-            self.filter.clear()
-
-    def collapse_all(self):
-        self.tree.collapseAll()
-
-    def expand_all(self):
-        self.tree.expandAll()
+    # ── Theme ────────────────────────────────────────────────────────────────
 
     def refresh_icons(self):
         """Re-render the header and folder icons in the current theme's colors."""
-        for button in self.findChildren(QToolButton):
-            name = button.property("svg_icon")
-            if name:
-                button.setIcon(svg_icon(name, TOOL_ICON_COLORS))
+        refresh_tool_icons(self)
         for item in self._items():
             if item.data(0, _KIND) == "experiment":
-                item.setIcon(0, svg_icon("folder", TOOL_ICON_COLORS))
+                item.setIcon(0, folder_icon())
 
     # ── Building ─────────────────────────────────────────────────────────────
 
@@ -119,7 +101,7 @@ class RunExplorer(QWidget):
                 groups[group] = self._item(self.tree.invisibleRootItem(), group, "group", group, _HEADING)
             exp_item = self._item(groups[group], exp, "experiment", f"{group}/{exp}", _PARENT)
             exp_item.setToolTip(0, f"results/logs/{group}/{exp}")
-            exp_item.setIcon(0, svg_icon("folder", TOOL_ICON_COLORS))
+            exp_item.setIcon(0, folder_icon())
             for agent in agents:
                 self._item(exp_item, agent, "agent", Source(group, exp, agent), _CHECKABLE)
         for item in self._items():
@@ -129,7 +111,7 @@ class RunExplorer(QWidget):
         for item in self._leaves():
             if item.data(0, _DATA) in checked:
                 item.setCheckState(0, Qt.CheckState.Checked)
-        self.apply_filter(self.filter.text())
+        self.apply_filter(self.search.text())
         self._emitting = True
         self._emit()
 

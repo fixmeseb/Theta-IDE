@@ -673,3 +673,26 @@ def test_a_quick_relayout_does_not_open_the_empty_label_as_a_window():
     assert grid.empty.isVisible() and grid.empty.parent() is grid.body
     grid.close()
     grid.deleteLater()
+
+
+def test_the_run_selector_shares_the_experiment_trees_header_behaviour():
+    """Search, Esc, collapse and expand come from the same code as the Experiment tab's tree (tree_tools)."""
+    from PyQt6.QtCore import QEvent
+    from PyQt6.QtGui import QKeyEvent
+
+    from frontend.config_tree import ConfigTreeWidget
+    from frontend.results.explorer import RunExplorer
+    from frontend.tree_tools import GroupItemDelegate, TreeHeaderActions
+
+    explorer = RunExplorer()
+    assert isinstance(explorer, TreeHeaderActions) and issubclass(ConfigTreeWidget, TreeHeaderActions)
+    assert isinstance(explorer.tree.itemDelegate(), GroupItemDelegate)
+    explorer.show()
+    assert explorer.search.isHidden()
+    explorer.btn_search.click()
+    assert explorer.search.isVisible() and explorer.btn_search.isChecked()
+    explorer.search.setText("cart")
+    QApplication.sendEvent(explorer.search, QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Escape, Qt.KeyboardModifier.NoModifier))
+    assert explorer.search.isHidden() and not explorer.btn_search.isChecked() and explorer.search.text() == ""
+    explorer.close()
+    explorer.deleteLater()
