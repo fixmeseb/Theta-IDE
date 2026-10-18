@@ -1,21 +1,28 @@
-"""Interactive Documentation panel widget for Theta-IDE."""
+"""Interactive Documentation panel widget for Theta-IDE.
+
+Left: an outline of the documentation (category headers that collapse, articles, and each
+article's sections). Right: the article as one page, a header (category, title, summary) over
+the text, which wraps at a readable width.
+"""
 from __future__ import annotations
 
+import html
 import re
 from typing import TYPE_CHECKING
 
 from PyQt6.QtCore import QEvent, Qt, QUrl
-from PyQt6.QtGui import QIcon
+from PyQt6.QtGui import QColor, QFont, QIcon
 from PyQt6.QtWidgets import (
     QComboBox,
     QFrame,
     QHBoxLayout,
     QLineEdit,
-    QListWidget,
-    QListWidgetItem,
     QPushButton,
     QSplitter,
     QTextBrowser,
+    QTextEdit,
+    QTreeWidget,
+    QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
@@ -32,6 +39,25 @@ if TYPE_CHECKING:
 _BUTTON_ICON_COLORS = {(QIcon.Mode.Normal, QIcon.State.Off): "text"}
 _SEARCH_ICON_COLORS = {(QIcon.Mode.Normal, QIcon.State.Off): "muted"}
 _CODE_BLOCK = re.compile(r"<pre><code>(.*?)</code></pre>", re.DOTALL)
+_SECTION = re.compile(r"<h3>(.*?)</h3>", re.DOTALL)
+_LEADING_H2 = re.compile(r"^\s*<h2>.*?</h2>", re.DOTALL)
+_TAG = re.compile(r"<[^>]+>")
+
+TEXT_WIDTH = 860  # px the article text wraps at: long lines across a wide window are hard to read
+
+# Outline item kinds, stored in Qt.ItemDataRole.UserRole as (kind, article_id, anchor)
+CATEGORY, ARTICLE, SECTION = "category", "article", "section"
+
+
+def _resized(font: QFont, factor: float) -> QFont:
+    """A copy of `font` scaled by `factor`. The app font may be sized in pixels, in which case
+    pointSizeF() is -1, so scale whichever unit it uses."""
+    scaled = QFont(font)
+    if font.pointSizeF() > 0:
+        scaled.setPointSizeF(font.pointSizeF() * factor)
+    elif font.pixelSize() > 0:
+        scaled.setPixelSize(max(9, round(font.pixelSize() * factor)))
+    return scaled
 
 
 def _theme_key():
@@ -45,13 +71,31 @@ def _boxed_code_blocks(article_html: str) -> str:
     showed as separated stripes, and it ignores border-radius. A table cell is one solid box with
     padding and a border, which is what a code block should look like.
     """
-    border, fill = theme_color("border"), theme_color("base")
+    border, fill = theme_color("border"), theme_color("surface")
     return _CODE_BLOCK.sub(
         lambda m: (f'<table class="code" width="100%" cellspacing="0" cellpadding="12" border="1" '
                    f'style="border-color: {border}; border-style: solid; background-color: {fill};">'
                    f'<tr><td><pre>{m.group(1)}</pre></td></tr></table>'),
         article_html,
     )
+
+
+def article_sections(article: DocArticle) -> list[str]:
+    """The plain-text titles of an article's sections (its <h3> headings), in order."""
+    return [html.unescape(_TAG.sub("", title)).strip() for title in _SECTION.findall(article.html_content)]
+
+
+def _anchored_sections(article_html: str) -> str:
+    """Put an anchor (sec-0, sec-1, …) before each section heading, for the outline to scroll to."""
+    count = iter(range(1_000_000))
+    # Inside the heading: an anchor before it belongs to the previous paragraph, so jumps stopped short
+    return _SECTION.sub(lambda m: f'<h3><a name="sec-{next(count)}"></a>{m.group(1)}</h3>', article_html)
+
+
+def article_body(article: DocArticle) -> str:
+    """The article's HTML as the page shows it: without its opening <h2> (the page header already
+    titles it), with anchored sections and boxed code blocks."""
+    return _boxed_code_blocks(_anchored_sections(_LEADING_H2.sub("", article.html_content, count=1)))
 
 
 class DocumentationPanel(QWidget):
@@ -63,19 +107,13 @@ class DocumentationPanel(QWidget):
         self.setObjectName("documentationPanel")
         self.current_article_id: str = "overview"
         self._styled_for = None
+        self._collapsed_categories: set[str] = set()
         self._init_ui()
         self._populate_categories()
-        self._populate_articles()
         self._apply_theme()
+        self._populate_articles()
         self._fit_contents_width()
         self.select_article("overview")
-
-    def _fit_contents_width(self, cap: int = 380):
-        """Open the table of contents wide enough for the longest title (up to `cap` px)."""
-        metrics = self.article_list.fontMetrics()
-        longest = max((metrics.horizontalAdvance(art.title) for art in ARTICLES), default=200)
-        frame = 2 * self.article_list.frameWidth() + 8 + 20 + 16  # list padding, item padding, scrollbar
-        self.splitter.setSizes([min(cap, longest + frame), 900])
 
     def _init_ui(self):
         root = QVBoxLayout(self)
@@ -86,7 +124,6 @@ class DocumentationPanel(QWidget):
         toolbar = QHBoxLayout()
         toolbar.setSpacing(10)
 
-        # Search Bar
         self.search_input = QLineEdit()
         self.search_input.setPlaceholderText("Search documentation, topics, or keywords…")
         self.search_action = self.search_input.addAction(QIcon(), QLineEdit.ActionPosition.LeadingPosition)
@@ -95,13 +132,11 @@ class DocumentationPanel(QWidget):
         self.search_input.textChanged.connect(self._on_search_changed)
         toolbar.addWidget(self.search_input, 1)
 
-        # Category Filter
         self.cat_combo = QComboBox()
         self.cat_combo.setMinimumWidth(160)
         self.cat_combo.currentIndexChanged.connect(self._on_filter_changed)
         toolbar.addWidget(self.cat_combo)
 
-        # Quick IDE Navigation Actions
         self.btn_hotkeys = QPushButton("Hotkeys")
         self.btn_hotkeys.setToolTip("Open Settings › Hotkeys")
         self.btn_hotkeys.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -118,68 +153,86 @@ class DocumentationPanel(QWidget):
 
         # ── Main Splitter ────────────────────────────────────────────────────────
         splitter = QSplitter(Qt.Orientation.Horizontal)
-        splitter.setHandleWidth(4)
+        splitter.setHandleWidth(10)
+        splitter.setChildrenCollapsible(False)
 
-        # Left Column: Topic List
+        # Left: the outline
         left_container = QWidget()
         left_layout = QVBoxLayout(left_container)
         left_layout.setContentsMargins(0, 0, 0, 0)
         left_layout.setSpacing(6)
+        left_layout.addWidget(label("CONTENTS", "eyebrow"))
 
-        left_header = label("TABLE OF CONTENTS", "eyebrow")
-        left_layout.addWidget(left_header)
-
-        self.article_list = QListWidget()
-        self.article_list.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
-        # No horizontal scrollbar: the list opens wide enough for its titles (see _fit_contents_width),
-        # and if it's dragged narrower they elide, with the full title in the tooltip
-        self.article_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        self.article_list.itemClicked.connect(self._on_article_clicked)
-        left_layout.addWidget(self.article_list, 1)
-
+        self.toc = QTreeWidget()
+        self.toc.setObjectName("docOutline")
+        self.toc.setHeaderHidden(True)
+        self.toc.setIndentation(14)
+        self.toc.setExpandsOnDoubleClick(False)  # one click on a header toggles it
+        self.toc.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.toc.setTextElideMode(Qt.TextElideMode.ElideRight)
+        self.toc.itemClicked.connect(self._on_outline_clicked)
+        self.toc.itemExpanded.connect(lambda item: self._remember_category(item, expanded=True))
+        self.toc.itemCollapsed.connect(lambda item: self._remember_category(item, expanded=False))
+        left_layout.addWidget(self.toc, 1)
         splitter.addWidget(left_container)
 
-        # Right Column: Content Viewer
-        right_container = QWidget()
-        right_layout = QVBoxLayout(right_container)
-        right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.setSpacing(10)
+        # Right: the article as one page (header over text), no box around each part
+        self.page = QFrame()
+        self.page.setObjectName("docPage")
+        page_layout = QVBoxLayout(self.page)
+        page_layout.setContentsMargins(32, 26, 16, 0)
+        page_layout.setSpacing(0)
 
-        # Header Info Card
-        self.header_card = QFrame()
-        self.header_card.setObjectName("card")
-        hc_layout = QVBoxLayout(self.header_card)
-        hc_layout.setContentsMargins(14, 12, 14, 12)
-        hc_layout.setSpacing(4)
-
-        meta_row = QHBoxLayout()
-        self.badge_cat = label("GETTING STARTED", "badge")
-        meta_row.addWidget(self.badge_cat)
-        meta_row.addStretch()
-        hc_layout.addLayout(meta_row)
-
-        self.title_lbl = label("Welcome & Architecture Overview", "heading")
-        self.title_lbl.setStyleSheet("font-size: 18px; font-weight: 600;")
-        hc_layout.addWidget(self.title_lbl)
-
-        self.summary_lbl = label("High-level architecture overview.", "muted")
+        self.header = QWidget()
+        self.header.setObjectName("docHeader")
+        self.header.setMaximumWidth(TEXT_WIDTH)
+        header_layout = QVBoxLayout(self.header)
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        header_layout.setSpacing(6)
+        self.badge_cat = label("Getting Started")  # breadcrumb: Category  ›  Article
+        self.badge_cat.setObjectName("docBreadcrumb")
+        header_layout.addWidget(self.badge_cat)
+        self.title_lbl = label("Welcome & Architecture Overview")
+        self.title_lbl.setObjectName("docTitle")
+        self.title_lbl.setWordWrap(True)
+        header_layout.addWidget(self.title_lbl)
+        self.summary_lbl = label("High-level architecture overview.")
+        self.summary_lbl.setObjectName("docSummary")
         self.summary_lbl.setWordWrap(True)
-        hc_layout.addWidget(self.summary_lbl)
+        header_layout.addWidget(self.summary_lbl)
+        page_layout.addWidget(self.header)
 
-        right_layout.addWidget(self.header_card)
+        self.divider = QFrame()
+        self.divider.setObjectName("docDivider")
+        self.divider.setFixedHeight(1)
+        self.divider.setMaximumWidth(TEXT_WIDTH)
+        page_layout.addSpacing(18)
+        page_layout.addWidget(self.divider)
+        page_layout.addSpacing(6)
 
-        # Rich Text Browser
         self.browser = QTextBrowser()
+        self.browser.setObjectName("docText")
+        self.browser.setFrameShape(QFrame.Shape.NoFrame)
         self.browser.setOpenExternalLinks(False)
         self.browser.setOpenLinks(False)
         self.browser.anchorClicked.connect(self._on_anchor_clicked)
-        right_layout.addWidget(self.browser, 1)
+        self.browser.setLineWrapMode(QTextEdit.LineWrapMode.FixedPixelWidth)
+        self.browser.setLineWrapColumnOrWidth(TEXT_WIDTH)
+        self.browser.document().setDocumentMargin(0)
+        page_layout.addWidget(self.browser, 1)
 
-        splitter.addWidget(right_container)
+        splitter.addWidget(self.page)
         splitter.setStretchFactor(0, 0)
         splitter.setStretchFactor(1, 1)
         self.splitter = splitter
         root.addWidget(splitter, 1)
+
+    def _fit_contents_width(self, cap: int = 360):
+        """Open the outline wide enough for the longest article title (up to `cap` px)."""
+        metrics = self.toc.fontMetrics()
+        longest = max((metrics.horizontalAdvance(art.title) for art in ARTICLES), default=200)
+        chrome = 2 * self.toc.frameWidth() + 2 * self.toc.indentation() + 24 + 16  # indent, padding, scrollbar
+        self.splitter.setSizes([min(cap, longest + chrome), 900])
 
     # ── Theme ───────────────────────────────────────────────────────────────────
 
@@ -189,6 +242,7 @@ class DocumentationPanel(QWidget):
         if (event.type() == QEvent.Type.PaletteChange and self._styled_for is not None
                 and self._styled_for != _theme_key()):
             self._apply_theme()
+            self._populate_articles()  # outline item colors
             scroll = self.browser.verticalScrollBar().value()
             self.select_article(self.current_article_id)  # the article's HTML carries theme colors
             self.browser.verticalScrollBar().setValue(scroll)
@@ -196,19 +250,22 @@ class DocumentationPanel(QWidget):
     def _apply_theme(self):
         """Colors for the panel's own widgets, all from the current theme."""
         self._styled_for = _theme_key()
-        border, raised = theme_color("border"), theme_color("raised")
-        self.article_list.setStyleSheet(
-            f"QListWidget {{ border: 1px solid {border}; border-radius: 6px; padding: 4px; outline: 0; }} "
-            "QListWidget::item { padding: 8px 10px; border: 0; border-radius: 4px; margin-bottom: 2px; } "
-            f"QListWidget::item:hover {{ background: {theme_color('surface')}; }} "
-            f"QListWidget::item:selected {{ background: {raised}; color: {theme_color('accent')}; "
-            "font-weight: 600; }"
+        border, accent = theme_color("border"), theme_color("accent")
+        self.toc.setStyleSheet(
+            f"QTreeWidget#docOutline {{ background: transparent; border: 0; outline: 0; }} "
+            "QTreeWidget#docOutline::item { padding: 5px 4px; border: 0; border-radius: 4px; } "
+            f"QTreeWidget#docOutline::item:hover {{ background: {theme_color('surface')}; }} "
+            f"QTreeWidget#docOutline::item:selected {{ background: {theme_color('raised')}; color: {accent}; }}"
         )
-        self.header_card.setStyleSheet(
-            f"QFrame#card {{ background: {theme_color('surface')}; border: 1px solid {border}; border-radius: 6px; }}"
-        )
-        self.browser.setStyleSheet(
-            f"QTextBrowser {{ border: 1px solid {border}; border-radius: 6px; padding: 16px; font-size: 13px; }}"
+        self.page.setStyleSheet(
+            f"QFrame#docPage {{ background: {theme_color('base')}; border: 1px solid {border}; border-radius: 10px; }} "
+            f"QLabel#docBreadcrumb {{ background: transparent; color: {accent}; font-size: 11px; font-weight: 600; "
+            "letter-spacing: 0.5px; } "
+            f"QLabel#docTitle {{ background: transparent; color: {theme_color('text')}; font-size: 24px; font-weight: 700; }} "
+            f"QLabel#docSummary {{ background: transparent; color: {theme_color('muted')}; font-size: 13px; }} "
+            f"QFrame#docDivider {{ background: {border}; border: 0; }} "
+            "QWidget#docHeader { background: transparent; } "
+            "QTextBrowser#docText { background: transparent; border: 0; padding: 0; font-size: 13px; }"
         )
         self.btn_hotkeys.setIcon(svg_icon("hotkeys", _BUTTON_ICON_COLORS, size=16))
         self.btn_hub.setIcon(svg_icon("hub", _BUTTON_ICON_COLORS, size=16))
@@ -218,114 +275,163 @@ class DocumentationPanel(QWidget):
         """Styles for an article. Qt rich text supports a CSS subset (no border-radius, no rgba,
         no :hover or :nth-child), so this keeps to what it renders, in theme colors."""
         text_col, accent_col, border = theme_color("text"), theme_color("accent"), theme_color("border")
+        mono = 'ui-monospace, Menlo, Consolas, "DejaVu Sans Mono", monospace'
         return f"""
             body {{ color: {text_col}; font-size: 13px; }}
-            h2 {{ color: {accent_col}; margin-top: 4px; margin-bottom: 12px; font-size: 18px; }}
-            h3 {{ color: {accent_col}; margin-top: 18px; margin-bottom: 8px; font-size: 15px; }}
+            h2 {{ color: {text_col}; margin-top: 18px; margin-bottom: 10px; font-size: 18px; }}
+            h3 {{ color: {text_col}; margin-top: 22px; margin-bottom: 8px; font-size: 15px; font-weight: 600; }}
+            h4 {{ color: {theme_color('muted')}; margin-top: 14px; margin-bottom: 6px; font-size: 13px; }}
+            p {{ margin-top: 0; margin-bottom: 10px; }}
             p, li {{ color: {text_col}; }}
-            code {{ color: {accent_col}; background-color: {theme_color('surface')};
-                    font-family: ui-monospace, Menlo, Consolas, "DejaVu Sans Mono", monospace; font-size: 12px; }}
-            pre {{ margin: 0; color: {text_col};
-                   font-family: ui-monospace, Menlo, Consolas, "DejaVu Sans Mono", monospace; font-size: 12px; }}
+            li {{ margin-bottom: 4px; }}
+            code {{ color: {accent_col}; background-color: {theme_color('surface')}; font-family: {mono}; font-size: 12px; }}
+            pre {{ margin: 0; color: {text_col}; font-family: {mono}; font-size: 12px; }}
             pre code {{ background-color: transparent; color: {text_col}; }}
             a {{ color: {accent_col}; text-decoration: none; font-weight: 500; }}
-            table {{ margin-top: 10px; margin-bottom: 10px; border-collapse: collapse; }}
+            table {{ margin-top: 10px; margin-bottom: 14px; border-collapse: collapse; }}
             th, td {{ padding: 8px 12px; border: 1px solid {border}; text-align: left; }}
             th {{ background-color: {theme_color('surface')}; }}
         """
 
-    # ── Articles ────────────────────────────────────────────────────────────────
+    # ── Outline ─────────────────────────────────────────────────────────────────
 
     def _populate_categories(self):
         self.cat_combo.clear()
         self.cat_combo.addItem("All Categories", "all")
-        categories = sorted({art.category for art in ARTICLES})
-        for cat in categories:
+        for cat in self._categories(ARTICLES):
             self.cat_combo.addItem(cat, cat)
 
+    @staticmethod
+    def _categories(articles) -> list[str]:
+        """Categories in the order their first article appears (the docs' reading order)."""
+        seen: list[str] = []
+        for art in articles:
+            if art.category not in seen:
+                seen.append(art.category)
+        return seen
+
     def _populate_articles(self):
-        self.article_list.clear()
+        """Rebuild the outline: category → article → section, for the articles matching the filters."""
         query = self.search_input.text().strip()
         cat = self.cat_combo.currentData()
-
         matched = search_articles(query)
         if cat and cat != "all":
             matched = [art for art in matched if art.category == cat]
 
-        for art in matched:
-            item = QListWidgetItem(f"{art.title}")
-            item.setData(Qt.ItemDataRole.UserRole, art.id)
-            item.setToolTip(f"{art.title}\n[{art.category}] {art.summary}")
-            self.article_list.addItem(item)
+        self.toc.blockSignals(True)
+        self.toc.clear()
+        category_font = _resized(self.toc.font(), 0.88)
+        category_font.setBold(True)
+        category_font.setCapitalization(QFont.Capitalization.AllUppercase)
+        category_font.setLetterSpacing(QFont.SpacingType.PercentageSpacing, 106)
+        section_font = _resized(self.toc.font(), 0.95)
+        muted, section_color = QColor(theme_color("muted")), QColor(theme_color("comment"))
 
-        if self.article_list.count() == 0:
-            empty_item = QListWidgetItem("No matching topics found")
-            empty_item.setFlags(Qt.ItemFlag.NoItemFlags)
-            self.article_list.addItem(empty_item)
+        for category in self._categories(matched):
+            cat_item = QTreeWidgetItem([category])
+            cat_item.setData(0, Qt.ItemDataRole.UserRole, (CATEGORY, None, None))
+            cat_item.setFont(0, category_font)
+            cat_item.setForeground(0, muted)
+            cat_item.setFlags(Qt.ItemFlag.ItemIsEnabled)  # a header: toggles, isn't selected
+            self.toc.addTopLevelItem(cat_item)
+            for art in (a for a in matched if a.category == category):
+                art_item = QTreeWidgetItem([art.title])
+                art_item.setData(0, Qt.ItemDataRole.UserRole, (ARTICLE, art.id, None))
+                art_item.setToolTip(0, f"{art.title}\n{art.summary}")
+                cat_item.addChild(art_item)
+                for i, section in enumerate(article_sections(art)):
+                    sec_item = QTreeWidgetItem([section])
+                    sec_item.setData(0, Qt.ItemDataRole.UserRole, (SECTION, art.id, f"sec-{i}"))
+                    sec_item.setFont(0, section_font)
+                    sec_item.setForeground(0, section_color)
+                    sec_item.setToolTip(0, section)
+                    art_item.addChild(sec_item)
+            # Searching shows every match; otherwise headers stay as the user left them
+            cat_item.setExpanded(bool(query) or category not in self._collapsed_categories)
+
+        if self.toc.topLevelItemCount() == 0:
+            empty = QTreeWidgetItem(["No matching topics found"])
+            empty.setFlags(Qt.ItemFlag.NoItemFlags)
+            self.toc.addTopLevelItem(empty)
+        self.toc.blockSignals(False)
+        self._mark_current_article()
+
+    def article_items(self) -> list[QTreeWidgetItem]:
+        """The outline's article entries, in order."""
+        items = []
+        for i in range(self.toc.topLevelItemCount()):
+            cat_item = self.toc.topLevelItem(i)
+            items.extend(cat_item.child(j) for j in range(cat_item.childCount()))
+        return items
+
+    def _remember_category(self, item: QTreeWidgetItem, expanded: bool):
+        kind, _, _ = item.data(0, Qt.ItemDataRole.UserRole) or (None, None, None)
+        if kind == CATEGORY:
+            (self._collapsed_categories.discard if expanded else self._collapsed_categories.add)(item.text(0))
+
+    def _mark_current_article(self):
+        """Select the open article and show its sections; other articles fold their sections away."""
+        for item in self.article_items():
+            current = item.data(0, Qt.ItemDataRole.UserRole)[1] == self.current_article_id
+            item.setExpanded(current)
+            if current:
+                self.toc.setCurrentItem(item)
+                self.toc.scrollToItem(item)
+
+    def _on_outline_clicked(self, item: QTreeWidgetItem, _column: int = 0):
+        kind, article_id, anchor = item.data(0, Qt.ItemDataRole.UserRole) or (None, None, None)
+        if kind == CATEGORY:
+            item.setExpanded(not item.isExpanded())
+        elif kind == ARTICLE:
+            if article_id == self.current_article_id:
+                item.setExpanded(not item.isExpanded())  # a second click folds its sections
+            else:
+                self.select_article(article_id)
+        elif kind == SECTION:
+            if article_id != self.current_article_id:
+                self.select_article(article_id)
+            self.browser.scrollToAnchor(anchor)
+
+    def _first_article_id(self):
+        items = self.article_items()
+        return items[0].data(0, Qt.ItemDataRole.UserRole)[1] if items else None
 
     def _on_search_changed(self, text: str):
         self._populate_articles()
-        if self.article_list.count() > 0:
-            first_item = self.article_list.item(0)
-            art_id = first_item.data(Qt.ItemDataRole.UserRole)
-            if art_id:
-                self.select_article(art_id)
+        first = self._first_article_id()
+        if first:
+            self.select_article(first)
 
     def _on_filter_changed(self, index: int):
         self._populate_articles()
-        if self.article_list.count() > 0:
-            first_item = self.article_list.item(0)
-            art_id = first_item.data(Qt.ItemDataRole.UserRole)
-            if art_id:
-                self.select_article(art_id)
+        first = self._first_article_id()
+        if first:
+            self.select_article(first)
 
-    def _on_article_clicked(self, item: QListWidgetItem):
-        art_id = item.data(Qt.ItemDataRole.UserRole)
-        if art_id:
-            self.select_article(art_id)
+    # ── Article ─────────────────────────────────────────────────────────────────
 
     def select_article(self, article_id: str):
-        self.current_article_id = article_id
-
-        # Update List Selection
-        for i in range(self.article_list.count()):
-            item = self.article_list.item(i)
-            if item.data(Qt.ItemDataRole.UserRole) == article_id:
-                self.article_list.setCurrentItem(item)
-                break
-
-        # Find Article
-        article: DocArticle | None = None
-        for art in ARTICLES:
-            if art.id == article_id:
-                article = art
-                break
-
+        article: DocArticle | None = next((art for art in ARTICLES if art.id == article_id), None)
         if not article:
             return
+        self.current_article_id = article_id
+        self._mark_current_article()
 
-        # Update Header Card
-        self.badge_cat.setText(article.category.upper())
+        self.badge_cat.setText(f"{article.category}  ›  {article.title}")
         self.title_lbl.setText(article.title)
         self.summary_lbl.setText(article.summary)
 
         self.browser.document().setDefaultStyleSheet(self._article_css())
-        self.browser.setHtml(f"<html><body>{_boxed_code_blocks(article.html_content)}</body></html>")
+        self.browser.setHtml(f"<html><body>{article_body(article)}</body></html>")
 
     def _on_anchor_clicked(self, url: QUrl):
         url_str = url.toString()
         if url_str.startswith("ide://"):
-            pane_id = url_str.replace("ide://", "")
-            self._navigate_ide(pane_id)
+            self._navigate_ide(url_str.replace("ide://", ""))
         elif url_str.startswith("#"):
-            # Internal anchor in document
-            self.browser.scrollToAnchor(url_str.lstrip("#"))
-        else:
-            # Check if it's an article ID link
-            for art in ARTICLES:
-                if art.id == url_str:
-                    self.select_article(art.id)
-                    return
+            self.browser.scrollToAnchor(url_str.lstrip("#"))  # internal anchor in the article
+        elif any(art.id == url_str for art in ARTICLES):
+            self.select_article(url_str)  # a link to another article
 
     # ── IDE navigation ──────────────────────────────────────────────────────────
 

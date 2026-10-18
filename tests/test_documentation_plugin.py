@@ -154,7 +154,7 @@ class TestDocumentationPlugin(unittest.TestCase):
 
         # Search filter
         panel.search_input.setText("paradigms")
-        self.assertGreater(panel.article_list.count(), 0)
+        self.assertGreater(len(panel.article_items()), 0)
 
         panel.cleanup()
 
@@ -210,8 +210,67 @@ class TestDocumentationPlugin(unittest.TestCase):
         app.processEvents()
         light = BUILTINS["Gruvbox Light"]["colors"]
         self.assertIn(light["text"], panel.browser.document().defaultStyleSheet())
-        self.assertIn(light["border"], panel.article_list.styleSheet())
+        self.assertIn(light["raised"], panel.toc.styleSheet())
         self.window.theme_manager.apply(BUILTINS["Gruvbox Dark"])
+
+    def test_outline_is_categories_articles_and_sections(self):
+        from frontend.plugins.core.documentation.content import ARTICLES
+        from frontend.plugins.core.documentation.panel import ARTICLE, CATEGORY, SECTION, article_sections
+
+        panel = DocumentationPanel(context=None)
+        self.addCleanup(panel.deleteLater)
+        role = Qt.ItemDataRole.UserRole
+        categories = [panel.toc.topLevelItem(i) for i in range(panel.toc.topLevelItemCount())]
+        self.assertEqual([c.text(0) for c in categories], list(dict.fromkeys(a.category for a in ARTICLES)))
+        self.assertTrue(all(c.data(0, role)[0] == CATEGORY and c.isExpanded() for c in categories))
+        self.assertEqual(len(panel.article_items()), len(ARTICLES))
+        for item in panel.article_items():
+            kind, article_id, _ = item.data(0, role)
+            self.assertEqual(kind, ARTICLE)
+            article = get_article_by_id(article_id)
+            sections = [item.child(i) for i in range(item.childCount())]
+            self.assertEqual([s.text(0) for s in sections], article_sections(article))
+            self.assertTrue(all(s.data(0, role)[0] == SECTION for s in sections))
+
+    def test_category_headers_collapse_and_the_open_article_shows_its_sections(self):
+        panel = DocumentationPanel(context=None)
+        self.addCleanup(panel.deleteLater)
+        header = panel.toc.topLevelItem(0)
+        panel._on_outline_clicked(header)
+        self.assertFalse(header.isExpanded())
+        panel._on_outline_clicked(header)
+        self.assertTrue(header.isExpanded())
+
+        panel.select_article("cli_workflows")
+        expanded = [i.data(0, Qt.ItemDataRole.UserRole)[1] for i in panel.article_items() if i.isExpanded()]
+        self.assertEqual(expanded, ["cli_workflows"])  # only the open article unfolds its sections
+        self.assertEqual(panel.toc.currentItem().data(0, Qt.ItemDataRole.UserRole)[1], "cli_workflows")
+
+    def test_clicking_a_section_opens_its_article_and_scrolls_to_it(self):
+        panel = DocumentationPanel(context=None)
+        self.addCleanup(panel.deleteLater)
+        panel.resize(1200, 700)
+        panel.show()
+        app.processEvents()
+        item = next(i for i in panel.article_items() if i.data(0, Qt.ItemDataRole.UserRole)[1] == "launching")
+        last_section = item.child(item.childCount() - 1)
+        panel._on_outline_clicked(last_section)
+        app.processEvents()
+        self.assertEqual(panel.current_article_id, "launching")
+        self.assertGreater(panel.browser.verticalScrollBar().value(), 0)
+
+    def test_page_header_replaces_the_articles_own_title(self):
+        from frontend.plugins.core.documentation.panel import TEXT_WIDTH, article_body
+
+        article = get_article_by_id("overview")
+        body = article_body(article)
+        self.assertNotIn("<h2>", body.split("<h3>")[0])  # the header titles the page; no second headline
+        self.assertIn('<h3><a name="sec-0"></a>', body)
+        panel = DocumentationPanel(context=None)
+        self.addCleanup(panel.deleteLater)
+        self.assertEqual(panel.title_lbl.text(), article.title)
+        self.assertIn(article.category, panel.badge_cat.text())
+        self.assertEqual(panel.browser.lineWrapColumnOrWidth(), TEXT_WIDTH)
 
     def test_state_persistence_in_settings(self):
         """Enabled and disabled states persist across sessions in settings.toml."""
