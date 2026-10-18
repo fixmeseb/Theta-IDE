@@ -112,6 +112,7 @@ class DocumentationPanel(QWidget):
         self._collapsed_categories: set[str] = set()
         self._expanded_articles: set[str] = {"overview"}
         self._anchor_tops: list[tuple[float, str]] | None = None  # (y, anchor) of each section; lazily
+        self._last_heading_scroll: float | None = None
         self._active_section: str | None = None
         self._init_ui()
         self._populate_categories()
@@ -433,11 +434,18 @@ class DocumentationPanel(QWidget):
         return super().eventFilter(watched, event)
 
     def _pad_document_end(self):
-        """Leave a view's height of room after the last line, so that any section, the last one
-        included, can scroll up to the top of the view (as an editor's "scroll past end" does)."""
-        frame = self.browser.document().rootFrame()
+        """Leave just enough room after the last line for the last section to scroll to the top of the
+        view, and no more: the page then stops scrolling exactly there. Articles whose last section
+        already reaches the top get no room at all."""
+        doc = self.browser.document()
+        frame = doc.rootFrame()
         fmt = frame.frameFormat()
-        room = self.browser.viewport().height()
+        self._section_tops()  # measures the last heading's scroll position
+        target = self._last_heading_scroll
+        room = 0.0
+        if target is not None:
+            content_end = doc.documentLayout().documentSize().height() - fmt.bottomMargin()
+            room = max(0.0, target + self.browser.viewport().height() - content_end)
         if abs(fmt.bottomMargin() - room) >= 1:
             fmt.setBottomMargin(room)
             frame.setFrameFormat(fmt)
@@ -446,8 +454,10 @@ class DocumentationPanel(QWidget):
         self._anchor_tops = None  # re-measured on the next scroll: the text re-flowed
 
     def _section_tops(self) -> list[tuple[float, str]]:
-        """(y, anchor) for each section heading in the open article, top to bottom."""
+        """(y, anchor) for each section heading in the open article, top to bottom. Also notes where
+        the view scrolls to when the last heading is put at its top."""
         if self._anchor_tops is None:
+            self._last_heading_scroll = None
             doc = self.browser.document()
             layout = doc.documentLayout()
             tops: dict[str, float] = {}
@@ -460,6 +470,7 @@ class DocumentationPanel(QWidget):
                         for name in fragment.charFormat().anchorNames():
                             if name.startswith("sec-") and name not in tops:
                                 tops[name] = layout.blockBoundingRect(block).top()
+                                self._last_heading_scroll = tops[name]  # scrollToAnchor aligns the block's top
                     it += 1
                 block = block.next()
             self._anchor_tops = sorted((y, name) for name, y in tops.items())
@@ -544,8 +555,8 @@ class DocumentationPanel(QWidget):
 
         self.browser.document().setDefaultStyleSheet(self._article_css())
         self.browser.setHtml(f"<html><body>{article_body(article)}</body></html>")
+        self._anchor_tops = None  # the new article's headings; measured by the padding below
         self._pad_document_end()  # setHtml resets the root frame's format
-        self._anchor_tops = None
         self._mark_current_article()
 
     def _set_expanded_in_outline(self, article_id: str):

@@ -301,7 +301,7 @@ class TestDocumentationPlugin(unittest.TestCase):
         self.assertEqual([anchor for _, _, anchor in selected[1:]], [f"sec-{i}" for i in range(sections)])
 
     def test_clicking_any_section_puts_it_at_the_top(self):
-        """Even an article's last sections: the page leaves room after its last line."""
+        """Even an article's last sections: the page leaves just enough room after its last line."""
         for width, height in ((1400, 800), (1000, 500)):
             panel = self.shown_panel(width, height)
             for article_id in ("launching", "ui_panels", "results_browser", "cli_workflows"):
@@ -315,6 +315,10 @@ class TestDocumentationPlugin(unittest.TestCase):
                     offset = heading_y - panel.browser.verticalScrollBar().value()
                     self.assertTrue(-40 <= offset <= 2, (article_id, anchor, offset))
                     self.assertEqual(panel.toc.currentItem().data(0, Qt.ItemDataRole.UserRole)[2], anchor)
+                # The room after the last line is just enough: nothing left to scroll past the last section
+                bar = panel.browser.verticalScrollBar()
+                if panel.browser.document().rootFrame().frameFormat().bottomMargin() > 0:
+                    self.assertLessEqual(bar.maximum() - bar.value(), 1, article_id)
 
     def test_clicking_a_section_opens_its_article_and_scrolls_to_it(self):
         panel = DocumentationPanel(context=None)
