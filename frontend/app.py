@@ -1149,12 +1149,18 @@ class Window(QMainWindow):
     def backend_health_callback(self, data, error):
         if not hasattr(self, "settings_backend_status"):
             return
+        self._backend_ok = not error
         if error:
             self.settings_backend_status.setText(f"Status: Unavailable ({error})")
-            self.settings_backend_status.setStyleSheet(f"color: {theme_color('number')};")
         else:
             self.settings_backend_status.setText(f"Status: Ready · composes {data['base_experiment']} in-process")
-            self.settings_backend_status.setStyleSheet(f"color: {theme_color('primary')};")
+        self.color_backend_status()
+
+    def color_backend_status(self):
+        """Colour the pipeline status by the last check's result, in the current theme."""
+        ok = getattr(self, "_backend_ok", None)
+        if ok is not None and hasattr(self, "settings_backend_status"):
+            self.settings_backend_status.setStyleSheet(f"color: {theme_color('primary' if ok else 'number')};")
 
     def run_quick_command(self, command):
         self.tabs.setCurrentWidget(self.console_panel)
@@ -1425,7 +1431,8 @@ class Window(QMainWindow):
         if hasattr(self, "settings_ascii"):
             self.settings_ascii.update()
         if hasattr(self, "settings_backend_status"):
-            self.test_backend_connection()
+            # Recolour only: re-running the check would recompose the whole pipeline config.
+            self.color_backend_status()
         if hasattr(self, "terminal_panel"):
             self.terminal_panel.apply_theme(self.theme_manager.active)
         if hasattr(self, "settings_view"):
