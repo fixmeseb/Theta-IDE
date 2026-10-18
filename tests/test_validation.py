@@ -265,3 +265,18 @@ def test_offline_rl_method_missing_agent_raises(mock_yaml, mock_cfg_offline):
     with pytest.raises(ConfigurationError, match="requires an agent harness"):
         validate_experiment_config(mock_cfg_offline, "test_exp")
 
+
+def test_agent_supported_paradigms_from_installed_manifest(tmp_path, monkeypatch):
+    """Component manifests (.theta_component.json) in methods directory define supported paradigms."""
+    import json
+    from src.app.pipeline.validation import _get_agent_supported_paradigms
+
+    method_dir = tmp_path / "src" / "usr" / "methods" / "custom_agent"
+    method_dir.mkdir(parents=True, exist_ok=True)
+    manifest = method_dir / ".theta_component.json"
+    manifest.write_text(json.dumps({"id": "custom_agent", "paradigms": ["offline_rl"]}), encoding="utf-8")
+
+    monkeypatch.chdir(tmp_path)
+    paradigms = _get_agent_supported_paradigms("custom_agent")
+    assert paradigms == ["offline_rl"]
+

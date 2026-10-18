@@ -418,6 +418,31 @@ def _get_agent_supported_paradigms(agent_algo: str) -> list[str] | None:
                         return [str(paradigms).lower()]
                 except Exception:
                     pass
+
+    # Search installed component manifests in src/usr/methods/
+    methods_dir = Path("src/usr/methods")
+    if methods_dir.exists():
+        candidates = [
+            methods_dir / agent_algo,
+            methods_dir / clean_algo,
+            methods_dir / (agent_algo.split("/")[0] if "/" in agent_algo else agent_algo),
+            methods_dir / (clean_algo.split("_")[0] if "_" in clean_algo else clean_algo),
+        ]
+        for candidate_dir in candidates:
+            if candidate_dir.is_dir():
+                for meta_file in [candidate_dir / ".theta_component.json", candidate_dir / "plugin.json"]:
+                    if meta_file.is_file():
+                        try:
+                            import json
+                            meta = json.loads(meta_file.read_text(encoding="utf-8"))
+                            paradigms = meta.get("paradigms") or meta.get("compatible_paradigms")
+                            if paradigms:
+                                if isinstance(paradigms, list):
+                                    return [str(x).lower() for x in paradigms]
+                                return [str(paradigms).lower()]
+                        except Exception:
+                            pass
+
     return None
 
 

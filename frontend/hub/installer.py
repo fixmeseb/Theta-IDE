@@ -328,6 +328,8 @@ class HubInstaller:
                 "config_path": installed_config_rel,
                 "config_paths": installed_config_paths,
             })
+            if hasattr(component, "extra") and isinstance(component.extra, dict) and "paradigms" in component.extra:
+                meta["paradigms"] = component.extra["paradigms"]
 
             if is_root_relative:
                 target_dir.mkdir(parents=True, exist_ok=True)
