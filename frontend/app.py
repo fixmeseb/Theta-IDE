@@ -51,6 +51,7 @@ from .about import AboutDialog
 from .app_icon import DESKTOP_FILE_NAME, ICON_PATH, app_icon, install_desktop_entry, set_windows_app_id
 from .components_panel import ComponentsPanel
 from .config_tree import ConfigTreeWidget
+from .config_model import config_fingerprint
 from .config_viewer import ConfigViewer
 from .config_tab_manager import ConfigTabManager
 from .hub import HubClient, HubDialog
@@ -1345,6 +1346,8 @@ class Window(QMainWindow):
         if hasattr(self, "settings_view") and hasattr(self.settings_view, "refresh_styles"):
             if self.settings_view.isVisible():
                 self.settings_view.refresh_styles()
+            else:
+                self._settings_styles_stale = True  # restyled when the Settings tab is next shown
 
         # 6. Update appearance UI zoom controls if built
         if hasattr(self, "zoom_slider") and self.zoom_slider:
@@ -1373,9 +1376,12 @@ class Window(QMainWindow):
             if hasattr(self.components_panel, "viewer") and self.components_panel.viewer and self.components_panel.viewer.is_dirty:
                 self.components_panel.save_current()
 
-        # Invalidate the config tree cache so the active panel sees fresh models/agents/envs
-        from .config_viewer import invalidate_config_tree
-        invalidate_config_tree()
+        # Refresh the config panels only when something under in/config changed since they last
+        # loaded (the Components panel, a hub install, an edit in the terminal). Reloading on every
+        # switch rebuilt the tree and re-rendered the open form each time (~0.5s).
+        if self._configs_changed_since(self):
+            from .config_viewer import invalidate_config_tree
+            invalidate_config_tree()  # other panels read the shared tree too
 
         w = self.tabs.widget(index)
         if hasattr(w, "activate") and callable(w.activate):
@@ -1385,13 +1391,14 @@ class Window(QMainWindow):
         if w is getattr(self, "config_panel", None):
             if hasattr(self, "config_tab_manager"):
                 active_v = self.config_tab_manager.current_viewer()
-                if active_v and hasattr(active_v, "reload_data"):
+                if active_v and hasattr(active_v, "reload_data") and self._configs_changed_since(active_v):
                     active_v.reload_data(force_tree_refresh=True)
 
         # If switching to components_panel, refresh viewer
         if w is getattr(self, "components_panel", None):
-            if hasattr(self.components_panel, "viewer") and hasattr(self.components_panel.viewer, "reload_data"):
-                self.components_panel.viewer.reload_data(force_tree_refresh=True)
+            viewer = getattr(self.components_panel, "viewer", None)
+            if hasattr(viewer, "reload_data") and self._configs_changed_since(viewer):
+                viewer.reload_data(force_tree_refresh=True)
 
         if self.tabs.widget(index) is self.queue_panel:
             self.on_queue_changed(self.jobs.queue_state())
@@ -1404,7 +1411,17 @@ class Window(QMainWindow):
             self.test_backend_connection()
             if hasattr(self, "settings_view"):
                 self.settings_view.reset_to_ascii()
-                self.settings_view.refresh_styles()
+                # Theme changes restyle it immediately; only a zoom made while it was hidden is pending.
+                if getattr(self, "_settings_styles_stale", False):
+                    self._settings_styles_stale = False
+                    self.settings_view.refresh_styles()
+
+    def _configs_changed_since(self, holder) -> bool:
+        """True if in/config changed since `holder` last checked; remembers the new state on it."""
+        fingerprint = config_fingerprint(self.config_tree.root_dir)
+        changed = getattr(holder, "_config_fingerprint", None) != fingerprint
+        holder._config_fingerprint = fingerprint
+        return changed
 
     def show_about(self):
         if hasattr(self, "settings_panel"):

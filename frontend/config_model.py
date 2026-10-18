@@ -10,6 +10,7 @@ selection turns into.
 
 from __future__ import annotations
 
+import copy
 import re
 import shlex
 from dataclasses import dataclass, field
@@ -27,12 +28,35 @@ _ALLOW_FLAGS = {
 _GROUPS = ("paradigms", "env", "agent", "model", "site")
 
 
+# path -> (file bytes, parsed value). The tree is rebuilt often (every save invalidates it) but
+# usually only one file changed, and parsing is what costs: reading the bytes is ~100x cheaper.
+# Keyed on the exact contents, not mtime, so two quick same-size writes can't return stale data.
+_PARSED: dict[Path, tuple[bytes, Any]] = {}
+
+
 def _read_yaml(path: Path) -> dict[str, Any]:
     try:
-        with path.open() as handle:
-            return yaml.safe_load(handle) or {}
+        data = path.read_bytes()
+        cached = _PARSED.get(path)
+        if cached is not None and cached[0] == data:
+            parsed = cached[1]
+        else:
+            parsed = yaml.safe_load(data) or {}
+            _PARSED[path] = (data, parsed)
     except (OSError, yaml.YAMLError):
         return {}
+    return copy.deepcopy(parsed)  # callers may mutate what they get; the cache must not change
+
+
+def config_fingerprint(config_root: Path) -> int:
+    """A hash of every YAML file under `config_root` (paths and contents): equal means unchanged."""
+    entries = []
+    for path in sorted(Path(config_root).rglob("*.yaml")):
+        try:
+            entries.append((str(path), path.read_bytes()))
+        except OSError:
+            continue
+    return hash(tuple(entries))
 
 
 def _yaml_files(directory: Path) -> list[Path]:
@@ -288,6 +312,7 @@ class ConfigTree:
 
     def __init__(self, config_root: Path):
         self.config_root = Path(config_root)
+        self._experiment_groups: dict[str, ExperimentGroup] | None = None
         self.paradigms = {p.stem: Paradigm.from_file(p) for p in _yaml_files(self.config_root / "paradigms")}
         agent_dir = self.config_root / "agent"
         self.agents = {}
@@ -331,6 +356,7 @@ class ConfigTree:
         """Create a new organizational folder under an experiment group."""
         folder = self.config_root / "experiment" / group / subpath
         folder.mkdir(parents=True, exist_ok=True)
+        self.refresh_groups()
         return folder
 
     def rename_folder(self, old_path: Path | str, new_name: str) -> Path:
@@ -340,6 +366,7 @@ class ConfigTree:
         if new_p.exists() and not old_p.samefile(new_p):
             raise FileExistsError(f"A folder named '{new_name}' already exists.")
         old_p.rename(new_p)
+        self.refresh_groups()
         return new_p
 
     def delete_folder(self, folder_path: Path | str) -> bool:
@@ -348,6 +375,7 @@ class ConfigTree:
         folder_p = Path(folder_path)
         if folder_p.is_dir():
             shutil.rmtree(folder_p)
+            self.refresh_groups()
             return True
         return False
 
@@ -414,10 +442,19 @@ class ConfigTree:
 
     @property
     def experiment_groups(self) -> dict[str, ExperimentGroup]:
-        root = self.config_root / "experiment"
-        if not root.is_dir():
-            return {}
-        return {d.name: ExperimentGroup.from_dir(d) for d in sorted(root.iterdir()) if d.is_dir()}
+        # Built once per tree: group() alone reads it up to three times. Folder edits through this
+        # tree reset it; anything else that changes in/config invalidates the whole tree.
+        if self._experiment_groups is None:
+            root = self.config_root / "experiment"
+            self._experiment_groups = (
+                {d.name: ExperimentGroup.from_dir(d) for d in sorted(root.iterdir()) if d.is_dir()}
+                if root.is_dir() else {}
+            )
+        return self._experiment_groups
+
+    def refresh_groups(self) -> None:
+        """Re-read the experiment groups on next use (after writing a group's folder or _base.yaml)."""
+        self._experiment_groups = None
 
     def group(self, name: str) -> ExperimentGroup:
         if not name:
