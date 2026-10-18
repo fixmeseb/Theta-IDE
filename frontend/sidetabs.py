@@ -7,6 +7,7 @@ by the top or bottom edge of another item reorders instead, and dropping it outs
 The bar's structure is `entries`, the top-level items in order: tab ids and bin ids. Each bin keeps its own
 `members`. `tab_order`, the flat order of every tab that the rest of the app reads, is derived from it.
 """
+import functools
 from pathlib import Path
 
 from PyQt6.QtCore import QByteArray, QEvent, QMimeData, QPoint, QRectF, QSize, Qt, QTimer, pyqtSignal
@@ -43,11 +44,21 @@ def svg_icon(name, colors, size=ICON_SIZE):
         source_path = p  # explicit path, e.g. a plugin's own icon
     else:
         return QIcon()
-    source = source_path.read_text(encoding="utf-8")
     ratio = QApplication.instance().devicePixelRatio() if QApplication.instance() else 1.0
+    # Resolve roles to colors here so the cache key changes with the theme.
+    resolved = tuple((mode, state, theme_color(role)) for (mode, state), role in colors.items())
+    # A copy: QIcon is implicitly shared, so a caller that modifies its icon detaches from the cache.
+    return QIcon(_render_svg_icon(source_path.read_bytes(), resolved, size, ratio))
+
+
+@functools.lru_cache(maxsize=1024)
+def _render_svg_icon(source: bytes, colors: tuple, size: int, ratio: float) -> QIcon:
+    """Render one icon. Cached: the UI asks for the same ~40 icons ~160 times while starting up,
+    and again on every theme switch. Keyed on the file's bytes, so an edited icon is re-rendered."""
+    text = source.decode("utf-8")
     icon = QIcon()
-    for (mode, state), role in colors.items():
-        renderer = QSvgRenderer(QByteArray(source.replace("currentColor", theme_color(role)).encode("utf-8")))
+    for mode, state, color in colors:
+        renderer = QSvgRenderer(QByteArray(text.replace("currentColor", color).encode("utf-8")))
         pixmap = QPixmap(round(size * ratio), round(size * ratio))
         pixmap.fill(Qt.GlobalColor.transparent)
         painter = QPainter(pixmap)
