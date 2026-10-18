@@ -371,6 +371,57 @@ def test_list_runs_rereads_a_changed_config_and_hands_out_copies(logs):
     assert again["config"]["seed"] == 1234 and "tampered" not in again["metadata"]
 
 
+def new_session():
+    """Forget the catalog's in-memory caches, as a freshly started app would have."""
+    for cache in catalog._PERSISTED_CACHES.values():
+        cache.clear()
+    catalog._persisted_loaded_for = None
+
+
+def test_summaries_are_kept_between_sessions(logs, monkeypatch):
+    write_run(logs, "g", "a")
+    write_run(logs, "g", "b")
+    first = catalog.list_runs()
+    assert catalog._summary_cache_file().is_file()
+
+    new_session()
+    monkeypatch.setattr(catalog, "_read_agent_summary", lambda *a: pytest.fail("re-parsed an unchanged metrics.csv"))
+    monkeypatch.setattr(catalog, "_read_config_summary", lambda *a: pytest.fail("re-parsed an unchanged config.yaml"))
+    key = lambda run: (run["group"], run["experiment_id"])
+    assert sorted(catalog.list_runs(), key=key) == sorted(first, key=key)
+
+
+def test_a_run_changed_or_deleted_between_sessions_is_noticed(logs):
+    import shutil
+
+    changed = write_run(logs, "g", "changed", versions={0: ([1.0, 2.0], True)})
+    gone = write_run(logs, "g", "gone")
+    catalog.list_runs()
+    new_session()
+    with open(changed / "ppo" / "version_0" / "metrics.csv", "a", encoding="utf-8") as f:
+        f.write(",500.0,9000.0\n")
+    shutil.rmtree(gone)
+    runs = {run["experiment_id"]: run for run in catalog.list_runs()}
+    assert runs["changed"]["agents"][0]["best_reward"] == 500.0
+    assert "gone" not in runs
+    saved = json.loads(catalog._summary_cache_file().read_text(encoding="utf-8"))
+    assert not any("gone" in path for path in saved["agents"])
+
+
+def test_an_unusable_cache_file_never_breaks_listing(logs, monkeypatch, tmp_path):
+    write_run(logs, "g", "a")
+    catalog._summary_cache_file().parent.mkdir(parents=True)
+    catalog._summary_cache_file().write_text("{not json", encoding="utf-8")
+    new_session()
+    assert [run["experiment_id"] for run in catalog.list_runs()] == ["a"]
+
+    blocker = tmp_path / "not_a_folder"
+    blocker.write_text("", encoding="utf-8")
+    monkeypatch.setattr(catalog, "_summary_cache_file", lambda: blocker / "cache.json")  # can't be written
+    new_session()
+    assert [run["experiment_id"] for run in catalog.list_runs()] == ["a"]
+
+
 def _write_artifacts(logs):
     """A run with plots, checkpoints and TensorBoard files next to its logs, plus another run's file."""
     results = logs.parent

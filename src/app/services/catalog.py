@@ -10,6 +10,7 @@ import copy
 import csv
 import io
 import json
+import os
 import threading
 from collections import OrderedDict
 from pathlib import Path
@@ -81,6 +82,76 @@ _SUMMARY_CACHE: dict[Path, tuple[tuple, dict[str, Any] | None]] = {}
 _CONFIG_SUMMARY_CACHE: dict[Path, tuple[tuple, dict[str, Any]]] = {}
 _RUN_METADATA_CACHE: dict[Path, tuple[tuple, dict[str, Any]]] = {}
 
+# The caches above are also kept on disk between sessions: without them, the first list_runs of a session
+# parses every metrics.csv (~9 s for 900 agents). Every entry keeps the stamp it was read at and is only
+# reused while the file still matches it, as in memory, so a run that changed while the app was closed is
+# read again. The file is a convenience: if it can't be read or written, listing works as before.
+_PERSISTED_CACHES = {"agents": _SUMMARY_CACHE, "configs": _CONFIG_SUMMARY_CACHE, "metadata": _RUN_METADATA_CACHE}
+_PERSISTED_FORMAT = 1
+_persisted_loaded_for: Path | None = None  # the LOGS_DIR whose cache file has been read this session
+_cache_dirty = False  # an entry was computed since the cache file was last written
+
+
+def _summary_cache_file() -> Path:
+    return LOGS_DIR.parent / ".cache" / "catalog-summaries.json"
+
+
+def _as_tuples(value):
+    """JSON turns the stamps' tuples into lists; turn them back so stamps compare equal."""
+    return tuple(_as_tuples(v) for v in value) if isinstance(value, list) else value
+
+
+def _load_persisted_summaries() -> None:
+    global _persisted_loaded_for
+    if _persisted_loaded_for == LOGS_DIR:
+        return
+    _persisted_loaded_for = LOGS_DIR
+    try:
+        data = json.loads(_summary_cache_file().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    if not isinstance(data, dict) or data.get("format") != _PERSISTED_FORMAT or data.get("logs_dir") != str(LOGS_DIR):
+        return
+    for name, cache in _PERSISTED_CACHES.items():
+        entries = data.get(name)
+        if not isinstance(entries, dict):
+            continue
+        for key, entry in entries.items():
+            if isinstance(entry, list) and len(entry) == 2:
+                cache.setdefault(Path(key), (_as_tuples(entry[0]), entry[1]))  # this session's entries win
+
+
+def _save_persisted_summaries(seen: dict[str, set[Path]]) -> None:
+    """Keep only entries for paths this listing saw (runs deleted since drop out), and write the file
+    if anything changed. Written to a temporary file and renamed, so a reader never sees half of it."""
+    global _cache_dirty
+    pruned = False
+    for name, cache in _PERSISTED_CACHES.items():
+        for key in [k for k in cache if k not in seen[name]]:
+            del cache[key]
+            pruned = True
+    if not (_cache_dirty or pruned):
+        return
+    data: dict[str, Any] = {"format": _PERSISTED_FORMAT, "logs_dir": str(LOGS_DIR)}
+    for name, cache in _PERSISTED_CACHES.items():
+        entries = {}
+        for key, (stamp, value) in cache.items():
+            try:
+                json.dumps(value, allow_nan=True)  # values JSON can't hold (a YAML date) stay in memory only
+            except (TypeError, ValueError):
+                continue
+            entries[str(key)] = [stamp, value]
+        data[name] = entries
+    target = _summary_cache_file()
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        temporary = target.with_name(f"{target.name}.{os.getpid()}.tmp")
+        temporary.write_text(json.dumps(data), encoding="utf-8")
+        os.replace(temporary, target)
+        _cache_dirty = False
+    except OSError:
+        pass  # e.g. a read-only results folder: the next session reads the files again
+
 
 def _file_stamp(path: Path | None) -> tuple:
     if path is None:
@@ -108,7 +179,13 @@ def agent_summary(agent_dir: Path) -> dict[str, Any] | None:
         return cached[1]
     summary = _read_agent_summary(agent_dir, runtime_file, metrics_file)
     _SUMMARY_CACHE[key] = (stamp, summary)
+    _mark_cache_dirty()
     return summary
+
+
+def _mark_cache_dirty() -> None:
+    global _cache_dirty
+    _cache_dirty = True
 
 
 def _read_agent_summary(agent_dir: Path, runtime_file: Path | None, metrics_file: Path | None) -> dict[str, Any] | None:
@@ -155,6 +232,7 @@ def _cached_by_stamp(cache: dict, path: Path, load):
         return copy.deepcopy(cached[1])
     value = load(path)
     cache[path] = (stamp, value)
+    _mark_cache_dirty()
     return copy.deepcopy(value)  # callers get their own copy; the cached one must not change
 
 
@@ -205,15 +283,17 @@ def list_runs() -> list[dict[str, Any]]:
     runs = []
     if not LOGS_DIR.exists():
         return runs
+    _load_persisted_summaries()
+    seen: dict[str, set[Path]] = {name: set() for name in _PERSISTED_CACHES}
     for run_dir in LOGS_DIR.glob("*/*"):
         if not run_dir.is_dir():
             continue
         metadata = _cached_by_stamp(_RUN_METADATA_CACHE, run_dir / "runtime.json", _read_run_metadata)
-        agents = [
-            summary
-            for agent_dir in sorted(p for p in run_dir.iterdir() if p.is_dir())
-            if (summary := agent_summary(agent_dir)) is not None
-        ]
+        agent_dirs = sorted(p for p in run_dir.iterdir() if p.is_dir())
+        seen["metadata"].add(run_dir / "runtime.json")
+        seen["configs"].add(run_dir / "config.yaml")
+        seen["agents"].update(agent_dirs)
+        agents = [summary for agent_dir in agent_dirs if (summary := agent_summary(agent_dir)) is not None]
         runs.append(
             {
                 "group": run_dir.parent.name,
@@ -224,6 +304,7 @@ def list_runs() -> list[dict[str, Any]]:
                 "finished": bool(agents) and all(agent["finished"] for agent in agents),
             }
         )
+    _save_persisted_summaries(seen)
     return runs
 
 
