@@ -55,7 +55,7 @@ theme = "Catppuccin"
 # Display zoom factor (1.0 = 100%). Use Cmd++ / Cmd+- to resize.
 zoom = 1.0
 
-# Enable the rotating 3-D ASCII sculpture on the Settings & About panel.
+# Enable the rotating 3-D ASCII sculpture on the About page.
 ascii_animation = true
 ascii_speed = 1.0
 ascii_size = 1.0

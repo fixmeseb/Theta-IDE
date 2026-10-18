@@ -14,7 +14,6 @@ try:
     app = QApplication.instance() or QApplication(sys.argv[:1])
     from frontend.about import AsciiTheta, AnimationSettingsDialog, AboutDialog
     from frontend.settings import SettingsManager
-    from frontend.settings_view import AsciiThetaSplash
     from frontend.app import Window
     HAS_PYQT6 = True
 except ImportError:
@@ -186,12 +185,10 @@ class TestSettingsViewAndAboutIntegration(unittest.TestCase):
         self.window.close()
         self.temp_dir.cleanup()
 
-    def test_animation_settings_button_on_splash(self):
-        btn = self.settings.ascii_splash.anim_settings_btn
+    def test_animation_settings_button_on_about_page(self):
+        btn = self.window.about_view.anim_btn
         self.assertIsNotNone(btn)
-        self.assertEqual(btn.text(), "Animation Settings")
-        self.assertIs(self.window.anim_toggle_btn, btn)
-        self.assertIs(self.window.anim_settings_btn, btn)
+        self.assertEqual(btn.text(), "Animation settings…")
 
     def test_animation_settings_button_on_about_dialog(self):
         about = AboutDialog()

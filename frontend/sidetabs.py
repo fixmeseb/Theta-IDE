@@ -401,7 +401,8 @@ class SideTabBar(QWidget):
 class SideTabs(QWidget):
     """Icon-over-label buttons stacked on the left, with the pages in a QStackedWidget beside them."""
     currentChanged = pyqtSignal(int)
-    logoClicked = pyqtSignal()
+    logoClicked = pyqtSignal()  # the logo opens About
+    settingsClicked = pyqtSignal()  # the gear opens Settings
     tabOrderChanged = pyqtSignal(list)  # also emitted when bins change, so the layout is saved
     tabVisibilityChanged = pyqtSignal(str, bool)
     tabsChanged = pyqtSignal()  # a tab was added or removed (plugins add theirs after the window is built)
@@ -419,12 +420,27 @@ class SideTabs(QWidget):
         self.bar_layout.setSpacing(3)
         self.bar_layout.addStretch()
 
+        # Settings and About sit at the bottom, outside the reorderable tabs: the gear, then the logo
+        self.settings_button = QToolButton()
+        self.settings_button.setObjectName("sideTab")
+        self.settings_button.setCheckable(True)
+        self.settings_button.setAutoRaise(True)
+        self.settings_button.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextUnderIcon)
+        self.settings_button.setText("Settings")
+        self.settings_button.setToolTip("Settings")
+        self.settings_button.setAccessibleName("Settings")
+        self.settings_button.setIconSize(QSize(ICON_SIZE, ICON_SIZE))
+        self.settings_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+        self.settings_button.setIcon(svg_icon("gear", TAB_ICON_COLORS))
+        self.settings_button.clicked.connect(self._on_settings_clicked)
+        self.bar_layout.addWidget(self.settings_button)
+
         self.logo_button = QToolButton()
         self.logo_button.setObjectName("sideTabLogo")
         self.logo_button.setCheckable(True)
         self.logo_button.setAutoRaise(True)
-        self.logo_button.setToolTip("Settings & About")
-        self.logo_button.setAccessibleName("ThetaIDE Settings & About")
+        self.logo_button.setToolTip("About ThetaIDE")
+        self.logo_button.setAccessibleName("About ThetaIDE")
         self.logo_button.setIconSize(QSize(36, 36))
         self.logo_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.logo_button.setCursor(Qt.CursorShape.PointingHandCursor)
@@ -459,6 +475,8 @@ class SideTabs(QWidget):
         self._bin_serial = 0
         self.settings_widget = None
         self.settings_index = -1
+        self.about_widget = None
+        self.about_index = -1
 
     @property
     def buttons(self):
@@ -881,6 +899,7 @@ class SideTabs(QWidget):
         for b in self.bins.values():
             b["header"].setIcon(svg_icon("bin_expanded" if b["expanded"] else "bin_collapsed",
                                          TAB_ICON_COLORS, size=10))
+        self.settings_button.setIcon(svg_icon("gear", TAB_ICON_COLORS))
         self.set_logo_icon()
         self.bar.update()
 
@@ -947,10 +966,23 @@ class SideTabs(QWidget):
         self.settings_index = self.stack.addWidget(widget)
         return self.settings_index
 
-    def _on_logo_clicked(self):
-        self.logoClicked.emit()
+    def set_about_widget(self, widget):
+        self.about_widget = widget
+        self.about_index = self.stack.addWidget(widget)
+        return self.about_index
+
+    def _on_settings_clicked(self):
+        self.settingsClicked.emit()
         if self.settings_widget is not None:
             self.setCurrentWidget(self.settings_widget)
+        else:
+            self.settings_button.setChecked(False)
+
+    def _on_logo_clicked(self):
+        self.logoClicked.emit()
+        target = self.about_widget if self.about_widget is not None else self.settings_widget
+        if target is not None:
+            self.setCurrentWidget(target)
 
     def widget(self, index):
         return self.stack.widget(index)
@@ -964,14 +996,10 @@ class SideTabs(QWidget):
         self.setCurrentWidget(self.stack.widget(index))
 
     def setCurrentWidget(self, widget):
-        if widget is self.settings_widget:
-            for item in self.tabs.values():
-                item["button"].setChecked(False)
-            self.logo_button.setChecked(True)
-        else:
-            self.logo_button.setChecked(False)
-            for item in self.tabs.values():
-                item["button"].setChecked(item["widget"] is widget)
+        self.settings_button.setChecked(widget is not None and widget is self.settings_widget)
+        self.logo_button.setChecked(widget is not None and widget is self.about_widget)
+        for item in self.tabs.values():
+            item["button"].setChecked(item["widget"] is widget)
         if widget is not None and widget != self.stack.currentWidget():
             self.stack.setCurrentWidget(widget)
             self.currentChanged.emit(self.stack.indexOf(widget))
