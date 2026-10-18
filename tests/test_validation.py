@@ -60,8 +60,8 @@ def mock_cfg_supervised():
 @pytest.fixture(autouse=True)
 def _register_test_agents():
     """Register test agent components with declared supported paradigms."""
-    from src.usr.methods.agent_registry import AGENT_REGISTRY, register_agent
-    from src.usr.methods.base_agent import OfflineAgentBase, OnlineAgentBase
+    from src.usr.algorithms.agent_registry import AGENT_REGISTRY, register_agent
+    from src.usr.algorithms.base_agent import OfflineAgentBase, OnlineAgentBase
 
     old_registry = AGENT_REGISTRY.copy()
 
@@ -271,7 +271,7 @@ def test_agent_supported_paradigms_from_installed_manifest(tmp_path, monkeypatch
     import json
     from src.app.pipeline.validation import _get_agent_supported_paradigms
 
-    method_dir = tmp_path / "src" / "usr" / "methods" / "custom_agent"
+    method_dir = tmp_path / "src" / "usr" / "algorithms" / "custom_agent"
     method_dir.mkdir(parents=True, exist_ok=True)
     manifest = method_dir / ".theta_component.json"
     manifest.write_text(json.dumps({"id": "custom_agent", "paradigms": ["offline_rl"]}), encoding="utf-8")

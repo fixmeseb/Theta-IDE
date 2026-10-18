@@ -151,7 +151,7 @@ class EPSepsisDataModule(L.LightningDataModule, BaseDataModule):
         _, self.input_dim = self.get_training_sequences()
 
     def _compute_cql_v_values(self, checkpoint: str) -> np.ndarray:
-        from src.usr.methods.agent_registry import get_agent_class
+        from src.usr.algorithms.agent_registry import get_agent_class
         CQLAgent = get_agent_class("cql")
 
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")

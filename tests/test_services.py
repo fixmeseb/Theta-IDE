@@ -15,8 +15,8 @@ from src.app.services.metrics import MetricsTail, latest_metrics_csv, read_metri
 
 @pytest.fixture(autouse=True)
 def _register_test_agents():
-    from src.usr.methods.agent_registry import AGENT_REGISTRY, register_agent
-    from src.usr.methods.base_agent import OfflineAgentBase
+    from src.usr.algorithms.agent_registry import AGENT_REGISTRY, register_agent
+    from src.usr.algorithms.base_agent import OfflineAgentBase
 
     @register_agent("cql")
     class MockCQL(OfflineAgentBase):

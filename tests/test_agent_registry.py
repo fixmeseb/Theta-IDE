@@ -1,12 +1,20 @@
 import pytest
 
-from src.usr.methods.agent_registry import AGENT_REGISTRY, get_agent_class, list_registered_agents, register_agent
+from src.usr.algorithms.agent_registry import (
+    AGENT_REGISTRY,
+    ALGORITHM_REGISTRY,
+    auto_discover,
+    get_agent_class,
+    get_algorithm_class,
+    list_registered_agents,
+    list_registered_algorithms,
+    register_agent,
+    register_algorithm,
+)
 
 
 @pytest.fixture(autouse=True)
 def clean_registry():
-    from src.usr.methods.agent_registry import auto_discover
-
     auto_discover()
     original = AGENT_REGISTRY.copy()
     AGENT_REGISTRY.clear()
@@ -72,3 +80,15 @@ def test_list_registered_agents():
     assert isinstance(agents, list)
     assert "a_algo" in agents
     assert "z_algo" in agents
+
+
+def test_algorithm_aliases():
+    @register_algorithm("custom_algo")
+    class CustomAlgo:
+        pass
+
+    assert "custom_algo" in ALGORITHM_REGISTRY
+    assert get_algorithm_class("custom_algo") is CustomAlgo
+    algos = list_registered_algorithms()
+    assert "custom_algo" in algos
+

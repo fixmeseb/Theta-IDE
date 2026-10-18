@@ -1,7 +1,7 @@
 type: base
 description: "Online RL with a live simulator (PPO, BlendRL online, etc.)."
 runner: OnlineRLRunner
-data_module: SimulatorDataModule
+default_data_module: SimulatorDataModule
 eval_protocol: EpisodicRewardEvalProtocol
 allows_eval_episodes: true
 default_callbacks:

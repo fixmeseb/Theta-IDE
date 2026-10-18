@@ -46,8 +46,12 @@ class HubInstaller:
         # Standard conventions
         if component.kind == "plugin":
             return self.data_dir / "plugins" / component.id
-        elif component.kind in ("method", "agent"):
-            return self.workspace_dir / "src" / "usr" / "methods" / component.id
+        elif component.kind in ("method", "agent", "algorithm"):
+            return self.workspace_dir / "src" / "usr" / "algorithms" / component.id
+        elif component.kind in ("datamodule", "data"):
+            return self.workspace_dir / "src" / "usr" / "data" / component.id
+        elif component.kind in ("evaluator", "eval"):
+            return self.workspace_dir / "src" / "usr" / "eval" / component.id
         elif component.kind == "model":
             return self.workspace_dir / "src" / "usr" / "models" / component.id
         elif component.kind == "env":
@@ -71,7 +75,7 @@ class HubInstaller:
             if component.id in ("dnn", "nature_cnn", "dueling_resnet"):
                 return self.workspace_dir / "in" / "config" / "model" / "basics" / f"{component.id}.yaml"
             return self.workspace_dir / "in" / "config" / "model" / f"{component.id}.yaml"
-        elif component.kind in ("method", "agent"):
+        elif component.kind in ("method", "agent", "algorithm"):
             return self.workspace_dir / "in" / "config" / "agent" / f"{component.id}.yaml"
         elif component.kind == "env":
             return self.workspace_dir / "in" / "config" / "env" / f"{component.id}.yaml"

@@ -62,7 +62,7 @@ class PluginScaffolder:
                 error="Component name cannot be empty.",
             )
 
-        valid_kinds = {"model", "agent", "env", "datamodule", "evaluator"}
+        valid_kinds = {"model", "agent", "algorithm", "env", "datamodule", "evaluator"}
         if options.kind not in valid_kinds:
             return ScaffoldResult(
                 success=False,
@@ -74,7 +74,7 @@ class PluginScaffolder:
         try:
             if options.kind == "model":
                 return self._scaffold_model(clean_name, options)
-            elif options.kind == "agent":
+            elif options.kind in ("agent", "algorithm"):
                 return self._scaffold_agent(clean_name, options)
             elif options.kind == "env":
                 return self._scaffold_env(clean_name, options)
@@ -294,7 +294,7 @@ dependencies = ["torch>=2.0.0"]
         return ScaffoldResult(success=True, component_id=name, target_dir=target_dir, created_files=created)
 
     def _scaffold_agent(self, name: str, opts: ScaffoldOptions) -> ScaffoldResult:
-        target_dir = opts.output_dir or (self.workspace_root / "src" / "usr" / "methods" / name)
+        target_dir = opts.output_dir or (self.workspace_root / "src" / "usr" / "algorithms" / name)
         target_dir.mkdir(parents=True, exist_ok=True)
         created: list[Path] = []
 
@@ -314,10 +314,10 @@ import torch.optim as optim
 
 from src.app.core.model_registry import build_model
 from src.app.core.protocols import AuxiliaryLossProtocol, OptimizerGroupsProtocol
-from src.usr.methods.agent_registry import register_agent
+from src.usr.algorithms.agent_registry import register_agent, register_algorithm
 
 
-@register_agent("{name}")
+@register_algorithm("{name}")
 class {class_name}(L.LightningModule):
     """Pluggable RL agent extending PyTorch Lightning."""
 
@@ -387,12 +387,12 @@ epochs: 10
         meta = {
             "id": name,
             "name": class_name,
-            "kind": "method",
+            "kind": "algorithm",
             "version": opts.version,
             "description": desc,
             "author": {"name": opts.author},
             "created_at": datetime.now(timezone.utc).isoformat(),
-            "target_path": f"src/usr/methods/{name}",
+            "target_path": f"src/usr/algorithms/{name}",
             "config_path": f"in/config/agent/{name}.yaml",
             "compatibility": {"theta": ">=2.0.0"},
             "paradigms": paradigms,
@@ -414,7 +414,7 @@ description = "{desc}"
 dependencies = ["torch>=2.0.0", "lightning>=2.0.0"]
 
 [project.entry-points."theta.agents"]
-{name} = "src.usr.methods.{name}.{name}_agent:{class_name}"
+{name} = "src.usr.algorithms.{name}.{name}_agent:{class_name}"
 """
         pyproject_file.write_text(pyproject_content, encoding="utf-8")
         created.append(pyproject_file)

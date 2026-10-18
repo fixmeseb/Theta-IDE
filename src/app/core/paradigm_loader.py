@@ -145,7 +145,7 @@ def load_paradigm_definition(paradigm_name: str) -> ParadigmDefinition:
         type=raw.get("type", "base"),
         description=raw.get("description", ""),
         runner_cls=get_component(raw.get("runner")),
-        data_module_cls=get_component(raw.get("data_module")),
+        data_module_cls=get_component(raw.get("data_module") or raw.get("default_data_module")),
         eval_protocol_cls=get_component(raw.get("eval_protocol")),
         default_callback_names=raw.get("default_callbacks") or [],
         raw=raw,

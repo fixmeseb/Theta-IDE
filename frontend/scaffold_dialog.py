@@ -66,7 +66,7 @@ class ScaffoldPluginDialog(QDialog):
         layout.addWidget(label("COMPONENT ARCHETYPE", "eyebrow"))
         self.combo_kind = QComboBox()
         self.combo_kind.addItem("Model Architecture (src/usr/models/)", "model")
-        self.combo_kind.addItem("RL Algorithm / Agent (src/usr/methods/)", "agent")
+        self.combo_kind.addItem("RL Algorithm / Agent (src/usr/algorithms/)", "algorithm")
         self.combo_kind.addItem("Environment & Grounding (in/envs/)", "env")
         self.combo_kind.addItem("DataModule & Sampler (src/usr/data/)", "datamodule")
         self.combo_kind.addItem("Evaluator & Verification Hook (src/usr/eval/)", "evaluator")
@@ -179,12 +179,12 @@ class ScaffoldPluginDialog(QDialog):
                 f"• src/usr/models/{name}/pyproject.toml",
                 f"• in/config/model/{name}.yaml",
             ]
-        elif kind == "agent":
+        elif kind in ("agent", "algorithm"):
             lines = [
-                f"• src/usr/methods/{name}/{name}_agent.py",
-                f"• src/usr/methods/{name}/__init__.py",
-                f"• src/usr/methods/{name}/.theta_component.json",
-                f"• src/usr/methods/{name}/pyproject.toml",
+                f"• src/usr/algorithms/{name}/{name}_agent.py",
+                f"• src/usr/algorithms/{name}/__init__.py",
+                f"• src/usr/algorithms/{name}/.theta_component.json",
+                f"• src/usr/algorithms/{name}/pyproject.toml",
                 f"• in/config/agent/{name}.yaml",
             ]
         elif kind == "env":

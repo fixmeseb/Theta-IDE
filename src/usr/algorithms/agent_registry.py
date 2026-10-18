@@ -75,31 +75,47 @@ def get_agent_class(algo_name: str):
 
 
 def auto_discover():
-    """Import all modules in src/usr/methods/ to trigger @register_agent decorators.
+    """Import all modules in src/usr/algorithms/ (and src/usr/methods/) to trigger @register_agent decorators.
 
     Called once at startup (e.g., in train.py) to ensure all agents are registered
     before get_agent_class() is used.
     """
     import sys
 
-    methods_dir = os.path.dirname(os.path.abspath(__file__))
-    usr_dir = os.path.dirname(methods_dir)
+    algorithms_dir = os.path.dirname(os.path.abspath(__file__))
+    usr_dir = os.path.dirname(algorithms_dir)
     src_dir = os.path.dirname(usr_dir)
     project_root = os.path.dirname(src_dir)
-    for p in (project_root, src_dir, usr_dir, methods_dir):
-        if p not in sys.path:
+    methods_dir = os.path.join(usr_dir, "methods")
+
+    for p in (project_root, src_dir, usr_dir, algorithms_dir, methods_dir):
+        if os.path.isdir(p) and p not in sys.path:
             sys.path.insert(0, p)
 
-    for module_info in pkgutil.iter_modules([methods_dir]):
+    # Discover in src/usr/algorithms
+    for module_info in pkgutil.iter_modules([algorithms_dir]):
         if module_info.name.startswith("_") or module_info.name in (
             "agent_registry",
             "base_agent",
         ):
             continue
         try:
-            importlib.import_module(f"src.usr.methods.{module_info.name}")
+            importlib.import_module(f"src.usr.algorithms.{module_info.name}")
         except Exception as e:
-            print(f"[Warning] Failed to auto-discover agent module '{module_info.name}': {e}")
+            print(f"[Warning] Failed to auto-discover algorithm module '{module_info.name}': {e}")
+
+    # Discover in src/usr/methods (legacy fallback if directory exists)
+    if os.path.isdir(methods_dir):
+        for module_info in pkgutil.iter_modules([methods_dir]):
+            if module_info.name.startswith("_") or module_info.name in (
+                "agent_registry",
+                "base_agent",
+            ):
+                continue
+            try:
+                importlib.import_module(f"src.usr.methods.{module_info.name}")
+            except Exception as e:
+                print(f"[Warning] Failed to auto-discover legacy agent module '{module_info.name}': {e}")
 
 
 def list_registered_agents():
@@ -107,8 +123,8 @@ def list_registered_agents():
     auto_discover()
     agents = set(AGENT_REGISTRY.keys())
     # Discover configured agent algorithms from in/config/agent/
-    methods_dir = os.path.dirname(os.path.abspath(__file__))
-    project_root = os.path.dirname(os.path.dirname(os.path.dirname(methods_dir)))
+    algorithms_dir = os.path.dirname(os.path.abspath(__file__))
+    project_root = os.path.dirname(os.path.dirname(os.path.dirname(algorithms_dir)))
     agent_cfg_dir = os.path.join(project_root, "in", "config", "agent")
     if os.path.isdir(agent_cfg_dir):
         for root, _, files in os.walk(agent_cfg_dir):
@@ -117,3 +133,10 @@ def list_registered_agents():
                     stem = f.rsplit(".", 1)[0]
                     agents.add(stem)
     return sorted(agents)
+
+
+# Semantic aliases aligning Algorithm terminology
+register_algorithm = register_agent
+get_algorithm_class = get_agent_class
+list_registered_algorithms = list_registered_agents
+ALGORITHM_REGISTRY = AGENT_REGISTRY

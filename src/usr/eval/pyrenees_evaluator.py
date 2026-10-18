@@ -16,7 +16,7 @@ class PyreneesEvaluator:
         self.tier_names = [("Low Tier", 0), ("Med Tier", 1), ("High Tier", 2)]
 
     def _load_agent(self, path):
-        from src.usr.methods.agent_registry import AGENT_REGISTRY, auto_discover, get_agent_class
+        from src.usr.algorithms.agent_registry import AGENT_REGISTRY, auto_discover, get_agent_class
 
         auto_discover()
         candidates = []

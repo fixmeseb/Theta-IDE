@@ -45,7 +45,7 @@ except Exception as e:
 
 from src.app.core.lightning_builder import build_trainer, finalize_training
 from src.app.data.rl_data_module import RLDataModule
-from src.usr.methods.agent_registry import auto_discover, get_agent_class
+from src.usr.algorithms.agent_registry import auto_discover, get_agent_class
 
 
 @hydra.main(version_base=None, config_path="../../in/config", config_name="config")
@@ -77,13 +77,37 @@ def main(cfg: DictConfig):
 
     paradigm_def = load_paradigm_definition(paradigm_name)
 
-    # 1. Resolve Data Module from explicit config or paradigm definition
-    dm_name = cfg.get("data_module") or (cfg.env.get("data_module") if hasattr(cfg, "env") else None)
-    DataModuleCls = get_component(dm_name) if dm_name else paradigm_def.data_module_cls
-    if DataModuleCls is None:
-        DataModuleCls = RLDataModule
+    # 1. Resolve Data Module from explicit config (CLI > experiment > group > env) or paradigm fallback
+    from src.app.core.datamodule_registry import get_datamodule_class
 
-    datamodule = DataModuleCls(cfg)
+    dm_cfg = cfg.get("data_module")
+    if dm_cfg is None and hasattr(cfg, "env") and hasattr(cfg.env, "get"):
+        dm_cfg = cfg.env.get("data_module")
+
+    dm_name = None
+    dm_params = {}
+    if isinstance(dm_cfg, str):
+        dm_name = dm_cfg
+    elif hasattr(dm_cfg, "get"):
+        dm_name = dm_cfg.get("name") or dm_cfg.get("class") or dm_cfg.get("type")
+        dm_params = {k: v for k, v in dm_cfg.items() if k not in ("name", "class", "type", "params")}
+        if "params" in dm_cfg and hasattr(dm_cfg["params"], "items"):
+            dm_params.update(dict(dm_cfg["params"]))
+
+    DataModuleCls = None
+    if dm_name:
+        DataModuleCls = get_datamodule_class(dm_name) or get_component(dm_name)
+
+    if DataModuleCls is None:
+        DataModuleCls = paradigm_def.data_module_cls or RLDataModule
+
+    try:
+        if dm_params:
+            datamodule = DataModuleCls(cfg, **dm_params)
+        else:
+            datamodule = DataModuleCls(cfg)
+    except TypeError:
+        datamodule = DataModuleCls(cfg)
 
     # 2. Build Model / Agent based on paradigm
     # Driven by whether the paradigm declares agents, not by its name, so an

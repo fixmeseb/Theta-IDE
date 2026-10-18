@@ -34,7 +34,7 @@ except ImportError:
 
 @pytest.fixture(autouse=True)
 def _register_test_agents():
-    from src.usr.methods.agent_registry import register_agent
+    from src.usr.algorithms.agent_registry import register_agent
 
     @register_agent("cql")
     class MockCQL(nn.Module):
@@ -240,7 +240,7 @@ def test_walk_model_modules_composite():
 def test_base_agent_callback_discovery_without_hardcoding():
     if not HAS_CEW_BLENDRL:
         pytest.skip("cew plugin is not installed")
-    from src.usr.methods.base_agent import OfflineAgentBase
+    from src.usr.algorithms.base_agent import OfflineAgentBase
 
     cew = CEWModel(n_inputs=4, n_actions=2)
     dummy_agent = DummyAgent(q_model=cew)
@@ -251,7 +251,7 @@ def test_base_agent_callback_discovery_without_hardcoding():
 
 
 def test_base_agent_dynamic_rebind_detection():
-    from src.usr.methods.base_agent import OfflineAgentBase
+    from src.usr.algorithms.base_agent import OfflineAgentBase
 
     dynamic_model = DummyDynamicModel()
     target_model = DummyDynamicModel()
@@ -288,7 +288,7 @@ def test_standard_gymnasium_vector_env_resolution():
 def test_cql_agent_instantiates_with_neural_models():
     from omegaconf import OmegaConf
 
-    from src.usr.methods.agent_registry import get_agent_class
+    from src.usr.algorithms.agent_registry import get_agent_class
     CQLAgent = get_agent_class("cql")
     from src.usr.models.neural.architectures import MLPQNetwork
     from src.usr.models.neural.resnet import DuelingResNetMLP
@@ -382,7 +382,7 @@ def test_paradigm_definition_and_data_modules():
 def test_iql_agent_instantiates_with_neural_models():
     from omegaconf import OmegaConf
 
-    from src.usr.methods.agent_registry import get_agent_class
+    from src.usr.algorithms.agent_registry import get_agent_class
     IQLAgent = get_agent_class("iql")
     from src.usr.models.neural.architectures import CNNActor, MLPQNetwork, MLPValueNetwork
     from src.usr.models.neural.resnet import DuelingResNetMLP
@@ -423,7 +423,7 @@ def test_iql_agent_instantiates_with_neural_models():
 def test_hybrid_detection_helpers():
     from omegaconf import OmegaConf
 
-    from src.usr.methods.base_agent import BaseAgent
+    from src.usr.algorithms.base_agent import BaseAgent
 
     class DummyAgent(BaseAgent):
         def training_step(self, batch, batch_idx):
@@ -470,7 +470,7 @@ def test_hybrid_detection_helpers():
 
 
 def test_agent_initialization_with_plain_dicts():
-    from src.usr.methods.agent_registry import get_agent_class
+    from src.usr.algorithms.agent_registry import get_agent_class
     CQLAgent = get_agent_class("cql")
     IQLAgent = get_agent_class("iql")
     PPOAgent = get_agent_class("ppo")
@@ -530,7 +530,7 @@ def test_custom_third_party_composite_plugin_end_to_end():
     """Verify that any third-party composite plugin can implement the protocols and run with standard RL algorithms with ZERO BlendRL dependencies."""
     from src.app.core.protocols import ModelSlot, CompositeModelProtocol, AuxiliaryLossProtocol, OptimizerGroupsProtocol
     from src.app.core.model_registry import register_model, build_model
-    from src.usr.methods.agent_registry import get_agent_class
+    from src.usr.algorithms.agent_registry import get_agent_class
     PPOAgent = get_agent_class("ppo")
     import torch.nn as nn
 

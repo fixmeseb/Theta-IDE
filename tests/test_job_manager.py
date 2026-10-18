@@ -28,8 +28,8 @@ app = QApplication.instance() or QApplication(sys.argv[:1])
 
 @pytest.fixture(autouse=True)
 def _register_test_agents():
-    from src.usr.methods.agent_registry import AGENT_REGISTRY, register_agent
-    from src.usr.methods.base_agent import OfflineAgentBase
+    from src.usr.algorithms.agent_registry import AGENT_REGISTRY, register_agent
+    from src.usr.algorithms.base_agent import OfflineAgentBase
 
     @register_agent("cql")
     class MockCQL(OfflineAgentBase):

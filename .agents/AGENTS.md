@@ -167,15 +167,17 @@ Priority: CLI flags > experiment `resources:` > site config > hardcoded fallback
 
 ---
 
-## 9. Agent & Model Implementation Guide
-Agents are PyTorch Lightning Modules in `src/usr/methods/` (registered in `agent_registry.py`):
-- `PPOAgent`: Standard online actor-critic RL.
-- `IQLAgent`: Offline RL using Implicit Q-Learning.
-- `CQLAgent`: Offline RL using Conservative Q-Learning.
-- **Model Architecture Selection:** All models live in `src/usr/models/` and are registered via `@register_model`. Instantiated through `build_model()` (`src/app/core/model_registry.py`).
-- **Algorithm-Model Decoupling:** Algorithms interact with policy models via duck-typed protocols: `ForwardModelProtocol`, `AuxiliaryLossProtocol`, and `OptimizerGroupsProtocol`.
-
-See `pipeline-crud` skill for step-by-step instructions on adding new agents.
+## 9. Algorithm, Model, Data & Evaluator Implementation Guide
+- **Algorithms (`src/usr/algorithms/`):** PyTorch Lightning Modules registered via `@register_algorithm` (or `@register_agent`):
+  - Online RL: PPOAgent, SB3 runner, CleanRL runner.
+  - Offline RL: CQLAgent, IQLAgent, D3RLPy runner.
+- **Models (`src/usr/models/`):** Registered via `@register_model` and built through `build_model()` (`src/app/core/model_registry.py`).
+  - Duck-typed protocols: `ForwardModelProtocol`, `AuxiliaryLossProtocol`, `OptimizerGroupsProtocol`.
+- **Data Modules (`src/usr/data/`):** Registered via `@register_datamodule` and resolved via `get_datamodule_class()` (`src/app/core/datamodule_registry.py`).
+  - Declared/overridden at CLI > Experiment > Group (`_base.yaml`) > Env, falling back to paradigm `default_data_module`.
+- **Checkpoints & Evaluators (`src/usr/eval/`):**
+  - Checkpoints: Declaratively configured via `checkpoint: { monitor, mode, save_top_k, every_n_epochs }`.
+  - Evaluators: Registered via `@register_evaluator` and resolved through `src/app/core/eval_registry.py`.
 
 ---
 

@@ -95,7 +95,7 @@ def paradigm_uses_static_dataset(paradigm_name: str | None) -> bool:
         defn = load_paradigm(paradigm_name or "")
     except ConfigurationError:
         return False
-    data_module = defn.get("data_module")
+    data_module = defn.get("data_module") or defn.get("default_data_module")
     return bool(data_module and data_module != "SimulatorDataModule")
 
 
@@ -362,7 +362,7 @@ def _get_agent_supported_paradigms(agent_algo: str) -> list[str] | None:
     """Query supported paradigms from agent class or config YAML."""
     clean_algo = agent_algo.lower().replace("-", "_")
     try:
-        from src.usr.methods.agent_registry import AGENT_REGISTRY, auto_discover, get_agent_class
+        from src.usr.algorithms.agent_registry import AGENT_REGISTRY, auto_discover, get_agent_class
         if not AGENT_REGISTRY:
             auto_discover()
         agent_cls = None
@@ -419,29 +419,29 @@ def _get_agent_supported_paradigms(agent_algo: str) -> list[str] | None:
                 except Exception:
                     pass
 
-    # Search installed component manifests in src/usr/methods/
-    methods_dir = Path("src/usr/methods")
-    if methods_dir.exists():
-        candidates = [
-            methods_dir / agent_algo,
-            methods_dir / clean_algo,
-            methods_dir / (agent_algo.split("/")[0] if "/" in agent_algo else agent_algo),
-            methods_dir / (clean_algo.split("_")[0] if "_" in clean_algo else clean_algo),
-        ]
-        for candidate_dir in candidates:
-            if candidate_dir.is_dir():
-                for meta_file in [candidate_dir / ".theta_component.json", candidate_dir / "plugin.json"]:
-                    if meta_file.is_file():
-                        try:
-                            import json
-                            meta = json.loads(meta_file.read_text(encoding="utf-8"))
-                            paradigms = meta.get("paradigms") or meta.get("compatible_paradigms")
-                            if paradigms:
-                                if isinstance(paradigms, list):
-                                    return [str(x).lower() for x in paradigms]
-                                return [str(paradigms).lower()]
-                        except Exception:
-                            pass
+    # Search installed component manifests in src/usr/algorithms/ and src/usr/methods/
+    for base_dir in [Path("src/usr/algorithms"), Path("src/usr/methods")]:
+        if base_dir.exists():
+            candidates = [
+                base_dir / agent_algo,
+                base_dir / clean_algo,
+                base_dir / (agent_algo.split("/")[0] if "/" in agent_algo else agent_algo),
+                base_dir / (clean_algo.split("_")[0] if "_" in clean_algo else clean_algo),
+            ]
+            for candidate_dir in candidates:
+                if candidate_dir.is_dir():
+                    for meta_file in [candidate_dir / ".theta_component.json", candidate_dir / "plugin.json"]:
+                        if meta_file.is_file():
+                            try:
+                                import json
+                                meta = json.loads(meta_file.read_text(encoding="utf-8"))
+                                paradigms = meta.get("paradigms") or meta.get("compatible_paradigms")
+                                if paradigms:
+                                    if isinstance(paradigms, list):
+                                        return [str(x).lower() for x in paradigms]
+                                    return [str(paradigms).lower()]
+                            except Exception:
+                                pass
 
     return None
 
@@ -450,7 +450,7 @@ def _agent_exists(agent_algo: str) -> bool:
     """Check whether an agent is known to the registry or has a config file."""
     clean_algo = agent_algo.lower().replace("-", "_")
     try:
-        from src.usr.methods.agent_registry import AGENT_REGISTRY, auto_discover
+        from src.usr.algorithms.agent_registry import AGENT_REGISTRY, auto_discover
         if not AGENT_REGISTRY:
             auto_discover()
         if clean_algo in AGENT_REGISTRY or agent_algo in AGENT_REGISTRY:

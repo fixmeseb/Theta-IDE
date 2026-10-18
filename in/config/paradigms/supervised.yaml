@@ -1,7 +1,7 @@
 type: base
 description: "Supervised learning on labeled static data (classifiers, regressors, sequence models)"
 runner: SupervisedRunner
-data_module: SupervisedDataModule
+default_data_module: SupervisedDataModule
 eval_protocol: ClassificationEvalProtocol
 default_callbacks:
   - EarlyStoppingCallback

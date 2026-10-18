@@ -53,7 +53,7 @@ def get_known_algorithms() -> set[str]:
     """Return all known algorithm names, including any registered dynamically."""
     algos = set(_KNOWN_ALGORITHMS)
     try:
-        from src.usr.methods.agent_registry import AGENT_REGISTRY
+        from src.usr.algorithms.agent_registry import AGENT_REGISTRY
 
         algos.update(AGENT_REGISTRY.keys())
     except Exception:

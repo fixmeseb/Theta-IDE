@@ -1,7 +1,7 @@
 type: base
 description: "Offline RL on a static transition dataset (CQL, IQL, etc.)"
 runner: OfflineRLRunner
-data_module: RLReplayBufferDataModule
+default_data_module: RLReplayBufferDataModule
 eval_protocol: OfflineRLEvalProtocol
 default_callbacks:
   - ModelCheckpointCallback
