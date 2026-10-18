@@ -245,6 +245,7 @@ class DocumentationPanel(QWidget):
         # The outline follows the reading position: the section whose heading has scrolled to the top
         self.browser.verticalScrollBar().valueChanged.connect(self._sync_outline_to_scroll)
         self.browser.document().documentLayout().documentSizeChanged.connect(self._forget_anchor_tops)
+        self.browser.viewport().installEventFilter(self)  # resizes: keep the room after the last line
         page_layout.addWidget(self.browser, 1)
 
         splitter.addWidget(self.page)
@@ -426,6 +427,21 @@ class DocumentationPanel(QWidget):
 
     # ── Following the reading position ──────────────────────────────────────────
 
+    def eventFilter(self, watched, event):
+        if watched is self.browser.viewport() and event.type() == QEvent.Type.Resize:
+            self._pad_document_end()
+        return super().eventFilter(watched, event)
+
+    def _pad_document_end(self):
+        """Leave a view's height of room after the last line, so that any section, the last one
+        included, can scroll up to the top of the view (as an editor's "scroll past end" does)."""
+        frame = self.browser.document().rootFrame()
+        fmt = frame.frameFormat()
+        room = self.browser.viewport().height()
+        if abs(fmt.bottomMargin() - room) >= 1:
+            fmt.setBottomMargin(room)
+            frame.setFrameFormat(fmt)
+
     def _forget_anchor_tops(self, *_):
         self._anchor_tops = None  # re-measured on the next scroll: the text re-flowed
 
@@ -450,23 +466,18 @@ class DocumentationPanel(QWidget):
         return self._anchor_tops
 
     def current_section(self) -> str | None:
-        """The anchor of the section being read: the last heading above a reading line.
-
-        The line sits just below the top of the view at the start and slides down to just above its
-        bottom as the page reaches its end. With a fixed line near the top, headings in the last
-        screenful never reached it (a short article could skip from its first section to its last)."""
-        bar = self.browser.verticalScrollBar()
-        tops = self._section_tops()
-        span = max(0, self.browser.viewport().height() - 48)
-        progress = bar.value() / bar.maximum() if bar.maximum() > 0 else 0.0
-        line = bar.value() + 24 + progress * span
+        """The anchor of the section being read: the last heading at or above the top of the view.
+        (The room after the last line lets every heading get there, so the line can stay fixed.)"""
+        line = self.browser.verticalScrollBar().value() + 24  # a heading just below the top edge counts
         current = None
-        for y, name in tops:
+        for y, name in self._section_tops():
             if y <= line:
                 current = name
         return current
 
     def _sync_outline_to_scroll(self, *_):
+        """Select the section being read (or the article, above its first section). This is the only
+        indicator, so the selected entry is always where the page is."""
         anchor = self.current_section()
         if anchor == self._active_section:
             return
@@ -475,14 +486,13 @@ class DocumentationPanel(QWidget):
                         if i.data(0, Qt.ItemDataRole.UserRole)[1] == self.current_article_id), None)
         if article is None:
             return
-        normal, active = QColor(theme_color("comment")), QColor(theme_color("accent"))
-        for j in range(article.childCount()):
-            section = article.child(j)
-            is_active = section.data(0, Qt.ItemDataRole.UserRole)[2] == anchor
-            font = section.font(0)
-            font.setBold(is_active)
-            section.setFont(0, font)
-            section.setForeground(0, active if is_active else normal)
+        target = next((article.child(j) for j in range(article.childCount())
+                       if article.child(j).data(0, Qt.ItemDataRole.UserRole)[2] == anchor), article)
+        if not target.isHidden() and (target is article or article.isExpanded()):
+            self.toc.setCurrentItem(target)
+            self.toc.scrollToItem(target)
+        else:
+            self.toc.setCurrentItem(article)  # its sections are folded away: the article stands for them
 
     def _on_outline_clicked(self, item: QTreeWidgetItem, _column: int = 0):
         kind, article_id, anchor = item.data(0, Qt.ItemDataRole.UserRole) or (None, None, None)
@@ -534,6 +544,7 @@ class DocumentationPanel(QWidget):
 
         self.browser.document().setDefaultStyleSheet(self._article_css())
         self.browser.setHtml(f"<html><body>{article_body(article)}</body></html>")
+        self._pad_document_end()  # setHtml resets the root frame's format
         self._anchor_tops = None
         self._mark_current_article()
 

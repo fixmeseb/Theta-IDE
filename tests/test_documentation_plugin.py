@@ -276,24 +276,45 @@ class TestDocumentationPlugin(unittest.TestCase):
         self.assertEqual(panel.current_article_id, "launching")
         self.assertEqual(self.expanded_articles(panel), ["launching"])
 
-    def test_outline_follows_the_reading_position(self):
+    def shown_panel(self, width=1400, height=800):
         panel = DocumentationPanel(context=None)
         self.addCleanup(panel.deleteLater)
-        panel.resize(1400, 800)
+        panel.resize(width, height)
         panel.show()
+        app.processEvents()
+        return panel
+
+    def test_selection_follows_the_reading_position(self):
+        """One indicator: the selected outline entry is the section being read."""
+        panel = self.shown_panel()
         panel.select_article("launching")
         app.processEvents()
         bar = panel.browser.verticalScrollBar()
-        seen = []
-        for value in list(range(0, bar.maximum(), 10)) + [bar.maximum()]:
+        selected = []
+        for value in range(0, bar.maximum() + 1, 10):
             bar.setValue(value)
-            if not seen or seen[-1] != panel.current_section():
-                seen.append(panel.current_section())
+            current = panel.toc.currentItem().data(0, Qt.ItemDataRole.UserRole)
+            if not selected or selected[-1] != current:
+                selected.append(current)
         sections = self.article_item(panel, "launching").childCount()
-        self.assertEqual(seen, [None] + [f"sec-{i}" for i in range(sections)])  # every section, in order
-        item = self.article_item(panel, "launching")
-        bold = [item.child(j).text(0) for j in range(item.childCount()) if item.child(j).font(0).bold()]
-        self.assertEqual(bold, [item.child(sections - 1).text(0)])  # the section being read is highlighted
+        self.assertEqual(selected[0], ("article", "launching", None))  # above the first section
+        self.assertEqual([anchor for _, _, anchor in selected[1:]], [f"sec-{i}" for i in range(sections)])
+
+    def test_clicking_any_section_puts_it_at_the_top(self):
+        """Even an article's last sections: the page leaves room after its last line."""
+        for width, height in ((1400, 800), (1000, 500)):
+            panel = self.shown_panel(width, height)
+            for article_id in ("launching", "ui_panels", "results_browser", "cli_workflows"):
+                item = self.article_item(panel, article_id)
+                for j in range(item.childCount()):
+                    section = self.article_item(panel, article_id).child(j)
+                    anchor = section.data(0, Qt.ItemDataRole.UserRole)[2]
+                    panel._on_outline_clicked(section)
+                    app.processEvents()
+                    heading_y = dict((name, y) for y, name in panel._section_tops())[anchor]
+                    offset = heading_y - panel.browser.verticalScrollBar().value()
+                    self.assertTrue(-40 <= offset <= 2, (article_id, anchor, offset))
+                    self.assertEqual(panel.toc.currentItem().data(0, Qt.ItemDataRole.UserRole)[2], anchor)
 
     def test_clicking_a_section_opens_its_article_and_scrolls_to_it(self):
         panel = DocumentationPanel(context=None)
