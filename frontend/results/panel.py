@@ -172,6 +172,7 @@ class ResultsPanel(QWidget):
         self.explorer.setMinimumWidth(220)
         self.explorer.selection_changed.connect(self._selection_changed)
         self.explorer.manifest_wanted.connect(self.loader.load_manifest)
+        self.explorer.refresh_requested.connect(self.refresh)
         self.tabs = QTabWidget()
         self.tabs.setDocumentMode(True)
         self.tab_corner = QWidget()  # buttons a layout puts beside the tabs (the Control rail's Export)

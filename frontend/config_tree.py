@@ -251,24 +251,43 @@ def find_config_root():
     return (Path(__file__).resolve().parent.parent / "in" / "config").resolve()
 
 
+def group_heading_font(base: QFont) -> QFont:
+    """The bold, larger font of a group heading (cartpole, mimic, ...) in the experiment and results trees."""
+    font = QFont(base)
+    font.setPointSize(max(base.pointSize() + 2, 14) if base.pointSize() > 0 else 14)
+    font.setBold(True)
+    return font
+
+
+def square_tool_button(icon_name: str, tooltip: str = "") -> QToolButton:
+    """A 30 × 30 header button with a themed SVG icon, like the experiment tree's (refresh_icons recolors it)."""
+    button = QToolButton()
+    button.setProperty("svg_icon", icon_name)
+    button.setIcon(svg_icon(icon_name, TOOL_ICON_COLORS))
+    button.setIconSize(QSize(16, 16))
+    button.setFixedSize(30, 30)
+    button.setStyleSheet("padding: 0;")
+    button.setToolTip(tooltip)
+    button.setAccessibleName(tooltip)
+    return button
+
+
 class GroupItemDelegate(QStyledItemDelegate):
     """Delegate rendering larger text, subtle underline, and extra vertical breathing room for group nodes."""
 
+    def is_group(self, index) -> bool:
+        """Whether `index` is a group heading (the experiment tree marks them in its item data)."""
+        data = index.data(Qt.ItemDataRole.UserRole)
+        return isinstance(data, dict) and bool(data.get("is_group"))
+
     def initStyleOption(self, option, index):
         super().initStyleOption(option, index)
-        data = index.data(Qt.ItemDataRole.UserRole)
-        if isinstance(data, dict) and data.get("is_group"):
-            f = QFont(option.font)
-            base_pt = option.font.pointSize()
-            target_pt = max(base_pt + 4, 16) if base_pt > 0 else 16
-            f.setPointSize(target_pt)
-            f.setBold(True)
-            option.font = f
+        if self.is_group(index):
+            option.font = group_heading_font(option.font)
 
     def paint(self, painter, option, index):
         super().paint(painter, option, index)
-        data = index.data(Qt.ItemDataRole.UserRole)
-        if isinstance(data, dict) and data.get("is_group"):
+        if self.is_group(index):
             painter.save()
             painter.setPen(QPen(QColor("#504945"), 1))
             y = option.rect.bottom() - 1
@@ -279,8 +298,7 @@ class GroupItemDelegate(QStyledItemDelegate):
         opt = QStyleOptionViewItem(option)
         self.initStyleOption(opt, index)
         hint = super().sizeHint(opt, index)
-        data = index.data(Qt.ItemDataRole.UserRole)
-        if isinstance(data, dict) and data.get("is_group"):
+        if self.is_group(index):
             return QSize(hint.width(), hint.height() + 10)
         return hint
 
@@ -988,12 +1006,7 @@ class ConfigTreeWidget(QWidget):
         icon_name = CATEGORY_ICONS.get(name) or CATEGORY_ICONS.get(rel_path)
         if is_group:
             # Top-level experiment group (e.g. cartpole, mimic): no icon, larger text, subtle line
-            base_f = self.tree.font()
-            f = QFont(base_f)
-            base_pt = base_f.pointSize()
-            target_pt = max(base_pt + 4, 16) if base_pt > 0 else 16
-            f.setPointSize(target_pt)
-            f.setBold(True)
+            f = group_heading_font(self.tree.font())
             node.setFont(0, f)
             node.setData(0, Qt.ItemDataRole.FontRole, f)
         elif icon_name:
@@ -1327,12 +1340,7 @@ class ConfigTreeWidget(QWidget):
         item = QTreeWidgetItem([""])
         item.setData(0, Qt.ItemDataRole.UserRole, {"type": "dir", "is_group": True})
 
-        base_f = self.tree.font()
-        f = QFont(base_f)
-        base_pt = base_f.pointSize()
-        target_pt = max(base_pt + 4, 16) if base_pt > 0 else 16
-        f.setPointSize(target_pt)
-        f.setBold(True)
+        f = group_heading_font(self.tree.font())
         item.setFont(0, f)
         item.setData(0, Qt.ItemDataRole.FontRole, f)
 

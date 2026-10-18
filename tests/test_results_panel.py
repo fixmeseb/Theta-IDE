@@ -13,7 +13,7 @@ pytest.importorskip("PyQt6")
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
 from PyQt6.QtCore import Qt  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QTabWidget  # noqa: E402
+from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
 app = QApplication.instance() or QApplication(sys.argv[:1])
@@ -267,16 +267,14 @@ def test_offline_backend_explains_itself():
     assert "Training pipeline unavailable" in panel.status.text()
 
 
-def test_window_hosts_the_panel_beside_the_run_list():
+def test_window_hosts_the_panel_as_the_results_tab():
     from frontend.app import Window
 
     with tempfile.TemporaryDirectory() as data_dir:
         window = Window(Path(data_dir))
         try:
-            assert isinstance(window.results_panel, QTabWidget)
-            assert window.results_panel.widget(0) is window.results_view
-            assert window.results_panel.tabText(1) == "Run list"
-            assert window.table is not None  # the run table and its actions are still there
+            assert window.results_panel is window.results_view  # the Run list tab is gone
+            assert not hasattr(window, "table")
         finally:
             window.close()
 
