@@ -221,7 +221,13 @@ class HubClient(QObject):
                 ck = comp.kind.lower()
                 if k in ("suite", "suites", "package") and ck in ("suite", "package"):
                     pass
-                elif k in ("method", "methods", "agent") and ck in ("method", "agent"):
+                elif k in ("method", "methods", "agent", "algorithm", "algorithms") and ck in ("method", "agent", "algorithm"):
+                    pass
+                elif k in ("data", "datamodule", "datamodules") and ck in ("data", "datamodule"):
+                    pass
+                elif k in ("eval", "evaluator", "evaluators") and ck in ("eval", "evaluator"):
+                    pass
+                elif k in ("plot", "plotter", "plotters") and ck in ("plot", "plotter"):
                     pass
                 elif ck != k:
                     continue

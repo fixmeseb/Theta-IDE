@@ -886,10 +886,11 @@ class ConfigTreeWidget(QWidget):
             if global_config.is_file():
                 self._add_file_node(self.tree, global_config, custom_display_name="Global Defaults (config)", is_global_config=True)
 
-            preferred_comp_order = ["agent", "env", "model", "paradigms", "site", "hydra"]
+            preferred_comp_order = ["agent", "env", "model", "data", "eval", "plot", "paradigms", "site", "hydra"]
+            standard_create = {"agent", "env", "model", "paradigms", "site", "hydra"}
             for cat in preferred_comp_order:
                 cat_dir = self.root_dir / cat
-                if not cat_dir.is_dir():
+                if not cat_dir.is_dir() and cat in standard_create:
                     try:
                         cat_dir.mkdir(parents=True, exist_ok=True)
                     except OSError:
@@ -904,10 +905,11 @@ class ConfigTreeWidget(QWidget):
                     self._add_file_node(self.tree, f)
         else:
             # "all": Top-level directory ordering with experiment first
-            preferred_order = ["experiment", "agent", "env", "model", "paradigms", "site", "hydra"]
+            preferred_order = ["experiment", "agent", "env", "model", "data", "eval", "plot", "paradigms", "site", "hydra"]
+            standard_create = {"experiment", "agent", "env", "model", "paradigms", "site", "hydra"}
             for cat in preferred_order:
                 cat_dir = self.root_dir / cat
-                if not cat_dir.is_dir():
+                if not cat_dir.is_dir() and cat in standard_create:
                     try:
                         cat_dir.mkdir(parents=True, exist_ok=True)
                     except OSError:

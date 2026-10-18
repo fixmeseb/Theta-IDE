@@ -335,7 +335,7 @@ def test_hub_view_mode_separation_and_suites_tab(qapp):
     pills_comp = list(view_comp.pills.keys())
     assert "suite" in pills_comp
     assert "plugin" not in pills_comp
-    assert pills_comp == ["all", "suite", "method", "model", "env"]
+    assert pills_comp == ["all", "suite", "method", "model", "env", "data", "eval", "plot"]
 
     # 2. Community Plugins Hub (mode="plugins")
     view_plug = HubView(client=client, mode="plugins")

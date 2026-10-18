@@ -419,9 +419,12 @@ class HubView(QWidget):
             kind_options = [
                 ("all", "All Components"),
                 ("suite", "Suites"),  # Replaces Plugins tab with Suites tab
-                ("method", "RL Methods"),
+                ("method", "Algorithms"),
                 ("model", "Models"),
                 ("env", "Environments"),
+                ("data", "Data Loaders"),
+                ("eval", "Evaluators"),
+                ("plot", "Plotters"),
             ]
         elif self.mode == "plugins":
             kind_options = [
@@ -432,9 +435,12 @@ class HubView(QWidget):
                 ("all", "All"),
                 ("plugin", "Plugins"),
                 ("suite", "Suites"),
-                ("method", "RL Methods"),
+                ("method", "Algorithms"),
                 ("model", "Models"),
                 ("env", "Environments"),
+                ("data", "Data Loaders"),
+                ("eval", "Evaluators"),
+                ("plot", "Plotters"),
             ]
 
         for kind_id, label_text in kind_options:

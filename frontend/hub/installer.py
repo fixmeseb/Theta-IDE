@@ -52,6 +52,8 @@ class HubInstaller:
             return self.workspace_dir / "src" / "usr" / "data" / component.id
         elif component.kind in ("evaluator", "eval"):
             return self.workspace_dir / "src" / "usr" / "eval" / component.id
+        elif component.kind in ("plotter", "plot"):
+            return self.workspace_dir / "plot" / component.id
         elif component.kind == "model":
             return self.workspace_dir / "src" / "usr" / "models" / component.id
         elif component.kind == "env":
@@ -77,6 +79,12 @@ class HubInstaller:
             return self.workspace_dir / "in" / "config" / "model" / f"{component.id}.yaml"
         elif component.kind in ("method", "agent", "algorithm"):
             return self.workspace_dir / "in" / "config" / "agent" / f"{component.id}.yaml"
+        elif component.kind in ("datamodule", "data"):
+            return self.workspace_dir / "in" / "config" / "data" / f"{component.id}.yaml"
+        elif component.kind in ("evaluator", "eval"):
+            return self.workspace_dir / "in" / "config" / "eval" / f"{component.id}.yaml"
+        elif component.kind in ("plotter", "plot"):
+            return self.workspace_dir / "in" / "config" / "plot" / f"{component.id}.yaml"
         elif component.kind == "env":
             return self.workspace_dir / "in" / "config" / "env" / f"{component.id}.yaml"
         elif component.kind == "experiment":
@@ -492,6 +500,7 @@ class HubInstaller:
             self.workspace_dir / "src" / "usr" / "models",
             self.workspace_dir / "src" / "usr" / "data",
             self.workspace_dir / "src" / "usr" / "eval",
+            self.workspace_dir / "plot",
             self.workspace_dir / ".thetaide" / "suites",
             self.workspace_dir / "plugins",
             self.data_dir / "plugins",
