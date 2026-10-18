@@ -152,7 +152,7 @@ class EPSepsisDataModule(L.LightningDataModule, BaseDataModule):
 
     def _compute_cql_v_values(self, checkpoint: str) -> np.ndarray:
         from src.usr.algorithms.agent_registry import get_agent_class
-        CQLAgent = get_agent_class("cql")
+        agent_cls = get_agent_class("cql")
 
         device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
         checkpoint_arg = Path(checkpoint)
@@ -169,7 +169,7 @@ class EPSepsisDataModule(L.LightningDataModule, BaseDataModule):
             raise FileNotFoundError(f"CQL checkpoint '{checkpoint}' does not exist.")
 
         log.info("Loading CQL agent from %s for V(s) precomputation...", cql_ckpt_path)
-        cql_agent = CQLAgent.load_from_checkpoint(cql_ckpt_path, map_location=device, weights_only=False)
+        cql_agent = agent_cls.load_from_checkpoint(cql_ckpt_path, map_location=device, weights_only=False)
         cql_agent.eval()
 
         v_vals_all = np.zeros((len(self.X), 240, 1), dtype=np.float32)

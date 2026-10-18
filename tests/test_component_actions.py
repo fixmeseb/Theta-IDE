@@ -277,7 +277,7 @@ def test_components_panel_integration(qapp, tmp_path, monkeypatch):
     panel.deleteLater()
 
 
-def test_ppo_agent_wraps_standard_model():
+def test_standard_model_actor_critic_wrapper():
     """Test that StandardModelActorCriticWrapper adapts a pure standard model (only forward()) to RL protocols."""
     import torch
     import torch.nn as nn

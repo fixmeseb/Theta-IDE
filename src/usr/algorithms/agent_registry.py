@@ -1,14 +1,14 @@
 """
-Agent Registry — Single source of truth for agent class lookup.
+Algorithm / Agent Registry — Single source of truth for algorithm class lookup.
 
-Agents self-register using the @register_agent decorator:
-    @register_agent("iql")
-    class IQLAgent(OfflineAgentBase):
+Algorithms self-register using the @register_algorithm (or @register_agent) decorator:
+    @register_algorithm("custom_algo")
+    class CustomAlgorithm(OfflineAgentBase):
         ...
 
-The pipeline resolves agents via get_agent_class():
-    AgentClass = get_agent_class("blendrl_iql_cp_tuned")
-    # → Returns BlendRLIQLAgent (longest prefix match: "blendrl_iql")
+The pipeline resolves algorithms via get_algorithm_class() / get_agent_class():
+    AgentClass = get_algorithm_class("custom_algo_tuned")
+    # → Returns CustomAlgorithm (longest prefix match)
 """
 
 import importlib
@@ -20,15 +20,11 @@ AGENT_REGISTRY: dict[str, Any] = {}
 
 
 def register_agent(*prefixes):
-    """Decorator to register an agent class under one or more algorithm prefixes.
+    """Decorator to register an algorithm class under one or more prefixes.
 
     Usage:
-        @register_agent("iql")
-        class IQLAgent(OfflineAgentBase):
-            ...
-
-        @register_agent("blendrl_iql")
-        class BlendRLIQLAgent(IQLAgent):
+        @register_algorithm("custom_algo")
+        class CustomAlgorithm(OfflineAgentBase):
             ...
     """
 

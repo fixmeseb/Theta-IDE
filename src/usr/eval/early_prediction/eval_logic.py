@@ -180,9 +180,9 @@ def load_policy_agent(ckpt_path, device):
 
     try:
         from src.usr.algorithms.agent_registry import get_agent_class
-        CQLAgent = get_agent_class("cql")
+        agent_cls = get_agent_class("cql")
 
-        agent = CQLAgent.load_from_checkpoint(str(ckpt_path), map_location=device, weights_only=False)
+        agent = agent_cls.load_from_checkpoint(str(ckpt_path), map_location=device, weights_only=False)
         agent.eval()
         return agent, "cql"
     except Exception as e:

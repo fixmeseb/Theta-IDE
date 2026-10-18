@@ -383,12 +383,12 @@ class EPRewardShaper:
             raise FileNotFoundError(f"Could not find a valid CQL checkpoint for V(s) computation at: {ckpt_path}")
 
         from src.usr.algorithms.agent_registry import get_agent_class
-        CQLAgent = get_agent_class("cql")
+        agent_cls = get_agent_class("cql")
 
         torch.serialization.add_safe_globals(
             [getattr(sys.modules.get("omegaconf.dictconfig", None), "DictConfig", None)]
         )
-        agent = CQLAgent.load_from_checkpoint(str(cql_ckpt_path), map_location=self.device, weights_only=False)
+        agent = agent_cls.load_from_checkpoint(str(cql_ckpt_path), map_location=self.device, weights_only=False)
         agent.eval()
 
         n = len(reader.obs)

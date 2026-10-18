@@ -52,6 +52,17 @@ def test_gym_classic_control_environments():
     mc_env.close()
 
 
+def _is_accessible_file(path: Path) -> bool:
+    try:
+        if not path.is_file():
+            return False
+        with open(path, "rb") as f:
+            f.read(1)
+        return True
+    except (OSError, PermissionError):
+        return False
+
+
 def test_suite_installation_and_modular_uninstallation(tmp_path):
     """Verify that installing a benchmark suite installs child components and child components remain independently manageable."""
     workspace = tmp_path / "workspace"
@@ -64,8 +75,8 @@ def test_suite_installation_and_modular_uninstallation(tmp_path):
     # Locate the packaged basic_suite from theta-hub
     hub_packages = Path(__file__).resolve().parents[2] / "theta-hub" / "packages"
     suite_zip = hub_packages / "basic_suite-1.0.0.zip"
-    if not suite_zip.is_file():
-        pytest.skip(f"Packaged suite zip not found at {suite_zip}")
+    if not _is_accessible_file(suite_zip):
+        pytest.skip(f"Packaged suite zip not accessible at {suite_zip}")
 
     suite_comp = HubComponent(
         id="basic_suite",
@@ -104,8 +115,8 @@ def test_suite_installation_and_modular_uninstallation(tmp_path):
     assert (workspace / "src" / "usr" / "models" / "dnn").is_dir()
     assert (workspace / "src" / "usr" / "models" / "dueling_resnet").is_dir()
     assert (workspace / "src" / "usr" / "models" / "nature_cnn").is_dir()
-    assert (workspace / "src" / "usr" / "methods" / "sb3").is_dir()
-    assert (workspace / "src" / "usr" / "methods" / "d3rlpy").is_dir()
+    assert (workspace / "src" / "usr" / "algorithms" / "sb3").is_dir() or (workspace / "src" / "usr" / "methods" / "sb3").is_dir()
+    assert (workspace / "src" / "usr" / "algorithms" / "d3rlpy").is_dir() or (workspace / "src" / "usr" / "methods" / "d3rlpy").is_dir()
     assert (workspace / "in" / "envs" / "atari").is_dir()
     assert (workspace / "in" / "envs" / "gym_classic_control").is_dir()
 
@@ -127,8 +138,8 @@ def test_suite_installation_and_modular_uninstallation(tmp_path):
 
     # Remaining child components are still intact!
     assert (workspace / "src" / "usr" / "models" / "dueling_resnet").is_dir()
-    assert (workspace / "src" / "usr" / "methods" / "sb3").is_dir()
-    assert (workspace / "src" / "usr" / "methods" / "d3rlpy").is_dir()
+    assert (workspace / "src" / "usr" / "algorithms" / "sb3").is_dir() or (workspace / "src" / "usr" / "methods" / "sb3").is_dir()
+    assert (workspace / "src" / "usr" / "algorithms" / "d3rlpy").is_dir() or (workspace / "src" / "usr" / "methods" / "d3rlpy").is_dir()
     assert (workspace / "in" / "envs" / "atari").is_dir()
 
     # 5. Full suite uninstallation protects category directories (agent/, model/, env/)
@@ -208,8 +219,8 @@ def test_dl_basics_suite_and_mnist_package_install_and_uninstall(tmp_path):
 
     hub_packages = Path(__file__).resolve().parents[2] / "theta-hub" / "packages"
     suite_zip = hub_packages / "dl_basics_suite-1.0.0.zip"
-    if not suite_zip.is_file():
-        pytest.skip(f"Packaged suite zip not found at {suite_zip}")
+    if not _is_accessible_file(suite_zip):
+        pytest.skip(f"Packaged suite zip not accessible at {suite_zip}")
 
     suite_comp = HubComponent(
         id="dl_basics_suite",
@@ -279,8 +290,8 @@ def test_nsfr_and_neumann_packages(tmp_path):
 
     for comp_id in ("nsfr", "neumann"):
         pkg_zip = hub_packages / f"{comp_id}-1.0.0.zip"
-        if not pkg_zip.is_file():
-            pytest.skip(f"Packaged component zip not found at {pkg_zip}")
+        if not _is_accessible_file(pkg_zip):
+            pytest.skip(f"Packaged component zip not accessible at {pkg_zip}")
         comp = HubComponent(
             id=comp_id,
             name=comp_id.upper(),

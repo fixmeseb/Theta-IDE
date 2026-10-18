@@ -108,10 +108,10 @@ class EnvironmentWrapperProtocol(Protocol):
 Agents implement RL algorithms (e.g., SAC, TD3, AWAC, Offline Multi-Agent) as PyTorch Lightning Modules:
 
 ```python
-from src.usr.methods.agent_registry import register_agent
+from src.usr.algorithms.agent_registry import register_algorithm, register_agent
 from src.app.core.protocols import AgentPluginProtocol
 
-@register_agent("my_algorithm", "my_algo")
+@register_algorithm("my_algorithm", "my_algo")
 class MyCustomAgent(L.LightningModule):
     """Custom reinforcement learning agent."""
 

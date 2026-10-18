@@ -1548,6 +1548,26 @@ class ConfigViewer(QWidget):
                 self.combo_env.setCurrentIndex(0)
             form_base.addWidget(self.combo_env, 0, 3)
 
+            form_base.addWidget(label("Data Module"), 1, 0)
+            self.combo_datamodule = ComboBox()
+            self.combo_datamodule.addItem("— Default for Paradigm —", None)
+            try:
+                from src.app.core.datamodule_registry import list_registered_datamodules
+                dm_names = sorted(set(name for name in list_registered_datamodules() if any(c.isupper() for c in name)))
+                self.combo_datamodule.addItems(dm_names)
+            except Exception:
+                pass
+            base_dm = data.get("data_module")
+            if isinstance(base_dm, dict):
+                base_dm_name = base_dm.get("name") or base_dm.get("class")
+            else:
+                base_dm_name = base_dm
+            if base_dm_name:
+                self.combo_datamodule.setCurrentText(str(base_dm_name))
+            else:
+                self.combo_datamodule.setCurrentIndex(0)
+            form_base.addWidget(self.combo_datamodule, 1, 1)
+
             def _on_base_p_changed(p_text):
                 val = None if p_text in ("", "— Select Paradigm —") else p_text
                 self.raw_data["paradigm"] = val
@@ -1558,11 +1578,21 @@ class ConfigViewer(QWidget):
                 val = None if e_text in ("", "— Select Environment —") else e_text
                 self._set_base_env(val)
 
+            def _on_base_dm_changed(dm_text):
+                val = None if dm_text in ("", "— Default for Paradigm —") else dm_text
+                if val is None:
+                    self.raw_data.pop("data_module", None)
+                else:
+                    self.raw_data["data_module"] = val
+                self._mark_dirty()
+
             self.combo_paradigm.currentTextChanged.connect(_on_base_p_changed)
             self.combo_env.currentTextChanged.connect(_on_base_e_changed)
+            self.combo_datamodule.currentTextChanged.connect(_on_base_dm_changed)
 
             self.field_widgets["paradigm"] = self.combo_paradigm
             self.field_widgets["env"] = self.combo_env
+            self.field_widgets["data_module"] = self.combo_datamodule
 
             box_base.add_layout(form_base)
             self.boxes_layout.addWidget(box_base)
@@ -3115,6 +3145,64 @@ class ConfigViewer(QWidget):
             box_tr.add_layout(grid_t)
             self.boxes_layout.addWidget(box_tr)
 
+        # --- MODULAR BOX: CHECKPOINT SETTINGS ---
+        has_checkpoint = "checkpoint" in data and isinstance(data["checkpoint"], dict)
+        show_checkpoint = has_checkpoint or (self.view_mode == "resolved" and "checkpoint" in resolved and isinstance(resolved["checkpoint"], dict))
+
+        if show_checkpoint:
+            box_ckpt = ConfigBox("Checkpoint Settings", "Model checkpointing and validation metric monitoring")
+            ckpt_header = QHBoxLayout()
+            ckpt_header.addStretch()
+            if has_checkpoint:
+                btn_rm_ckpt = _make_subtle_tool_button("trash", "Remove checkpoint overrides", size=24, icon_size=14)
+                btn_rm_ckpt.clicked.connect(lambda: self.remove_block("checkpoint"))
+                ckpt_header.addWidget(btn_rm_ckpt)
+            else:
+                ckpt_header.addWidget(label("(inherited defaults)", "muted"))
+            box_ckpt.add_layout(ckpt_header)
+
+            grid_c = QGridLayout()
+            grid_c.setVerticalSpacing(10)
+            grid_c.setHorizontalSpacing(16)
+            ckpt_source = data.get("checkpoint", {}) if has_checkpoint else resolved.get("checkpoint", {})
+            if not isinstance(ckpt_source, dict):
+                ckpt_source = {}
+
+            grid_c.addWidget(label("Monitor Metric"), 0, 0)
+            edit_mon = QLineEdit()
+            edit_mon.setMaximumWidth(NUMBER_FIELD_WIDTH)
+            edit_mon.setPlaceholderText("e.g. val/loss")
+            edit_mon.setText(str(ckpt_source.get("monitor") or ""))
+            edit_mon.textChanged.connect(lambda v: self._on_nested_edited("checkpoint", "monitor", v.strip() or None))
+            grid_c.addWidget(edit_mon, 0, 1)
+
+            grid_c.addWidget(label("Mode"), 0, 2)
+            combo_mode = ComboBox()
+            combo_mode.setMaximumWidth(NUMBER_FIELD_WIDTH)
+            combo_mode.addItems(["min", "max"])
+            combo_mode.setCurrentText(str(ckpt_source.get("mode") or "min"))
+            combo_mode.currentTextChanged.connect(lambda v: self._on_nested_edited("checkpoint", "mode", v))
+            grid_c.addWidget(combo_mode, 0, 3)
+
+            grid_c.addWidget(label("Save Top K"), 1, 0)
+            spin_topk = SpinBox()
+            spin_topk.setMaximumWidth(NUMBER_FIELD_WIDTH)
+            spin_topk.setRange(0, 50)
+            spin_topk.setValue(int(ckpt_source.get("save_top_k") if ckpt_source.get("save_top_k") is not None else 1))
+            spin_topk.valueChanged.connect(lambda v: self._on_nested_edited("checkpoint", "save_top_k", v))
+            grid_c.addWidget(spin_topk, 1, 1)
+
+            grid_c.addWidget(label("Every N Epochs"), 1, 2)
+            spin_every = SpinBox()
+            spin_every.setMaximumWidth(NUMBER_FIELD_WIDTH)
+            spin_every.setRange(1, 1000)
+            spin_every.setValue(int(ckpt_source.get("every_n_epochs") or 1))
+            spin_every.valueChanged.connect(lambda v: self._on_nested_edited("checkpoint", "every_n_epochs", v))
+            grid_c.addWidget(spin_every, 1, 3)
+
+            box_ckpt.add_layout(grid_c)
+            self.boxes_layout.addWidget(box_ckpt)
+
         # --- MODULAR BOX: DATASET SPECIFICATION ---
         has_dataset = "dataset_path" in data
         is_offline_req = paradigm in ("offline_rl", "supervised")
@@ -3176,6 +3264,41 @@ class ConfigViewer(QWidget):
             ds_path_row.addWidget(lbl_status)
             ds_path_row.addStretch()
             ds_form.addRow("Dataset Path", ds_path_row)
+
+            # Data Module selector
+            ds_dm_row = QHBoxLayout()
+            ds_dm_row.setSpacing(6)
+            self.combo_ds_datamodule = ComboBox()
+            self.combo_ds_datamodule.setMaximumWidth(320)
+            self.combo_ds_datamodule.addItem("— Default (inherit from Group / Paradigm) —", None)
+            try:
+                from src.app.core.datamodule_registry import list_registered_datamodules
+                dm_names = sorted(set(name for name in list_registered_datamodules() if any(c.isupper() for c in name)))
+                self.combo_ds_datamodule.addItems(dm_names)
+            except Exception:
+                pass
+            cur_dm = data.get("data_module")
+            if isinstance(cur_dm, dict):
+                cur_dm_name = cur_dm.get("name") or cur_dm.get("class")
+            else:
+                cur_dm_name = cur_dm
+            if cur_dm_name:
+                self.combo_ds_datamodule.setCurrentText(str(cur_dm_name))
+            else:
+                self.combo_ds_datamodule.setCurrentIndex(0)
+
+            def _on_ds_dm_changed(dm_text):
+                val = None if dm_text in ("", "— Default (inherit from Group / Paradigm) —") else dm_text
+                if val is None:
+                    self.raw_data.pop("data_module", None)
+                else:
+                    self.raw_data["data_module"] = val
+                self._mark_dirty()
+
+            self.combo_ds_datamodule.currentTextChanged.connect(_on_ds_dm_changed)
+            ds_dm_row.addWidget(self.combo_ds_datamodule)
+            ds_dm_row.addStretch()
+            ds_form.addRow("Data Module", ds_dm_row)
 
             box_ds.add_layout(ds_form)
             self.boxes_layout.addWidget(box_ds)
@@ -3337,6 +3460,10 @@ class ConfigViewer(QWidget):
         act_tr = add_menu.addAction("Trainer Overrides")
         act_tr.triggered.connect(lambda: self.add_block("trainer"))
         act_tr.setEnabled("trainer" not in data)
+
+        act_ckpt = add_menu.addAction("Checkpoint Settings")
+        act_ckpt.triggered.connect(lambda: self.add_block("checkpoint"))
+        act_ckpt.setEnabled("checkpoint" not in data)
 
         act_env = add_menu.addAction("Environment Overrides")
         act_env.triggered.connect(lambda: self.add_block("env"))
@@ -3955,12 +4082,15 @@ class ConfigViewer(QWidget):
             self.raw_data.pop("resources", None)
         elif block_name == "trainer":
             self.raw_data.pop("trainer", None)
+        elif block_name == "checkpoint":
+            self.raw_data.pop("checkpoint", None)
         elif block_name == "env":
             if isinstance(self.raw_data.get("env"), dict):
                 self.raw_data.pop("env", None)
         elif block_name == "dataset":
             self.raw_data.pop("dataset_path", None)
             self.raw_data.pop("offline_datasets", None)
+            self.raw_data.pop("data_module", None)
         elif block_name == "sweeper":
             self.raw_data.pop("sweeper", None)
             if "hydra" in self.raw_data and isinstance(self.raw_data["hydra"], dict):
@@ -3979,6 +4109,8 @@ class ConfigViewer(QWidget):
             self.raw_data["resources"] = {"time": "02:00:00", "gpus": 1, "cores": 8, "memory": "16G"}
         elif block_name == "trainer":
             self.raw_data["trainer"] = {"accelerator": "cpu", "max_epochs": 25}
+        elif block_name == "checkpoint":
+            self.raw_data["checkpoint"] = {"monitor": "val/loss", "mode": "min", "save_top_k": 1, "every_n_epochs": 1}
         elif block_name == "env":
             self.raw_data["env"] = {"num_envs": 4, "num_steps": 128}
         elif block_name == "dataset":

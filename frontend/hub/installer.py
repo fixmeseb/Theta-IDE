@@ -487,8 +487,11 @@ class HubInstaller:
 
         scan_roots = [
             self.workspace_dir / "in" / "envs",
+            self.workspace_dir / "src" / "usr" / "algorithms",
             self.workspace_dir / "src" / "usr" / "methods",
             self.workspace_dir / "src" / "usr" / "models",
+            self.workspace_dir / "src" / "usr" / "data",
+            self.workspace_dir / "src" / "usr" / "eval",
             self.workspace_dir / ".thetaide" / "suites",
             self.workspace_dir / "plugins",
             self.data_dir / "plugins",

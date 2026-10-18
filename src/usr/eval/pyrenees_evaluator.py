@@ -59,7 +59,7 @@ class PyreneesEvaluator:
             return probs, acts
 
         # Fallback for unmigrated or raw models
-        is_cql = ag.__class__.__name__ == "CQLAgent" or "cql" in str(getattr(ag, "algorithm", "")).lower()
+        is_cql = "cql" in ag.__class__.__name__.lower() or "cql" in str(getattr(ag, "algorithm", "")).lower()
         use_actor = bool(ag.get_cfg("use_actor", False)) if hasattr(ag, "get_cfg") else getattr(ag, "use_actor", False)
 
         if hasattr(ag, "is_modular") and ag.is_modular:

@@ -169,19 +169,23 @@ class ClinicalAlignmentPlotter(BasePlotter):
         return method_ckpts, method_interval_ckpts
 
     def _load_agent(self, path, dev):
-        from src.usr.methods.cql_agent import CQLAgent
-        from src.usr.methods.iql_agent import IQLAgent
+        from src.usr.algorithms.agent_registry import AGENT_REGISTRY, auto_discover, get_agent_class
 
-        classes = [CQLAgent, IQLAgent]
-        try:
-            from src.usr.methods.cew_agent import CEWAgent
-
-            classes.insert(1, CEWAgent)
-        except ImportError:
-            pass
+        auto_discover()
+        candidates = []
+        for name in ("cql", "iql", "blendrl_cql", "blendrl_iql", "cew"):
+            try:
+                cand = get_agent_class(name)
+                if cand not in candidates:
+                    candidates.append(cand)
+            except Exception:
+                pass
+        for cls in AGENT_REGISTRY.values():
+            if cls not in candidates and hasattr(cls, "load_from_checkpoint"):
+                candidates.append(cls)
 
         last_error = None
-        for cls in classes:
+        for cls in candidates:
             try:
                 ag = cls.load_from_checkpoint(str(path), map_location=dev, weights_only=False)
                 ag.to(dev)
@@ -208,7 +212,7 @@ class ClinicalAlignmentPlotter(BasePlotter):
             return probs, acts
 
         # Fallback for unmigrated or raw models
-        is_cql = ag.__class__.__name__ == "CQLAgent" or "cql" in str(getattr(ag, "algorithm", "")).lower()
+        is_cql = "cql" in ag.__class__.__name__.lower() or "cql" in str(getattr(ag, "algorithm", "")).lower()
         use_actor = bool(ag.get_cfg("use_actor", False)) if hasattr(ag, "get_cfg") else getattr(ag, "use_actor", False)
 
         if hasattr(ag, "is_modular") and ag.is_modular:
