@@ -25,10 +25,12 @@ from PyQt6.QtWidgets import (
     QLineEdit,
     QMenu,
     QMessageBox,
+    QPlainTextEdit,
     QPushButton,
     QScrollArea,
     QSizePolicy,
     QSpinBox,
+    QTextEdit,
     QToolButton,
     QVBoxLayout,
     QWidget,
@@ -734,6 +736,13 @@ class ConfigViewer(QWidget):
         self.field_widgets = {}
         self._preamble = ""
         self.auto_save = False
+        # Field edits (typing) auto-save after a pause instead of on every keystroke: each save
+        # rewrites the YAML, invalidates the config tree cache (a rescan of every config on the
+        # next lookup) and triggers a pipeline compose.
+        self._autosave_timer = QTimer(self)
+        self._autosave_timer.setSingleShot(True)
+        self._autosave_timer.setInterval(400)
+        self._autosave_timer.timeout.connect(self.flush_pending_save)
         self._pending_new_method = False
         self._pending_new_method_spec = {}
         self.spin_timesteps = SpinBox()
@@ -4418,9 +4427,23 @@ class ConfigViewer(QWidget):
         self._mark_dirty()
         self._render_boxes()
 
+    def flush_pending_save(self):
+        """Write a pending auto-save now (before anything reads the file from disk, or on close)."""
+        self._autosave_timer.stop()
+        if getattr(self, "auto_save", False) and self.is_dirty:
+            self.save_to_disk()
+
+    def _typing_in_text_field(self) -> bool:
+        """True while the user is typing into one of this viewer's text boxes."""
+        focus = QApplication.focusWidget()
+        return isinstance(focus, (QLineEdit, QPlainTextEdit, QTextEdit)) and self.isAncestorOf(focus)
+
     def _mark_dirty(self):
         self.is_dirty = True
-        if getattr(self, "auto_save", False):
+        if getattr(self, "auto_save", False) and self._typing_in_text_field():
+            self._autosave_timer.start()  # restarts on each keystroke; saves once typing pauses
+        elif getattr(self, "auto_save", False):
+            self._autosave_timer.stop()  # this save covers any pending text edit
             self.save_to_disk()
         else:
             self._update_dirty_ui()

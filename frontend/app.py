@@ -578,7 +578,7 @@ class Window(QMainWindow):
         viewer = self.config_viewer
         if viewer and viewer.current_rel_path:
             self.statusBar().showMessage(f"Saved {viewer.current_rel_path}", 4000)
-        self.request_compose()
+        self.compose_timer.start()  # debounced: an edit's config_changed has usually queued one already
 
     def on_config_file_renamed(self, old_rel, new_rel):
         viewer = self.config_viewer
@@ -2574,6 +2574,8 @@ class Window(QMainWindow):
             if answer != QMessageBox.StandardButton.Yes:
                 event.ignore()
                 return
+        for viewer in self.findChildren(ConfigViewer):
+            viewer.flush_pending_save()  # edits typed in the last moment before closing
         if self.active and self.active["simulated"]:
             self.stop_run()
         elif self.active:

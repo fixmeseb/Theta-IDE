@@ -313,6 +313,7 @@ class ConfigTabManager(QTabWidget):
         rel_path = viewer.current_rel_path or ""
         norm_rel = Path(rel_path).as_posix() if rel_path else ""
 
+        viewer.flush_pending_save()  # auto-save edits typed just before closing, without a prompt
         if viewer.is_dirty:
             name = Path(rel_path).name or "Configuration"
             res = QMessageBox.question(
