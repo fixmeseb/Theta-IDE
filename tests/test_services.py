@@ -321,6 +321,56 @@ def test_run_metrics_returns_every_column_and_supports_versions_and_since(logs):
         catalog.run_metrics("g", "..", "ppo")
 
 
+def test_following_a_run_reads_only_what_was_appended(logs, monkeypatch):
+    """Polls (since=N-1, as the GUI's) continue from where the last read stopped; a half-written row waits."""
+    run = write_run(logs, "g", "live", versions={0: ([1.0, 2.0], False)})
+    metrics_csv = run / "ppo" / "version_0" / "metrics.csv"
+    first = catalog.run_metrics("g", "live", "ppo")
+    assert first["total_rows"] == 4
+
+    parsed = []
+    real_parse = catalog._parse_rows
+    monkeypatch.setattr(catalog, "_parse_rows", lambda header, body: parsed.append(body) or real_parse(header, body))
+    with open(metrics_csv, "a", encoding="utf-8") as f:
+        f.write(",3.0,3000.0\n3,1003.0,\n,4.0,40")  # two complete rows, then one still being written
+    poll = catalog.run_metrics("g", "live", "ppo", since=first["total_rows"] - 1)
+    assert poll["total_rows"] == 6
+    assert [row["eval/reward"] for row in poll["metrics"]] == ["1002.0", "3.0", "1003.0"]  # last held row, then new
+    assert b"1.0" not in parsed[-1] and b"40" not in parsed[-1]  # neither old rows nor the partial one were parsed
+
+    with open(metrics_csv, "a", encoding="utf-8") as f:
+        f.write("00.0\n")  # the half-written row completes
+    poll = catalog.run_metrics("g", "live", "ppo", since=poll["total_rows"] - 1)
+    assert poll["total_rows"] == 7 and poll["metrics"][-1]["transitions"] == "4000.0"
+
+
+def test_a_rewritten_metrics_file_is_read_whole(logs):
+    """New columns make the logger rewrite metrics.csv with a new header: continuing the old read would
+    file values under the wrong names, so that read starts over."""
+    run = write_run(logs, "g", "grow", versions={0: ([1.0, 2.0], False)})
+    metrics_csv = run / "ppo" / "version_0" / "metrics.csv"
+    first = catalog.run_metrics("g", "grow", "ppo")
+    metrics_csv.write_text("epoch,eval/reward,transitions,train/loss\n" + "".join(
+        f",{r},{i}000.0,0.{i}\n" for i, r in enumerate([1.0, 2.0, 3.0, 4.0, 5.0], start=1)), encoding="utf-8")
+    poll = catalog.run_metrics("g", "grow", "ppo", since=first["total_rows"] - 1)
+    assert poll["columns"] == ["epoch", "eval/reward", "transitions", "train/loss"]
+    assert poll["total_rows"] == 5
+    assert [row["train/loss"] for row in poll["metrics"]] == ["0.4", "0.5"]  # rows 3 and 4 of the new file
+
+
+def test_list_runs_rereads_a_changed_config_and_hands_out_copies(logs):
+    run = write_run(logs, "g", "cfg")
+    assert catalog.list_runs()[0]["config"]["seed"] == 7
+    config = run / "config.yaml"
+    config.write_text(config.read_text(encoding="utf-8").replace("seed: 7", "seed: 1234"), encoding="utf-8")
+    listed = catalog.list_runs()[0]
+    assert listed["config"]["seed"] == 1234
+    listed["config"]["seed"] = -1
+    listed["metadata"]["tampered"] = True
+    again = catalog.list_runs()[0]
+    assert again["config"]["seed"] == 1234 and "tampered" not in again["metadata"]
+
+
 def _write_artifacts(logs):
     """A run with plots, checkpoints and TensorBoard files next to its logs, plus another run's file."""
     results = logs.parent

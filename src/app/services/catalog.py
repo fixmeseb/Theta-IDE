@@ -6,8 +6,12 @@ plain folder name, and run files are only read from inside that run's own result
 
 from __future__ import annotations
 
+import copy
 import csv
+import io
 import json
+import threading
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
@@ -73,6 +77,9 @@ def list_experiments() -> list[dict[str, Any]]:
 
 # agent_summary results by agent folder, valid while the files they were read from are unchanged.
 _SUMMARY_CACHE: dict[Path, tuple[tuple, dict[str, Any] | None]] = {}
+# Per-run files, keyed by path and reused until their stamp changes (see _cached_by_stamp)
+_CONFIG_SUMMARY_CACHE: dict[Path, tuple[tuple, dict[str, Any]]] = {}
+_RUN_METADATA_CACHE: dict[Path, tuple[tuple, dict[str, Any]]] = {}
 
 
 def _file_stamp(path: Path | None) -> tuple:
@@ -92,8 +99,10 @@ def agent_summary(agent_dir: Path) -> dict[str, Any] | None:
     """
     runtime_file = latest_version_file(agent_dir, "runtime.json")
     metrics_file = latest_version_file(agent_dir, "metrics.csv")
-    key = agent_dir.resolve()
-    stamp = (_file_stamp(runtime_file and runtime_file.resolve()), _file_stamp(metrics_file and metrics_file.resolve()))
+    # No .resolve(): the paths come from LOGS_DIR, already absolute, and resolving three paths per agent
+    # (an lstat for every path segment) was most of a repeated list_runs
+    key = agent_dir
+    stamp = (_file_stamp(runtime_file), _file_stamp(metrics_file))
     cached = _SUMMARY_CACHE.get(key)
     if cached is not None and cached[0] == stamp:
         return cached[1]
@@ -138,10 +147,35 @@ def _read_agent_summary(agent_dir: Path, runtime_file: Path | None, metrics_file
     }
 
 
+def _cached_by_stamp(cache: dict, path: Path, load):
+    """load(path), reused until the file's mtime or size changes (or it appears or disappears)."""
+    stamp = _file_stamp(path)
+    cached = cache.get(path)
+    if cached is not None and cached[0] == stamp:
+        return copy.deepcopy(cached[1])
+    value = load(path)
+    cache[path] = (stamp, value)
+    return copy.deepcopy(value)  # callers get their own copy; the cached one must not change
+
+
 def run_config_summary(run_dir: Path) -> dict[str, Any]:
-    """The fields of a run's saved Hydra config (config.yaml) that the Results browser shows."""
+    """The fields of a run's saved Hydra config (config.yaml) that the Results browser shows.
+
+    Cached per file: listing runs re-read every run's config.yaml, and YAML parsing was about two thirds
+    of a repeated list_runs."""
+    return _cached_by_stamp(_CONFIG_SUMMARY_CACHE, run_dir / "config.yaml", _read_config_summary)
+
+
+def _read_run_metadata(runtime_file: Path) -> dict[str, Any]:
     try:
-        cfg = yaml.safe_load((run_dir / "config.yaml").read_text(encoding="utf-8")) or {}
+        return json.loads(runtime_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def _read_config_summary(config_file: Path) -> dict[str, Any]:
+    try:
+        cfg = yaml.safe_load(config_file.read_text(encoding="utf-8")) or {}
     except (OSError, yaml.YAMLError):
         return {}
     if not isinstance(cfg, dict):
@@ -174,13 +208,7 @@ def list_runs() -> list[dict[str, Any]]:
     for run_dir in LOGS_DIR.glob("*/*"):
         if not run_dir.is_dir():
             continue
-        metadata = {}
-        runtime_file = run_dir / "runtime.json"
-        if runtime_file.exists():
-            try:
-                metadata = json.loads(runtime_file.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                pass
+        metadata = _cached_by_stamp(_RUN_METADATA_CACHE, run_dir / "runtime.json", _read_run_metadata)
         agents = [
             summary
             for agent_dir in sorted(p for p in run_dir.iterdir() if p.is_dir())
@@ -233,18 +261,90 @@ def run_metrics(
         metrics_file = agent_dir / name / "metrics.csv"
     if metrics_file is None or not metrics_file.exists():
         raise FileNotFoundError(f"No metrics for {group}/{experiment_id}/{agent}")
-    with open(metrics_file, encoding="utf-8", newline="") as f:
-        reader = csv.DictReader(f)
-        rows = list(reader)
-        columns = list(reader.fieldnames or [])
+    rows, columns, total = _metrics_rows(metrics_file, max(int(since), 0))
     return {
-        "metrics": rows[max(int(since), 0) :],
+        "metrics": rows,
         "columns": columns,
-        "total_rows": len(rows),
+        "total_rows": total,
         "version": metrics_file.parent.name,
         "versions": versions,
         "source": str(metrics_file),
     }
+
+
+class _MetricsTail:
+    """Where the last read of one metrics.csv stopped, so a later read can start there."""
+
+    __slots__ = ("inode", "header", "rows", "last_row_start", "end")
+
+    def __init__(self, inode, header, rows, last_row_start, end):
+        self.inode, self.header, self.rows, self.last_row_start, self.end = inode, header, rows, last_row_start, end
+
+
+# metrics.csv path -> where its last read stopped. A run being followed is polled with since=N every few
+# seconds; re-reading the whole file each time cost ~0.5 s per poll at 100k rows, and grew with the run.
+_METRICS_TAILS: "OrderedDict[Path, _MetricsTail]" = OrderedDict()
+_METRICS_TAILS_LIMIT = 64
+_METRICS_TAILS_LOCK = threading.Lock()
+
+
+def _parse_rows(header_text: str, body: bytes) -> list[dict[str, str]]:
+    """Rows of `body` (complete CSV lines) as DictReader yields them for a file with this header."""
+    text = header_text + body.decode("utf-8", errors="replace")
+    return list(csv.DictReader(io.StringIO(text, newline="")))
+
+
+def _metrics_rows(path: Path, since: int) -> tuple[list[dict[str, str]], list[str], int]:
+    """(rows from `since` on, columns, total rows) of a metrics.csv; only complete lines count.
+
+    A row still being written (no newline yet) is left for the next read. Reads continue from where the
+    previous read of this file stopped when they can: same file (inode), same header, not shrunk, and
+    `since` at or after its last row (the GUI re-fetches its last row, which may have been half-written).
+    Anything else (a first load, a rewrite with new columns, a replaced file) reads the file whole.
+    """
+    key = path.resolve()
+    try:
+        stat = path.stat()
+        with open(path, "rb") as f:
+            header_line = f.readline()
+            if not header_line.endswith(b"\n"):
+                return [], [], 0  # the header itself is still being written
+            header_text = header_line.decode("utf-8", errors="replace")
+            header = next(csv.reader([header_text.rstrip("\r\n")]), [])
+            with _METRICS_TAILS_LOCK:
+                tail = _METRICS_TAILS.get(key)
+            resumable = (
+                tail is not None
+                and tail.inode == stat.st_ino
+                and tail.header == header
+                and stat.st_size >= tail.end
+                and tail.rows >= 1
+                and since >= tail.rows - 1
+            )
+            if resumable:
+                start, first_row = (tail.last_row_start, tail.rows - 1) if since == tail.rows - 1 else (tail.end, tail.rows)
+            else:
+                start, first_row = len(header_line), 0
+            f.seek(start)
+            body = f.read()
+    except OSError as exc:
+        raise FileNotFoundError(f"Cannot read {path}: {exc}") from exc
+
+    complete = body[: body.rfind(b"\n") + 1]
+    rows = _parse_rows(header_text, complete)
+    total = first_row + len(rows)
+    if rows:
+        # The byte offset where the last complete row starts, so the next read can re-serve it
+        last_line = complete[:-1].rfind(b"\n") + 1
+        last_row_start = start + last_line
+    else:
+        last_row_start = tail.last_row_start if resumable else start
+    with _METRICS_TAILS_LOCK:
+        _METRICS_TAILS[key] = _MetricsTail(stat.st_ino, header, total, last_row_start, start + len(complete))
+        _METRICS_TAILS.move_to_end(key)
+        while len(_METRICS_TAILS) > _METRICS_TAILS_LIMIT:
+            _METRICS_TAILS.popitem(last=False)
+    return rows[max(since - first_row, 0):], header, total
 
 
 # ── Run manifest: every artifact a run produced ───────────────────────────────
