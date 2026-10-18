@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from typing import Dict, List, Optional
 
-from PyQt6.QtCore import Qt, QUrl, pyqtSignal
-from PyQt6.QtGui import QDesktopServices
+from PyQt6.QtCore import QEvent, Qt, QUrl, pyqtSignal
+from PyQt6.QtGui import QColor, QDesktopServices
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -21,9 +21,75 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from ..theme import theme_color
+from ..theme import current_theme, theme_color
 from .client import HubClient
 from .models import HubComponent
+
+# Uninstall/remove are destructive in every theme, so they keep one red (with white text, which
+# reads on it at 4.9:1) rather than borrowing a theme role that is orange or purple in some palettes.
+DANGER, DANGER_HOVER, ON_DANGER = "#cc241d", "#e0352b", "#ffffff"
+
+# The theme role that colors each kind's badge.
+KIND_ROLES = {
+    "plugin": "number",
+    "suite": "number",
+    "package": "number",
+    "method": "primary",
+    "model": "secondary",
+    "env": "accent",
+    "experiment": "focus",
+}
+
+
+def _luminance(color: str) -> float:
+    def channel(c):
+        return c / 12.92 if c <= 0.03928 else ((c + 0.055) / 1.055) ** 2.4
+    q = QColor(color)
+    return 0.2126 * channel(q.redF()) + 0.7152 * channel(q.greenF()) + 0.0722 * channel(q.blueF())
+
+
+def _contrast(a: str, b: str) -> float:
+    hi, lo = sorted((_luminance(a), _luminance(b)), reverse=True)
+    return (hi + 0.05) / (lo + 0.05)
+
+
+def _text_on(background: str) -> str:
+    """The theme's base or text color, whichever reads better on `background`. Some palettes have
+    mid-tone roles neither reaches 4.5:1 on (Catppuccin Latte's orange and green); black or white then."""
+    best = max((theme_color("base"), theme_color("text")), key=lambda c: _contrast(c, background))
+    if _contrast(best, background) >= 4.5:
+        return best
+    return max(("#000000", "#ffffff"), key=lambda c: _contrast(c, background))
+
+
+def _hover(color: str) -> str:
+    """`color` nudged away from the background: lighter on dark themes, darker on light ones."""
+    q = QColor(color)
+    dark_theme = QColor(theme_color("base")).lightnessF() < 0.5
+    return (q.lighter(118) if dark_theme else q.darker(112)).name()
+
+
+def _theme_key():
+    """Identifies the active palette, so a restyle runs only when the theme really changed."""
+    return tuple(sorted(current_theme()["colors"].items()))
+
+
+def _filled_button_css(background: str, hover: str, foreground: str) -> str:
+    return (
+        "QPushButton {"
+        f"  background-color: {background};"
+        f"  color: {foreground};"
+        f"  border: 1px solid {background};"
+        "  border-radius: 4px;"
+        "  font-weight: 700;"
+        "  padding: 4px 14px;"
+        "}"
+        "QPushButton:hover {"
+        f"  background-color: {hover};"
+        f"  border-color: {hover};"
+        "}"
+        + _disabled_button_css()
+    )
 
 
 def _disabled_button_css():
@@ -45,7 +111,33 @@ class HubComponentCard(QFrame):
         self.component = component
         self.client = client
         self.setObjectName("card")
+        self._styled_for = None  # the theme the colors below were last set for
         self._build_ui()
+
+    def changeEvent(self, event):
+        # A theme switch sets the application palette, which reaches every widget as a PaletteChange
+        super().changeEvent(event)
+        if (event.type() == QEvent.Type.PaletteChange and self._styled_for is not None  # built and styled
+                and self._styled_for != _theme_key()):
+            self._apply_theme()
+
+    def _apply_theme(self):
+        """Set every color on the card from the current theme. Runs when built and on theme switches."""
+        self._styled_for = _theme_key()
+        badge_bg = theme_color(KIND_ROLES.get(self.component.kind, "disabled"))
+        self.kind_badge.setStyleSheet(
+            f"background-color: {badge_bg}; color: {_text_on(badge_bg)}; font-size: 10px; "
+            f"font-weight: 700; padding: 2px 6px; border-radius: 4px;"
+        )
+        self.version_label.setStyleSheet(f"color: {theme_color('comment')}; font-size: 12px;")
+        self.author_label.setStyleSheet(f"color: {theme_color('muted')}; font-size: 11px;")
+        self.desc_label.setStyleSheet(f"color: {theme_color('text')}; font-size: 12px; line-height: 1.4;")
+        for tag_label in self.tag_labels:
+            tag_label.setStyleSheet(f"color: {theme_color('secondary')}; font-size: 11px;")
+        if self.btn_repo is not None:
+            self.btn_repo.setStyleSheet(
+                f"color: {theme_color('secondary')}; font-size: 11px; border: none; background: transparent;")
+        self._style_action_button()
 
     def _build_ui(self):
         layout = QVBoxLayout(self)
@@ -56,23 +148,9 @@ class HubComponentCard(QFrame):
         top_row = QHBoxLayout()
         top_row.setSpacing(8)
 
-        # Kind badge
-        kind_colors = {
-            "plugin": ("#b16286", "#d3869b"),   # Purple
-            "suite": ("#b16286", "#d3869b"),    # Purple
-            "package": ("#b16286", "#d3869b"),  # Purple
-            "method": ("#98971a", "#b8bb26"),   # Green
-            "model": ("#458588", "#83a598"),    # Blue
-            "env": ("#d79921", "#fabd2f"),      # Yellow/Orange
-            "experiment": ("#cc241d", "#fb4934")# Red
-        }
-        badge_bg, badge_fg = kind_colors.get(self.component.kind, ("#665c54", "#ebdbb2"))
-        kind_badge = QLabel(self.component.kind.upper())
-        kind_badge.setStyleSheet(
-            f"background-color: {badge_bg}; color: #ebdbb2; font-size: 10px; "
-            f"font-weight: 700; padding: 2px 6px; border-radius: 4px;"
-        )
-        top_row.addWidget(kind_badge)
+        # Kind badge (colored by _apply_theme, like everything below)
+        self.kind_badge = QLabel(self.component.kind.upper())
+        top_row.addWidget(self.kind_badge)
 
         # Title
         title_label = QLabel(self.component.name)
@@ -80,15 +158,12 @@ class HubComponentCard(QFrame):
         top_row.addWidget(title_label)
 
         # Version
-        version_label = QLabel(f"v{self.component.version}")
-        version_label.setStyleSheet(f"color: {theme_color('comment')}; font-size: 12px;")
-        top_row.addWidget(version_label)
+        self.version_label = QLabel(f"v{self.component.version}")
+        top_row.addWidget(self.version_label)
 
         # Author
-        author_text = f"by {self.component.author.name}"
-        author_label = QLabel(author_text)
-        author_label.setStyleSheet(f"color: {theme_color('muted')}; font-size: 11px;")
-        top_row.addWidget(author_label)
+        self.author_label = QLabel(f"by {self.component.author.name}")
+        top_row.addWidget(self.author_label)
 
         top_row.addStretch()
 
@@ -102,29 +177,27 @@ class HubComponentCard(QFrame):
         layout.addLayout(top_row)
 
         # ── Description ──────────────────────────────────────────────────────
-        desc_label = QLabel(self.component.description)
-        desc_label.setWordWrap(True)
-        desc_label.setStyleSheet(f"color: {theme_color('text')}; font-size: 12px; line-height: 1.4;")
-        layout.addWidget(desc_label)
+        self.desc_label = QLabel(self.component.description)
+        self.desc_label.setWordWrap(True)
+        layout.addWidget(self.desc_label)
 
         # ── Bottom Row: Tags & Links ─────────────────────────────────────────
         bottom_row = QHBoxLayout()
         bottom_row.setSpacing(6)
 
-        for tag in self.component.tags[:5]:
-            tag_label = QLabel(f"#{tag}")
-            tag_label.setStyleSheet(f"color: {theme_color('secondary')}; font-size: 11px;")
+        self.tag_labels = [QLabel(f"#{tag}") for tag in self.component.tags[:5]]
+        for tag_label in self.tag_labels:
             bottom_row.addWidget(tag_label)
 
         bottom_row.addStretch()
 
+        self.btn_repo = None
         if self.component.repository:
-            btn_repo = QToolButton()
-            btn_repo.setText("GitHub")
-            btn_repo.setStyleSheet(f"color: {theme_color('secondary')}; font-size: 11px; border: none; background: transparent;")
-            btn_repo.setCursor(Qt.CursorShape.PointingHandCursor)
-            btn_repo.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(self.component.repository)))
-            bottom_row.addWidget(btn_repo)
+            self.btn_repo = QToolButton()
+            self.btn_repo.setText("GitHub")
+            self.btn_repo.setCursor(Qt.CursorShape.PointingHandCursor)
+            self.btn_repo.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(self.component.repository)))
+            bottom_row.addWidget(self.btn_repo)
 
         layout.addLayout(bottom_row)
 
@@ -135,70 +208,36 @@ class HubComponentCard(QFrame):
         self.progress_bar.hide()
         layout.addWidget(self.progress_bar)
 
-        self.update_action_state()
+        self.update_action_state()  # text and role for the install state
+        self._apply_theme()
 
     def update_action_state(self):
-        """Update button text and style according to local installation state."""
-        if self.component.is_installed:
-            if self.component.has_update:
-                self.btn_action.setText(f"Update to v{self.component.version}")
-                self.btn_action.setObjectName("actionUpdate")
-                self.btn_action.setStyleSheet(
-                    "QPushButton {"
-                    "  background-color: #458588;"
-                    "  color: #ebdbb2;"
-                    "  border: 1px solid #83a598;"
-                    "  border-radius: 4px;"
-                    "  font-weight: 700;"
-                    "  padding: 4px 14px;"
-                    "}"
-                    "QPushButton:hover {"
-                    "  background-color: #83a598;"
-                    "  color: #1d2021;"
-                    "  border-color: #83a598;"
-                    "}"
-                    + _disabled_button_css()
-                )
-                self.btn_action.setEnabled(True)
-            else:
-                self.btn_action.setText("Uninstall")
-                self.btn_action.setObjectName("actionUninstall")
-                self.btn_action.setStyleSheet(
-                    "QPushButton {"
-                    "  background-color: #cc241d;"
-                    "  color: #ebdbb2;"
-                    "  border: 1px solid #cc241d;"
-                    "  border-radius: 4px;"
-                    "  font-weight: 700;"
-                    "  padding: 4px 14px;"
-                    "}"
-                    "QPushButton:hover {"
-                    "  background-color: #fb4934;"
-                    "  color: #1d2021;"
-                    "  border-color: #fb4934;"
-                    "}"
-                    + _disabled_button_css()
-                )
-                self.btn_action.setEnabled(True)
+        """Set the action button's text for the local installation state, and color it."""
+        if self.component.is_installed and self.component.has_update:
+            self.btn_action.setText(f"Update to v{self.component.version}")
+            self.btn_action.setObjectName("actionUpdate")
+        elif self.component.is_installed:
+            self.btn_action.setText("Uninstall")
+            self.btn_action.setObjectName("actionUninstall")
         else:
             self.btn_action.setText("Install")
             self.btn_action.setObjectName("actionInstall")
-            self.btn_action.setStyleSheet(
-                "QPushButton {"
-                f"  background-color: {theme_color('primary')};"
-                f"  color: {theme_color('base')};"
-                f"  border: 1px solid {theme_color('primary')};"
-                "  border-radius: 4px;"
-                "  font-weight: 700;"
-                "  padding: 4px 14px;"
-                "}"
-                "QPushButton:hover {"
-                f"  background-color: {theme_color('primary_hover')};"
-                f"  border-color: {theme_color('primary_hover')};"
-                "}"
-                + _disabled_button_css()
-            )
-            self.btn_action.setEnabled(True)
+        self.btn_action.setEnabled(True)
+        self._style_action_button()
+
+    def _style_action_button(self):
+        """Color the action button for its role. Leaves its text and enabled state alone, so a theme
+        switch during an install doesn't reset "Installing…" or re-enable the button."""
+        role = self.btn_action.objectName()
+        if role == "actionUninstall":
+            css = _filled_button_css(DANGER, DANGER_HOVER, ON_DANGER)
+        elif role == "actionUpdate":
+            update = theme_color("secondary")
+            css = _filled_button_css(update, _hover(update), _text_on(update))
+        else:
+            install = theme_color("primary")
+            css = _filled_button_css(install, theme_color("primary_hover"), _text_on(install))
+        self.btn_action.setStyleSheet(css)
         self.btn_action.style().unpolish(self.btn_action)
         self.btn_action.style().polish(self.btn_action)
 
@@ -291,7 +330,7 @@ class UninstallComponentDialog(QDialog):
         btn_row.addWidget(btn_keep)
 
         btn_remove = QPushButton("Remove All")
-        btn_remove.setStyleSheet("background-color: #cc241d; color: #ebdbb2; font-weight: bold;")
+        btn_remove.setStyleSheet(f"background-color: {DANGER}; color: {ON_DANGER}; font-weight: bold;")
         btn_remove.setToolTip("Uninstall component code and delete all associated YAML configurations")
         btn_remove.clicked.connect(self._on_remove)
         btn_row.addWidget(btn_remove)
@@ -331,12 +370,28 @@ class HubView(QWidget):
         self.active_kind: str | None = "plugin" if mode == "plugins" else initial_kind
         self.close_button_text = close_button_text
         self.cards: Dict[str, HubComponentCard] = {}
+        self._styled_for = None
 
         self._build_ui()
+        self._apply_theme()
         self._wire_client()
 
         # Load components
         self.client.fetch_index_async()
+
+    def changeEvent(self, event):
+        super().changeEvent(event)  # cards restyle themselves; this covers the header and footer
+        if (event.type() == QEvent.Type.PaletteChange and self._styled_for is not None  # built and styled
+                and self._styled_for != _theme_key()):
+            self._apply_theme()
+
+    def _apply_theme(self):
+        self._styled_for = _theme_key()
+        self.eyebrow.setStyleSheet(
+            f"font-size: 11px; font-weight: 700; letter-spacing: 1px; color: {theme_color('secondary')};")
+        self.desc.setStyleSheet(f"color: {theme_color('muted')}; font-size: 12px;")
+        self.sort_lbl.setStyleSheet(f"color: {theme_color('muted')}; font-size: 11px;")
+        self.status_label.setStyleSheet(f"color: {theme_color('comment')}; font-size: 11px;")
 
     def _matches_mode(self, comp: HubComponent) -> bool:
         """Enforce strict separation between UI plugins and modular components."""
@@ -356,10 +411,9 @@ class HubView(QWidget):
         header.setSpacing(3)
 
         eyebrow_text = "THETA COMMUNITY PLUGINS" if self.mode == "plugins" else "THETA COMPONENT HUB"
-        eyebrow = QLabel(eyebrow_text)
-        eyebrow.setObjectName("eyebrow")
-        eyebrow.setStyleSheet(f"font-size: 11px; font-weight: 700; letter-spacing: 1px; color: {theme_color('secondary')};")
-        header.addWidget(eyebrow)
+        self.eyebrow = QLabel(eyebrow_text)
+        self.eyebrow.setObjectName("eyebrow")
+        header.addWidget(self.eyebrow)
 
         title_text = "Explore & Install Plugins" if self.mode == "plugins" else "Explore & Install Components"
         title = QLabel(title_text)
@@ -371,9 +425,8 @@ class HubView(QWidget):
             if self.mode == "plugins"
             else "Discover reinforcement learning benchmark suites, algorithm baselines, symbolic models, and environments."
         )
-        desc = QLabel(desc_text)
-        desc.setStyleSheet(f"color: {theme_color('muted')}; font-size: 12px;")
-        header.addWidget(desc)
+        self.desc = QLabel(desc_text)
+        header.addWidget(self.desc)
         main_layout.addLayout(header)
 
         # ── Search & Filter Bar ──────────────────────────────────────────────
@@ -390,9 +443,8 @@ class HubView(QWidget):
         self.search_input.textChanged.connect(self._apply_filters)
         search_row.addWidget(self.search_input, 1)
 
-        sort_lbl = QLabel("Sort:")
-        sort_lbl.setStyleSheet(f"color: {theme_color('muted')}; font-size: 11px;")
-        search_row.addWidget(sort_lbl)
+        self.sort_lbl = QLabel("Sort:")
+        search_row.addWidget(self.sort_lbl)
 
         self.sort_combo = QComboBox()
         self.sort_combo.addItem("Default", "default")
@@ -467,7 +519,6 @@ class HubView(QWidget):
         # ── Footer / Status ──────────────────────────────────────────────────
         footer = QHBoxLayout()
         self.status_label = QLabel("Loading community registry…")
-        self.status_label.setStyleSheet(f"color: {theme_color('comment')}; font-size: 11px;")
         footer.addWidget(self.status_label, 1)
 
         self.btn_close = QPushButton(self.close_button_text)
