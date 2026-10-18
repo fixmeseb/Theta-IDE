@@ -315,8 +315,19 @@ class PosixPtySession(QObject):
         """Check if tmux is currently running in this terminal session."""
         if not self.is_alive() or not self.process:
             return False
+        pid = self.process.pid
+        # Linux: read the shell's children from /proc. This runs on the UI thread every couple of
+        # seconds, and spawning pgrep + ps there stalled the window ~40 ms each time.
+        children = Path(f"/proc/{pid}/task/{pid}/children")
+        if children.exists():
+            try:
+                for cpid in children.read_text().split():
+                    if "tmux" in Path(f"/proc/{cpid}/comm").read_text():
+                        return True
+            except OSError:
+                pass
+            return False
         try:
-            pid = self.process.pid
             out = subprocess.check_output(["pgrep", "-P", str(pid)], text=True, timeout=0.1)
             child_pids = [int(p) for p in out.strip().split() if p.isdigit()]
             for cpid in child_pids:
