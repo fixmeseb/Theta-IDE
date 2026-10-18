@@ -183,8 +183,10 @@ class Window(QMainWindow):
         self.active_config_path = None
         self.active_config_rel_path = None
         self.current_experiment = None
-        self.state_label = None
-        self.backend_label = None
+        # Created before anything that talks to the backend: its replies arrive on the event loop, which
+        # the splash progress steps below spin, so a reply can land before the rest of the window exists.
+        self.state_label = label("TRAINING   •   idle  ", "muted")
+        self.backend_label = label("PIPELINE   ○   loading…  ", "muted")
         self.fixed_fields = {}
         self.fields = {}
         step("Building the workspace…", 0.08)
@@ -206,9 +208,7 @@ class Window(QMainWindow):
         self.theme_manager.committed.connect(self.persist_theme_choice)
         step("Applying theme…", 0.68)
         self.theme_changed()
-        self.state_label = label("TRAINING   •   idle  ", "muted")
         self.statusBar().addPermanentWidget(self.state_label)
-        self.backend_label = label("PIPELINE   ○   loading…  ", "muted")
         self.statusBar().addPermanentWidget(self.backend_label)
         step("Loading runs…", 0.79)
         self.refresh_runs()
