@@ -284,8 +284,14 @@ def build_trainer(cfg, model=None):
                 )
 
     if is_online:
-        from src.app.core.callbacks import EnvironmentEvaluatorCallback
+        from src.app.core.callbacks import EnvironmentEvaluatorCallback, PeriodicCheckpointCallback
+        from src.app.core.checkpoints import checkpoint_interval
+
         callbacks.append(EnvironmentEvaluatorCallback(cfg))
+
+        interval = checkpoint_interval(cfg)
+        if interval:
+            callbacks.append(PeriodicCheckpointCallback(ckpt_dir, interval, int(cfg.get("total_timesteps") or 0)))
 
     if cfg.get("paradigm") == "online_rl":
         num_envs = getattr(model, "num_envs", cfg.env.num_envs) if model else cfg.env.num_envs

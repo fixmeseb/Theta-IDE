@@ -15,6 +15,7 @@ from typing import Any
 
 import yaml
 
+from src.app.core.checkpoints import checkpoint_errors
 from src.app.pipeline.config import normalize_agent_name, parse_methods_dict, resolve_experiment_config_name
 from src.app.pipeline.datasets import resolve_dataset_path
 from src.app.pipeline.exceptions import ConfigurationError
@@ -224,6 +225,10 @@ def validate_experiment_config(cfg: Any, experiment_name: str, is_sweep: bool = 
 
     # --- Apply paradigm constraints ---
     _check_paradigm_constraints(cfg, paradigm_name, constraints, env_name)
+
+    # --- Periodic checkpoints: checkpoint_every_steps or num_checkpoints ---
+    for problem in checkpoint_errors(cfg):
+        raise ConfigurationError(f"[ConfigurationError] Experiment '{experiment_name}': {problem}")
 
     # --- Paradigm-Method/Agent Validation ---
     _validate_methods_for_paradigm(cfg, paradigm_name, paradigm_def)
