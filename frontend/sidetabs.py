@@ -26,6 +26,7 @@ TAB_MIME = "application/x-thetatab-id"
 BIN_MIME = "application/x-thetabin-id"
 MERGE_ZONE = 0.28  # dropping in the top or bottom 28% of an item reorders; the middle groups
 BIN_NAME_LIMIT = 40
+RENAME_DOUBLE_CLICK_MS = 250  # a bin header's double-click renames only when this quick
 
 
 def svg_icon(name, colors, size=ICON_SIZE):
@@ -151,6 +152,7 @@ class BinHeader(DraggableTabButton):
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.clicked.connect(self._on_clicked)
         self.editor = None
+        self._last_press_ms = None  # timestamp of the last left press, to time double-clicks
 
     @property
     def bin_id(self):
@@ -159,10 +161,24 @@ class BinHeader(DraggableTabButton):
     def _on_clicked(self):
         self.side_tabs.toggle_bin(self.bin_id)
 
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._last_press_ms = event.timestamp()
+        super().mousePressEvent(event)
+
     def mouseDoubleClickEvent(self, event):
-        # The two clicks of a double-click toggled the bin twice, so it ends up as it was.
-        self.start_rename()
-        event.accept()
+        # Qt calls two presses a double-click when they fall within the platform interval (400 ms by
+        # default), which also catches a deliberate collapse-then-expand. Only a quick one renames;
+        # a slower second press is an ordinary click (QWidget turns it into a press, so it toggles).
+        first = self._last_press_ms
+        self._last_press_ms = None
+        if (event.button() == Qt.MouseButton.LeftButton and first is not None
+                and event.timestamp() - first <= RENAME_DOUBLE_CLICK_MS):
+            self.side_tabs.toggle_bin(self.bin_id)  # undo the first click's toggle: renaming leaves it as it was
+            self.start_rename()
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -214,7 +230,7 @@ class BinHeader(DraggableTabButton):
 
 
 class _BinNameEditor(QLineEdit):
-    """Inline editor over a bin header: Enter or focus loss keeps the name, Escape cancels."""
+    """Inline editor over a bin header: Enter, focus loss or a click elsewhere keeps the name, Escape cancels."""
 
     def __init__(self, header, parent):
         super().__init__(parent)
@@ -223,10 +239,21 @@ class _BinNameEditor(QLineEdit):
         self.setMaxLength(BIN_NAME_LIMIT)
         self._done = False
         self.returnPressed.connect(lambda: self._finish(True))
+        # A click on something that doesn't take focus (the sidebar's background, a label) never
+        # moves focus out of the editor, so watch presses app-wide while it's open.
+        QApplication.instance().installEventFilter(self)
+
+    def eventFilter(self, watched, event):
+        if (event.type() == QEvent.Type.MouseButtonPress and not self._done
+                and QApplication.activePopupWidget() is None  # e.g. the editor's own context menu
+                and not self.rect().contains(self.mapFromGlobal(event.globalPosition().toPoint()))):
+            self._finish(True)
+        return False  # the click still goes where it was aimed
 
     def _finish(self, commit):
         if not self._done:
             self._done = True
+            QApplication.instance().removeEventFilter(self)
             self.header.finish_rename(commit)
 
     def keyPressEvent(self, event):
