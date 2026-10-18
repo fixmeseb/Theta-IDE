@@ -1362,8 +1362,10 @@ class Window(QMainWindow):
         if hasattr(self, "zoom_percent_label") and self.zoom_percent_label:
             self.zoom_percent_label.setText(f"{int(round(factor * 100))}%")
 
-        # 7. Status bar confirmation
-        if hasattr(self, "statusBar") and self.statusBar():
+        # 7. Status bar confirmation, for zooms the user makes. Not while starting up: a message shown
+        # before the window is visible doesn't hide the status bar's normal widgets (QStatusBar only
+        # hides visible ones), so for its 1.5 s it was drawn on top of the theme label.
+        if self.isVisible() and hasattr(self, "statusBar") and self.statusBar():
             self.statusBar().showMessage(f"Zoom: {int(round(factor * 100))}%", 1500)
 
     def _persist_zoom(self):

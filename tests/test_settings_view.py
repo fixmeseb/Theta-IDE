@@ -103,6 +103,32 @@ class TestSettingsViewStructureAndNavigation(unittest.TestCase):
         self.assertEqual(card.width(), SettingsDetailWindow.MAX_PAGE_WIDTH)
         self.assertEqual(card.height(), self.settings.settings_window.height())
 
+    def test_rebuilt_pane_switches_leave_no_stale_widgets_on_screen(self):
+        """Plugins add tabs while the window is built, rebuilding the switches before the event loop runs;
+        the old labels used to stay visible (stacked at the card's corner) until deleteLater fired."""
+        from PyQt6.QtWidgets import QLabel
+
+        self.settings.rebuild_pane_switches()  # a rebuild, with no event loop to run deleteLater
+        card = self.settings.panes_grid.parentWidget()
+        visible = [lbl.text() for lbl in card.findChildren(QLabel) if lbl.isVisible()]
+        for _pid, entry in self.window.tabs.tabs.items():
+            name = entry.get("text") or entry.get("short")
+            self.assertLessEqual(visible.count(name), 1, name)
+
+    def test_startup_zoom_posts_no_status_message_but_user_zoom_does(self):
+        """A message posted before the window is visible doesn't hide the status bar's own widgets,
+        so it was drawn over the theme label. Startup has nothing to confirm; user zooms still do."""
+        with tempfile.TemporaryDirectory() as temp:
+            fresh = Window(Path(temp))
+            try:
+                self.assertEqual(fresh.statusBar().currentMessage(), "")
+            finally:
+                fresh._quitting = True
+                fresh.close()
+        self.window.set_zoom(1.1, persist=False)
+        self.assertEqual(self.window.statusBar().currentMessage(), "Zoom: 110%")
+        self.window.set_zoom(1.0, persist=False)
+
     def test_no_animation_or_about_content_in_settings(self):
         self.assertNotIn("animation", self.settings.tab_buttons)
         self.assertNotIn("animation", self.settings.page_widgets)

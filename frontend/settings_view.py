@@ -1003,14 +1003,21 @@ class SettingsView(QWidget):
         grid = getattr(self, "panes_grid", None)
         if grid is None:
             return
+        # Hide what's taken out as well as deleting it: deleteLater only runs once the event loop does,
+        # and plugins add their tabs (and so rebuild this) while the window is still being built. Until
+        # then the old labels and switches stayed visible, piled up at the card's top-left corner.
         while grid.count():
             item = grid.takeAt(0)
             row = item.layout()
             while row is not None and row.count():
                 child = row.takeAt(0)
                 if child.widget() is not None:
+                    child.widget().hide()
                     child.widget().deleteLater()
+            if row is not None:
+                row.deleteLater()  # takeAt hands the row layout to us; nothing else frees it
             if item.widget() is not None:
+                item.widget().hide()
                 item.widget().deleteLater()
 
         tabs = getattr(self.window, "tabs", None)
