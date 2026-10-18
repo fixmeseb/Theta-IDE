@@ -10,7 +10,4 @@ constraints:
   requires:
     methods: non_empty
     agent: required
-forbidden_agents:
-  - cql
-  - iql
 

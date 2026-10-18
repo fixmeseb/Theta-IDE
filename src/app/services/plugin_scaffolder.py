@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 import json
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from . import PROJECT_ROOT
 
@@ -31,8 +31,8 @@ class ScaffoldOptions:
     version: str = "0.1.0"
     description: str = ""
     is_composite: bool = False  # For models: generates ModelSlot and CompositeModelProtocol
-    paradigms: List[str] = field(default_factory=list)  # Supported paradigms (e.g. ['online_rl'])
-    output_dir: Optional[Path] = None
+    paradigms: list[str] = field(default_factory=list)  # Supported paradigms (e.g. ['online_rl'])
+    output_dir: Path | None = None
 
 
 @dataclass
@@ -41,14 +41,14 @@ class ScaffoldResult:
     success: bool
     component_id: str
     target_dir: Path
-    created_files: List[Path] = field(default_factory=list)
-    error: Optional[str] = None
+    created_files: list[Path] = field(default_factory=list)
+    error: str | None = None
 
 
 class PluginScaffolder:
     """Scaffolds new component plugins adhering to Theta-IDE protocols."""
 
-    def __init__(self, workspace_root: Optional[Path] = None):
+    def __init__(self, workspace_root: Path | None = None):
         self.workspace_root = Path(workspace_root) if workspace_root else PROJECT_ROOT
 
     def scaffold(self, options: ScaffoldOptions) -> ScaffoldResult:
@@ -101,7 +101,7 @@ class PluginScaffolder:
     def _scaffold_model(self, name: str, opts: ScaffoldOptions) -> ScaffoldResult:
         target_dir = opts.output_dir or (self.workspace_root / "src" / "usr" / "models" / name)
         target_dir.mkdir(parents=True, exist_ok=True)
-        created: List[Path] = []
+        created: list[Path] = []
 
         class_name = "".join(part.capitalize() for part in name.split("_")) + "Model"
         desc = opts.description or f"Custom {name} model architecture for Theta-IDE."
@@ -296,7 +296,7 @@ dependencies = ["torch>=2.0.0"]
     def _scaffold_agent(self, name: str, opts: ScaffoldOptions) -> ScaffoldResult:
         target_dir = opts.output_dir or (self.workspace_root / "src" / "usr" / "methods" / name)
         target_dir.mkdir(parents=True, exist_ok=True)
-        created: List[Path] = []
+        created: list[Path] = []
 
         class_name = "".join(part.capitalize() for part in name.split("_")) + "Agent"
         desc = opts.description or f"Custom {name} RL algorithm for Theta-IDE."
@@ -424,7 +424,7 @@ dependencies = ["torch>=2.0.0", "lightning>=2.0.0"]
     def _scaffold_env(self, name: str, opts: ScaffoldOptions) -> ScaffoldResult:
         target_dir = opts.output_dir or (self.workspace_root / "in" / "envs" / name)
         target_dir.mkdir(parents=True, exist_ok=True)
-        created: List[Path] = []
+        created: list[Path] = []
 
         class_name = "".join(part.capitalize() for part in name.split("_")) + "EnvironmentPlugin"
         desc = opts.description or f"Custom {name} simulator & grounding environment for Theta-IDE."
@@ -546,7 +546,7 @@ env:
     def _scaffold_datamodule(self, name: str, opts: ScaffoldOptions) -> ScaffoldResult:
         target_dir = opts.output_dir or (self.workspace_root / "src" / "usr" / "data" / name)
         target_dir.mkdir(parents=True, exist_ok=True)
-        created: List[Path] = []
+        created: list[Path] = []
 
         class_name = "".join(part.capitalize() for part in name.split("_")) + "DataModule"
         desc = opts.description or f"Custom {name} DataModule for Theta-IDE."
@@ -633,7 +633,7 @@ class {class_name}(L.LightningDataModule, DataModulePluginProtocol, TrajectorySa
     def _scaffold_evaluator(self, name: str, opts: ScaffoldOptions) -> ScaffoldResult:
         target_dir = opts.output_dir or (self.workspace_root / "src" / "usr" / "eval" / name)
         target_dir.mkdir(parents=True, exist_ok=True)
-        created: List[Path] = []
+        created: list[Path] = []
 
         class_name = "".join(part.capitalize() for part in name.split("_")) + "Evaluator"
         desc = opts.description or f"Custom {name} evaluation & verification hook for Theta-IDE."

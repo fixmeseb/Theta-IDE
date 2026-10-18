@@ -58,13 +58,28 @@ def wait_for(predicate, timeout=5):
     return False
 
 
+@pytest.fixture
+def mock_config_root(tmp_path_factory):
+    root = tmp_path_factory.mktemp("config_root")
+    (root / "agent").mkdir(parents=True)
+    (root / "model").mkdir(parents=True)
+    (root / "env").mkdir(parents=True)
+    (root / "agent" / "cql.yaml").write_text("agent: cql\n", encoding="utf-8")
+    (root / "agent" / "ppo.yaml").write_text("agent: ppo\n", encoding="utf-8")
+    (root / "agent" / "iql.yaml").write_text("agent: iql\n", encoding="utf-8")
+    (root / "model" / "nsfr.yaml").write_text("model: nsfr\n", encoding="utf-8")
+    (root / "env" / "cartpole.yaml").write_text("env: cartpole\n", encoding="utf-8")
+    (root / "env" / "pyrenees.yaml").write_text("env: pyrenees\n", encoding="utf-8")
+    return root
+
+
 # ── catalog and queries ─────────────────────────────────────────────────────
 
-def test_local_components_get_built_in_tags_and_hub_components_their_index_tags():
+def test_local_components_get_built_in_tags_and_hub_components_their_index_tags(mock_config_root):
     hub = SimpleNamespace(components=[SimpleNamespace(id="blendrl", name="BlendRL", kind="model",
                                                       tags=["BlendRL", "neural-symbolic"], description="")],
                           cache_file=None)
-    catalog = {c.key: c for c in build_catalog(CONFIG, hub)}
+    catalog = {c.key: c for c in build_catalog(mock_config_root, hub)}
     assert catalog["agent/cql"].tags == ["cql", "offline-rl", "q-learning"]
     assert catalog["hub/blendrl"].tags == ["blendrl", "neural-symbolic"] and catalog["hub/blendrl"].source == "hub"
     assert "env/cartpole" in catalog and "model/nsfr" in catalog
@@ -167,9 +182,9 @@ def test_citation_is_bibtex():
 # ── panel ───────────────────────────────────────────────────────────────────
 
 @pytest.fixture
-def panel():
+def panel(mock_config_root):
     fake = FakeArxiv()
-    widget = ArxivPanel(searcher=ArxivSearcher(fetch=fake), hub_client=None, config_root=CONFIG)
+    widget = ArxivPanel(searcher=ArxivSearcher(fetch=fake), hub_client=None, config_root=mock_config_root)
     widget.fake = fake
     widget.resize(1000, 700)
     widget.show()

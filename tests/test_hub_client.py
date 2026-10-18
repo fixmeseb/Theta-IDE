@@ -201,11 +201,15 @@ class TestHubClientAndInstaller(unittest.TestCase):
 
     def test_hub_dialog_ui_initialization(self):
         """HubDialog builds UI and filter pills cleanly."""
-        dialog = HubDialog(self.client)
+        dialog = HubDialog(self.client, mode="components")
         self.assertEqual(dialog.windowTitle(), "Theta Community Hub")
-        self.assertIn("plugin", dialog.pills)
         self.assertIn("method", dialog.pills)
         dialog.close()
+
+        plugins_dialog = HubDialog(self.client, mode="plugins")
+        self.assertEqual(plugins_dialog.windowTitle(), "Theta Community Plugins")
+        self.assertIn("plugin", plugins_dialog.pills)
+        plugins_dialog.close()
 
     def test_hub_component_card_button_colors_and_state(self):
         """HubComponentCard displays green Install and red Uninstall buttons and transitions cleanly."""

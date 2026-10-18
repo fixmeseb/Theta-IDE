@@ -18,7 +18,3 @@ constraints:
 default_model: dense_autoencoder
 
 allowed_agents: []
-forbidden_agents:
-  - cql
-  - iql
-  - ppo

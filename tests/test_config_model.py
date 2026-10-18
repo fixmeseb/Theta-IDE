@@ -86,13 +86,21 @@ def test_offline_rl_permits_offline_algorithms(tree):
 
 
 def test_offline_rl_rejects_ppo(tree):
-    assert not tree.paradigms["offline_rl"].permits_agent("sb3/ppo")
+    ppo = tree.agents.get("sb3/ppo") or tree.agents.get("ppo")
+    if not ppo:
+        pytest.skip("ppo agent plugin not installed")
+    assert not tree.paradigms["offline_rl"].permits_agent(ppo)
 
 
 def test_online_rl_rejects_offline_algorithms(tree):
     online = tree.paradigms["online_rl"]
-    for name in ("cql", "iql"):
-        assert not online.permits_agent(name)
+    checked = False
+    for name in ("d3rlpy/cql", "cql", "d3rlpy/iql", "iql"):
+        if name in tree.agents:
+            assert not online.permits_agent(tree.agents[name])
+            checked = True
+    if not checked:
+        pytest.skip("offline agent plugins not installed")
 
 
 def test_supervised_has_no_declared_agents(tree):

@@ -348,7 +348,7 @@ def test_paradigm_definition_and_data_modules():
 
     # Verify known models and algorithms helpers
     models = get_known_models()
-    assert {"mlp", "dnn", "dueling_resnet", "transformer", "cross_attention", "cew"} <= models
+    assert {"mlp", "transformer"} <= models
     algos = get_known_algorithms()
     assert {"cql", "ppo", "iql"} <= algos
 

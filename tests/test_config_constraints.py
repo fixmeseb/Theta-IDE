@@ -19,22 +19,125 @@ try:
 
     app = QApplication.instance() or QApplication(sys.argv[:1])
     from frontend.config_model import ConfigTree
-    from frontend.config_viewer import ConfigViewer, config_tree
+    from frontend.config_viewer import ConfigViewer, config_tree, set_config_tree, invalidate_config_tree
 
     HAS_PYQT6 = True
 except ImportError:
     HAS_PYQT6 = False
 
 
+_SHARED_TMP = None
+_MOCK_TREE = None
+
+
+def setUpModule():
+    global _SHARED_TMP, _MOCK_TREE
+    if not HAS_PYQT6:
+        return
+
+    _SHARED_TMP = tempfile.TemporaryDirectory()
+    root = Path(_SHARED_TMP.name)
+
+    # Paradigms
+    (root / "paradigms").mkdir(parents=True, exist_ok=True)
+    (root / "paradigms" / "online_rl.yaml").write_text(
+        "allows_eval_episodes: true\n"
+        "allowed_agents: [ppo]\n"
+        "forbidden_agents: [cql, iql, cew]\n",
+        encoding="utf-8",
+    )
+    (root / "paradigms" / "offline_rl.yaml").write_text(
+        "allowed_agents: [cql, iql, cew]\n"
+        "forbidden_agents: [ppo]\n"
+        "constraints:\n"
+        "  forbids:\n"
+        "    eval_episodes: 'offline rl has no simulator'\n",
+        encoding="utf-8",
+    )
+
+    # Agents
+    (root / "agent").mkdir(parents=True, exist_ok=True)
+    (root / "agent" / "ppo.yaml").write_text(
+        "algorithm: ppo\ncompatible_paradigms: [online_rl]\nlr: 0.0003\n",
+        encoding="utf-8",
+    )
+    (root / "agent" / "cql.yaml").write_text(
+        "algorithm: cql\ncompatible_paradigms: [offline_rl]\ncql_alpha: 5.0\n",
+        encoding="utf-8",
+    )
+    (root / "agent" / "iql.yaml").write_text(
+        "algorithm: iql\ncompatible_paradigms: [offline_rl]\n",
+        encoding="utf-8",
+    )
+    (root / "agent" / "cew.yaml").write_text(
+        "algorithm: cew\ncompatible_paradigms: [offline_rl]\n",
+        encoding="utf-8",
+    )
+
+    # Models
+    (root / "model").mkdir(parents=True, exist_ok=True)
+    (root / "model" / "dnn.yaml").write_text(
+        "architecture: dnn\nhidden_sizes: [64, 64]\nactivation: relu\n",
+        encoding="utf-8",
+    )
+
+    # Environments
+    (root / "env").mkdir(parents=True, exist_ok=True)
+    (root / "env" / "cartpole.yaml").write_text(
+        "description: cartpole\n",
+        encoding="utf-8",
+    )
+    (root / "env" / "mimic.yaml").write_text(
+        "compatible_paradigms: [offline_rl]\n",
+        encoding="utf-8",
+    )
+    (root / "env" / "pyrenees.yaml").write_text(
+        "compatible_paradigms: [offline_rl]\n",
+        encoding="utf-8",
+    )
+
+    # Experiments and groups
+    exp_dir = root / "experiment"
+    (exp_dir / "cartpole").mkdir(parents=True, exist_ok=True)
+    (exp_dir / "cartpole" / "_base.yaml").write_text(
+        "paradigm: online_rl\nenv: cartpole\neval_episodes: 10\n",
+        encoding="utf-8",
+    )
+    (exp_dir / "cartpole" / "demo.yaml").write_text(
+        "experiment_id: cp_demo\ntotal_timesteps: 10000\n",
+        encoding="utf-8",
+    )
+
+    (exp_dir / "mimic").mkdir(parents=True, exist_ok=True)
+    (exp_dir / "mimic" / "_base.yaml").write_text(
+        "paradigm: offline_rl\nenv: mimic\neval_episodes: 0\n",
+        encoding="utf-8",
+    )
+    (exp_dir / "mimic" / "demo.yaml").write_text(
+        "experiment_id: mimic_demo\n",
+        encoding="utf-8",
+    )
+
+    _MOCK_TREE = ConfigTree(root)
+    set_config_tree(_MOCK_TREE)
+
+
+def tearDownModule():
+    global _SHARED_TMP, _MOCK_TREE
+    invalidate_config_tree()
+    if _SHARED_TMP is not None:
+        _SHARED_TMP.cleanup()
+        _SHARED_TMP = None
+    _MOCK_TREE = None
+
+
 def an_experiment_in(group):
-    """Any experiment in `group`, as (path, rel_path).
-
-    Naming a specific file would tie these tests to the config tree staying
-    still, and it does not: a reorganisation took it from 85 experiments to 68
-    and deleted the one these tests used to open.
-    """
-    from pathlib import Path
-
+    """Any experiment in `group`, as (path, rel_path)."""
+    if _SHARED_TMP is not None:
+        directory = Path(_SHARED_TMP.name) / "experiment" / group
+        for path in sorted(directory.glob("*.yaml")):
+            if not path.name.startswith("_"):
+                return path, f"experiment/{group}/{path.name}"
     directory = Path("in/config/experiment") / group
     for path in sorted(directory.glob("*.yaml")):
         if not path.name.startswith("_"):
@@ -110,7 +213,7 @@ class TestParadigmSelector(ConfigViewerConstraintTest):
     def test_paradigm_combo_lists_every_paradigm(self):
         viewer = self.load(ONLINE_EXPERIMENT)
         listed = {viewer.combo_paradigm.itemText(i) for i in range(viewer.combo_paradigm.count())}
-        self.assertEqual(listed, set(ConfigTree.discover().paradigms))
+        self.assertEqual(listed, set(config_tree().paradigms))
 
     def test_changing_paradigm_updates_raw_data(self):
         viewer = self.load(ONLINE_EXPERIMENT)
@@ -292,7 +395,7 @@ class TestTreeToolbar(unittest.TestCase):
     def setUp(self):
         from frontend.config_tree import ConfigTreeWidget
 
-        self.widget = ConfigTreeWidget(mode="experiments")
+        self.widget = ConfigTreeWidget(root_dir=Path(_SHARED_TMP.name), mode="experiments")
         self.addCleanup(self.widget.close)
 
     def test_icon_buttons_have_icons_not_unrenderable_glyphs(self):

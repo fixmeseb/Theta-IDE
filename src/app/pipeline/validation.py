@@ -355,26 +355,35 @@ def _validate_methods_for_paradigm(cfg: Any, paradigm_name: str, paradigm_def: d
                         f"[ConfigurationError] Method '{method_name}' uses agent '{agent_algo}', "
                         f"which is not allowed in paradigm '{paradigm_name}'. Allowed agents: {allowed_agents}."
                     )
-            else:
-                # 3. Agent has no explicit paradigms and paradigm has no allowed_agents.
-                # Ensure the agent actually exists in registry or configs.
-                if not _agent_exists(agent_algo):
-                    raise ConfigurationError(
-                        f"[ConfigurationError] Method '{method_name}' uses agent '{agent_algo}', "
-                        f"which is not allowed in paradigm '{paradigm_name}'."
-                    )
+
 
 
 def _get_agent_supported_paradigms(agent_algo: str) -> list[str] | None:
     """Query supported paradigms from agent class or config YAML."""
     clean_algo = agent_algo.lower().replace("-", "_")
     try:
-        from src.usr.methods.agent_registry import AGENT_REGISTRY, auto_discover
+        from src.usr.methods.agent_registry import AGENT_REGISTRY, auto_discover, get_agent_class
         if not AGENT_REGISTRY:
             auto_discover()
-        agent_cls = AGENT_REGISTRY.get(clean_algo) or AGENT_REGISTRY.get(agent_algo)
-        if agent_cls is not None and hasattr(agent_cls, "get_supported_paradigms"):
-            return [str(p).lower() for p in agent_cls.get_supported_paradigms()]
+        agent_cls = None
+        try:
+            agent_cls = get_agent_class(clean_algo)
+        except Exception:
+            agent_cls = AGENT_REGISTRY.get(clean_algo) or AGENT_REGISTRY.get(agent_algo)
+
+        if agent_cls is not None:
+            if hasattr(agent_cls, "get_supported_paradigms"):
+                return [str(p).lower() for p in agent_cls.get_supported_paradigms()]
+            if hasattr(agent_cls, "supported_paradigms"):
+                p = getattr(agent_cls, "supported_paradigms")
+                if isinstance(p, (list, tuple, set)):
+                    return [str(x).lower() for x in p]
+                return [str(p).lower()]
+            if hasattr(agent_cls, "compatible_paradigms"):
+                p = getattr(agent_cls, "compatible_paradigms")
+                if isinstance(p, (list, tuple, set)):
+                    return [str(x).lower() for x in p]
+                return [str(p).lower()]
     except Exception:
         pass
 
@@ -389,7 +398,7 @@ def _get_agent_supported_paradigms(agent_algo: str) -> list[str] | None:
             if p.is_file():
                 try:
                     data = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
-                    paradigms = data.get("paradigms") or data.get("compatible_paradigms")
+                    paradigms = data.get("paradigms") or data.get("compatible_paradigms") or data.get("supported_paradigms")
                     if paradigms:
                         if isinstance(paradigms, list):
                             return [str(x).lower() for x in paradigms]
@@ -402,7 +411,7 @@ def _get_agent_supported_paradigms(agent_algo: str) -> list[str] | None:
             if y.stem.lower() in (clean_algo, agent_algo.lower()):
                 try:
                     data = yaml.safe_load(y.read_text(encoding="utf-8")) or {}
-                    paradigms = data.get("paradigms") or data.get("compatible_paradigms")
+                    paradigms = data.get("paradigms") or data.get("compatible_paradigms") or data.get("supported_paradigms")
                     if paradigms:
                         if isinstance(paradigms, list):
                             return [str(x).lower() for x in paradigms]

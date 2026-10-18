@@ -122,8 +122,8 @@ class TestFileTreeToolbar(unittest.TestCase):
             hw = tree_comp.header_widget
             groups = hw.header_layout.groups
             self.assertEqual([b.button_id for b in groups["row1_left"]], ["reload", "collapse_all", "expand_all", "search"])
-            self.assertEqual([b.button_id for b in groups["row1_right"]], ["hub", "raw_yaml"])
-            self.assertEqual([b.button_id for b in groups["row2_left"]], ["new_file", "copy"])
+            self.assertEqual([b.button_id for b in groups["row1_right"]], ["plus", "hub", "raw_yaml"])
+            self.assertEqual([b.button_id for b in groups["row2_left"]], ["copy"])
             self.assertEqual([b.button_id for b in groups["row2_right"]], [])
         finally:
             tree_comp.close()

@@ -196,25 +196,6 @@ def get_agent_candidate_hyperparameters(
             if k not in ("algorithm", "name", "type") and k not in TRAINING_HYPERPARAMETERS:
                 if k not in current_keys and k not in candidates:
                     candidates.append(k)
-    fallbacks = {
-        "cql": ["cql_alpha", "soft_target_tau", "use_actor", "target_entropy", "cql_weight"],
-        "ppo": [
-            "clip_coef",
-            "clip_range",
-            "ent_coef",
-            "vf_coef",
-            "gae_lambda",
-            "num_steps",
-            "num_envs",
-            "update_epochs",
-            "max_grad_norm",
-            "target_kl",
-        ],
-        "iql": ["expectile", "temperature", "soft_target_tau"],
-    }
-    for k in fallbacks.get(agent_name, []):
-        if k not in current_keys and k not in candidates:
-            candidates.append(k)
     return candidates
 
 
@@ -234,14 +215,6 @@ def get_model_candidate_hyperparameters(
             if k not in ("architecture", "type", "lightning_module", "name", "slots"):
                 if k not in current_keys and k not in candidates:
                     candidates.append(k)
-    if not candidates:
-        if model_name == "dnn":
-            candidates = ["hidden_sizes", "activation"]
-        elif model_name == "dueling_resnet":
-            candidates = ["hidden_sizes"]
-        elif model_name in ("dense_autoencoder", "autoencoder"):
-            candidates = ["hidden_dim", "latent_dim", "dropout"]
-        candidates = [k for k in candidates if k not in current_keys]
     return candidates
 
 
@@ -393,6 +366,7 @@ FIXED_BOX_KEYS = frozenset(
         # the same setting twice.
         "hydra",
         "dataset_path",
+        "offline_datasets",
         "description",
         "eval_freq_steps",
         "eval_freq",
@@ -428,6 +402,13 @@ def invalidate_config_tree():
     global _CONFIG_TREE, _CONFIG_TREE_LOADED
     _CONFIG_TREE = None
     _CONFIG_TREE_LOADED = False
+
+
+def set_config_tree(tree: ConfigTree | None):
+    """Explicitly set or override the active ConfigTree (useful for tests and dependency injection)."""
+    global _CONFIG_TREE, _CONFIG_TREE_LOADED
+    _CONFIG_TREE = tree
+    _CONFIG_TREE_LOADED = True
 
 
 def config_tree(force_reload: bool = False):
@@ -2634,8 +2615,6 @@ class ConfigViewer(QWidget):
                         model_defs = dict(tree.model_parameters(model_name)) if tree else {}
                         model_keys_raw = set(model_defs.keys())
                         model_keys = model_keys_raw - {"architecture", "type", "lightning_module"}
-                        if model_name == "dnn":
-                            model_keys.update(["hidden_sizes", "activation"])
 
                         for mk in list(model_keys):
                             val = None
@@ -2716,12 +2695,7 @@ class ConfigViewer(QWidget):
                                 if mk not in model_keys_present:
                                     def_val = model_defs.get(mk)
                                     if def_val is None:
-                                        if mk == "hidden_sizes" and model_name == "dnn":
-                                            def_val = "[64, 64]"
-                                        elif mk == "activation" and model_name == "dnn":
-                                            def_val = "relu"
-                                        else:
-                                            continue
+                                        continue
                                     row_mp = QHBoxLayout()
                                     if isinstance(def_val, bool):
                                         cb_mp = ToggleSlider(checked=def_val)
@@ -3784,7 +3758,7 @@ class ConfigViewer(QWidget):
         default_model = (
             (def_spec.get("model") if def_spec else None)
             or (p_obj.raw.get("default_model") if p_obj else None)
-            or "dnn"
+            or (next(iter(tree.models)) if tree and tree.models else "")
         )
 
         methods = self.raw_data.setdefault("methods", {})
@@ -4206,13 +4180,13 @@ class ConfigViewer(QWidget):
         m_spec = methods.setdefault(method_name, {})
         tree = config_tree()
         model_val = m_spec.get("model")
-        model_name = next(iter(model_val)) if isinstance(model_val, dict) else str(model_val or "dnn")
+        model_name = next(iter(model_val)) if isinstance(model_val, dict) else str(model_val or (tree.models[0] if tree and tree.models else ""))
 
         tree = config_tree()
         subcomps = tree.model_subcomponents(model_name) if tree else {}
         sub_default = dict(subcomps.get(subcomp_name, {}))
         if not sub_default:
-            sub_default = {"type": "dnn"}
+            sub_default = {}
 
         if isinstance(m_spec.get("model"), dict):
             m_spec["model"].setdefault(model_name, {})[subcomp_name] = sub_default
