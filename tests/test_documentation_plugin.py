@@ -232,7 +232,13 @@ class TestDocumentationPlugin(unittest.TestCase):
             self.assertEqual([s.text(0) for s in sections], article_sections(article))
             self.assertTrue(all(s.data(0, role)[0] == SECTION for s in sections))
 
-    def test_category_headers_collapse_and_the_open_article_shows_its_sections(self):
+    def article_item(self, panel, article_id):
+        return next(i for i in panel.article_items() if i.data(0, Qt.ItemDataRole.UserRole)[1] == article_id)
+
+    def expanded_articles(self, panel):
+        return sorted(i.data(0, Qt.ItemDataRole.UserRole)[1] for i in panel.article_items() if i.isExpanded())
+
+    def test_category_headers_collapse_with_one_click(self):
         panel = DocumentationPanel(context=None)
         self.addCleanup(panel.deleteLater)
         header = panel.toc.topLevelItem(0)
@@ -241,10 +247,53 @@ class TestDocumentationPlugin(unittest.TestCase):
         panel._on_outline_clicked(header)
         self.assertTrue(header.isExpanded())
 
-        panel.select_article("cli_workflows")
-        expanded = [i.data(0, Qt.ItemDataRole.UserRole)[1] for i in panel.article_items() if i.isExpanded()]
-        self.assertEqual(expanded, ["cli_workflows"])  # only the open article unfolds its sections
+    def test_opening_an_article_unfolds_it_without_folding_others(self):
+        panel = DocumentationPanel(context=None)
+        self.addCleanup(panel.deleteLater)
+        panel._on_outline_clicked(self.article_item(panel, "launching"))
+        panel._on_outline_clicked(self.article_item(panel, "cli_workflows"))
+        self.assertEqual(self.expanded_articles(panel), ["cli_workflows", "launching", "overview"])
         self.assertEqual(panel.toc.currentItem().data(0, Qt.ItemDataRole.UserRole)[1], "cli_workflows")
+
+    def test_expand_all_and_collapse_all(self):
+        panel = DocumentationPanel(context=None)
+        self.addCleanup(panel.deleteLater)
+        categories = [panel.toc.topLevelItem(i) for i in range(panel.toc.topLevelItemCount())]
+        panel.btn_collapse_all.click()
+        self.assertFalse(any(c.isExpanded() for c in categories))
+        self.assertEqual(self.expanded_articles(panel), [])
+        panel.btn_expand_all.click()
+        self.assertTrue(all(c.isExpanded() for c in categories))
+        self.assertEqual(len(self.expanded_articles(panel)), len(panel.article_items()))
+
+    def test_expansion_survives_rebuilding_the_outline(self):
+        panel = DocumentationPanel(context=None)
+        self.addCleanup(panel.deleteLater)
+        panel.btn_collapse_all.click()
+        panel._on_outline_clicked(self.article_item(panel, "launching"))
+        panel.search_input.setText("install")  # still matches the open article, so it stays open
+        panel.search_input.setText("")
+        self.assertEqual(panel.current_article_id, "launching")
+        self.assertEqual(self.expanded_articles(panel), ["launching"])
+
+    def test_outline_follows_the_reading_position(self):
+        panel = DocumentationPanel(context=None)
+        self.addCleanup(panel.deleteLater)
+        panel.resize(1400, 800)
+        panel.show()
+        panel.select_article("launching")
+        app.processEvents()
+        bar = panel.browser.verticalScrollBar()
+        seen = []
+        for value in list(range(0, bar.maximum(), 10)) + [bar.maximum()]:
+            bar.setValue(value)
+            if not seen or seen[-1] != panel.current_section():
+                seen.append(panel.current_section())
+        sections = self.article_item(panel, "launching").childCount()
+        self.assertEqual(seen, [None] + [f"sec-{i}" for i in range(sections)])  # every section, in order
+        item = self.article_item(panel, "launching")
+        bold = [item.child(j).text(0) for j in range(item.childCount()) if item.child(j).font(0).bold()]
+        self.assertEqual(bold, [item.child(sections - 1).text(0)])  # the section being read is highlighted
 
     def test_clicking_a_section_opens_its_article_and_scrolls_to_it(self):
         panel = DocumentationPanel(context=None)

@@ -21,6 +21,7 @@ from PyQt6.QtWidgets import (
     QSplitter,
     QTextBrowser,
     QTextEdit,
+    QToolButton,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
@@ -107,7 +108,11 @@ class DocumentationPanel(QWidget):
         self.setObjectName("documentationPanel")
         self.current_article_id: str = "overview"
         self._styled_for = None
+        # What the user unfolded or folded, kept across outline rebuilds (search, filters, theme)
         self._collapsed_categories: set[str] = set()
+        self._expanded_articles: set[str] = {"overview"}
+        self._anchor_tops: list[tuple[float, str]] | None = None  # (y, anchor) of each section; lazily
+        self._active_section: str | None = None
         self._init_ui()
         self._populate_categories()
         self._apply_theme()
@@ -161,7 +166,25 @@ class DocumentationPanel(QWidget):
         left_layout = QVBoxLayout(left_container)
         left_layout.setContentsMargins(0, 0, 0, 0)
         left_layout.setSpacing(6)
-        left_layout.addWidget(label("CONTENTS", "eyebrow"))
+        contents_row = QHBoxLayout()
+        contents_row.setContentsMargins(0, 0, 0, 0)
+        contents_row.setSpacing(2)
+        contents_row.addWidget(label("CONTENTS", "eyebrow"))
+        contents_row.addStretch()
+        self.btn_expand_all = QToolButton()
+        self.btn_expand_all.setText("Expand all")
+        self.btn_expand_all.setToolTip("Unfold every category and article")
+        self.btn_expand_all.clicked.connect(lambda: self.set_all_expanded(True))
+        self.btn_collapse_all = QToolButton()
+        self.btn_collapse_all.setText("Collapse all")
+        self.btn_collapse_all.setToolTip("Fold every category and article")
+        self.btn_collapse_all.clicked.connect(lambda: self.set_all_expanded(False))
+        for button in (self.btn_expand_all, self.btn_collapse_all):
+            button.setObjectName("docOutlineAction")
+            button.setAutoRaise(True)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            contents_row.addWidget(button)
+        left_layout.addLayout(contents_row)
 
         self.toc = QTreeWidget()
         self.toc.setObjectName("docOutline")
@@ -171,8 +194,8 @@ class DocumentationPanel(QWidget):
         self.toc.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.toc.setTextElideMode(Qt.TextElideMode.ElideRight)
         self.toc.itemClicked.connect(self._on_outline_clicked)
-        self.toc.itemExpanded.connect(lambda item: self._remember_category(item, expanded=True))
-        self.toc.itemCollapsed.connect(lambda item: self._remember_category(item, expanded=False))
+        self.toc.itemExpanded.connect(lambda item: self._remember_expansion(item, expanded=True))
+        self.toc.itemCollapsed.connect(lambda item: self._remember_expansion(item, expanded=False))
         left_layout.addWidget(self.toc, 1)
         splitter.addWidget(left_container)
 
@@ -219,6 +242,9 @@ class DocumentationPanel(QWidget):
         self.browser.setLineWrapMode(QTextEdit.LineWrapMode.FixedPixelWidth)
         self.browser.setLineWrapColumnOrWidth(TEXT_WIDTH)
         self.browser.document().setDocumentMargin(0)
+        # The outline follows the reading position: the section whose heading has scrolled to the top
+        self.browser.verticalScrollBar().valueChanged.connect(self._sync_outline_to_scroll)
+        self.browser.document().documentLayout().documentSizeChanged.connect(self._forget_anchor_tops)
         page_layout.addWidget(self.browser, 1)
 
         splitter.addWidget(self.page)
@@ -257,6 +283,14 @@ class DocumentationPanel(QWidget):
             f"QTreeWidget#docOutline::item:hover {{ background: {theme_color('surface')}; }} "
             f"QTreeWidget#docOutline::item:selected {{ background: {theme_color('raised')}; color: {accent}; }}"
         )
+        # Quiet text buttons; set on each button, since they sit beside the outline, not inside it
+        action_css = (
+            f"QToolButton#docOutlineAction {{ color: {theme_color('muted')}; font-size: 11px; padding: 1px 6px; "
+            "border: 0; border-radius: 4px; background: transparent; } "
+            f"QToolButton#docOutlineAction:hover {{ color: {theme_color('text')}; background: {theme_color('surface')}; }}"
+        )
+        self.btn_expand_all.setStyleSheet(action_css)
+        self.btn_collapse_all.setStyleSheet(action_css)
         self.page.setStyleSheet(
             f"QFrame#docPage {{ background: {theme_color('base')}; border: 1px solid {border}; border-radius: 10px; }} "
             f"QLabel#docBreadcrumb {{ background: transparent; color: {accent}; font-size: 11px; font-weight: 600; "
@@ -346,6 +380,7 @@ class DocumentationPanel(QWidget):
                     sec_item.setForeground(0, section_color)
                     sec_item.setToolTip(0, section)
                     art_item.addChild(sec_item)
+                art_item.setExpanded(art.id in self._expanded_articles)
             # Searching shows every match; otherwise headers stay as the user left them
             cat_item.setExpanded(bool(query) or category not in self._collapsed_categories)
 
@@ -364,19 +399,90 @@ class DocumentationPanel(QWidget):
             items.extend(cat_item.child(j) for j in range(cat_item.childCount()))
         return items
 
-    def _remember_category(self, item: QTreeWidgetItem, expanded: bool):
-        kind, _, _ = item.data(0, Qt.ItemDataRole.UserRole) or (None, None, None)
+    def _remember_expansion(self, item: QTreeWidgetItem, expanded: bool):
+        kind, article_id, _ = item.data(0, Qt.ItemDataRole.UserRole) or (None, None, None)
         if kind == CATEGORY:
             (self._collapsed_categories.discard if expanded else self._collapsed_categories.add)(item.text(0))
+        elif kind == ARTICLE:
+            (self._expanded_articles.add if expanded else self._expanded_articles.discard)(article_id)
+
+    def set_all_expanded(self, expanded: bool):
+        """Expand all / Collapse all: every category and every article."""
+        for i in range(self.toc.topLevelItemCount()):
+            cat_item = self.toc.topLevelItem(i)
+            cat_item.setExpanded(expanded)  # the expand/collapse signals record each change
+            for j in range(cat_item.childCount()):
+                cat_item.child(j).setExpanded(expanded)
 
     def _mark_current_article(self):
-        """Select the open article and show its sections; other articles fold their sections away."""
+        """Select the open article in the outline. Expansion is left as the user set it."""
         for item in self.article_items():
-            current = item.data(0, Qt.ItemDataRole.UserRole)[1] == self.current_article_id
-            item.setExpanded(current)
-            if current:
+            if item.data(0, Qt.ItemDataRole.UserRole)[1] == self.current_article_id:
                 self.toc.setCurrentItem(item)
                 self.toc.scrollToItem(item)
+                break
+        self._active_section = None
+        self._sync_outline_to_scroll()
+
+    # ── Following the reading position ──────────────────────────────────────────
+
+    def _forget_anchor_tops(self, *_):
+        self._anchor_tops = None  # re-measured on the next scroll: the text re-flowed
+
+    def _section_tops(self) -> list[tuple[float, str]]:
+        """(y, anchor) for each section heading in the open article, top to bottom."""
+        if self._anchor_tops is None:
+            doc = self.browser.document()
+            layout = doc.documentLayout()
+            tops: dict[str, float] = {}
+            block = doc.begin()
+            while block.isValid():
+                it = block.begin()
+                while not it.atEnd():
+                    fragment = it.fragment()
+                    if fragment.isValid():
+                        for name in fragment.charFormat().anchorNames():
+                            if name.startswith("sec-") and name not in tops:
+                                tops[name] = layout.blockBoundingRect(block).top()
+                    it += 1
+                block = block.next()
+            self._anchor_tops = sorted((y, name) for name, y in tops.items())
+        return self._anchor_tops
+
+    def current_section(self) -> str | None:
+        """The anchor of the section being read: the last heading above a reading line.
+
+        The line sits just below the top of the view at the start and slides down to just above its
+        bottom as the page reaches its end. With a fixed line near the top, headings in the last
+        screenful never reached it (a short article could skip from its first section to its last)."""
+        bar = self.browser.verticalScrollBar()
+        tops = self._section_tops()
+        span = max(0, self.browser.viewport().height() - 48)
+        progress = bar.value() / bar.maximum() if bar.maximum() > 0 else 0.0
+        line = bar.value() + 24 + progress * span
+        current = None
+        for y, name in tops:
+            if y <= line:
+                current = name
+        return current
+
+    def _sync_outline_to_scroll(self, *_):
+        anchor = self.current_section()
+        if anchor == self._active_section:
+            return
+        self._active_section = anchor
+        article = next((i for i in self.article_items()
+                        if i.data(0, Qt.ItemDataRole.UserRole)[1] == self.current_article_id), None)
+        if article is None:
+            return
+        normal, active = QColor(theme_color("comment")), QColor(theme_color("accent"))
+        for j in range(article.childCount()):
+            section = article.child(j)
+            is_active = section.data(0, Qt.ItemDataRole.UserRole)[2] == anchor
+            font = section.font(0)
+            font.setBold(is_active)
+            section.setFont(0, font)
+            section.setForeground(0, active if is_active else normal)
 
     def _on_outline_clicked(self, item: QTreeWidgetItem, _column: int = 0):
         kind, article_id, anchor = item.data(0, Qt.ItemDataRole.UserRole) or (None, None, None)
@@ -398,15 +504,17 @@ class DocumentationPanel(QWidget):
 
     def _on_search_changed(self, text: str):
         self._populate_articles()
-        first = self._first_article_id()
-        if first:
-            self.select_article(first)
+        self._open_a_match()
 
     def _on_filter_changed(self, index: int):
         self._populate_articles()
-        first = self._first_article_id()
-        if first:
-            self.select_article(first)
+        self._open_a_match()
+
+    def _open_a_match(self):
+        """Keep the open article if it still matches the search and filter; otherwise open the first match."""
+        ids = [item.data(0, Qt.ItemDataRole.UserRole)[1] for item in self.article_items()]
+        if ids and self.current_article_id not in ids:
+            self.select_article(ids[0])
 
     # ── Article ─────────────────────────────────────────────────────────────────
 
@@ -414,8 +522,11 @@ class DocumentationPanel(QWidget):
         article: DocArticle | None = next((art for art in ARTICLES if art.id == article_id), None)
         if not article:
             return
+        if article_id != self.current_article_id or article_id not in self._expanded_articles:
+            self._expanded_articles.add(article_id)  # opening an article unfolds its sections
+            self._collapsed_categories.discard(article.category)
+            self._set_expanded_in_outline(article_id)
         self.current_article_id = article_id
-        self._mark_current_article()
 
         self.badge_cat.setText(f"{article.category}  ›  {article.title}")
         self.title_lbl.setText(article.title)
@@ -423,6 +534,14 @@ class DocumentationPanel(QWidget):
 
         self.browser.document().setDefaultStyleSheet(self._article_css())
         self.browser.setHtml(f"<html><body>{article_body(article)}</body></html>")
+        self._anchor_tops = None
+        self._mark_current_article()
+
+    def _set_expanded_in_outline(self, article_id: str):
+        for item in self.article_items():
+            if item.data(0, Qt.ItemDataRole.UserRole)[1] == article_id:
+                item.parent().setExpanded(True)
+                item.setExpanded(True)
 
     def _on_anchor_clicked(self, url: QUrl):
         url_str = url.toString()
