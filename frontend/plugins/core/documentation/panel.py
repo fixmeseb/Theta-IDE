@@ -1,15 +1,15 @@
 """Interactive Documentation panel widget for Theta-IDE."""
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Optional
+import re
+from typing import TYPE_CHECKING
 
-from PyQt6.QtCore import Qt, QUrl
-from PyQt6.QtGui import QFont
+from PyQt6.QtCore import QEvent, Qt, QUrl
+from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import (
     QComboBox,
     QFrame,
     QHBoxLayout,
-    QLabel,
     QLineEdit,
     QListWidget,
     QListWidgetItem,
@@ -20,13 +20,38 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from frontend.theme import theme_color
+from frontend.sidetabs import svg_icon
+from frontend.theme import current_theme, theme_color
 from frontend.widgets import label
 
-from .content import ARTICLES, DocArticle, get_all_articles, search_articles
+from .content import ARTICLES, DocArticle, search_articles
 
 if TYPE_CHECKING:
     from frontend.plugins.context import PluginContext
+
+_BUTTON_ICON_COLORS = {(QIcon.Mode.Normal, QIcon.State.Off): "text"}
+_SEARCH_ICON_COLORS = {(QIcon.Mode.Normal, QIcon.State.Off): "muted"}
+_CODE_BLOCK = re.compile(r"<pre><code>(.*?)</code></pre>", re.DOTALL)
+
+
+def _theme_key():
+    return tuple(sorted(current_theme()["colors"].items()))
+
+
+def _boxed_code_blocks(article_html: str) -> str:
+    """Wrap each <pre><code> block in a one-cell table.
+
+    Qt's rich text paints a <pre> background line by line (every line is its own block), so code
+    showed as separated stripes, and it ignores border-radius. A table cell is one solid box with
+    padding and a border, which is what a code block should look like.
+    """
+    border, fill = theme_color("border"), theme_color("base")
+    return _CODE_BLOCK.sub(
+        lambda m: (f'<table class="code" width="100%" cellspacing="0" cellpadding="12" border="1" '
+                   f'style="border-color: {border}; border-style: solid; background-color: {fill};">'
+                   f'<tr><td><pre>{m.group(1)}</pre></td></tr></table>'),
+        article_html,
+    )
 
 
 class DocumentationPanel(QWidget):
@@ -37,10 +62,20 @@ class DocumentationPanel(QWidget):
         self.context = context
         self.setObjectName("documentationPanel")
         self.current_article_id: str = "overview"
+        self._styled_for = None
         self._init_ui()
         self._populate_categories()
         self._populate_articles()
+        self._apply_theme()
+        self._fit_contents_width()
         self.select_article("overview")
+
+    def _fit_contents_width(self, cap: int = 380):
+        """Open the table of contents wide enough for the longest title (up to `cap` px)."""
+        metrics = self.article_list.fontMetrics()
+        longest = max((metrics.horizontalAdvance(art.title) for art in ARTICLES), default=200)
+        frame = 2 * self.article_list.frameWidth() + 8 + 20 + 16  # list padding, item padding, scrollbar
+        self.splitter.setSizes([min(cap, longest + frame), 900])
 
     def _init_ui(self):
         root = QVBoxLayout(self)
@@ -53,7 +88,8 @@ class DocumentationPanel(QWidget):
 
         # Search Bar
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("🔍  Search documentation, topics, or keywords…")
+        self.search_input.setPlaceholderText("Search documentation, topics, or keywords…")
+        self.search_action = self.search_input.addAction(QIcon(), QLineEdit.ActionPosition.LeadingPosition)
         self.search_input.setClearButtonEnabled(True)
         self.search_input.setMinimumWidth(260)
         self.search_input.textChanged.connect(self._on_search_changed)
@@ -66,17 +102,17 @@ class DocumentationPanel(QWidget):
         toolbar.addWidget(self.cat_combo)
 
         # Quick IDE Navigation Actions
-        btn_hotkeys = QPushButton("⚡ Hotkeys")
-        btn_hotkeys.setToolTip("Switch to Hotkeys settings")
-        btn_hotkeys.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_hotkeys.clicked.connect(lambda: self._navigate_ide("settings"))
-        toolbar.addWidget(btn_hotkeys)
+        self.btn_hotkeys = QPushButton("Hotkeys")
+        self.btn_hotkeys.setToolTip("Open Settings › Hotkeys")
+        self.btn_hotkeys.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_hotkeys.clicked.connect(self._open_hotkeys)
+        toolbar.addWidget(self.btn_hotkeys)
 
-        btn_hub = QPushButton("🌐 Community Hub")
-        btn_hub.setToolTip("Explore Community Hub extensions")
-        btn_hub.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_hub.clicked.connect(lambda: self._navigate_ide("components"))
-        toolbar.addWidget(btn_hub)
+        self.btn_hub = QPushButton("Community Hub")
+        self.btn_hub.setToolTip("Explore Community Hub components")
+        self.btn_hub.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_hub.clicked.connect(self._open_hub)
+        toolbar.addWidget(self.btn_hub)
 
         root.addLayout(toolbar)
 
@@ -95,12 +131,9 @@ class DocumentationPanel(QWidget):
 
         self.article_list = QListWidget()
         self.article_list.setSelectionMode(QListWidget.SelectionMode.SingleSelection)
-        self.article_list.setStyleSheet(
-            "QListWidget { border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 6px; padding: 4px; } "
-            "QListWidget::item { padding: 8px 10px; border-radius: 4px; margin-bottom: 2px; } "
-            "QListWidget::item:hover { background: rgba(255, 255, 255, 0.06); } "
-            "QListWidget::item:selected { background: rgba(254, 128, 25, 0.22); color: #fe8019; font-weight: 600; }"
-        )
+        # No horizontal scrollbar: the list opens wide enough for its titles (see _fit_contents_width),
+        # and if it's dragged narrower they elide, with the full title in the tooltip
+        self.article_list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self.article_list.itemClicked.connect(self._on_article_clicked)
         left_layout.addWidget(self.article_list, 1)
 
@@ -115,9 +148,6 @@ class DocumentationPanel(QWidget):
         # Header Info Card
         self.header_card = QFrame()
         self.header_card.setObjectName("card")
-        self.header_card.setStyleSheet(
-            "QFrame#card { background: rgba(255, 255, 255, 0.03); border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 6px; padding: 12px; }"
-        )
         hc_layout = QVBoxLayout(self.header_card)
         hc_layout.setContentsMargins(14, 12, 14, 12)
         hc_layout.setSpacing(4)
@@ -143,14 +173,68 @@ class DocumentationPanel(QWidget):
         self.browser.setOpenExternalLinks(False)
         self.browser.setOpenLinks(False)
         self.browser.anchorClicked.connect(self._on_anchor_clicked)
-        self.browser.setStyleSheet(
-            "QTextBrowser { border: 1px solid rgba(255, 255, 255, 0.08); border-radius: 6px; padding: 16px; font-size: 13px; line-height: 1.6; } "
-        )
         right_layout.addWidget(self.browser, 1)
 
         splitter.addWidget(right_container)
-        splitter.setSizes([260, 800])
+        splitter.setStretchFactor(0, 0)
+        splitter.setStretchFactor(1, 1)
+        self.splitter = splitter
         root.addWidget(splitter, 1)
+
+    # ── Theme ───────────────────────────────────────────────────────────────────
+
+    def changeEvent(self, event):
+        # A theme switch sets the application palette, which reaches every widget as a PaletteChange
+        super().changeEvent(event)
+        if (event.type() == QEvent.Type.PaletteChange and self._styled_for is not None
+                and self._styled_for != _theme_key()):
+            self._apply_theme()
+            scroll = self.browser.verticalScrollBar().value()
+            self.select_article(self.current_article_id)  # the article's HTML carries theme colors
+            self.browser.verticalScrollBar().setValue(scroll)
+
+    def _apply_theme(self):
+        """Colors for the panel's own widgets, all from the current theme."""
+        self._styled_for = _theme_key()
+        border, raised = theme_color("border"), theme_color("raised")
+        self.article_list.setStyleSheet(
+            f"QListWidget {{ border: 1px solid {border}; border-radius: 6px; padding: 4px; outline: 0; }} "
+            "QListWidget::item { padding: 8px 10px; border: 0; border-radius: 4px; margin-bottom: 2px; } "
+            f"QListWidget::item:hover {{ background: {theme_color('surface')}; }} "
+            f"QListWidget::item:selected {{ background: {raised}; color: {theme_color('accent')}; "
+            "font-weight: 600; }"
+        )
+        self.header_card.setStyleSheet(
+            f"QFrame#card {{ background: {theme_color('surface')}; border: 1px solid {border}; border-radius: 6px; }}"
+        )
+        self.browser.setStyleSheet(
+            f"QTextBrowser {{ border: 1px solid {border}; border-radius: 6px; padding: 16px; font-size: 13px; }}"
+        )
+        self.btn_hotkeys.setIcon(svg_icon("hotkeys", _BUTTON_ICON_COLORS, size=16))
+        self.btn_hub.setIcon(svg_icon("hub", _BUTTON_ICON_COLORS, size=16))
+        self.search_action.setIcon(svg_icon("search", _SEARCH_ICON_COLORS, size=16))
+
+    def _article_css(self) -> str:
+        """Styles for an article. Qt rich text supports a CSS subset (no border-radius, no rgba,
+        no :hover or :nth-child), so this keeps to what it renders, in theme colors."""
+        text_col, accent_col, border = theme_color("text"), theme_color("accent"), theme_color("border")
+        return f"""
+            body {{ color: {text_col}; font-size: 13px; }}
+            h2 {{ color: {accent_col}; margin-top: 4px; margin-bottom: 12px; font-size: 18px; }}
+            h3 {{ color: {accent_col}; margin-top: 18px; margin-bottom: 8px; font-size: 15px; }}
+            p, li {{ color: {text_col}; }}
+            code {{ color: {accent_col}; background-color: {theme_color('surface')};
+                    font-family: ui-monospace, Menlo, Consolas, "DejaVu Sans Mono", monospace; font-size: 12px; }}
+            pre {{ margin: 0; color: {text_col};
+                   font-family: ui-monospace, Menlo, Consolas, "DejaVu Sans Mono", monospace; font-size: 12px; }}
+            pre code {{ background-color: transparent; color: {text_col}; }}
+            a {{ color: {accent_col}; text-decoration: none; font-weight: 500; }}
+            table {{ margin-top: 10px; margin-bottom: 10px; border-collapse: collapse; }}
+            th, td {{ padding: 8px 12px; border: 1px solid {border}; text-align: left; }}
+            th {{ background-color: {theme_color('surface')}; }}
+        """
+
+    # ── Articles ────────────────────────────────────────────────────────────────
 
     def _populate_categories(self):
         self.cat_combo.clear()
@@ -171,7 +255,7 @@ class DocumentationPanel(QWidget):
         for art in matched:
             item = QListWidgetItem(f"{art.title}")
             item.setData(Qt.ItemDataRole.UserRole, art.id)
-            item.setToolTip(f"[{art.category}] {art.summary}")
+            item.setToolTip(f"{art.title}\n[{art.category}] {art.summary}")
             self.article_list.addItem(item)
 
         if self.article_list.count() == 0:
@@ -225,88 +309,8 @@ class DocumentationPanel(QWidget):
         self.title_lbl.setText(article.title)
         self.summary_lbl.setText(article.summary)
 
-        # Style HTML with Gruvbox / Theme Palette
-        bg = theme_color("bg")
-        text_col = theme_color("text")
-        muted_col = theme_color("muted")
-        accent_col = theme_color("accent")
-
-        styled_html = f"""
-        <html>
-        <head>
-          <style>
-            body {{
-              color: {text_col};
-              font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-              font-size: 13px;
-              line-height: 1.6;
-            }}
-            h2 {{
-              color: {accent_col};
-              margin-top: 4px;
-              margin-bottom: 12px;
-              font-size: 18px;
-              border-bottom: 1px solid rgba(255, 255, 255, 0.1);
-              padding-bottom: 6px;
-            }}
-            h3 {{
-              color: {accent_col};
-              margin-top: 18px;
-              margin-bottom: 8px;
-              font-size: 15px;
-            }}
-            p, li {{
-              color: {text_col};
-            }}
-            code {{
-              background-color: rgba(255, 255, 255, 0.08);
-              color: #fabd2f;
-              padding: 2px 5px;
-              border-radius: 4px;
-              font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-              font-size: 12px;
-            }}
-            pre {{
-              background-color: rgba(0, 0, 0, 0.35);
-              border: 1px solid rgba(255, 255, 255, 0.12);
-              border-radius: 6px;
-              padding: 12px 14px;
-              margin: 10px 0;
-            }}
-            pre code {{
-              background: transparent;
-              padding: 0;
-              color: #ebdbb2;
-            }}
-            a {{
-              color: {accent_col};
-              text-decoration: none;
-              font-weight: 500;
-            }}
-            a:hover {{
-              text-decoration: underline;
-            }}
-            table {{
-              margin: 12px 0;
-              border-collapse: collapse;
-              width: 100%;
-            }}
-            th, td {{
-              padding: 8px 12px;
-              border: 1px solid rgba(255, 255, 255, 0.12);
-              text-align: left;
-            }}
-            tr:nth-child(even) {{
-              background-color: rgba(255, 255, 255, 0.02);
-            }}
-          </style>
-        </head>
-        <body>
-          {article.html_content}
-        </body>
-        </html>
-        """
-        self.browser.setHtml(styled_html)
+        self.browser.document().setDefaultStyleSheet(self._article_css())
+        self.browser.setHtml(f"<html><body>{_boxed_code_blocks(article.html_content)}</body></html>")
 
     def _on_anchor_clicked(self, url: QUrl):
         url_str = url.toString()
@@ -323,8 +327,20 @@ class DocumentationPanel(QWidget):
                     self.select_article(art.id)
                     return
 
+    # ── IDE navigation ──────────────────────────────────────────────────────────
+
+    def _open_hotkeys(self):
+        if self.context and hasattr(self.context, "open_settings"):
+            self.context.open_settings("hotkeys")
+
+    def _open_hub(self):
+        if self.context and hasattr(self.context, "open_component_hub"):
+            self.context.open_component_hub()
+
     def _navigate_ide(self, pane_id: str):
-        if self.context and hasattr(self.context, "select_sidebar_tab"):
+        if pane_id == "settings" and self.context and hasattr(self.context, "open_settings"):
+            self.context.open_settings()  # Settings isn't a sidebar tab
+        elif self.context and hasattr(self.context, "select_sidebar_tab"):
             self.context.select_sidebar_tab(pane_id)
 
     def cleanup(self):

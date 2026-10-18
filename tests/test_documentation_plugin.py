@@ -158,6 +158,61 @@ class TestDocumentationPlugin(unittest.TestCase):
 
         panel.cleanup()
 
+    def test_toolbar_has_no_emoji(self):
+        import unicodedata
+
+        source = Path(DocumentationPanel.__module__.replace(".", "/") + ".py").read_text(encoding="utf-8")
+        emoji = [ch for ch in source if unicodedata.category(ch) == "So" and ord(ch) >= 0x2600]
+        self.assertEqual(emoji, [])
+
+    def enabled_panel(self):
+        """The panel of the enabled plugin, wired to its real PluginContext, as in the app."""
+        manager = self.window.plugin_manager
+        self.assertTrue(manager.enable_plugin("documentation"))
+        self.addCleanup(manager.disable_plugin, "documentation")
+        return manager.instances["documentation"].panel
+
+    def test_hotkeys_button_opens_the_hotkeys_settings_page(self):
+        panel = self.enabled_panel()
+        panel.btn_hotkeys.click()
+        self.assertIs(self.window.tabs.currentWidget(), self.window.settings_panel)
+        self.assertEqual(self.window.settings_view.active_tab_id, "hotkeys")
+
+    def test_hub_button_opens_the_component_hub(self):
+        from unittest import mock
+
+        from frontend.hub.client import HubClient
+
+        panel = self.enabled_panel()
+        with mock.patch.object(HubClient, "fetch_index_async"):  # no network
+            panel.btn_hub.click()
+        self.assertIs(self.window.tabs.currentWidget(), self.window.components_panel)
+        self.assertTrue(self.window.components_panel.is_hub_active)
+
+    def test_code_blocks_render_as_one_box(self):
+        """Qt paints a <pre> background per line (stripes); each block becomes a one-cell table."""
+        from frontend.plugins.core.documentation.panel import _boxed_code_blocks
+
+        article = get_article_by_id("cli_workflows")
+        blocks = article.html_content.count("<pre><code>")
+        self.assertGreater(blocks, 0)
+        boxed = _boxed_code_blocks(article.html_content)
+        self.assertNotIn("<pre><code>", boxed)
+        self.assertEqual(boxed.count('<table class="code"'), blocks)
+
+    def test_open_article_follows_a_theme_switch(self):
+        from frontend.theme import BUILTINS
+
+        panel = DocumentationPanel(context=None)
+        self.addCleanup(panel.deleteLater)
+        panel.show()
+        self.window.theme_manager.apply(BUILTINS["Gruvbox Light"])
+        app.processEvents()
+        light = BUILTINS["Gruvbox Light"]["colors"]
+        self.assertIn(light["text"], panel.browser.document().defaultStyleSheet())
+        self.assertIn(light["border"], panel.article_list.styleSheet())
+        self.window.theme_manager.apply(BUILTINS["Gruvbox Dark"])
+
     def test_state_persistence_in_settings(self):
         """Enabled and disabled states persist across sessions in settings.toml."""
         manager = self.window.plugin_manager

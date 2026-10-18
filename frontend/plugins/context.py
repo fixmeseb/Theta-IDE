@@ -95,6 +95,18 @@ class PluginContext:
             if entry and "widget" in entry:
                 self._window.tabs.setCurrentWidget(entry["widget"])
 
+    def open_settings(self, page: Optional[str] = None) -> None:
+        """Open Settings (not a sidebar tab, so select_sidebar_tab can't), on `page` (e.g. "hotkeys") if given."""
+        if hasattr(self._window, "show_settings"):
+            self._window.show_settings(page)
+
+    def open_component_hub(self) -> None:
+        """Open the Component Hub inside the Components panel."""
+        panel = getattr(self._window, "components_panel", None)
+        if panel is not None and hasattr(panel, "show_hub"):
+            self._window.tabs.setCurrentWidget(panel)
+            panel.show_hub()
+
     # ── Extension Slots ──────────────────────────────────────────────────────
 
     def contribute_to_slot(
