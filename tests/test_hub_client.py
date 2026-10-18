@@ -111,7 +111,7 @@ class TestHubClientAndInstaller(unittest.TestCase):
         env_comp = HubComponent(id="my_env", name="E", kind="env", version="1.0")
 
         self.assertEqual(installer.resolve_target_dir(plugin_comp), self.data_dir / "plugins" / "my_plugin")
-        self.assertEqual(installer.resolve_target_dir(method_comp), self.workspace_dir / "src" / "usr" / "methods" / "my_method")
+        self.assertEqual(installer.resolve_target_dir(method_comp), self.workspace_dir / "src" / "usr" / "algorithms" / "my_method")
         self.assertEqual(installer.resolve_target_dir(model_comp), self.workspace_dir / "src" / "usr" / "models" / "my_model")
         self.assertEqual(installer.resolve_target_dir(env_comp), self.workspace_dir / "in" / "envs" / "my_env")
 
@@ -153,7 +153,7 @@ class TestHubClientAndInstaller(unittest.TestCase):
         self.assertTrue(success)
 
         # Verify files on disk
-        dest = self.workspace_dir / "src" / "usr" / "methods" / "sample-rl-agent"
+        dest = self.workspace_dir / "src" / "usr" / "algorithms" / "sample-rl-agent"
         deployed_cfg = self.workspace_dir / "in" / "config" / "agent" / "sample-rl-agent.yaml"
         self.assertTrue((dest / "main.py").exists())
         self.assertTrue((dest / "config.yaml").exists())

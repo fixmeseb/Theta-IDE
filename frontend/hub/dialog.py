@@ -12,7 +12,6 @@ from PyQt6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
     QProgressBar,
     QPushButton,
     QScrollArea,
@@ -331,6 +330,7 @@ class HubView(QWidget):
         self.active_kind: str | None = "plugin" if mode == "plugins" else initial_kind
         self.close_button_text = close_button_text
         self.cards: Dict[str, HubComponentCard] = {}
+        self.search_input = None
 
         self._build_ui()
         self._wire_client()
@@ -351,68 +351,9 @@ class HubView(QWidget):
         main_layout.setContentsMargins(16, 12, 16, 14)
         main_layout.setSpacing(12)
 
-        # ── Header ───────────────────────────────────────────────────────────
-        header = QVBoxLayout()
-        header.setSpacing(3)
-
-        eyebrow_text = "THETA COMMUNITY PLUGINS" if self.mode == "plugins" else "THETA COMPONENT HUB"
-        eyebrow = QLabel(eyebrow_text)
-        eyebrow.setObjectName("eyebrow")
-        eyebrow.setStyleSheet(f"font-size: 11px; font-weight: 700; letter-spacing: 1px; color: {theme_color('secondary')};")
-        header.addWidget(eyebrow)
-
-        title_text = "Explore & Install Plugins" if self.mode == "plugins" else "Explore & Install Components"
-        title = QLabel(title_text)
-        title.setStyleSheet("font-size: 18px; font-weight: 700;")
-        header.addWidget(title)
-
-        desc_text = (
-            "Discover community UI extensions, developer plugins, and workspace integrations."
-            if self.mode == "plugins"
-            else "Discover reinforcement learning benchmark suites, algorithm baselines, symbolic models, and environments."
-        )
-        desc = QLabel(desc_text)
-        desc.setStyleSheet(f"color: {theme_color('muted')}; font-size: 12px;")
-        header.addWidget(desc)
-        main_layout.addLayout(header)
-
-        # ── Search & Filter Bar ──────────────────────────────────────────────
-        search_row = QHBoxLayout()
-        search_row.setSpacing(8)
-
-        self.search_input = QLineEdit()
-        search_placeholder = (
-            "Search community plugins by name, author, or tag…"
-            if self.mode == "plugins"
-            else "Search components by name, author, tag, or description…"
-        )
-        self.search_input.setPlaceholderText(search_placeholder)
-        self.search_input.textChanged.connect(self._apply_filters)
-        search_row.addWidget(self.search_input, 1)
-
-        sort_lbl = QLabel("Sort:")
-        sort_lbl.setStyleSheet(f"color: {theme_color('muted')}; font-size: 11px;")
-        search_row.addWidget(sort_lbl)
-
-        self.sort_combo = QComboBox()
-        self.sort_combo.addItem("Default", "default")
-        self.sort_combo.addItem("Uninstalled first", "uninstalled_first")
-        self.sort_combo.addItem("Installed first", "installed_first")
-        self.sort_combo.addItem("Name (A–Z)", "name_asc")
-        self.sort_combo.setToolTip("Sort components list")
-        self.sort_combo.currentIndexChanged.connect(self._apply_filters)
-        search_row.addWidget(self.sort_combo)
-
-        self.btn_refresh = QPushButton("Refresh")
-        self.btn_refresh.setToolTip("Reload registry from GitHub")
-        self.btn_refresh.clicked.connect(lambda: self.client.fetch_index_async(force=True))
-        search_row.addWidget(self.btn_refresh)
-
-        main_layout.addLayout(search_row)
-
-        # ── Kind Filter Pills ────────────────────────────────────────────────
-        pill_row = QHBoxLayout()
-        pill_row.setSpacing(6)
+        # ── Top Bar: Organizational Tabs & Sort / Refresh Controls ───────────
+        top_bar = QHBoxLayout()
+        top_bar.setSpacing(6)
 
         self.pills = {}
         if self.mode == "components":
@@ -451,10 +392,29 @@ class HubView(QWidget):
                 btn.setChecked(True)
             btn.clicked.connect(lambda chk, k=kind_id: self._select_kind(k))
             self.pills[kind_id] = btn
-            pill_row.addWidget(btn)
+            top_bar.addWidget(btn)
 
-        pill_row.addStretch()
-        main_layout.addLayout(pill_row)
+        top_bar.addStretch()
+
+        sort_lbl = QLabel("Sort:")
+        sort_lbl.setStyleSheet(f"color: {theme_color('muted')}; font-size: 11px;")
+        top_bar.addWidget(sort_lbl)
+
+        self.sort_combo = QComboBox()
+        self.sort_combo.addItem("Default", "default")
+        self.sort_combo.addItem("Uninstalled first", "uninstalled_first")
+        self.sort_combo.addItem("Installed first", "installed_first")
+        self.sort_combo.addItem("Name (A–Z)", "name_asc")
+        self.sort_combo.setToolTip("Sort components list")
+        self.sort_combo.currentIndexChanged.connect(self._apply_filters)
+        top_bar.addWidget(self.sort_combo)
+
+        self.btn_refresh = QPushButton("Refresh")
+        self.btn_refresh.setToolTip("Reload registry from GitHub")
+        self.btn_refresh.clicked.connect(lambda: self.client.fetch_index_async(force=True))
+        top_bar.addWidget(self.btn_refresh)
+
+        main_layout.addLayout(top_bar)
 
         # ── Components Scroll Area ───────────────────────────────────────────
         self.scroll_area = QScrollArea()
@@ -530,7 +490,7 @@ class HubView(QWidget):
         self._apply_filters()
 
     def _apply_filters(self):
-        query = self.search_input.text()
+        query = self.search_input.text() if self.search_input is not None else ""
         target_kind = "plugin" if self.mode == "plugins" else self.active_kind
         matched = list(self.client.search(query=query, kind=target_kind))
         # Enforce mode filter
@@ -650,6 +610,10 @@ class HubDialog(QDialog):
     @property
     def search_input(self):
         return self.hub_view.search_input
+
+    @property
+    def _on_index_loaded(self):
+        return self.hub_view._on_index_loaded
 
     def _populate_cards(self, components: List[HubComponent]):
         return self.hub_view._populate_cards(components)
