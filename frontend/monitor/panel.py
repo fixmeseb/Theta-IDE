@@ -440,9 +440,6 @@ class MonitorPanel(QWidget):
             parts.append(f"Machine CPU {hw['host_cpu_percent']:.0f}%")
         self.monitor_note.setText("System: " + "  •  ".join(parts))
 
-    def show_comparison(self, series):
-        """Overlay several runs' reward curves (the Results browser's multi-selection)."""
-        self.reward_chart.set_series(series)
 
     def render(self):
         host = self.host
