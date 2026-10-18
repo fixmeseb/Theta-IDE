@@ -126,6 +126,10 @@ class PlotGrid(QScrollArea):
         while self.grid.count():
             item = self.grid.takeAt(0)
             if item.widget() is not None:
+                # Hide before detaching. Adding a widget to a layout queues a call that shows it; when the
+                # grid is laid out again before that call runs (a run's metrics arriving right after
+                # "Loading metrics…"), it would show the detached, parentless widget as its own window.
+                item.widget().hide()
                 item.widget().setParent(None)
         for r in range(self.grid.rowCount()):
             self.grid.setRowStretch(r, 0)
@@ -136,11 +140,11 @@ class PlotGrid(QScrollArea):
             self.grid.setColumnStretch(c, 1 if c < columns else 0)
         row = 0
         if self.header is not None:
-            self.grid.addWidget(self.header, row, 0, 1, columns)
+            self._place(self.header, row, 0, 1, columns)
             row += 1
         if not metrics:
             self.empty.setText(empty_text)
-            self.grid.addWidget(self.empty, row, 0, 1, columns)
+            self._place(self.empty, row, 0, 1, columns)
             self.grid.setRowStretch(row, 1)
             return
         for metric in metrics:
@@ -149,14 +153,14 @@ class PlotGrid(QScrollArea):
             focused = self.focus if self.focus in metrics else metrics[0]
             card = self.cards[focused]
             card.chart.setMinimumHeight(HERO_HEIGHT)
-            self.grid.addWidget(card, row, 0, 1, columns)
+            self._place(card, row, 0, 1, columns)
             self.grid.setRowStretch(row, 1)
             return
         rest = list(metrics)
         if self.hero in metrics:
             card = self.cards[self.hero]
             card.chart.setMinimumHeight(HERO_HEIGHT)
-            self.grid.addWidget(card, row, 0, 1, columns)
+            self._place(card, row, 0, 1, columns)
             row += 1
             rest.remove(self.hero)
         for group, names in group_metrics(rest).items():
@@ -177,9 +181,14 @@ class PlotGrid(QScrollArea):
             for i, metric in enumerate(names):
                 card = self.cards[metric]
                 card.chart.setMinimumHeight(180 if columns > 2 else 220)
-                self.grid.addWidget(card, row + i // columns, i % columns)
+                self._place(card, row + i // columns, i % columns)
             row += (len(names) + columns - 1) // columns
         self.grid.setRowStretch(row, 1)
+
+    def _place(self, widget, row, column, row_span=1, column_span=1):
+        """Put `widget` in the grid and show it (set_metrics hid it, and a layout does not show a hidden widget)."""
+        self.grid.addWidget(widget, row, column, row_span, column_span)
+        widget.show()
 
     def charts(self) -> dict[str, Chart]:
         return {metric: card.chart for metric, card in self.cards.items()}
