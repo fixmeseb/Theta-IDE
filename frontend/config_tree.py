@@ -1258,6 +1258,7 @@ class ConfigTreeWidget(TreeHeaderActions, QWidget):
         base_dir.mkdir(parents=True, exist_ok=True)
         base_yaml = group_base_yaml(env, paradigm, tree.paradigms.get(paradigm))
         (base_dir / "_base.yaml").write_text(base_yaml, encoding="utf-8")
+        tree.refresh_groups()  # the caller reads tree.group() again and must see this base
         return paradigm
 
     def _split_group_and_subpath(self, rel_path: str) -> tuple[str, str]:

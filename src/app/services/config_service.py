@@ -3,15 +3,84 @@ would, and checking a launch before any process starts."""
 
 from __future__ import annotations
 
+import copy
+import functools
+import sys
+import threading
+from collections import OrderedDict
 from typing import Any
 
 import yaml
 from omegaconf import OmegaConf
 
-from src.app.pipeline.compose import compose_experiment, effective_config, method_plans, validate_composed
+from src.app.pipeline.compose import (
+    CONFIG_DIR,
+    compose_experiment,
+    effective_config,
+    method_plans,
+    validate_composed,
+)
 from src.app.pipeline.config import normalize_agent_name
 
 from . import LOGS_DIR
+
+# A Hydra compose costs ~130-200 ms, and the GUI asks for the same one again and again: at startup,
+# on every Settings visit, on reopening an experiment, after an undo. The result depends only on its
+# arguments, the YAML under in/config, and the agent registry (auto-discovered from src/usr), so
+# results are reused while all of those are byte-for-byte unchanged (~3 ms to check).
+_USER_CODE_DIR = CONFIG_DIR.parents[1] / "src" / "usr"
+_COMPOSE_CACHE: OrderedDict[tuple, tuple[bool, Any]] = OrderedDict()
+_COMPOSE_CACHE_SIZE = 64
+_COMPOSE_CACHE_LOCK = threading.Lock()
+
+
+def _inputs_fingerprint() -> int:
+    """Hash of everything a compose can depend on: the files (paths and exact contents) and the
+    agents registered in memory (hot reload and tests register agents without touching files)."""
+    registry_module = sys.modules.get("src.usr.methods.agent_registry")  # don't import it just to look
+    registry = getattr(registry_module, "AGENT_REGISTRY", None) or {}
+    parts: list[Any] = [tuple(sorted((name, id(cls)) for name, cls in registry.items()))]
+    for root, pattern in ((CONFIG_DIR, "*.yaml"), (_USER_CODE_DIR, "*.py")):
+        for path in sorted(root.rglob(pattern)):
+            try:
+                parts.append((str(path), path.read_bytes()))
+            except OSError:
+                continue
+    return hash(tuple(parts))
+
+
+def _cached_on_inputs(fn):
+    """Memoize `fn` on its arguments plus _inputs_fingerprint(). Errors are cached too: with the
+    same inputs a failed compose fails again. Callers get copies, so they can't alter the cache."""
+
+    @functools.wraps(fn)
+    def wrapper(*args):
+        key = (fn.__name__, repr(args), _inputs_fingerprint())  # args are strings and lists of strings
+        with _COMPOSE_CACHE_LOCK:
+            hit = _COMPOSE_CACHE.get(key)
+            if hit is not None:
+                _COMPOSE_CACHE.move_to_end(key)
+        if hit is None:
+            try:
+                hit = (True, fn(*args))
+            except Exception as exc:  # noqa: BLE001 - re-raised below, for this and later calls
+                hit = (False, exc)
+            with _COMPOSE_CACHE_LOCK:
+                _COMPOSE_CACHE[key] = hit
+                while len(_COMPOSE_CACHE) > _COMPOSE_CACHE_SIZE:
+                    _COMPOSE_CACHE.popitem(last=False)
+        ok, value = hit
+        if not ok:
+            raise value.with_traceback(None)
+        return copy.deepcopy(value)
+
+    wrapper.uncached = fn
+    return wrapper
+
+
+def clear_compose_cache() -> None:
+    with _COMPOSE_CACHE_LOCK:
+        _COMPOSE_CACHE.clear()
 
 # The GUI composes GUI_BASE_EXPERIMENT plus one override per field; defaults are read from the
 # composed config rather than duplicated in the GUI.
@@ -114,6 +183,7 @@ def effective_timesteps(plans: dict[str, dict], total_timesteps):
     return max(rollouts, default=total_timesteps)
 
 
+@_cached_on_inputs
 def config_schema() -> dict[str, Any]:
     """The builder's fields with defaults read from the composed base experiment."""
     composed = compose_experiment(GUI_BASE_EXPERIMENT)
@@ -143,6 +213,7 @@ def config_schema() -> dict[str, Any]:
     }
 
 
+@_cached_on_inputs
 def compose_report(experiment: str, overrides: list[str] | None = None) -> dict[str, Any]:
     """Compose and validate an experiment exactly as `run_pipeline.py` would, without running it."""
     overrides = list(overrides or [])

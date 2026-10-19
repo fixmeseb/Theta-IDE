@@ -337,8 +337,13 @@ class ThemeManager(QObject):
             palette.setColor(QPalette.ColorGroup.Disabled, role, QColor(colors["disabled"]))
         app.setPalette(palette)
         sheet = stylesheet(theme, zoom=self.zoom)
-        app.setStyleSheet(sheet)  # top-level dialogs and anything outside the styled target
-        self._restyle_target(sheet)
+        # QApplication.setStyleSheet repolishes each widget once per ancestor (O(widgets x depth):
+        # ~15k restyles and ~2s for the main window), while QWidget.setStyleSheet restyles each
+        # descendant about once. So once there is a style target, theme it alone: its dialogs,
+        # menus, popups and tooltips are parented to it and inherit its sheet. The app-level sheet
+        # only covers windows created without a parent, before the target exists.
+        if not self._restyle_target(sheet):
+            app.setStyleSheet(sheet)
         self.changed.emit()
         for widget in app.allWidgets():
             widget.update()
@@ -357,14 +362,18 @@ class ThemeManager(QObject):
                 app.setStyleSheet(ss)
 
     def _restyle_target(self, sheet):
-        """Give the zoom target the new stylesheet; forget it if Qt has already deleted it."""
+        """Give the zoom target the new stylesheet; forget it if Qt has already deleted it.
+
+        Returns True if a live target was restyled."""
         target = self._style_target
         if target is None:
-            return
+            return False
         try:
             target.setStyleSheet(sheet)
         except RuntimeError:  # wrapped C++ widget was deleted
             self._style_target = None
+            return False
+        return True
 
     def select_by_name(self, name: str, _emit: bool = True) -> bool:
         """Switch the active theme to *name* without writing to .appearance.json.

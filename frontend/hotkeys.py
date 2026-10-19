@@ -345,6 +345,11 @@ class HotkeyManager(QObject):
     # ── Event filter ──────────────────────────────────────────────────────
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        # This filter sees every event in the app (a theme switch alone sends ~100k style/polish
+        # events), so bail out on anything that isn't a key event before doing any other work.
+        etype = event.type()
+        if etype not in (QEvent.Type.KeyPress, QEvent.Type.KeyRelease):
+            return False
         if not self.enabled:
             return super().eventFilter(watched, event)
 
@@ -358,7 +363,6 @@ class HotkeyManager(QObject):
         if self.terminal_precedence and self.is_in_terminal(watched):
             return super().eventFilter(watched, event)
 
-        etype = event.type()
         if etype == QEvent.Type.KeyPress and isinstance(event, QKeyEvent):
             return self._handle_key_press(watched, event)
         if etype == QEvent.Type.KeyRelease and isinstance(event, QKeyEvent):

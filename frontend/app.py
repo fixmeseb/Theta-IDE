@@ -41,6 +41,7 @@ from .about import AboutDialog
 from .app_icon import DESKTOP_FILE_NAME, ICON_PATH, app_icon, install_desktop_entry, set_windows_app_id
 from .components_panel import ComponentsPanel
 from .config_tree import ConfigTreeWidget
+from .config_model import config_fingerprint
 from .config_viewer import ConfigViewer
 from .config_tab_manager import ConfigTabManager
 from .hub import HubClient, HubDialog
@@ -179,8 +180,10 @@ class Window(QMainWindow):
         self.active_config_path = None
         self.active_config_rel_path = None
         self.current_experiment = None
-        self.state_label = None
-        self.backend_label = None
+        # Created before anything that talks to the backend: its replies arrive on the event loop, which
+        # the splash progress steps below spin, so a reply can land before the rest of the window exists.
+        self.state_label = label("TRAINING   •   idle  ", "muted")
+        self.backend_label = label("PIPELINE   ○   loading…  ", "muted")
         self.fixed_fields = {}
         self.fields = {}
         step("Building the workspace…", 0.08)
@@ -202,9 +205,7 @@ class Window(QMainWindow):
         self.theme_manager.committed.connect(self.persist_theme_choice)
         step("Applying theme…", 0.68)
         self.theme_changed()
-        self.state_label = label("TRAINING   •   idle  ", "muted")
         self.statusBar().addPermanentWidget(self.state_label)
-        self.backend_label = label("PIPELINE   ○   loading…  ", "muted")
         self.statusBar().addPermanentWidget(self.backend_label)
         step("Loading runs…", 0.79)
         self.refresh_runs()
@@ -528,7 +529,7 @@ class Window(QMainWindow):
         viewer = self.config_viewer
         if viewer and viewer.current_rel_path:
             self.statusBar().showMessage(f"Saved {viewer.current_rel_path}", 4000)
-        self.request_compose()
+        self.compose_timer.start()  # debounced: an edit's config_changed has usually queued one already
 
     def on_config_file_renamed(self, old_rel, new_rel):
         viewer = self.config_viewer
@@ -1099,12 +1100,18 @@ class Window(QMainWindow):
     def backend_health_callback(self, data, error):
         if not hasattr(self, "settings_backend_status"):
             return
+        self._backend_ok = not error
         if error:
             self.settings_backend_status.setText(f"Status: Unavailable ({error})")
-            self.settings_backend_status.setStyleSheet(f"color: {theme_color('number')};")
         else:
             self.settings_backend_status.setText(f"Status: Ready · composes {data['base_experiment']} in-process")
-            self.settings_backend_status.setStyleSheet(f"color: {theme_color('primary')};")
+        self.color_backend_status()
+
+    def color_backend_status(self):
+        """Colour the pipeline status by the last check's result, in the current theme."""
+        ok = getattr(self, "_backend_ok", None)
+        if ok is not None and hasattr(self, "settings_backend_status"):
+            self.settings_backend_status.setStyleSheet(f"color: {theme_color('primary' if ok else 'number')};")
 
     def run_quick_command(self, command):
         self.tabs.setCurrentWidget(self.console_panel)
@@ -1288,6 +1295,8 @@ class Window(QMainWindow):
         if hasattr(self, "settings_view") and hasattr(self.settings_view, "refresh_styles"):
             if self.settings_view.isVisible():
                 self.settings_view.refresh_styles()
+            else:
+                self._settings_styles_stale = True  # restyled when the Settings tab is next shown
 
         # 6. Update appearance UI zoom controls if built
         if hasattr(self, "zoom_slider") and self.zoom_slider:
@@ -1316,9 +1325,12 @@ class Window(QMainWindow):
             if hasattr(self.components_panel, "viewer") and self.components_panel.viewer and self.components_panel.viewer.is_dirty:
                 self.components_panel.save_current()
 
-        # Invalidate the config tree cache so the active panel sees fresh models/agents/envs
-        from .config_viewer import invalidate_config_tree
-        invalidate_config_tree()
+        # Refresh the config panels only when something under in/config changed since they last
+        # loaded (the Components panel, a hub install, an edit in the terminal). Reloading on every
+        # switch rebuilt the tree and re-rendered the open form each time (~0.5s).
+        if self._configs_changed_since(self):
+            from .config_viewer import invalidate_config_tree
+            invalidate_config_tree()  # other panels read the shared tree too
 
         w = self.tabs.widget(index)
         if hasattr(w, "activate") and callable(w.activate):
@@ -1328,13 +1340,14 @@ class Window(QMainWindow):
         if w is getattr(self, "config_panel", None):
             if hasattr(self, "config_tab_manager"):
                 active_v = self.config_tab_manager.current_viewer()
-                if active_v and hasattr(active_v, "reload_data"):
+                if active_v and hasattr(active_v, "reload_data") and self._configs_changed_since(active_v):
                     active_v.reload_data(force_tree_refresh=True)
 
         # If switching to components_panel, refresh viewer
         if w is getattr(self, "components_panel", None):
-            if hasattr(self.components_panel, "viewer") and hasattr(self.components_panel.viewer, "reload_data"):
-                self.components_panel.viewer.reload_data(force_tree_refresh=True)
+            viewer = getattr(self.components_panel, "viewer", None)
+            if hasattr(viewer, "reload_data") and self._configs_changed_since(viewer):
+                viewer.reload_data(force_tree_refresh=True)
 
         if self.tabs.widget(index) is self.queue_panel:
             self.on_queue_changed(self.jobs.queue_state())
@@ -1347,7 +1360,17 @@ class Window(QMainWindow):
             self.test_backend_connection()
             if hasattr(self, "settings_view"):
                 self.settings_view.reset_to_ascii()
-                self.settings_view.refresh_styles()
+                # Theme changes restyle it immediately; only a zoom made while it was hidden is pending.
+                if getattr(self, "_settings_styles_stale", False):
+                    self._settings_styles_stale = False
+                    self.settings_view.refresh_styles()
+
+    def _configs_changed_since(self, holder) -> bool:
+        """True if in/config changed since `holder` last checked; remembers the new state on it."""
+        fingerprint = config_fingerprint(self.config_tree.root_dir)
+        changed = getattr(holder, "_config_fingerprint", None) != fingerprint
+        holder._config_fingerprint = fingerprint
+        return changed
 
     def show_about(self):
         if hasattr(self, "settings_panel"):
@@ -1376,7 +1399,8 @@ class Window(QMainWindow):
         if hasattr(self, "settings_ascii"):
             self.settings_ascii.update()
         if hasattr(self, "settings_backend_status"):
-            self.test_backend_connection()
+            # Recolour only: re-running the check would recompose the whole pipeline config.
+            self.color_backend_status()
         if hasattr(self, "terminal_panel"):
             self.terminal_panel.apply_theme(self.theme_manager.active)
         if hasattr(self, "settings_view"):
@@ -2412,6 +2436,8 @@ class Window(QMainWindow):
             if answer != QMessageBox.StandardButton.Yes:
                 event.ignore()
                 return
+        for viewer in self.findChildren(ConfigViewer):
+            viewer.flush_pending_save()  # edits typed in the last moment before closing
         if self.active and self.active["simulated"]:
             self.stop_run()
         elif self.active:
