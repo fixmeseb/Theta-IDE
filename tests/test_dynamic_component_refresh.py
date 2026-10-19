@@ -56,8 +56,17 @@ def test_dynamic_model_dropdown_population(qapp, tmp_path, monkeypatch):
 
         # 3. Load an experiment in ConfigViewer
         viewer = ConfigViewer()
-        exp_path = workspace_root / "in" / "config" / "experiment" / "cartpole" / "quick_test.yaml"
-        viewer.load_file(exp_path, "experiment/cartpole/quick_test.yaml")
+        exp_path = tmp_path / "test_exp.yaml"
+        exp_path.write_text(
+            "experiment_id: test_exp\n"
+            "paradigm: online_rl\n"
+            "methods:\n"
+            "  m1:\n"
+            "    agent: ppo\n"
+            "    model: mlp\n",
+            encoding="utf-8",
+        )
+        viewer.load_file(exp_path, "experiment/test/test_exp.yaml")
 
         # Find any method card's model combo box
         found_combo = False

@@ -313,27 +313,41 @@ class PluginContext:
 
     def cleanup(self) -> None:
         """Remove any remaining tabs, slots, commands, and safely terminate tracked processes."""
-        # 1. Terminate tracked subprocesses
+        try:
+            import psutil
+        except ImportError:
+            psutil = None
+
         for proc in list(self._tracked_processes):
             if proc.state() == QProcess.ProcessState.NotRunning:
                 continue
             pid = int(proc.processId())
-            if pid > 0:
+            if pid > 0 and psutil is not None:
                 try:
-                    kill_process_tree(pid)
-                except Exception as exc:
-                    # Its own failure must not skip the fallback below, which is
-                    # there precisely for when the tree kill does not land.
-                    self.log(f"Error terminating child process tree: {exc}")
+                    parent = psutil.Process(pid)
+                    for child in parent.children(recursive=True):
+                        try:
+                            child.kill()
+                        except Exception:
+                            pass
+                    try:
+                        parent.kill()
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
+            elif pid > 0:
+                try:
+                    import signal
+                    os.kill(pid, signal.SIGKILL)
+                except Exception:
+                    pass
             try:
-                # Finish through Qt as well. kill_process_tree signals the pid
-                # directly, and QProcess goes on reporting Running until it reaps
-                # the child itself, so the caller sees a process that is gone.
                 if proc.state() != QProcess.ProcessState.NotRunning:
                     proc.kill()
                 proc.waitForFinished(3000)
             except Exception as exc:
-                self.log(f"Error terminating child process: {exc}")
+                self.log(f"Error terminating child process via Qt: {exc}")
         self._tracked_processes.clear()
 
         # 2. Unregister UI tabs

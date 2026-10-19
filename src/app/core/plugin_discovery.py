@@ -9,11 +9,12 @@ standard pyproject.toml entry-point groups:
   - theta.evaluators: Pluggable evaluation, safety, and verification hooks
   - theta.plugins: Pluggable Theta-IDE GUI plugins
 """
+
 from __future__ import annotations
 
 import importlib
-from importlib.metadata import entry_points
 import logging
+from importlib.metadata import entry_points
 from typing import Any, Callable, Dict, List, Optional
 
 log = logging.getLogger(__name__)
@@ -80,18 +81,21 @@ def load_all_plugins(force_reload: bool = False) -> Dict[str, Dict[str, Any]]:
 
     # 1. Register discovered models
     from src.app.core.model_registry import register_model
+
     for name, model_cls in results.get("models", {}).items():
         if isinstance(model_cls, type):
             register_model(name)(model_cls)
 
     # 2. Register discovered agents / algorithms
-    from src.usr.methods.agent_registry import register_agent
+    from src.usr.algorithms.agent_registry import register_agent
+
     for name, agent_cls in results.get("agents", {}).items():
         if isinstance(agent_cls, type):
             register_agent(name)(agent_cls)
 
     # 3. Register discovered components into paradigm loader
     from src.app.core.paradigm_loader import register_component
+
     for name, comp_cls in results.get("datamodules", {}).items():
         if isinstance(comp_cls, type):
             register_component(name)(comp_cls)

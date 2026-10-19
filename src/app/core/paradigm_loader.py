@@ -96,6 +96,7 @@ def _auto_discover_components():
     # Discover components declared via pyproject.toml entry-points
     try:
         from src.app.core.plugin_discovery import discover_entry_points
+
         for group in ("theta.datamodules", "theta.components"):
             for comp_name, comp_cls in discover_entry_points(group).items():
                 if isinstance(comp_cls, type):
@@ -145,7 +146,7 @@ def load_paradigm_definition(paradigm_name: str) -> ParadigmDefinition:
         type=raw.get("type", "base"),
         description=raw.get("description", ""),
         runner_cls=get_component(raw.get("runner")),
-        data_module_cls=get_component(raw.get("data_module")),
+        data_module_cls=get_component(raw.get("data_module") or raw.get("default_data_module")),
         eval_protocol_cls=get_component(raw.get("eval_protocol")),
         default_callback_names=raw.get("default_callbacks") or [],
         raw=raw,

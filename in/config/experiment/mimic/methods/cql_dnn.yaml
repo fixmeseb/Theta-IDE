@@ -1,8 +1,0 @@
-agent: cql
-model: dnn
-
-style:
-  label: "DNN"
-  color: "#1f77b4"
-  marker: "o"
-  linestyle: "-"

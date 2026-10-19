@@ -4,6 +4,14 @@ from pathlib import Path
 
 import pytest
 
+try:
+    import resource
+    soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
+    if soft < 4096:
+        resource.setrlimit(resource.RLIMIT_NOFILE, (min(4096, hard), hard))
+except Exception:
+    pass
+
 PROJECT_ROOT = Path(__file__).parent.parent
 SRC_DIR = PROJECT_ROOT / "src"
 
@@ -54,6 +62,24 @@ def _delete_leftover_widgets():
     for widget in app.topLevelWidgets():
         widget.deleteLater()
     QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete.value)
+
+
+@pytest.fixture(autouse=True)
+def _no_hub_network(monkeypatch):
+    """Keep the Component Hub offline in tests.
+
+    Opening a HubView starts fetch_index_async: a thread that downloads the registry from
+    GitHub and signals the view when it is done. Tests close the view straight away, so the
+    thread outlived it (and wrote a .thetaide cache into the workspace); on CI that aborted
+    the whole run. Tests that need components set client.components themselves.
+    """
+    if "frontend.hub.client" not in sys.modules:
+        try:
+            import frontend.hub.client  # noqa: F401
+        except ImportError:  # no GUI stack installed
+            return
+    monkeypatch.setattr(sys.modules["frontend.hub.client"].HubClient, "fetch_index_async",
+                        lambda self, force=False: None)
 
 
 @pytest.fixture

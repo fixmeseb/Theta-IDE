@@ -202,6 +202,13 @@ class HubClient(QObject):
                     return comp
             if comp.id.startswith(cid) or cid.startswith(comp.id):
                 return comp
+
+        # Fallback for thetalib constituent components
+        if cid in ("standard-figures", "standard_figures", "image-data", "image_data", "replay-buffer", "replay_buffer", "tabular-data", "tabular_data"):
+            for comp in self.components:
+                if comp.id == "thetalib":
+                    return comp
+
         return None
 
     def search(
@@ -209,19 +216,30 @@ class HubClient(QObject):
         query: str = "",
         kind: Optional[str] = None,
         tag: Optional[str] = None,
+        include_internal: bool = False,
     ) -> List[HubComponent]:
         """Filter components by search query, component kind, or tag."""
         q = query.strip().lower()
         results = []
 
         for comp in self.components:
+            # Skip hidden and internal thetalib subcomponents from browser search
+            if not include_internal and (comp.is_thetalib_component or comp.hidden):
+                continue
+
             # Kind filter
             if kind and kind.lower() != "all":
                 k = kind.lower()
                 ck = comp.kind.lower()
                 if k in ("suite", "suites", "package") and ck in ("suite", "package"):
                     pass
-                elif k in ("method", "methods", "agent") and ck in ("method", "agent"):
+                elif k in ("method", "methods", "agent", "algorithm", "algorithms") and ck in ("method", "agent", "algorithm"):
+                    pass
+                elif k in ("data", "datamodule", "datamodules") and ck in ("data", "datamodule"):
+                    pass
+                elif k in ("eval", "evaluator", "evaluators") and ck in ("eval", "evaluator"):
+                    pass
+                elif k in ("plot", "plotter", "plotters") and ck in ("plot", "plotter"):
                     pass
                 elif ck != k:
                     continue

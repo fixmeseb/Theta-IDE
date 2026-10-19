@@ -104,7 +104,24 @@ class BasePlotter:
     def __init__(self, name: str):
         self.name = name
         self.plot_dir = Path(__file__).parent
-        self.default_config_path = self.plot_dir / f"_{name}_config.yaml"
+        project_root = Path(PROJECT_ROOT)
+        plot_cfg_dir = project_root / "in" / "config" / "plot"
+        stem = Path(name).stem
+        matching_plot_configs = []
+        if plot_cfg_dir.exists():
+            matching_plot_configs = list(plot_cfg_dir.glob(f"**/{stem}.yaml"))
+        candidate_configs = (
+            [plot_cfg_dir / f"{name}.yaml"]
+            + matching_plot_configs
+            + [
+                self.plot_dir / name / f"_{stem}_config.yaml",
+                self.plot_dir / name / f"_{name}_config.yaml",
+                self.plot_dir / name / "config.yaml",
+                self.plot_dir / f"_{stem}_config.yaml",
+                self.plot_dir / f"_{name}_config.yaml",
+            ]
+        )
+        self.default_config_path = next((p for p in candidate_configs if p.exists()), candidate_configs[-1])
         self.default_cfg = self._load_yaml(self.default_config_path)
 
     def _load_yaml(self, path: Path) -> dict:

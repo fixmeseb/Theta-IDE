@@ -52,20 +52,23 @@ You can define custom plotting formats in YAML files. Each entry in the `plots` 
 
 ## 2. Adding Custom Methods & Architectures
 
-### Adding a Custom Training Method (Agent)
-Agents are modular PyTorch Lightning Modules situated in `src/methods/`. To implement a new agent:
+### Adding a Custom Algorithm (Agent)
+Algorithms are modular PyTorch Lightning Modules situated in `src/usr/algorithms/` (or installed as plugins). To implement a new algorithm:
 
-1. **Create the Agent Script**: Create `src/methods/my_new_agent.py` subclassing `PPOAgent` or `lightning.LightningModule`. Ensure you implement:
-    * `training_step(self, batch, batch_idx)`: Sample transitions from the offline data reader via `self.trainer.datamodule.reader.sample(self.cfg.agent.batch_size)` and apply your gradient update manual pipeline (`self.manual_backward()`, `optimizer.step()`).
+1. **Create the Algorithm Script**: Create `src/usr/algorithms/my_new_algo/agent.py` subclassing `OfflineAgentBase`, `OnlineAgentBase`, or `lightning.LightningModule`. Ensure you implement:
+    * `training_step(self, batch, batch_idx)`: Process transitions and return training loss.
     * `get_action_and_value(self, obs, logic_obs=None, action=None)`: Used during evaluation steps.
     * `configure_optimizers(self)`: Return your model's optimizers.
-2. **Register the Agent**: Open `src/train.py` and import your agent. Register it in the `main()` function:
+2. **Register the Algorithm**: Decorate your class with `@register_algorithm`:
     ```python
-    elif base_algo_name.startswith("my_new_agent"):
-        from src.methods.my_new_agent import MyNewAgent
-        model = MyNewAgent(cfg)
+    from src.usr.algorithms.agent_registry import register_algorithm
+    from src.usr.algorithms.base_agent import OfflineAgentBase
+
+    @register_algorithm("my_new_algo")
+    class MyNewAlgorithm(OfflineAgentBase):
+        ...
     ```
-3. **Define Hyperparameters**: Create a configuration file `in/config/agent/my_new_agent.yaml` to specify default parameters (e.g., learning rates, batch sizes).
+3. **Define Hyperparameters**: Create a configuration file `in/config/agent/my_new_algo.yaml` to specify default parameters (e.g., learning rates, batch sizes).
 
 ### Adding a Custom Architecture
 Neural architectures are instantiated via `get_neural_agent` in `src/utils.py`.

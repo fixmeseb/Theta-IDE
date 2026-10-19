@@ -142,10 +142,9 @@ class TestConfigTree(unittest.TestCase):
         try:
             top_count = comp_tree.tree.topLevelItemCount()
             top_texts = [comp_tree.tree.topLevelItem(i).text(0) for i in range(top_count)]
-            self.assertTrue(any("agent" in t for t in top_texts))
-            self.assertTrue(any("env" in t for t in top_texts))
-            self.assertTrue(any("config" in t.lower() for t in top_texts))
-            self.assertTrue("config" in top_texts[0].lower(), "Global defaults config must be pinned at the top")
+            self.assertTrue(any(t in ("Algorithms", "agent") for t in top_texts))
+            self.assertTrue(any(t in ("Environments", "env") for t in top_texts))
+            self.assertTrue(any("System" in t or "config" in t.lower() for t in top_texts))
             self.assertFalse(any("experiment" in t for t in top_texts))
         finally:
             comp_tree.close()
@@ -204,7 +203,7 @@ class TestConfigTree(unittest.TestCase):
             agent_item = None
             for i in range(comp_tree.tree.topLevelItemCount()):
                 item = comp_tree.tree.topLevelItem(i)
-                if "agent" in item.text(0):
+                if item.text(0) in ("Algorithms", "agent"):
                     agent_item = item
                     item.setExpanded(True)
                     break
@@ -219,7 +218,7 @@ class TestConfigTree(unittest.TestCase):
             found_agent = None
             for i in range(comp_tree.tree.topLevelItemCount()):
                 item = comp_tree.tree.topLevelItem(i)
-                if "agent" in item.text(0):
+                if item.text(0) in ("Algorithms", "agent"):
                     found_agent = item
                     break
             self.assertIsNotNone(found_agent)
@@ -233,7 +232,7 @@ class TestConfigTree(unittest.TestCase):
             found_agent_after = None
             for i in range(comp_tree.tree.topLevelItemCount()):
                 item = comp_tree.tree.topLevelItem(i)
-                if "agent" in item.text(0):
+                if item.text(0) in ("Algorithms", "agent"):
                     found_agent_after = item
                     break
             self.assertIsNotNone(found_agent_after)
@@ -673,7 +672,9 @@ class TestConfigViewer(unittest.TestCase):
 class TestComponentsPanel(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
-        self.root = Path(self.temp_dir.name)
+        # The real layout, <workspace>/in/config: the panel takes the workspace (and the Hub's
+        # .thetaide) from two levels up, which for a bare temp dir is "/" on Linux and unwritable
+        self.root = Path(self.temp_dir.name) / "in" / "config"
         (self.root / "experiment" / "cartpole").mkdir(parents=True)
         (self.root / "agent").mkdir(parents=True)
         (self.root / "env").mkdir(parents=True)
@@ -694,7 +695,7 @@ class TestComponentsPanel(unittest.TestCase):
     def test_components_panel_tree_only_has_components(self):
         top_count = self.panel.components_tree.tree.topLevelItemCount()
         top_texts = [self.panel.components_tree.tree.topLevelItem(i).text(0) for i in range(top_count)]
-        self.assertTrue(any("agent" in t for t in top_texts))
+        self.assertTrue(any(t in ("Algorithms", "agent") for t in top_texts))
         self.assertFalse(any("experiment" in t for t in top_texts))
 
     def test_select_component_loads_into_viewer_and_raw_editor(self):
@@ -811,6 +812,7 @@ class TestComponentsPanel(unittest.TestCase):
 
     def test_filetree_unsynced_indicator(self):
         # Initial state: clean
+        self.panel.components_tree.select_file("agent/ppo.yaml")
         item = self.panel.components_tree.find_file_item("agent/ppo.yaml")
         self.assertIsNotNone(item)
         self.assertEqual(item.text(0), "ppo")
@@ -819,9 +821,8 @@ class TestComponentsPanel(unittest.TestCase):
 
         # Modify value in viewer
         from frontend.widgets import SpinBox, DoubleSpinBox
-        from frontend.config_viewer import ConfigBox
-        card = self.panel.viewer.findChildren(ConfigBox)[0]
-        spins = card.findChildren(SpinBox) + card.findChildren(DoubleSpinBox)
+        from frontend.config_viewer import CompactDoubleSpinBox
+        spins = self.panel.viewer.findChildren((SpinBox, DoubleSpinBox, CompactDoubleSpinBox))
         self.assertGreater(len(spins), 0)
         orig_val = spins[0].value()
         spins[0].setValue(orig_val + 1)
@@ -950,8 +951,10 @@ class TestExperimentPaneWindowIntegration(unittest.TestCase):
         self.assertEqual(self.window.start_button.property("svg_icon"), "launch")
         self.assertEqual(self.window.btn_export.property("svg_icon"), "export")
         self.assertEqual(self.window.btn_toggle_yaml.property("svg_icon"), "raw_yaml")
-        self.assertIsNone(self.window.queue_button)
-        self.assertIsNone(self.window.stop_button)
+        # Add to queue and Stop are not in the experiment pane: they are the Queue tab's run controls
+        self.assertIs(self.window.queue_button, self.window.queue_panel.add_button)
+        self.assertIs(self.window.stop_button, self.window.queue_panel.stop_button)
+        self.assertFalse(tree.isAncestorOf(self.window.queue_button) or tree.isAncestorOf(self.window.stop_button))
 
         # Header layout widgets check
         header_widgets = [

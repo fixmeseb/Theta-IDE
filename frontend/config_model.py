@@ -137,7 +137,13 @@ class Agent:
         elif isinstance(paradigms, str):
             cp = (paradigms,)
         else:
-            cp = ()
+            engine = str(raw.get("engine", "")).lower()
+            if engine == "sb3" or name.startswith("sb3/"):
+                cp = ("online_rl",)
+            elif engine == "d3rlpy" or name.startswith("d3rlpy/"):
+                cp = ("offline_rl",)
+            else:
+                cp = ()
 
         return cls(
             name=name,

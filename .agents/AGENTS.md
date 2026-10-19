@@ -23,7 +23,7 @@ This document is the foundational source of truth for Antigravity in this worksp
 
 ## 1. Project Overview & Pipeline Rules
 
-Theta-IDE is a modular reinforcement learning & architecture benchmarking IDE and execution engine. It decouples core RL training algorithms (PPO, CQL, IQL) from model architectures, allowing pure neural models, composite architectures, and hybrid neural-symbolic systems (such as the reference BlendRL plugin) to plug in via clean runtime protocols.
+Theta-IDE is a modular reinforcement learning & architecture benchmarking IDE and execution engine. It decouples RL training algorithms (executed via runner engines like Stable-Baselines3 and D3RLPy or installed plugins) from model architectures, allowing pure neural models, composite architectures, and hybrid neural-symbolic systems (such as the reference BlendRL plugin) to plug in via clean runtime protocols.
 
 **No standalone scripts.** Do not write `if __name__ == "__main__":` Python scripts, bash scripts, or one-off files in the root or `scripts/` directories. Use the modular pipeline:
 - **Run experiments:** `python run_pipeline.py <group>/<exp>` — configure via Hydra in `in/config/`.
@@ -38,18 +38,18 @@ An experiment's declared **paradigm** determines what training, evaluation, and 
 
 ### `online_rl`
 Trains agents via live simulator rollouts (e.g. CartPole, Seaquest).
-- **Agents:** Online RL algorithms (`allowed_agents: [ppo]`, forbidding `cql, iql, cew`).
+- **Execution:** Online RL algorithms executed via `sb3_runner` (PPO, SAC, DQN, A2C) or installed online algorithm plugins.
 - **Evaluation:** Fixed-episode average reward in the live simulator via `EnvironmentEvaluatorCallback`.
 
 ### `offline_rl`
 Trains agents on static transition datasets (e.g. MIMIC, Pyrenees, pre-collected datasets).
-- **Agents:** Offline RL algorithms (`allowed_agents: [cql, iql, cew]`, forbidding `ppo`).
+- **Execution:** Offline RL algorithms executed via `d3rlpy` (CQL, IQL, BC) or installed offline algorithm plugins.
 - **Data & Evaluation:** Replay buffer data module; validation loss and Bellman error via Lightning.
 - **Constraints:** `eval_episodes: 0`.
 
 ### `supervised`
 Supervised representation learning and early prediction tasks.
-- **Models:** Predictive architectures (`allowed_models: [dnn, cnn, resnet, lstm, gru, transformer, ecm, ...], forbidding standalone RL agents).
+- **Models:** Predictive architectures (e.g. classifiers, regressors, sequence models).
 
 > **Paradigm enforcement:** Every experiment strictly declares its `paradigm: <name>`. Pre-flight validation enforces that declared methods and environments are valid for that paradigm. Multi-paradigm workflows (e.g. online collection feeding offline RL) are orchestrated at the workflow task level, keeping individual paradigms clean and decoupled.
 
@@ -167,15 +167,18 @@ Priority: CLI flags > experiment `resources:` > site config > hardcoded fallback
 
 ---
 
-## 9. Agent & Model Implementation Guide
-Agents are PyTorch Lightning Modules in `src/usr/methods/` (registered in `agent_registry.py`):
-- `PPOAgent`: Standard online actor-critic RL.
-- `IQLAgent`: Offline RL using Implicit Q-Learning.
-- `CQLAgent`: Offline RL using Conservative Q-Learning.
-- **Model Architecture Selection:** All models live in `src/usr/models/` and are registered via `@register_model`. Instantiated through `build_model()` (`src/app/core/model_registry.py`).
-- **Algorithm-Model Decoupling:** Algorithms interact with policy models via duck-typed protocols: `ForwardModelProtocol`, `AuxiliaryLossProtocol`, and `OptimizerGroupsProtocol`.
-
-See `pipeline-crud` skill for step-by-step instructions on adding new agents.
+## 9. Algorithm, Model, Data & Evaluator Implementation Guide
+- **Algorithms (`src/usr/algorithms/`):** Base agent contracts (`BaseAgent`, `OfflineAgentBase`, `OnlineAgentBase`) and registry (`@register_algorithm` / `@register_agent` in `agent_registry.py`).
+  - Online algorithms are handled via the `sb3_runner` (Stable-Baselines3) or installed online algorithm plugins.
+  - Offline algorithms are handled via the `d3rlpy` runner or installed offline algorithm plugins.
+  - Standalone agents (e.g. old dogfood implementations) are not hardcoded in the core repository; standard algorithms delegate to these runners.
+- **Models (`src/usr/models/`):** Registered via `@register_model` and built through `build_model()` (`src/app/core/model_registry.py`).
+  - Duck-typed protocols: `ForwardModelProtocol`, `AuxiliaryLossProtocol`, `OptimizerGroupsProtocol`.
+- **Data Modules (`src/usr/data/`):** Registered via `@register_datamodule` and resolved via `get_datamodule_class()` (`src/app/core/datamodule_registry.py`).
+  - Declared/overridden at CLI > Experiment > Group (`_base.yaml`) > Env, falling back to paradigm `default_data_module`.
+- **Checkpoints & Evaluators (`src/usr/eval/`):**
+  - Checkpoints: Declaratively configured via `checkpoint: { monitor, mode, save_top_k, every_n_epochs }`.
+  - Evaluators: Registered via `@register_evaluator` and resolved through `src/app/core/eval_registry.py`.
 
 ---
 

@@ -13,6 +13,8 @@ would admit them and double every RL curve.
 
 from __future__ import annotations
 
+import pytest
+
 from frontend.model import COUNTER_COLUMNS, metric_points, position_column
 from frontend.monitor import run_setup_label
 
@@ -273,7 +275,11 @@ def test_rl_environments_keep_episode_reward():
 def test_offline_environments_headline_validation_loss():
     """breast_cancer and mimic declare monitor_metric: val/loss, which is already
     the number build_trainer selects best_model.ckpt on."""
+    from frontend.config_viewer import config_tree
+    tree = config_tree()
     for env in ("breast_cancer", "mimic"):
+        if not tree or env not in tree.environments:
+            pytest.skip(f"{env} environment uninstalled")
         key, info = _headline(env)
         assert (key, info.label) == ("val/loss", "Validation loss")
 
@@ -309,6 +315,11 @@ def test_every_environment_declares_what_it_is_judged_by():
 def test_the_headline_value_comes_from_the_run():
     from frontend.model import latest, metric_points
     from frontend.monitor import headline_metric
+    from frontend.config_viewer import config_tree
+
+    tree = config_tree()
+    if not tree or "breast_cancer" not in tree.environments:
+        pytest.skip("breast_cancer environment uninstalled")
 
     run = {"metrics": metric_points([
         {"epoch": 0.0, "step": 13.0, "train/loss": 0.55, "val/loss": 0.41},

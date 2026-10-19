@@ -83,6 +83,17 @@ def test_scaffold_evaluator(tmp_path):
     assert (res.target_dir / "reachability_checker_evaluator.py").is_file()
 
 
+def test_scaffold_plotter(tmp_path):
+    scaffolder = PluginScaffolder(workspace_root=tmp_path)
+    opts = ScaffoldOptions(name="pareto_frontier", kind="plotter")
+    res = scaffolder.scaffold(opts)
+    assert res.success is True
+    assert (res.target_dir / "pareto_frontier_plotter.py").is_file()
+    assert (res.target_dir / "__init__.py").is_file()
+    assert (res.target_dir / ".theta_component.json").is_file()
+    assert (tmp_path / "in" / "config" / "plot" / "pareto_frontier.yaml").is_file()
+
+
 def test_scaffold_invalid_kind(tmp_path):
     scaffolder = PluginScaffolder(workspace_root=tmp_path)
     opts = ScaffoldOptions(name="invalid_comp", kind="unsupported_kind")
@@ -107,6 +118,7 @@ def test_scaffold_dialog_gui(qapp, tmp_path):
 def test_components_panel_plus_button(qapp, tmp_path):
     from frontend.components_panel import ComponentsPanel
     panel = ComponentsPanel()
+    panel.components_tree.reset_toolbar_layout()
     assert hasattr(panel, "btn_plus")
     assert panel.btn_plus is not None
     assert panel.btn_plus.property("svg_icon") == "plus"
@@ -123,4 +135,5 @@ def test_components_panel_plus_button(qapp, tmp_path):
     hub_idx = header_widgets.index(panel.btn_hub)
     assert abs(plus_idx - hub_idx) == 1
     panel.deleteLater()
+
 

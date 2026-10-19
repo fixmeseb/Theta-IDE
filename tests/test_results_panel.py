@@ -13,7 +13,7 @@ pytest.importorskip("PyQt6")
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
 from PyQt6.QtCore import Qt  # noqa: E402
-from PyQt6.QtWidgets import QApplication, QTabWidget  # noqa: E402
+from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
 app = QApplication.instance() or QApplication(sys.argv[:1])
@@ -267,16 +267,14 @@ def test_offline_backend_explains_itself():
     assert "Training pipeline unavailable" in panel.status.text()
 
 
-def test_window_hosts_the_panel_beside_the_run_list():
+def test_window_hosts_the_panel_as_the_results_tab():
     from frontend.app import Window
 
     with tempfile.TemporaryDirectory() as data_dir:
         window = Window(Path(data_dir))
         try:
-            assert isinstance(window.results_panel, QTabWidget)
-            assert window.results_panel.widget(0) is window.results_view
-            assert window.results_panel.tabText(1) == "Run list"
-            assert window.table is not None  # the run table and its actions are still there
+            assert window.results_panel is window.results_view  # the Run list tab is gone
+            assert not hasattr(window, "table")
         finally:
             window.close()
 
@@ -650,3 +648,51 @@ def test_window_loads_results_runs_into_the_builder_only_when_it_has_their_confi
             assert window.tabs.currentWidget() is window.config_panel
         finally:
             window.close()
+
+
+def test_a_quick_relayout_does_not_open_the_empty_label_as_a_window():
+    """Metrics arriving right after "Loading metrics…" must not leave that label floating in its own window.
+
+    Adding a widget to a visible layout queues a call that shows it. If the grid was laid out again before
+    that call ran, the call used to show the detached, parentless label as a top-level window.
+    """
+    from frontend.results.plot_grid import PlotGrid
+
+    grid = PlotGrid()
+    grid.show()
+    app.processEvents()
+    grid.set_metrics([], "Loading metrics…")  # queues the label's show…
+    grid.set_metrics(["eval/reward"])  # …and the metrics arrive before it runs
+    app.processEvents()
+    floating = [w for w in app.topLevelWidgets() if w.isVisible() and w is not grid and w.parent() is None
+                and getattr(w, "text", lambda: "")() == "Loading metrics…"]
+    assert floating == []
+    assert not grid.empty.isVisible() and grid.cards["eval/reward"].isVisible()
+    grid.set_metrics([], "Nothing to plot")  # and the label still shows when it is placed again
+    app.processEvents()
+    assert grid.empty.isVisible() and grid.empty.parent() is grid.body
+    grid.close()
+    grid.deleteLater()
+
+
+def test_the_run_selector_shares_the_experiment_trees_header_behaviour():
+    """Search, Esc, collapse and expand come from the same code as the Experiment tab's tree (tree_tools)."""
+    from PyQt6.QtCore import QEvent
+    from PyQt6.QtGui import QKeyEvent
+
+    from frontend.config_tree import ConfigTreeWidget
+    from frontend.results.explorer import RunExplorer
+    from frontend.tree_tools import GroupItemDelegate, TreeHeaderActions
+
+    explorer = RunExplorer()
+    assert isinstance(explorer, TreeHeaderActions) and issubclass(ConfigTreeWidget, TreeHeaderActions)
+    assert isinstance(explorer.tree.itemDelegate(), GroupItemDelegate)
+    explorer.show()
+    assert explorer.search.isHidden()
+    explorer.btn_search.click()
+    assert explorer.search.isVisible() and explorer.btn_search.isChecked()
+    explorer.search.setText("cart")
+    QApplication.sendEvent(explorer.search, QKeyEvent(QEvent.Type.KeyPress, Qt.Key.Key_Escape, Qt.KeyboardModifier.NoModifier))
+    assert explorer.search.isHidden() and not explorer.btn_search.isChecked() and explorer.search.text() == ""
+    explorer.close()
+    explorer.deleteLater()

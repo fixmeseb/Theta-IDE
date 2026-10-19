@@ -3,7 +3,6 @@ import argparse
 import os
 import sys
 import time
-from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 
@@ -12,18 +11,13 @@ import yaml
 if sys.platform == "darwin" and "QTWEBENGINE_CHROMIUM_FLAGS" not in os.environ:
     os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = "--disable-gpu"
 
-from PyQt6.QtCore import QRegularExpression, Qt, QTimer, QUrl
-from PyQt6.QtGui import QAction, QDesktopServices, QFont, QIcon, QKeySequence, QRegularExpressionValidator
+from PyQt6.QtCore import Qt, QTimer, QUrl
+from PyQt6.QtGui import QAction, QDesktopServices, QFont, QIcon, QKeySequence
 from PyQt6.QtWidgets import (
-    QAbstractItemView,
     QApplication,
-    QCheckBox,
-    QComboBox,
     QDialog,
     QDockWidget,
-    QFileDialog,
     QHBoxLayout,
-    QHeaderView,
     QLineEdit,
     QMainWindow,
     QMessageBox,
@@ -31,22 +25,18 @@ from PyQt6.QtWidgets import (
     QPushButton,
     QSplitter,
     QStyle,
-    QTabWidget,
-    QTableWidget,
-    QTableWidgetItem,
     QToolButton,
     QVBoxLayout,
     QWidget,
 )
 
 from . import wheel_guard
-from .model import (BASE_EXPERIMENT, FINAL_STATUSES, LIVE_STATUSES, RESULT_COLUMNS, SOURCE_FILTERS, STATUS_FILTERS,
-                    Config, Store, disk_run, example_runs, matches_filters, metric_points,
-                    metric_points_from_api, new_run, result_row, run_source, sample)
+from .model import (BASE_EXPERIMENT, FINAL_STATUSES, LIVE_STATUSES, Config, Store, disk_run, example_runs, metric_points,
+                    metric_points_from_api, new_run, sample)
 from .settings import SettingsManager
 from .theme import STYLE, ThemeManager, theme_color
 from .theme_builder import ThemeBuilder
-from .widgets import Chart, SortableItem, ToggleSlider, YamlHighlighter, label
+from .widgets import ToggleSlider, YamlHighlighter, label
 from .about import AboutDialog, AboutView
 from .app_icon import DESKTOP_FILE_NAME, ICON_PATH, app_icon, install_desktop_entry, set_windows_app_id
 from .components_panel import ComponentsPanel
@@ -61,7 +51,7 @@ from .export_dialog import ExportExperimentDialog
 from src.app.services import PROJECT_ROOT
 from src.app.services.config_service import LaunchError
 from .local_backend import LocalBackend
-from .monitor import ENV_MAX_REWARD, MonitorPanel
+from .monitor import MonitorPanel
 from .results.panel import ResultsPanel
 from .plots import PlotViewer
 from .plugins import CommandRegistry, ExtensionSlotRegistry, PluginManager
@@ -87,6 +77,12 @@ def normalize_menu_shortcut(shortcut_str: str) -> str:
         return ""
     import re
     return re.sub(r"(?i)\b(cmd|command)\b", "Ctrl", str(shortcut_str).strip())
+
+
+def launch_buttons(window):
+    """Buttons that launch the open experiment now: the experiment tree's and the Queue tab's."""
+    panel = getattr(window, "queue_panel", None)
+    return [b for b in (window.start_button, panel and panel.launch_button) if b is not None]
 
 
 class Window(QMainWindow):
@@ -217,7 +213,7 @@ class Window(QMainWindow):
         if self.runs:
             self.select_run(self.runs[0])
         self.log("ThetaIDE ready. Launch trains on this machine with run_pipeline.py; "
-                 "Run → Start simulated demo needs no training environment.")
+                 "Queue → Start simulated demo needs no training environment.")
         self.request_schema(apply_defaults=True)
         self.reconnect_live_run()
         for error in errors:
@@ -362,73 +358,25 @@ class Window(QMainWindow):
         self.monitor_panel = self.monitor
         self.tabs.addTab(self.monitor_panel, "Training monitor", "monitor", "Monitor", tab_id="monitor")
 
-        # 4. Results Browser Panel
-        results = QWidget()
-        results_layout = QVBoxLayout(results)
-        results_layout.setContentsMargins(18, 18, 18, 18)
-        results_layout.addWidget(label("Experiment history", "heading"))
-        results_layout.addWidget(label("Select one run to inspect, or two to compare (Ctrl + click). "
-                                       "Click a column header to sort.", "muted"))
-        filters = QHBoxLayout()
-        self.search = QLineEdit()
-        self.search.setPlaceholderText("Filter by name, method, environment, seed, status, or source…")
-        self.search.textChanged.connect(self.refresh_runs)
-        filters.addWidget(self.search, 1)
-        self.source_filter = QComboBox()
-        self.status_filter = QComboBox()
-        for combo, choices in ((self.source_filter, SOURCE_FILTERS), (self.status_filter, STATUS_FILTERS)):
-            for key, text in choices.items():
-                combo.addItem(text, key)
-            combo.currentIndexChanged.connect(self.refresh_runs)
-            filters.addWidget(combo)
-        self.show_examples = QCheckBox("Show example runs")
-        self.show_examples.setToolTip("Example runs carry synthetic metrics. They are hidden once real runs exist.")
-        self.show_examples.toggled.connect(self.refresh_runs)
-        filters.addWidget(self.show_examples)
-        refresh = self.button("↻  Refresh", self.request_disk_runs)
-        refresh.setToolTip("Re-read results/logs through the backend, including runs started from the command line")
-        filters.addWidget(refresh)
-        results_layout.addLayout(filters)
-        self.disk_status = label("", "muted")
-        results_layout.addWidget(self.disk_status)
-        self.table = QTableWidget(0, len(RESULT_COLUMNS))
-        self.table.setHorizontalHeaderLabels(list(RESULT_COLUMNS))
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.ResizeToContents)
-        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        self.table.setSortingEnabled(True)
-        self.table.sortByColumn(RESULT_COLUMNS.index("Started"), Qt.SortOrder.DescendingOrder)
-        self.table.verticalHeader().hide()
-        self.table.verticalHeader().setDefaultSectionSize(40)
-        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        self.table.setAlternatingRowColors(True)
-        self.table.setShowGrid(False)
-        self.table.itemSelectionChanged.connect(self.table_selected)
-        self.table.itemDoubleClicked.connect(lambda _: self.tabs.setCurrentWidget(self.monitor_panel))
-        results_layout.addWidget(self.table, 1)
-        actions = QHBoxLayout()
-        actions.addWidget(self.button("Load saved config", self.load_selected_config))
-        actions.addWidget(self.button("Compare two runs", self.compare))
-        actions.addWidget(self.button("View plot", self.view_selected_plot))
-        actions.addStretch()
-        results_layout.addLayout(actions)
-        # Results: every metric of the ticked runs (ResultsPanel), plus the run table it is replacing,
-        # kept as a second tab until its Load config / Compare / View plot actions move over.
+        # 4. Results Browser Panel: every metric of the ticked runs
         self.results_view = ResultsPanel(self.backend, self.settings_manager, load_config=self.load_results_config)
-        self.results_tabs = QTabWidget()
-        self.results_tabs.setDocumentMode(True)
-        self.results_tabs.addTab(self.results_view, "Curves")
-        self.results_tabs.addTab(results, "Run list")
-        self.results_panel = self.results_tabs
+        self.results_panel = self.results_view
         self.tabs.addTab(self.results_panel, "Results browser", "results", "Results", tab_id="results")
 
         # 5. Plot Viewer
         self.plot_viewer = PlotViewer()
-        self.tabs.addTab(self.plot_viewer, "Plot viewer", "plots", "Plots", tab_id="plots")
+        # The runs list: the runs ticked in it are plotted together here. Past runs are viewed in this tab;
+        # the Training monitor shows only the current or most recent run.
+        self.plot_viewer.add_runs_list(self.monitor.sidebar)
+        self.monitor.sidebar.compare_changed.connect(self.plot_ticked_runs)
+        self.tabs.addTab(self.plot_viewer, "Plot Viewer", "plots", "Plots", tab_id="plots")
 
         # 6. Job Queue Panel
-        self.queue_panel = QueuePanel(self.move_queued, self.remove_queued, self.open_job, self.set_queue_running)
+        self.queue_panel = QueuePanel(self.move_queued, self.remove_queued, self.open_job, self.set_queue_running,
+                                      on_launch=self.launch_training, on_add=self.add_to_queue,
+                                      on_stop=self.stop_run, on_demo=self.start_demo)
+        self.queue_button = self.queue_panel.add_button
+        self.stop_button = self.queue_panel.stop_button
         self.tabs.addTab(self.queue_panel, "Job queue", "queue", "Queue", tab_id="queue")
 
         # 8. Terminal Panel
@@ -519,10 +467,12 @@ class Window(QMainWindow):
             self.active_config_path = None
             self.active_config_rel_path = None
             self.current_experiment = None
-            if self.start_button is not None:
-                self.start_button.setEnabled(False)
+            for button in launch_buttons(self):
+                button.setEnabled(False)
             if self.queue_button is not None:
                 self.queue_button.setEnabled(False)
+            if hasattr(self, "queue_panel"):
+                self.queue_panel.set_experiment(None)
             return
 
         self.active_config_path = viewer.current_path
@@ -971,7 +921,7 @@ class Window(QMainWindow):
         self.statusBar().showMessage(f"Uninstalled plugin: {name}", 4000)
 
     def open_plugin_settings(self, plugin_id: str):
-        from PyQt6.QtWidgets import QDialog, QDialogButtonBox, QMessageBox, QVBoxLayout
+        from PyQt6.QtWidgets import QDialogButtonBox, QMessageBox, QVBoxLayout
         
         instance = self.plugin_manager.instances.get(plugin_id)
         if not instance:
@@ -1204,7 +1154,7 @@ class Window(QMainWindow):
             self.addAction(action)
             self.menu_actions[aid] = action
 
-        run_menu = self.menuBar().addMenu("Run")
+        # Training is started and stopped from the Queue tab; its shortcuts stay window-wide.
         for aid, title, default_sc, callback in (
             ("launch_training", "Launch training", "F5", self.launch_training),
             ("stop_run", "Stop", "Shift+F5", self.stop_run),
@@ -1221,7 +1171,6 @@ class Window(QMainWindow):
                 action.setShortcut(QKeySequence(sc_norm))
             action.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
             action.triggered.connect(callback)
-            run_menu.addAction(action)
             self.addAction(action)
             self.menu_actions[aid] = action
         view_menu = self.menuBar().addMenu("View")
@@ -1263,7 +1212,7 @@ class Window(QMainWindow):
         view_menu.addAction("Workflows", lambda: self.tabs.setCurrentWidget(self.workflows_panel))
         view_menu.addAction("Training monitor", lambda: self.tabs.setCurrentWidget(self.monitor_panel))
         view_menu.addAction("Results browser", lambda: self.tabs.setCurrentWidget(self.results_panel))
-        view_menu.addAction("Plot viewer", lambda: self.tabs.setCurrentWidget(self.plot_viewer))
+        view_menu.addAction("Plot Viewer", lambda: self.tabs.setCurrentWidget(self.plot_viewer))
         if hasattr(self, "tabs") and "tensorboard" in self.tabs.tabs:
             view_menu.addAction("TensorBoard", self.show_tensorboard)
         view_menu.addAction("Job queue", lambda: self.tabs.setCurrentWidget(self.queue_panel))
@@ -1455,6 +1404,8 @@ class Window(QMainWindow):
                      getattr(getattr(self, "components_panel", None), "components_tree", None)):
             if tree is not None:
                 tree.refresh_icons()
+        if hasattr(self, "results_view"):
+            self.results_view.explorer.refresh_icons()
         if hasattr(self, "settings_theme_select"):
             self.settings_theme_select.blockSignals(True)
             self.settings_theme_select.setCurrentText(self.theme_manager.active["name"])
@@ -1599,8 +1550,6 @@ class Window(QMainWindow):
         was_connected, self.backend_connected = self.backend_connected, connected
         if connected and not was_connected:
             self.request_disk_runs()  # list runs on disk, including ones started outside the app
-        elif was_connected != connected:
-            self.update_disk_status()
         if not connected and hasattr(self, "results_view"):
             self.results_view.set_offline()
         if connected:
@@ -1676,14 +1625,6 @@ class Window(QMainWindow):
             return []
 
         missing = []
-        ct = getattr(self, "config_tree", None)
-        tree = getattr(ct, "tree_model", None) if ct is not None else None
-        if tree is None:
-            try:
-                from frontend.config_model import config_tree
-                tree = config_tree()
-            except Exception:
-                tree = None
 
         # 1. Check from compose errors if any
         compose_err = getattr(self, "compose_error", "") or ""
@@ -1691,65 +1632,51 @@ class Window(QMainWindow):
         find_matches = re.findall(r"Could not find '(agent|model|env|paradigms)/([^']+)'", compose_err)
         for cat, name in find_matches:
             missing.append(f"{cat}: {name}")
+        err_matches = re.findall(r"missing component[s]?: ([^.]+)", compose_err, re.IGNORECASE)
+        for m in err_matches:
+            for item in m.split(","):
+                item_clean = item.strip()
+                if item_clean:
+                    missing.append(item_clean)
 
         # 2. Check from current viewer or experiment file
+        data = None
         viewer = getattr(self, "config_viewer", None)
         if viewer and getattr(viewer, "raw_data", None):
             data = viewer.raw_data
-            # Environment check
-            env_val = viewer._get_explicit_env() or viewer._get_base_env()
-            if env_val and tree:
-                env_exists = (
-                    env_val in tree.environments
-                    or any(e.name == env_val for e in tree.environments.values())
-                    or (tree.config_root / "env" / f"{env_val}.yaml").is_file()
-                )
-                if not env_exists:
-                    missing.append(f"environment: {env_val}")
+        if not data and hasattr(self, "active_config_path") and self.active_config_path:
+            try:
+                import yaml
+                data = yaml.safe_load(Path(self.active_config_path).read_text(encoding="utf-8"))
+            except Exception:
+                data = None
+        if not data:
+            exp_target = getattr(self, "current_experiment", None)
+            if exp_target:
+                p = Path("in/config/experiment") / f"{exp_target}.yaml"
+                if p.is_file():
+                    try:
+                        import yaml
+                        data = yaml.safe_load(p.read_text(encoding="utf-8"))
+                    except Exception:
+                        data = None
 
-            # Methods check
-            methods = data.get("methods", {})
-            if isinstance(methods, dict):
-                for m_name, m_spec in methods.items():
-                    if not isinstance(m_spec, dict):
-                        continue
-                    ag = m_spec.get("agent")
-                    if isinstance(ag, dict):
-                        ag = ag.get("algorithm") or ag.get("name")
-                    if ag and tree:
-                        ag_str = str(ag)
-                        ag_exists = (
-                            ag_str in tree.agents
-                            or any(a.name == ag_str or a.algorithm == ag_str for a in tree.agents.values())
-                            or (tree.config_root / "agent" / f"{ag_str}.yaml").is_file()
-                        )
-                        if not ag_exists:
-                            missing.append(f"algorithm: {ag_str}")
-
-                    mo = m_spec.get("model")
-                    if isinstance(mo, dict):
-                        mo = next(iter(mo)) if mo else None
-                    if mo and tree:
-                        mo_str = str(mo)
-                        mo_stem = mo_str.split("/")[-1]
-                        mo_exists = (
-                            mo_str in tree.models
-                            or mo_stem in tree.models
-                            or (tree.config_root / "model" / f"{mo_str}.yaml").is_file()
-                            or (tree.config_root / "model" / "basics" / f"{mo_stem}.yaml").is_file()
-                        )
-                        if not mo_exists:
-                            missing.append(f"model: {mo_str}")
+        if data:
+            try:
+                from src.app.pipeline.validation import find_missing_components
+                missing.extend(find_missing_components(data))
+            except Exception:
+                pass
 
         return list(dict.fromkeys(missing))
 
     def update_launch_state(self):
         idle = self.active is None
         has_experiment = bool(getattr(self, "current_experiment", None))
-        missing_components = Window.check_missing_components(self) if has_experiment else []
+        missing_components = self.check_missing_components() if has_experiment else []
         ready = idle and self.compose_valid and has_experiment and not missing_components
-        if self.start_button is not None:
-            self.start_button.setEnabled(ready)
+        for button in launch_buttons(self):  # the experiment tree's and the Queue tab's
+            button.setEnabled(ready)
         if self.queue_button is not None:
             self.queue_button.setEnabled(self.compose_valid and has_experiment and not missing_components)
         if self.stop_button is not None:
@@ -1780,10 +1707,19 @@ class Window(QMainWindow):
             exp_name = getattr(self, "current_experiment", "experiment")
             tip = f"Train {exp_name} through the backend (F5)"
             btn_text = "Launch training"
-        if self.start_button is not None:
-            self.start_button.setToolTip(tip)
-            if hasattr(self.start_button, "setText"):
-                self.start_button.setText(btn_text)
+        for button in launch_buttons(self):
+            button.setToolTip(tip)
+        # Only the experiment tree's button says why in its text; the Queue tab's stays "Launch now"
+        # (a reason such as "Missing component: nsfr" does not fit it) and says why in its tooltip.
+        if self.start_button is not None and hasattr(self.start_button, "setText"):
+            self.start_button.setText(btn_text)
+        if hasattr(self, "queue_panel"):
+            self.queue_panel.set_experiment(getattr(self, "current_experiment", None),
+                                            getattr(self, "active_config_rel_path", "") or "")
+            self.queue_panel.stop_button.setToolTip("Stop the active run (Shift+F5)" if not idle else "No run is active")
+            self.queue_panel.add_button.setToolTip(
+                tip.replace("Cannot run", "Cannot queue") if not ready and idle
+                else f"Add {getattr(self, 'current_experiment', 'the experiment')} to the queue (Ctrl+Shift+Q)")
         if getattr(self, "state_label", None) is not None:
             run = self.active
             if run is None:
@@ -1826,8 +1762,8 @@ class Window(QMainWindow):
         experiment_id = self.unique_experiment_id(config.name, is_recover=is_recover)
         overrides = self.config_viewer.get_overrides() if hasattr(self, "config_viewer") else config.overrides()
         overrides = [o for o in overrides if not o.startswith("++experiment_id=")] + [f"++experiment_id='{experiment_id}'"]
-        if self.start_button is not None:
-            self.start_button.setEnabled(False)
+        for button in launch_buttons(self):
+            button.setEnabled(False)
         self.log(f"Launching {experiment_id}:\n  python run_pipeline.py {exp_target} {' '.join(overrides)}")
         try:
             job = self.jobs.launch(exp_target, overrides)
@@ -2127,13 +2063,26 @@ class Window(QMainWindow):
         except KeyError:
             self.log("Remove failed: that job no longer exists.")
 
+    def plot_ticked_runs(self, run_ids):
+        """The runs list's ticks changed: draw those runs in the Plot Viewer (loading their curves if needed)."""
+        for run_id in run_ids:
+            run = self.by_id(run_id)
+            if run is not None:
+                self.load_disk_metrics(run)  # command-line runs load their curves on first use
+        self.plot_viewer.set_compared(run_ids, self.monitor.sidebar.colors())
+
     def open_job(self, job_id):
+        """Queue → double-click (or Open in Plot Viewer): plot that job's run in the Plot Viewer."""
         run = next((r for r in self.runs if not r["simulated"] and r["backend"].get("job_id") == job_id), None)
         if run is None:
             self.statusBar().showMessage("That job has no run record in this workspace.", 5000)
             return
-        self.select_run(run)
-        self.tabs.setCurrentWidget(self.monitor_panel)
+        self.monitor.sidebar.tick(run["id"])
+        self.tabs.setCurrentWidget(self.plot_viewer)
+
+    def latest_run(self):
+        """The run the Training monitor shows: the one training now, else the most recent one."""
+        return self.active or (self.runs[0] if self.runs else None)
 
     # ── Simulated demo (no training environment needed) ──────────────────────
 
@@ -2210,15 +2159,6 @@ class Window(QMainWindow):
         if hasattr(self, "monitor"):
             self.monitor.render()
 
-    def select_prev_run(self):
-        self.monitor.select_prev_run()
-
-    def select_next_run(self):
-        self.monitor.select_next_run()
-
-    def jump_to_live_run(self):
-        self.monitor.jump_to_live_run()
-
     def toggle_pin_baseline(self):
         self.monitor.toggle_pin_baseline()
 
@@ -2248,46 +2188,9 @@ class Window(QMainWindow):
         self.plot_viewer.update_runs(self.runs)
         if hasattr(self, "settings_runs_count_label"):
             self.settings_runs_count_label.setText(f"Total run records:  {len(self.runs)} runs")
-        query = self.search.text().lower()
-        # Example runs are synthetic; once real runs exist they only show on request.
-        has_real = any(run_source(run) != "example" for run in self.runs)
-        self.show_examples.setVisible(has_real)
-        show_examples = (self.show_examples.isChecked() or not has_real
-                         or self.source_filter.currentData() == "simulated")
-        selected_ids = {self.table.item(index.row(), 0).data(Qt.ItemDataRole.UserRole)
-                        for index in self.table.selectionModel().selectedRows()}
-        self.table.blockSignals(True)
-        self.table.setSortingEnabled(False)  # rows would re-sort mid-fill otherwise
-        self.table.setRowCount(0)
-        for run in self.runs:
-            if not matches_filters(run, self.source_filter.currentData(), self.status_filter.currentData(),
-                                   show_examples):
-                continue
-            backend = run.get("backend") or {}
-            cells = result_row(run, self.disk_entries.get((backend.get("group"), backend.get("experiment_id"))))
-            if query not in " ".join(text for text, _ in cells).lower():
-                continue
-            row = self.table.rowCount()
-            self.table.insertRow(row)
-            for col, (text, key) in enumerate(cells):
-                cell = SortableItem(text, key)
-                cell.setData(Qt.ItemDataRole.UserRole, run["id"])
-                # Experiment names read best left-aligned; every other value sits centered under its label.
-                cell.setTextAlignment((Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter) if col == 0
-                                      else Qt.AlignmentFlag.AlignCenter)
-                self.table.setItem(row, col, cell)
-        self.table.setSortingEnabled(True)
-        selection = self.table.selectionModel()
-        for row in range(self.table.rowCount()):  # keep the selection across refreshes
-            if self.table.item(row, 0).data(Qt.ItemDataRole.UserRole) in selected_ids:
-                selection.select(self.table.model().index(row, 0),
-                                 selection.SelectionFlag.Select | selection.SelectionFlag.Rows)
-        self.table.blockSignals(False)
-        self.update_disk_status()
-
         # Sync the Monitor's run selector
         if hasattr(self, "monitor"):
-            self.monitor.set_runs(self.runs, self.selected)
+            self.monitor.set_runs(self.runs)
 
     def request_disk_runs(self):
         """List every results/logs folder (catalog.list_runs on the background thread)."""
@@ -2318,16 +2221,8 @@ class Window(QMainWindow):
         if self.selected is not None and not any(run is self.selected for run in self.runs):
             self.selected = None  # its folder was deleted
         self.refresh_runs()
-
-    def update_disk_status(self):
-        if not hasattr(self, "disk_status"):
-            return
-        found = sum(1 for run in self.runs if run_source(run) == "cli")
-        if self.backend_connected:
-            self.disk_status.setText(f"●  {len(self.disk_entries)} run folders in results/logs · "
-                                     f"{found} started outside the app")
-        else:
-            self.disk_status.setText("○  Training pipeline unavailable: runs in results/logs can't be listed yet.")
+        if self.selected is None and self.latest_run() is not None:
+            self.select_run(self.latest_run())
 
     def load_disk_metrics(self, run):
         """Fetch the metrics of a run found in results/logs (the app has none recorded for it)."""
@@ -2351,50 +2246,17 @@ class Window(QMainWindow):
         if self.selected is run:
             self.render_run()
         self.refresh_runs()
-        selected_ids = {self.table.item(index.row(), 0).data(Qt.ItemDataRole.UserRole)
-                        for index in self.table.selectionModel().selectedRows()}
-        if len(selected_ids) > 1 and run["id"] in selected_ids:
-            self.table_selected()  # redraw the comparison overlay with the newly loaded curve
 
     def by_id(self, run_id):
         return next((run for run in self.runs if run["id"] == run_id), None)
 
     def view_selected_plot(self):
         if self.selected:
-            self.plot_viewer.show_run(self.selected["id"])
+            self.monitor.sidebar.tick(self.selected["id"])  # the plot draws the ticked runs
         self.tabs.setCurrentWidget(self.plot_viewer)
 
     def tree_selected(self, item, _):
         pass
-
-    def table_selected(self):
-        rows = self.table.selectionModel().selectedRows()
-        if len(rows) == 1:
-            run = self.by_id(self.table.item(rows[0].row(), 0).data(Qt.ItemDataRole.UserRole))
-            self.select_run(run)
-        elif len(rows) >= 2:
-            runs = [self.by_id(self.table.item(r.row(), 0).data(Qt.ItemDataRole.UserRole)) for r in rows]
-            runs = [r for r in runs if r is not None]
-            for r in runs:
-                self.load_disk_metrics(r)  # command-line runs load their curves on first use
-            if runs:
-                palette = ("#b8bb26", "#83a598", "#fabd2f", "#d3869b", "#8ec07c")
-                series = []
-                for i, r in enumerate(runs[:5]):
-                    name = f"{r['config'].get('name', r['id'])} (seed {r['config'].get('seed', 0)})"
-                    series.append((name, r.get("metrics", []), palette[i % len(palette)]))
-                self.monitor.show_comparison(series)
-                self.selected = runs[0]
-
-    def load_selected_config(self):
-        rows = self.table.selectionModel().selectedRows()
-        if len(rows) != 1:
-            self.statusBar().showMessage("Select exactly one run to load its saved config.", 5000)
-            return
-        run = self.by_id(self.table.item(rows[0].row(), 0).data(Qt.ItemDataRole.UserRole))
-        problem = self.load_run_config(run)
-        if problem:
-            self.statusBar().showMessage(problem, 8000)
 
     def load_run_config(self, run):
         """Put a run record's builder config into the experiment builder; return why not, or None."""
@@ -2440,45 +2302,6 @@ class Window(QMainWindow):
             return ("No builder config is saved for this run (only runs Theta-IDE launched or listed have one). "
                     "Its full saved config is in the Config tab.")
         return self.load_run_config(run)
-
-    def compare(self):
-        rows = self.table.selectionModel().selectedRows()
-        if len(rows) != 2:
-            self.statusBar().showMessage("Select exactly two runs with Ctrl + click to compare.", 5000)
-            return
-        runs = [self.by_id(self.table.item(index.row(), 0).data(Qt.ItemDataRole.UserRole)) for index in rows]
-        dialog = QDialog(self)
-        dialog.setWindowTitle("Compare experiments")
-        dialog.resize(820, 660)
-        layout = QVBoxLayout(dialog)
-        layout.addWidget(label("Two runs. One question.", "heading"))
-        chart = Chart("reward", "Episode reward", band="reward_std")
-        chart.set_series([(run["config"]["name"], run["metrics"], color)
-                          for run, color in zip(runs, ("#b8bb26", "#83a598"))],
-                         reference=ENV_MAX_REWARD.get(runs[0]["config"]["env"]))
-        layout.addWidget(chart, 1)
-        for run, color in zip(runs, ("#b8bb26", "#83a598")):
-            legend = label(f"●  {run['config']['name']} · seed {run['config']['seed']} · {run['id']}")
-            legend.setStyleSheet(f"color: {theme_color(color)}")
-            layout.addWidget(legend)
-        diff = QTableWidget(len(asdict(Config())), 3)
-        diff.setHorizontalHeaderLabels(["Parameter", "Run A", "Run B"])
-        diff.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeMode.Stretch)
-        diff.verticalHeader().hide()
-        diff.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
-        configs = [asdict(Config(**run["config"])) for run in runs]  # older records lack newer fields
-        for row, key in enumerate(asdict(Config())):
-            for col, value in enumerate((key, configs[0][key], configs[1][key])):
-                cell = QTableWidgetItem(str(value))
-                if configs[0][key] != configs[1][key]:
-                    from PyQt6.QtGui import QColor
-                    cell.setForeground(QColor(theme_color("accent")))
-                diff.setItem(row, col, cell)
-        layout.addWidget(diff, 1)
-        synthetic = [run["config"]["name"] for run in runs if run["simulated"]]
-        note = f" Synthetic curves: {', '.join(synthetic)}." if synthetic else ""
-        layout.addWidget(label("Changed parameters are highlighted." + note, "muted"))
-        dialog.exec()
 
     def export_config(self):
         config = self.config()

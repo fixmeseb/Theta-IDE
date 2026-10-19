@@ -8,14 +8,15 @@ base configuration profiles, and .theta_component.json manifests for:
   - DataModules & Trajectory Samplers
   - Evaluators, Safety & Verification Hooks
 """
+
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
 import json
 import logging
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any
 
 from . import PROJECT_ROOT
 
@@ -25,30 +26,32 @@ log = logging.getLogger(__name__)
 @dataclass
 class ScaffoldOptions:
     """Options for generating a new component plugin scaffold."""
+
     name: str
     kind: str  # "model", "agent", "env", "datamodule", "evaluator"
     author: str = "Theta Researcher"
     version: str = "0.1.0"
     description: str = ""
     is_composite: bool = False  # For models: generates ModelSlot and CompositeModelProtocol
-    paradigms: List[str] = field(default_factory=list)  # Supported paradigms (e.g. ['online_rl'])
-    output_dir: Optional[Path] = None
+    paradigms: list[str] = field(default_factory=list)  # Supported paradigms (e.g. ['online_rl'])
+    output_dir: Path | None = None
 
 
 @dataclass
 class ScaffoldResult:
     """Result of component scaffolding operation."""
+
     success: bool
     component_id: str
     target_dir: Path
-    created_files: List[Path] = field(default_factory=list)
-    error: Optional[str] = None
+    created_files: list[Path] = field(default_factory=list)
+    error: str | None = None
 
 
 class PluginScaffolder:
     """Scaffolds new component plugins adhering to Theta-IDE protocols."""
 
-    def __init__(self, workspace_root: Optional[Path] = None):
+    def __init__(self, workspace_root: Path | None = None):
         self.workspace_root = Path(workspace_root) if workspace_root else PROJECT_ROOT
 
     def scaffold(self, options: ScaffoldOptions) -> ScaffoldResult:
@@ -62,7 +65,7 @@ class PluginScaffolder:
                 error="Component name cannot be empty.",
             )
 
-        valid_kinds = {"model", "agent", "env", "datamodule", "evaluator"}
+        valid_kinds = {"model", "agent", "algorithm", "env", "datamodule", "evaluator", "plotter", "plot"}
         if options.kind not in valid_kinds:
             return ScaffoldResult(
                 success=False,
@@ -74,7 +77,7 @@ class PluginScaffolder:
         try:
             if options.kind == "model":
                 return self._scaffold_model(clean_name, options)
-            elif options.kind == "agent":
+            elif options.kind in ("agent", "algorithm"):
                 return self._scaffold_agent(clean_name, options)
             elif options.kind == "env":
                 return self._scaffold_env(clean_name, options)
@@ -82,6 +85,8 @@ class PluginScaffolder:
                 return self._scaffold_datamodule(clean_name, options)
             elif options.kind == "evaluator":
                 return self._scaffold_evaluator(clean_name, options)
+            elif options.kind in ("plotter", "plot"):
+                return self._scaffold_plotter(clean_name, options)
             else:
                 return ScaffoldResult(
                     success=False,
@@ -101,7 +106,7 @@ class PluginScaffolder:
     def _scaffold_model(self, name: str, opts: ScaffoldOptions) -> ScaffoldResult:
         target_dir = opts.output_dir or (self.workspace_root / "src" / "usr" / "models" / name)
         target_dir.mkdir(parents=True, exist_ok=True)
-        created: List[Path] = []
+        created: list[Path] = []
 
         class_name = "".join(part.capitalize() for part in name.split("_")) + "Model"
         desc = opts.description or f"Custom {name} model architecture for Theta-IDE."
@@ -294,9 +299,9 @@ dependencies = ["torch>=2.0.0"]
         return ScaffoldResult(success=True, component_id=name, target_dir=target_dir, created_files=created)
 
     def _scaffold_agent(self, name: str, opts: ScaffoldOptions) -> ScaffoldResult:
-        target_dir = opts.output_dir or (self.workspace_root / "src" / "usr" / "methods" / name)
+        target_dir = opts.output_dir or (self.workspace_root / "src" / "usr" / "algorithms" / name)
         target_dir.mkdir(parents=True, exist_ok=True)
-        created: List[Path] = []
+        created: list[Path] = []
 
         class_name = "".join(part.capitalize() for part in name.split("_")) + "Agent"
         desc = opts.description or f"Custom {name} RL algorithm for Theta-IDE."
@@ -314,10 +319,10 @@ import torch.optim as optim
 
 from src.app.core.model_registry import build_model
 from src.app.core.protocols import AuxiliaryLossProtocol, OptimizerGroupsProtocol
-from src.usr.methods.agent_registry import register_agent
+from src.usr.algorithms.agent_registry import register_agent, register_algorithm
 
 
-@register_agent("{name}")
+@register_algorithm("{name}")
 class {class_name}(L.LightningModule):
     """Pluggable RL agent extending PyTorch Lightning."""
 
@@ -364,7 +369,7 @@ class {class_name}(L.LightningModule):
 
         # 2. __init__.py
         init_file = target_dir / "__init__.py"
-        init_file.write_text(f'from . import {name}_agent  # noqa: F401\n', encoding="utf-8")
+        init_file.write_text(f"from . import {name}_agent  # noqa: F401\n", encoding="utf-8")
         created.append(init_file)
 
         # 3. Base config in in/config/agent/<name>.yaml
@@ -387,12 +392,12 @@ epochs: 10
         meta = {
             "id": name,
             "name": class_name,
-            "kind": "method",
+            "kind": "algorithm",
             "version": opts.version,
             "description": desc,
             "author": {"name": opts.author},
             "created_at": datetime.now(timezone.utc).isoformat(),
-            "target_path": f"src/usr/methods/{name}",
+            "target_path": f"src/usr/algorithms/{name}",
             "config_path": f"in/config/agent/{name}.yaml",
             "compatibility": {"theta": ">=2.0.0"},
             "paradigms": paradigms,
@@ -414,7 +419,7 @@ description = "{desc}"
 dependencies = ["torch>=2.0.0", "lightning>=2.0.0"]
 
 [project.entry-points."theta.agents"]
-{name} = "src.usr.methods.{name}.{name}_agent:{class_name}"
+{name} = "src.usr.algorithms.{name}.{name}_agent:{class_name}"
 """
         pyproject_file.write_text(pyproject_content, encoding="utf-8")
         created.append(pyproject_file)
@@ -424,7 +429,7 @@ dependencies = ["torch>=2.0.0", "lightning>=2.0.0"]
     def _scaffold_env(self, name: str, opts: ScaffoldOptions) -> ScaffoldResult:
         target_dir = opts.output_dir or (self.workspace_root / "in" / "envs" / name)
         target_dir.mkdir(parents=True, exist_ok=True)
-        created: List[Path] = []
+        created: list[Path] = []
 
         class_name = "".join(part.capitalize() for part in name.split("_")) + "EnvironmentPlugin"
         desc = opts.description or f"Custom {name} simulator & grounding environment for Theta-IDE."
@@ -490,7 +495,9 @@ class {class_name}(EnvironmentPluginProtocol):
 
         # 2. __init__.py
         init_file = target_dir / "__init__.py"
-        init_file.write_text(f'from .env import {class_name}, {name.capitalize()}GymEnv  # noqa: F401\n', encoding="utf-8")
+        init_file.write_text(
+            f"from .env import {class_name}, {name.capitalize()}GymEnv  # noqa: F401\n", encoding="utf-8"
+        )
         created.append(init_file)
 
         # 3. Base config in in/config/env/<name>.yaml
@@ -516,7 +523,9 @@ env:
         rules_dir = self.workspace_root / "in" / "rules" / name
         rules_dir.mkdir(parents=True, exist_ok=True)
         rules_file = rules_dir / "default.rules"
-        rules_file.write_text(f"# Domain rules for {name}\n# Example: action_preferred(X) :- state_positive(X).\n", encoding="utf-8")
+        rules_file.write_text(
+            f"# Domain rules for {name}\n# Example: action_preferred(X) :- state_positive(X).\n", encoding="utf-8"
+        )
         created.append(rules_file)
 
         # 5. Manifest
@@ -546,7 +555,7 @@ env:
     def _scaffold_datamodule(self, name: str, opts: ScaffoldOptions) -> ScaffoldResult:
         target_dir = opts.output_dir or (self.workspace_root / "src" / "usr" / "data" / name)
         target_dir.mkdir(parents=True, exist_ok=True)
-        created: List[Path] = []
+        created: list[Path] = []
 
         class_name = "".join(part.capitalize() for part in name.split("_")) + "DataModule"
         desc = opts.description or f"Custom {name} DataModule for Theta-IDE."
@@ -605,7 +614,7 @@ class {class_name}(L.LightningDataModule, DataModulePluginProtocol, TrajectorySa
         created.append(code_file)
 
         init_file = target_dir / "__init__.py"
-        init_file.write_text(f'from . import {name}_data_module  # noqa: F401\n', encoding="utf-8")
+        init_file.write_text(f"from . import {name}_data_module  # noqa: F401\n", encoding="utf-8")
         created.append(init_file)
 
         meta_file = target_dir / ".theta_component.json"
@@ -633,7 +642,7 @@ class {class_name}(L.LightningDataModule, DataModulePluginProtocol, TrajectorySa
     def _scaffold_evaluator(self, name: str, opts: ScaffoldOptions) -> ScaffoldResult:
         target_dir = opts.output_dir or (self.workspace_root / "src" / "usr" / "eval" / name)
         target_dir.mkdir(parents=True, exist_ok=True)
-        created: List[Path] = []
+        created: list[Path] = []
 
         class_name = "".join(part.capitalize() for part in name.split("_")) + "Evaluator"
         desc = opts.description or f"Custom {name} evaluation & verification hook for Theta-IDE."
@@ -671,7 +680,7 @@ class {class_name}(EvaluationHookProtocol):
         created.append(code_file)
 
         init_file = target_dir / "__init__.py"
-        init_file.write_text(f'from . import {name}_evaluator  # noqa: F401\n', encoding="utf-8")
+        init_file.write_text(f"from . import {name}_evaluator  # noqa: F401\n", encoding="utf-8")
         created.append(init_file)
 
         meta_file = target_dir / ".theta_component.json"
@@ -684,6 +693,91 @@ class {class_name}(EvaluationHookProtocol):
             "author": {"name": opts.author},
             "created_at": datetime.now(timezone.utc).isoformat(),
             "target_path": f"src/usr/eval/{name}",
+            "compatibility": {"theta": ">=2.0.0"},
+            "paradigms": paradigms,
+        }
+        meta_file.write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
+        created.append(meta_file)
+
+        plugin_json_file = target_dir / "plugin.json"
+        plugin_json_file.write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
+        created.append(plugin_json_file)
+
+        return ScaffoldResult(success=True, component_id=name, target_dir=target_dir, created_files=created)
+
+    def _scaffold_plotter(self, name: str, opts: ScaffoldOptions) -> ScaffoldResult:
+        target_dir = opts.output_dir or (self.workspace_root / "plot" / name)
+        target_dir.mkdir(parents=True, exist_ok=True)
+        created: list[Path] = []
+
+        class_name = "".join(part.capitalize() for part in name.split("_")) + "Plotter"
+        desc = opts.description or f"Custom {name} experiment plotter & visualization component for Theta-IDE."
+        paradigms = opts.paradigms or ["online_rl", "offline_rl", "supervised"]
+
+        code_file = target_dir / f"{name}_plotter.py"
+        code_content = f'''"""Custom plotter component adhering to BasePlotter and registered via @register_plotter."""
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
+
+from plot.base import BasePlotter, clean_label, get_style_info, moving_average
+from src.app.core.plotter_registry import register_plotter
+
+
+@register_plotter("{name}")
+class {class_name}(BasePlotter):
+    """Custom visualization and performance diagnostic plotter."""
+
+    @classmethod
+    def get_supported_paradigms(cls) -> List[str]:
+        return {repr(paradigms)}
+
+    def __init__(self):
+        super().__init__("{name}")
+
+    def run(self, exp_id: str, cli_overrides: Optional[Dict[str, Any]] = None) -> None:
+        cfg, group, output_dir = self.get_effective_config(exp_id, cli_overrides)
+        metrics = cfg.get("metrics", ["eval/reward", "train/reward", "train/length"])
+        self.plot_metric_series(exp_id, group, output_dir, metrics, cfg)
+'''
+        code_file.write_text(code_content, encoding="utf-8")
+        created.append(code_file)
+
+        init_file = target_dir / "__init__.py"
+        init_file.write_text(f"from . import {name}_plotter  # noqa: F401\n", encoding="utf-8")
+        created.append(init_file)
+
+        # Default configuration in in/config/plot/<name>.yaml
+        config_dir = self.workspace_root / "in" / "config" / "plot"
+        config_dir.mkdir(parents=True, exist_ok=True)
+        config_file = config_dir / f"{name}.yaml"
+        config_content = f"""# Default configuration profile for {name} plotter component
+metrics:
+  - "eval/reward"
+  - "train/reward"
+  - "train/length"
+smoothing_window: 10
+dpi: 300
+format: "png"
+output_dir: null
+"""
+        config_file.write_text(config_content, encoding="utf-8")
+        created.append(config_file)
+
+        meta_file = target_dir / ".theta_component.json"
+        meta = {
+            "id": name,
+            "name": class_name,
+            "kind": "plotter",
+            "version": opts.version,
+            "description": desc,
+            "author": {"name": opts.author},
+            "created_at": datetime.now(timezone.utc).isoformat(),
+            "target_path": f"plot/{name}",
+            "config_path": f"in/config/plot/{name}.yaml",
             "compatibility": {"theta": ">=2.0.0"},
             "paradigms": paradigms,
         }

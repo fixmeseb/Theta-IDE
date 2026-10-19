@@ -1,9 +1,12 @@
+import os
 import time
+from pathlib import Path
 
 import lightning as L
 import numpy as np
 import torch
 
+from src.app.core.checkpoints import CheckpointSchedule, checkpoint_name
 from src.app.core.env_vectorized import VectorizedNudgeBaseEnv
 
 
@@ -165,3 +168,31 @@ class EnvironmentEvaluatorCallback(L.Callback):
     def on_fit_end(self, trainer, pl_module):
         if self.eval_env:
             self.eval_env.close()
+
+
+class PeriodicCheckpointCallback(L.Callback):
+    """Saves step_<transitions>.ckpt on the experiment's schedule and reports each one to telemetry."""
+
+    def __init__(self, ckpt_dir: str, interval: int, total: int | None):
+        super().__init__()
+        self.ckpt_dir = ckpt_dir
+        self.schedule = CheckpointSchedule(interval, total)
+
+    def on_train_epoch_end(self, trainer, pl_module):
+        transitions = int(getattr(pl_module, "global_step_count", 0))
+        if not self.schedule.due(transitions):
+            return
+        os.makedirs(self.ckpt_dir, exist_ok=True)
+        path = os.path.join(self.ckpt_dir, f"{checkpoint_name(transitions)}.ckpt")
+        trainer.save_checkpoint(path)
+        from src.app.telemetry.lightning import ThetaLogger
+
+        for lg in trainer.loggers:
+            if isinstance(lg, ThetaLogger):
+                lg.run.artifact(path, kind="checkpoint", transitions=transitions)
+                lg.run.event(
+                    "checkpoint",
+                    f"Saved {Path(path).name} at {transitions:,} transitions",
+                    path=path,
+                    transitions=transitions,
+                )

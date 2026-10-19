@@ -22,7 +22,7 @@ from . import LOGS_DIR, PLOTS_DIR, PROJECT_ROOT
 from .metrics import latest_version_file, read_metrics_table
 
 try:
-    from src.usr.methods.agent_registry import list_registered_agents
+    from src.usr.algorithms.agent_registry import list_registered_agents
 except ImportError:  # pragma: no cover - registry is optional
 
     def list_registered_agents():

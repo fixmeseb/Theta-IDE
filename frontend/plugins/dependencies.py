@@ -38,13 +38,17 @@ def parse_package_name(requirement: str) -> Tuple[str, str]:
     if "#" in cleaned:
         cleaned = cleaned.split("#", 1)[0].strip()
 
-    # Match package name before versions or extras (e.g., pkg[extra]>=1.0.0)
-    match = re.match(r"^([A-Za-z0-9_\-\.]+)", cleaned)
+    # Match package name and optional extras (e.g., gymnasium[atari]>=1.0.0)
+    match = re.match(r"^([A-Za-z0-9_\-\.]+)(?:\[([A-Za-z0-9_,\-\.]+)\])?", cleaned)
     if not match:
         return cleaned, cleaned.replace("-", "_")
 
     pkg_name = match.group(1).lower()
-    mod_name = PACKAGE_TO_MODULE_MAP.get(pkg_name, pkg_name.replace("-", "_"))
+    extras = match.group(2)
+    if pkg_name == "gymnasium" and extras and "atari" in extras.lower():
+        mod_name = "ale_py"
+    else:
+        mod_name = PACKAGE_TO_MODULE_MAP.get(pkg_name, pkg_name.replace("-", "_"))
     return pkg_name, mod_name
 
 

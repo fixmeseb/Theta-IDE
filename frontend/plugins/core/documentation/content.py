@@ -168,33 +168,36 @@ python -m frontend</code></pre>
 <h3>2. Training Monitor (<code>monitor</code>)</h3>
 <p>Real-time telemetry and telemetry replay for live and finished training runs:</p>
 <ul>
-  <li><b>Runs sidebar:</b> live and queued runs first, then recent ones, each with a status mark, a small reward curve and its latest reward. Click a run to show it; tick runs to overlay them on the shown run's <b>Charts</b> and <b>System</b> views, each in the color of its row. <b>Clear comparison</b> unticks them all.</li>
-  <li><b>Status strip:</b> the run's status, elapsed time, training speed (steps per second), time left, and how long ago it last reported. A running job that goes quiet for two minutes shows <b>STALLED</b>.</li>
-  <li><b>Overview:</b> key scalars (Episode Reward, a loss of your choice, Timestep Budget) and the reward and loss curves.</li>
-  <li><b>Charts:</b> every metric the run logs, one chart per metric in folding sections, one curve per agent. <b>Hide</b> a chart or <b>Show all plots</b>. Hover over any chart: the inspector below lists every metric of every curve at that step. Values marked &asymp; come from the nearest other logged step (hover the cell to see which).</li>
+  <li>The monitor is for the run training now: it shows that run, or the most recent one when nothing is training. Past runs are viewed in the <b>Plot Viewer</b> (see below).</li>
+  <li><b>Status row:</b> the run's status, name, paradigm and seed, then elapsed time, training speed (steps per second, eased so it does not jitter) and time left. A running job that goes quiet for two minutes shows <b>STALLED</b> and when it last reported; a finished run shows when it last wrote. Hover the name for the environment, methods and where the run's files are.</li>
+  <li><b>System &middot; Logs &middot; Feed &middot; Files:</b> buttons at the end of the status row. Each opens that view in place of the charts; click it again to go back. The System button shows the training process's CPU use while it runs.</li>
+  <li><b>Pipeline strip:</b> the run's methods in training order, one segment each (done, training with its progress, or waiting), with checkpoints &#9670;, the latest new best &#9733; and warnings &#9888; marked under it. Click a segment to show only that method's curves; click it again to show them all.</li>
+  <li><b>Cards:</b> the metric the run is judged by, a second metric of your choice (pick it on the card), and the timestep budget.</li>
+  <li><b>Charts:</b> a chart for every metric the run logs, in folding sections, one curve per agent: the evaluation section first, led by the headline chart (with its &plusmn;1 std band and the environment's maximum), losses four to a row. The evaluation section starts folded, since the headline card already shows its latest value: click its heading to show it, and it stays shown. While a run trains, its charts span its whole step budget (the part not reached yet is shaded), their y-axis only grows (a dashed line marks the highest value so far), and each curve still training has its newest point marked. <b>Hide</b> a chart or <b>Show all plots</b>. Hover over any chart: the inspector below lists every metric of every curve at that step. Values marked &asymp; come from the nearest other logged step (hover the cell to see which).</li>
+  <li><b>Smoothing</b> and <b>Pin as baseline</b> sit on the first section's heading row. Smoothing is an exponential moving average from 0% (raw points) to 95%. Pinning a run overlays its curve as a dashed baseline on the headline chart of any other run you show.</li>
+  <li><b>Bottom bar:</b> the newest warning or error any method reported, with <b>Open log</b>; or, before there are metrics, what the run is waiting for (its place in the queue, the pipeline starting).</li>
   <li><b>System:</b> CPU, memory and GPU memory of the training process (and its child processes) over time, measured inside the training process itself.</li>
   <li><b>Logs:</b> the pipeline's output with search, an <i>Errors and warnings only</i> filter, and <i>Follow</i> to keep the newest lines in view.</li>
   <li><b>Feed:</b> what happened, newest first: run start and finish, checkpoints, new bests for <code>eval/</code> and <code>val/</code> metrics, NaN warnings and errors.</li>
   <li><b>Files:</b> checkpoints and other files the run reported; double-click to open one, or <b>Open run folder</b>.</li>
-  <li><b>Smoothing Slider:</b> Exponential Moving Average (EMA) smoothing from 0% (raw points) up to 95% (smoothed trends), for the Overview and Charts curves.</li>
-  <li><b>Multi-Run Navigation:</b> Previous/Next buttons and dropdown selector to compare against previous runs in history.</li>
-  <li><b>Pin as Baseline:</b> Pin any historic run as a dashed reference curve overlay on top of active runs.</li>
-  <li><b>Jump to Live:</b> Instant one-click camera focus back to the actively training experiment.</li>
 </ul>
 
 <h3>3. Job Queue (<code>queue</code>)</h3>
-<p>Line up several experiments and train them one after another:</p>
+<p>Start and stop training here, or line up several experiments and train them one after another:</p>
 <ul>
-  <li>Add the loaded experiment with <b>Run &rarr; Add to queue</b> (<code>Ctrl+Shift+Q</code>). Adding does not start it.</li>
+  <li>The top row names the experiment open in the Experiment tab. <b>Launch now</b> (<code>F5</code>) trains it straight away, <b>Stop</b> (<code>Shift+F5</code>) ends the active run, and <b>Start simulated demo</b> (<code>Ctrl+F5</code>) runs a simulated one that needs no training environment.</li>
+  <li>Add the open experiment with <b>Add to queue</b> (<code>Ctrl+Shift+Q</code>). Adding does not start it.</li>
   <li><b>Start queue</b> (<code>Ctrl+Shift+R</code>) trains queued experiments one at a time, in order. The Training Monitor switches to each one as it starts.</li>
   <li><b>Pause queue</b> stops the next job from starting; a job already training keeps running. The queue also pauses itself when it runs out of jobs.</li>
-  <li>The list shows running, queued and recent jobs. Select a job to <b>Move up</b>, <b>Move down</b>, <b>Remove from queue</b>, or <b>Open in monitor</b>.</li>
+  <li>The list shows running, queued and recent jobs. Select a job to <b>Move up</b>, <b>Move down</b> or <b>Remove from queue</b>; double-click it (or <b>Open in Plot Viewer</b>) to plot its run in the Plot Viewer.</li>
   <li>The queue is kept by the backend, so it continues while Theta-IDE is closed, but it is lost if the backend restarts.</li>
 </ul>
 
 <h3>4. Plots & Visualizations (<code>plots</code>)</h3>
 <p>Inspect output plots auto-generated at the end of training pipelines:</p>
 <ul>
+  <li><b>Runs</b> (left): every run, for viewing past runs. Live and queued runs first, then recent ones; each row has a status mark, the run's name, how far along it is (<i>training &middot; 62%</i>, <i>done</i>, <i>queued</i>), a small reward curve and its latest reward. Click a run (or tick its box) to plot it; click again to take it off. The plot draws exactly the ticked runs, each in the color of its row, and <b>X</b> / <b>Y</b> offer every metric they log. <b>Clear plot</b> unticks them all.</li>
+  <li><b>Open CSV / image&hellip;</b> shows a file from disk instead; ticking or unticking a run goes back to the runs.</li>
   <li><b>Convergence Curves:</b> Visualizes mean ± SEM evaluation rewards across seeds and algorithms.</li>
   <li><b>Loss Decomposition:</b> Explores actor loss, critic/Q-loss, policy entropy, and Bellman error over transitions.</li>
   <li><b>Report Generator:</b> Markdown comparison tables showing best metrics and hyperparameter configurations.</li>
@@ -422,11 +425,11 @@ python -m frontend</code></pre>
     <td>Shortcut</td>
     <td>Action</td>
   </tr>
-  <tr><td><code>F5</code></td><td>Run &rarr; Launch training with the loaded experiment</td></tr>
-  <tr><td><code>Shift+F5</code></td><td>Run &rarr; Stop the active run</td></tr>
-  <tr><td><code>Ctrl+F5</code></td><td>Run &rarr; Start simulated demo (no backend needed)</td></tr>
-  <tr><td><code>Ctrl+Shift+Q</code></td><td>Run &rarr; Add to queue</td></tr>
-  <tr><td><code>Ctrl+Shift+R</code></td><td>Run &rarr; Start or pause queue</td></tr>
+  <tr><td><code>F5</code></td><td>Queue &rarr; Launch now: train the open experiment</td></tr>
+  <tr><td><code>Shift+F5</code></td><td>Queue &rarr; Stop the active run</td></tr>
+  <tr><td><code>Ctrl+F5</code></td><td>Queue &rarr; Start simulated demo (no backend needed)</td></tr>
+  <tr><td><code>Ctrl+Shift+Q</code></td><td>Queue &rarr; Add to queue</td></tr>
+  <tr><td><code>Ctrl+Shift+R</code></td><td>Queue &rarr; Start or pause queue</td></tr>
   <tr><td><code>Ctrl+N</code></td><td>File &rarr; New experiment</td></tr>
   <tr><td><code>Ctrl+S</code></td><td>File &rarr; Save configuration</td></tr>
   <tr><td><code>Ctrl+Shift+S</code></td><td>File &rarr; Export draft YAML</td></tr>
@@ -637,10 +640,10 @@ class MyPlugin(Plugin):
     <td><code>PluginManager</code> scans <code>plugin.json</code></td>
   </tr>
   <tr>
-    <td><b><code>method</code></b></td>
-    <td><code>src/usr/methods/&lt;id&gt;/</code></td>
+    <td><b><code>algorithm</code></b></td>
+    <td><code>src/usr/algorithms/&lt;id&gt;/</code></td>
     <td><code>in/config/agent/&lt;id&gt;.yaml</code></td>
-    <td><code>@register_agent("&lt;prefix&gt;")</code> from <code>src/usr/methods/agent_registry.py</code></td>
+    <td><code>@register_algorithm("&lt;prefix&gt;")</code> from <code>src/usr/algorithms/agent_registry.py</code></td>
   </tr>
   <tr>
     <td><b><code>model</code></b></td>
@@ -732,16 +735,16 @@ class MyToolPlugin(Plugin):
 └── plugin.json       # Optional component metadata</code></pre>
 
 <div style="background-color: rgba(254, 128, 25, 0.12); border-left: 4px solid #fe8019; padding: 10px 14px; margin: 12px 0; border-radius: 4px;">
-  <b>Crucial Rule:</b> The directory <i>must</i> contain an <code>__init__.py</code> file. Theta-IDE's agent registry uses <code>pkgutil.iter_modules()</code> to auto-discover modules in <code>src/usr/methods/</code>. Without <code>__init__.py</code>, the subdirectory will not be imported!
+  <b>Crucial Rule:</b> The directory <i>must</i> contain an <code>__init__.py</code> file. Theta-IDE's algorithm registry uses <code>pkgutil.iter_modules()</code> to auto-discover modules in <code>src/usr/algorithms/</code>. Without <code>__init__.py</code>, the subdirectory will not be imported!
 </div>
 
 <h4>Python Implementation (<code>agent.py</code>)</h4>
 <pre><code>import torch
-from src.usr.methods.base_agent import OfflineAgentBase  # or OnlineAgentBase
-from src.usr.methods.agent_registry import register_agent
+from src.usr.algorithms.base_agent import OfflineAgentBase  # or OnlineAgentBase
+from src.usr.algorithms.agent_registry import register_algorithm, register_agent
 
-@register_agent("my_cql", "my_cql_variant")
-class MyCQLAgent(OfflineAgentBase):
+@register_algorithm("my_algo", "my_algo_variant")
+class MyCustomAlgorithm(OfflineAgentBase):
     def __init__(self, obs_dim, n_actions, cfg=None, **kwargs):
         super().__init__()
         self.save_hyperparameters()
@@ -759,15 +762,15 @@ class MyCQLAgent(OfflineAgentBase):
         return torch.optim.Adam(self.parameters(), lr=self.hparams.get("lr", 3e-4))</code></pre>
 
 <h4>Export in <code>__init__.py</code></h4>
-<pre><code>from .agent import MyCQLAgent
+<pre><code>from .agent import MyCustomAlgorithm
 
-__all__ = ["MyCQLAgent"]</code></pre>
+__all__ = ["MyCustomAlgorithm"]</code></pre>
 
-<h4>Default Configuration (<code>my_method.yaml</code>)</h4>
-<p>Deployed automatically to <code>in/config/agent/my_method.yaml</code>:</p>
+<h4>Default Configuration (<code>my_algo.yaml</code>)</h4>
+<p>Deployed automatically to <code>in/config/agent/my_algo.yaml</code>:</p>
 <pre><code># @package _global_
 agent:
-  name: my_cql
+  name: my_algo
   lr: 3e-4
   cql_alpha: 5.0
   batch_size: 256
@@ -876,7 +879,9 @@ resources:
   memory: "16G"
 
 total_timesteps: 100000
-eval_episodes: 20</code></pre>
+eval_episodes: 20
+num_checkpoints: 10              # or checkpoint_every_steps: 10000 (one or the other)</code></pre>
+<p><b>Checkpoints</b> (online RL): set <code>checkpoint_every_steps</code> to save a checkpoint each time training passes another N timesteps, or <code>num_checkpoints</code> to save that many, spread evenly over <code>total_timesteps</code>. The last one always falls at the end of the run. They are saved as <code>step_&lt;timesteps&gt;.ckpt</code> (<code>.zip</code> for Stable-Baselines3) next to <code>best_model</code>. Setting both is an error. In the experiment editor, <b>+ &rarr; Checkpoints</b> adds the row; its menu switches between the two.</p>
 
 <hr style="border: 0; border-top: 1px solid rgba(255,255,255,0.1); margin: 20px 0;" />
 
@@ -1265,7 +1270,7 @@ workflow: sepsis_reciprocal</code></pre>
 <ul>
   <li>Activate <code>venv/</code> and run <code>pip install -e ".[gui]"</code>, then start the app with <code>python -m frontend</code> from the repository root.</li>
   <li><i>Settings &rarr; Training Pipeline</i> shows which Python the app is using and has a <b>Check pipeline</b> button.</li>
-  <li>Simulated demo runs (<i>Run &rarr; Start simulated demo</i>) work without the training environment.</li>
+  <li>Simulated demo runs (<i>Queue &rarr; Start simulated demo</i>) work without the training environment.</li>
 </ul>
 
 <h3>2. OpenGL / Qt Display Errors on Headless or Cluster Nodes</h3>

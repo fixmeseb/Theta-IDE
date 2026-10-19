@@ -15,6 +15,7 @@ from typing import Any
 
 import yaml
 
+from src.app.core.checkpoints import checkpoint_errors
 from src.app.pipeline.config import normalize_agent_name, parse_methods_dict, resolve_experiment_config_name
 from src.app.pipeline.datasets import resolve_dataset_path
 from src.app.pipeline.exceptions import ConfigurationError
@@ -95,7 +96,7 @@ def paradigm_uses_static_dataset(paradigm_name: str | None) -> bool:
         defn = load_paradigm(paradigm_name or "")
     except ConfigurationError:
         return False
-    data_module = defn.get("data_module")
+    data_module = defn.get("data_module") or defn.get("default_data_module")
     return bool(data_module and data_module != "SimulatorDataModule")
 
 
@@ -225,8 +226,20 @@ def validate_experiment_config(cfg: Any, experiment_name: str, is_sweep: bool = 
     # --- Apply paradigm constraints ---
     _check_paradigm_constraints(cfg, paradigm_name, constraints, env_name)
 
+    # --- Periodic checkpoints: checkpoint_every_steps or num_checkpoints ---
+    for problem in checkpoint_errors(cfg):
+        raise ConfigurationError(f"[ConfigurationError] Experiment '{experiment_name}': {problem}")
+
     # --- Paradigm-Method/Agent Validation ---
     _validate_methods_for_paradigm(cfg, paradigm_name, paradigm_def)
+
+    # --- Missing Components Validation ---
+    missing_comps = find_missing_components(cfg)
+    if missing_comps:
+        raise ConfigurationError(
+            f"[ConfigurationError] Experiment '{experiment_name}' references missing component(s): "
+            f"{', '.join(missing_comps)}. Install them via the Component Hub."
+        )
 
     # --- Optuna sweep direction notice ---
     if is_sweep:
@@ -318,9 +331,7 @@ def _validate_methods_for_paradigm(cfg: Any, paradigm_name: str, paradigm_def: d
                 )
 
         # Check if paradigm requires an agent harness (e.g. constraints.requires.agent: required or allowed_agents)
-        requires_agent = (
-            allowed_agents is not None and len(allowed_agents) > 0
-        ) or (
+        requires_agent = (allowed_agents is not None and len(allowed_agents) > 0) or (
             paradigm_def.get("constraints", {}).get("requires", {}).get("agent") == "required"
         )
 
@@ -355,26 +366,35 @@ def _validate_methods_for_paradigm(cfg: Any, paradigm_name: str, paradigm_def: d
                         f"[ConfigurationError] Method '{method_name}' uses agent '{agent_algo}', "
                         f"which is not allowed in paradigm '{paradigm_name}'. Allowed agents: {allowed_agents}."
                     )
-            else:
-                # 3. Agent has no explicit paradigms and paradigm has no allowed_agents.
-                # Ensure the agent actually exists in registry or configs.
-                if not _agent_exists(agent_algo):
-                    raise ConfigurationError(
-                        f"[ConfigurationError] Method '{method_name}' uses agent '{agent_algo}', "
-                        f"which is not allowed in paradigm '{paradigm_name}'."
-                    )
 
 
 def _get_agent_supported_paradigms(agent_algo: str) -> list[str] | None:
     """Query supported paradigms from agent class or config YAML."""
     clean_algo = agent_algo.lower().replace("-", "_")
     try:
-        from src.usr.methods.agent_registry import AGENT_REGISTRY, auto_discover
+        from src.usr.algorithms.agent_registry import AGENT_REGISTRY, auto_discover, get_agent_class
+
         if not AGENT_REGISTRY:
             auto_discover()
-        agent_cls = AGENT_REGISTRY.get(clean_algo) or AGENT_REGISTRY.get(agent_algo)
-        if agent_cls is not None and hasattr(agent_cls, "get_supported_paradigms"):
-            return [str(p).lower() for p in agent_cls.get_supported_paradigms()]
+        agent_cls = None
+        try:
+            agent_cls = get_agent_class(clean_algo)
+        except Exception:
+            agent_cls = AGENT_REGISTRY.get(clean_algo) or AGENT_REGISTRY.get(agent_algo)
+
+        if agent_cls is not None:
+            if hasattr(agent_cls, "get_supported_paradigms"):
+                return [str(p).lower() for p in agent_cls.get_supported_paradigms()]
+            if hasattr(agent_cls, "supported_paradigms"):
+                p = getattr(agent_cls, "supported_paradigms")
+                if isinstance(p, (list, tuple, set)):
+                    return [str(x).lower() for x in p]
+                return [str(p).lower()]
+            if hasattr(agent_cls, "compatible_paradigms"):
+                p = getattr(agent_cls, "compatible_paradigms")
+                if isinstance(p, (list, tuple, set)):
+                    return [str(x).lower() for x in p]
+                return [str(p).lower()]
     except Exception:
         pass
 
@@ -389,7 +409,9 @@ def _get_agent_supported_paradigms(agent_algo: str) -> list[str] | None:
             if p.is_file():
                 try:
                     data = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
-                    paradigms = data.get("paradigms") or data.get("compatible_paradigms")
+                    paradigms = (
+                        data.get("paradigms") or data.get("compatible_paradigms") or data.get("supported_paradigms")
+                    )
                     if paradigms:
                         if isinstance(paradigms, list):
                             return [str(x).lower() for x in paradigms]
@@ -402,27 +424,74 @@ def _get_agent_supported_paradigms(agent_algo: str) -> list[str] | None:
             if y.stem.lower() in (clean_algo, agent_algo.lower()):
                 try:
                     data = yaml.safe_load(y.read_text(encoding="utf-8")) or {}
-                    paradigms = data.get("paradigms") or data.get("compatible_paradigms")
+                    paradigms = (
+                        data.get("paradigms") or data.get("compatible_paradigms") or data.get("supported_paradigms")
+                    )
                     if paradigms:
                         if isinstance(paradigms, list):
                             return [str(x).lower() for x in paradigms]
                         return [str(paradigms).lower()]
                 except Exception:
                     pass
+
+    # Search installed component manifests in src/usr/algorithms/ and src/usr/methods/
+    for base_dir in [Path("src/usr/algorithms"), Path("src/usr/methods")]:
+        if base_dir.exists():
+            candidates = [
+                base_dir / agent_algo,
+                base_dir / clean_algo,
+                base_dir / (agent_algo.split("/")[0] if "/" in agent_algo else agent_algo),
+                base_dir / (clean_algo.split("_")[0] if "_" in clean_algo else clean_algo),
+            ]
+            for candidate_dir in candidates:
+                if candidate_dir.is_dir():
+                    for meta_file in [candidate_dir / ".theta_component.json", candidate_dir / "plugin.json"]:
+                        if meta_file.is_file():
+                            try:
+                                import json
+
+                                meta = json.loads(meta_file.read_text(encoding="utf-8"))
+                                paradigms = meta.get("paradigms") or meta.get("compatible_paradigms")
+                                if paradigms:
+                                    if isinstance(paradigms, list):
+                                        return [str(x).lower() for x in paradigms]
+                                    return [str(paradigms).lower()]
+                            except Exception:
+                                pass
+
     return None
 
 
 def _agent_exists(agent_algo: str) -> bool:
-    """Check whether an agent is known to the registry or has a config file."""
-    clean_algo = agent_algo.lower().replace("-", "_")
+    """Check whether an agent is known to the registry, has a config file, or maps to an engine runner."""
+    if not agent_algo:
+        return False
+    clean_algo = str(agent_algo).lower().replace("-", "_")
     try:
-        from src.usr.methods.agent_registry import AGENT_REGISTRY, auto_discover
+        from src.usr.algorithms.agent_registry import AGENT_REGISTRY, auto_discover
+
         if not AGENT_REGISTRY:
             auto_discover()
         if clean_algo in AGENT_REGISTRY or agent_algo in AGENT_REGISTRY:
             return True
     except Exception:
         pass
+
+    try:
+        from src.app.pipeline.engine import ENGINE_SCRIPT_MAP
+        if clean_algo in ENGINE_SCRIPT_MAP or str(agent_algo).lower() in ENGINE_SCRIPT_MAP:
+            return True
+        prefix = str(agent_algo).split("/")[0].lower()
+        if prefix in ENGINE_SCRIPT_MAP:
+            return True
+    except Exception:
+        prefix = str(agent_algo).split("/")[0].lower()
+
+    for methods_dir in [Path("src/usr/methods"), Path("src/usr/algorithms")]:
+        if methods_dir.is_dir():
+            for d in [methods_dir / agent_algo, methods_dir / clean_algo, methods_dir / prefix]:
+                if d.is_dir():
+                    return True
 
     agent_dir = Path("in/config/agent")
     if agent_dir.exists():
@@ -434,10 +503,184 @@ def _agent_exists(agent_algo: str) -> bool:
             if p.is_file():
                 return True
         for y in agent_dir.rglob("*.yaml"):
-            if y.stem.lower() in (clean_algo, agent_algo.lower()):
+            if y.stem.lower() in (clean_algo, str(agent_algo).lower()):
                 return True
     return False
 
 
+def _model_exists(name: str) -> bool:
+    """Check whether a model architecture is registered, installed as a plugin, or configured in in/config/model/."""
+    if not name:
+        return True
+    clean = str(name).lower().strip()
+    stem = clean.split("/")[-1]
+
+    # Model registry
+    try:
+        from src.app.core.model_registry import MODEL_REGISTRY, auto_discover_models
+        if not MODEL_REGISTRY:
+            auto_discover_models()
+        if clean in MODEL_REGISTRY or stem in MODEL_REGISTRY:
+            return True
+        if any(clean == p or clean.startswith(p + "_") or stem == p or stem.startswith(p + "_") for p in MODEL_REGISTRY):
+            return True
+    except Exception:
+        pass
+
+    # Configs in in/config/model
+    cfg_root = Path("in/config/model")
+    if cfg_root.is_dir():
+        for p in [cfg_root / f"{clean}.yaml", cfg_root / f"{stem}.yaml", cfg_root / "basics" / f"{stem}.yaml"]:
+            if p.is_file():
+                return True
+        for y in cfg_root.rglob("*.yaml"):
+            if y.stem.lower() in (clean, stem):
+                return True
+
+    # Directories in src/usr/models
+    models_dir = Path("src/usr/models")
+    if models_dir.is_dir():
+        for d in [models_dir / clean, models_dir / stem]:
+            if d.is_dir():
+                return True
+
+    return False
+
+
+def _env_exists(env_name: str) -> bool:
+    """Check whether an environment exists as a plugin, config, registered env, or Gymnasium env."""
+    if not env_name or env_name == "unknown":
+        return True
+    clean = str(env_name).strip().lower()
+    stem = clean.split("/")[-1]
+
+    cfg_root = Path("in/config/env")
+    if cfg_root.is_dir():
+        for p in [cfg_root / f"{clean}.yaml", cfg_root / f"{stem}.yaml"]:
+            if p.is_file():
+                return True
+        for y in cfg_root.rglob("*.yaml"):
+            if y.stem.lower() == stem or y.relative_to(cfg_root).with_suffix("").as_posix().lower() == clean:
+                return True
+
+    for envs_dir in [Path("in/envs"), Path("src/usr/environments")]:
+        if envs_dir.is_dir():
+            for d in [envs_dir / clean, envs_dir / stem]:
+                if d.is_dir():
+                    return True
+
+    try:
+        import gymnasium as gym
+        for spec_id in gym.envs.registry.keys():
+            spec_clean = spec_id.lower()
+            if clean == spec_clean or stem == spec_clean:
+                return True
+            spec_stem = spec_clean.split("/")[-1].split("-v")[0]
+            if stem == spec_stem or clean == spec_stem:
+                return True
+    except Exception:
+        pass
+
+    return False
+
+
+def find_missing_components(cfg_or_dict: Any) -> list[str]:
+    """Inspect an experiment configuration and return a list of all missing components.
+
+    Checks environment, agents, models, and composite submodels against installed plugins,
+    code registries, and in/config/ YAML files.
+    """
+    missing: list[str] = []
+
+    # Extract methods
+    if hasattr(cfg_or_dict, "methods"):
+        methods = cfg_or_dict.methods
+    elif isinstance(cfg_or_dict, dict):
+        methods = cfg_or_dict.get("methods", {})
+    else:
+        methods = {}
+
+    # Extract environment
+    if hasattr(cfg_or_dict, "env"):
+        env_obj = cfg_or_dict.env
+        env_val = getattr(env_obj, "name", None) or getattr(env_obj, "env_id", None) if not isinstance(env_obj, str) else env_obj
+    elif isinstance(cfg_or_dict, dict):
+        env_obj = cfg_or_dict.get("env")
+        if isinstance(env_obj, dict):
+            env_val = env_obj.get("name") or env_obj.get("env_id")
+        elif isinstance(env_obj, str):
+            env_val = env_obj
+        else:
+            env_val = None
+            if "defaults" in cfg_or_dict and isinstance(cfg_or_dict["defaults"], list):
+                for d in cfg_or_dict["defaults"]:
+                    if isinstance(d, dict) and "override /env" in d:
+                        env_val = d["override /env"]
+                    elif isinstance(d, str) and d.startswith("override /env:"):
+                        env_val = d.split(":", 1)[1].strip()
+    else:
+        env_val = None
+
+    if env_val and env_val != "unknown" and not _env_exists(str(env_val)):
+        missing.append(f"environment: {env_val}")
+
+    if hasattr(methods, "items"):
+        for m_name, m_spec in methods.items():
+            if not m_spec or not hasattr(m_spec, "get"):
+                continue
+
+            # Check agent
+            ag = m_spec.get("agent")
+            if isinstance(ag, dict) or hasattr(ag, "get"):
+                ag_str = ag.get("name") or ag.get("algorithm") or ag.get("type")
+            elif ag:
+                ag_str = str(ag)
+            else:
+                ag_str = None
+            if ag_str and not _agent_exists(ag_str):
+                missing.append(f"agent: {ag_str}")
+
+            # Check model
+            mo = m_spec.get("model")
+            mo_str = None
+            nested_dict = {}
+            if isinstance(mo, str):
+                mo_str = mo
+            elif isinstance(mo, dict) or hasattr(mo, "get"):
+                mo_str = mo.get("name") or mo.get("architecture") or mo.get("type") or mo.get("base")
+                if not mo_str and len(mo) == 1:
+                    first_k = next(iter(mo))
+                    mo_str = first_k
+                    val = mo[first_k]
+                    if isinstance(val, dict) or hasattr(val, "get"):
+                        nested_dict = val
+            if mo_str and not _model_exists(mo_str):
+                missing.append(f"model: {mo_str}")
+
+            # Check composite submodels (symbolic, neural, blender, encoder, decoder)
+            for container in (m_spec, nested_dict):
+                if not container:
+                    continue
+                for slot in ("symbolic", "neural", "blender", "encoder", "decoder"):
+                    slot_val = container.get(slot) if hasattr(container, "get") else None
+                    if isinstance(slot_val, dict) or hasattr(slot_val, "get"):
+                        st = slot_val.get("type") or slot_val.get("architecture") or slot_val.get("model") or slot_val.get("name")
+                        if not st and len(slot_val) == 1:
+                            cand = next(iter(slot_val))
+                            if cand not in (
+                                "mode", "blend_function", "ecm_dthr", "rules", "lr",
+                                "hidden_sizes", "activation", "dim", "layers", "depth", "width"
+                            ) and (isinstance(slot_val[cand], dict) or hasattr(slot_val[cand], "get")):
+                                st = cand
+                        if st and not _model_exists(str(st)):
+                            missing.append(f"{slot}: {st}")
+                    elif isinstance(slot_val, str) and slot_val.lower() not in ("neural", "learned", "heuristic", "default", "none", "identity"):
+                        if not _model_exists(slot_val):
+                            missing.append(f"{slot}: {slot_val}")
+
+    return list(dict.fromkeys(missing))
+
+
 def _validate_offline_dataset_paths(cfg: Any, notices: list[str]) -> None:
     pass
+

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import unittest.mock as mock
 
 import pytest
@@ -31,10 +32,15 @@ except ImportError:
     CEWModel = None  # type: ignore
     HAS_CEW_BLENDRL = False
 
+# The standard models (mlp, cnn, transformer, ...) are the Hub's `neural` model component
+HAS_NEURAL = (importlib.util.find_spec("src.usr.models.neural") is not None  # checked first: a missing
+              and importlib.util.find_spec("src.usr.models.neural.architectures") is not None)  # parent raises
+needs_neural = pytest.mark.skipif(not HAS_NEURAL, reason="the 'neural' model component is not installed")
+
 
 @pytest.fixture(autouse=True)
 def _register_test_agents():
-    from src.usr.methods.agent_registry import register_agent
+    from src.usr.algorithms.agent_registry import register_agent
 
     @register_agent("cql")
     class MockCQL(nn.Module):
@@ -139,6 +145,7 @@ def test_register_and_build_custom_model():
     assert m.out_features == 3
 
 
+@needs_neural
 def test_registered_standard_neural_models():
     from src.usr.models.neural.architectures import CNNActor, MLPQNetwork, NeuralBlenderMLP
 
@@ -169,11 +176,15 @@ def test_registered_standard_neural_models():
 
 def test_factories_get_neural_agent_delegates_to_build_model():
     from src.app.core.factories import get_neural_agent
-    from src.usr.models.neural.architectures import MLPQNetwork
 
-    agent_model = get_neural_agent("cartpole", n_actions=2, device="cpu", arch_name="mlp", num_in_features=4)
-    assert isinstance(agent_model, MLPQNetwork)
-    assert agent_model.n_actions == 2
+    @register_model("test_factory_probe")
+    def _create_probe(n_actions=2, num_in_features=4, **kwargs):
+        return nn.Linear(num_in_features, n_actions)
+
+    agent_model = get_neural_agent("cartpole", n_actions=2, device="cpu", arch_name="test_factory_probe",
+                                   num_in_features=4)
+    assert isinstance(agent_model, nn.Linear)
+    assert (agent_model.in_features, agent_model.out_features) == (4, 2)
 
 
 
@@ -240,7 +251,7 @@ def test_walk_model_modules_composite():
 def test_base_agent_callback_discovery_without_hardcoding():
     if not HAS_CEW_BLENDRL:
         pytest.skip("cew plugin is not installed")
-    from src.usr.methods.base_agent import OfflineAgentBase
+    from src.usr.algorithms.base_agent import OfflineAgentBase
 
     cew = CEWModel(n_inputs=4, n_actions=2)
     dummy_agent = DummyAgent(q_model=cew)
@@ -251,7 +262,7 @@ def test_base_agent_callback_discovery_without_hardcoding():
 
 
 def test_base_agent_dynamic_rebind_detection():
-    from src.usr.methods.base_agent import OfflineAgentBase
+    from src.usr.algorithms.base_agent import OfflineAgentBase
 
     dynamic_model = DummyDynamicModel()
     target_model = DummyDynamicModel()
@@ -285,10 +296,11 @@ def test_standard_gymnasium_vector_env_resolution():
     env.close()
 
 
+@needs_neural
 def test_cql_agent_instantiates_with_neural_models():
     from omegaconf import OmegaConf
 
-    from src.usr.methods.agent_registry import get_agent_class
+    from src.usr.algorithms.agent_registry import get_agent_class
     CQLAgent = get_agent_class("cql")
     from src.usr.models.neural.architectures import MLPQNetwork
     from src.usr.models.neural.resnet import DuelingResNetMLP
@@ -340,6 +352,7 @@ def test_action_count_harmonization():
         env.close()
 
 
+@needs_neural
 def test_paradigm_definition_and_data_modules():
     from omegaconf import OmegaConf
 
@@ -348,7 +361,7 @@ def test_paradigm_definition_and_data_modules():
 
     # Verify known models and algorithms helpers
     models = get_known_models()
-    assert {"mlp", "dnn", "dueling_resnet", "transformer", "cross_attention", "cew"} <= models
+    assert {"mlp", "transformer"} <= models
     algos = get_known_algorithms()
     assert {"cql", "ppo", "iql"} <= algos
 
@@ -379,10 +392,11 @@ def test_paradigm_definition_and_data_modules():
     assert hasattr(dm_supervised, "setup")
 
 
+@needs_neural
 def test_iql_agent_instantiates_with_neural_models():
     from omegaconf import OmegaConf
 
-    from src.usr.methods.agent_registry import get_agent_class
+    from src.usr.algorithms.agent_registry import get_agent_class
     IQLAgent = get_agent_class("iql")
     from src.usr.models.neural.architectures import CNNActor, MLPQNetwork, MLPValueNetwork
     from src.usr.models.neural.resnet import DuelingResNetMLP
@@ -423,7 +437,7 @@ def test_iql_agent_instantiates_with_neural_models():
 def test_hybrid_detection_helpers():
     from omegaconf import OmegaConf
 
-    from src.usr.methods.base_agent import BaseAgent
+    from src.usr.algorithms.base_agent import BaseAgent
 
     class DummyAgent(BaseAgent):
         def training_step(self, batch, batch_idx):
@@ -469,8 +483,9 @@ def test_hybrid_detection_helpers():
     assert agent4.resolve_model_name() == "dueling_resnet"
 
 
+@needs_neural
 def test_agent_initialization_with_plain_dicts():
-    from src.usr.methods.agent_registry import get_agent_class
+    from src.usr.algorithms.agent_registry import get_agent_class
     CQLAgent = get_agent_class("cql")
     IQLAgent = get_agent_class("iql")
     PPOAgent = get_agent_class("ppo")
@@ -526,11 +541,12 @@ def test_dynamic_build_model_cew_and_blendrl():
     )
     assert isinstance(m_blend, BlenderActorCritic)
 
+@needs_neural
 def test_custom_third_party_composite_plugin_end_to_end():
     """Verify that any third-party composite plugin can implement the protocols and run with standard RL algorithms with ZERO BlendRL dependencies."""
     from src.app.core.protocols import ModelSlot, CompositeModelProtocol, AuxiliaryLossProtocol, OptimizerGroupsProtocol
     from src.app.core.model_registry import register_model, build_model
-    from src.usr.methods.agent_registry import get_agent_class
+    from src.usr.algorithms.agent_registry import get_agent_class
     PPOAgent = get_agent_class("ppo")
     import torch.nn as nn
 

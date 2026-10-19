@@ -41,17 +41,21 @@ class ExportExperimentDialog(QDialog):
         experiment_id: str,
         workspace_root: Path,
         raw_yaml_text: Optional[str] = None,
+        group: Optional[str] = None,
         parent: Optional[QWidget] = None,
     ):
         super().__init__(parent)
         self.experiment_id = experiment_id.strip()
         self.workspace_root = Path(workspace_root)
         self.raw_yaml_text = raw_yaml_text
+        self.group = group or (self.experiment_id.split("/")[0] if "/" in self.experiment_id else self.experiment_id)
+        self.is_group_export = bool(group) or ("/" not in self.experiment_id and not self.experiment_id.endswith(".yaml"))
         self.exporter = ExperimentExporter(workspace_root=self.workspace_root)
         self.export_result: Optional[ExportResult] = None
 
-        self.setWindowTitle("Export Experiment")
-        self.setMinimumWidth(520)
+        title_text = f"Export Experiment Plugin: {self.group}" if self.is_group_export else "Export Experiment"
+        self.setWindowTitle(title_text)
+        self.setMinimumWidth(540)
         self.setModal(True)
         self._init_ui()
 
@@ -63,11 +67,17 @@ class ExportExperimentDialog(QDialog):
         # Header
         header = QVBoxLayout()
         header.setSpacing(4)
-        title = QLabel("Export Experiment")
+        title_lbl = f"Export Experiment Plugin: {self.group}" if self.is_group_export else "Export Experiment"
+        title = QLabel(title_lbl)
         title.setStyleSheet("font-size: 16px; font-weight: 700;")
         header.addWidget(title)
 
-        sub = QLabel(f"Export '{self.experiment_id}' for distribution via Theta Hub or standalone execution.")
+        sub_lbl = (
+            f"Package entire '{self.group}' experiment suite (all recipes, group defaults, environment, evaluators, and plotters) for 1-click install in Theta Hub."
+            if self.is_group_export
+            else f"Export '{self.experiment_id}' for distribution via Theta Hub or standalone execution."
+        )
+        sub = QLabel(sub_lbl)
         sub.setStyleSheet(f"color: {theme_color('muted')}; font-size: 12px;")
         sub.setWordWrap(True)
         header.addWidget(sub)
@@ -111,6 +121,10 @@ class ExportExperimentDialog(QDialog):
 
         opts_layout.addWidget(label("PACKAGE ASSETS", "eyebrow"))
 
+        self.chk_group_all = QCheckBox("Bundle full experiment group (all recipes + group defaults)")
+        self.chk_group_all.setChecked(self.is_group_export)
+        opts_layout.addWidget(self.chk_group_all)
+
         self.chk_env = QCheckBox("Include environment configuration & custom rules")
         self.chk_env.setChecked(True)
         opts_layout.addWidget(self.chk_env)
@@ -118,6 +132,18 @@ class ExportExperimentDialog(QDialog):
         self.chk_models = QCheckBox("Include custom model architecture definitions")
         self.chk_models.setChecked(True)
         opts_layout.addWidget(self.chk_models)
+
+        self.chk_eval = QCheckBox("Include custom evaluators & reward shaping")
+        self.chk_eval.setChecked(True)
+        opts_layout.addWidget(self.chk_eval)
+
+        self.chk_plots = QCheckBox("Include visualization suites & plotters")
+        self.chk_plots.setChecked(True)
+        opts_layout.addWidget(self.chk_plots)
+
+        self.chk_data = QCheckBox("Include custom data modules & loaders")
+        self.chk_data.setChecked(True)
+        opts_layout.addWidget(self.chk_data)
 
         self.chk_checkpoints = QCheckBox("Include trained checkpoint weights (if available)")
         self.chk_checkpoints.setChecked(False)
@@ -248,17 +274,25 @@ class ExportExperimentDialog(QDialog):
             return
 
         # Export ZIP Hub Component
+        is_bundle = getattr(self, "is_group_export", False) or self.chk_group_all.isChecked()
         opts = ExportOptions(
             include_checkpoints=self.chk_checkpoints.isChecked(),
             include_environment=self.chk_env.isChecked(),
             include_models=self.chk_models.isChecked(),
             include_rules=self.chk_env.isChecked(),
+            include_evaluators=self.chk_eval.isChecked(),
+            include_plotters=self.chk_plots.isChecked(),
+            include_data_modules=self.chk_data.isChecked(),
+            include_all_group_experiments=is_bundle,
             output_path=target_path,
             author=self.edit_author.text().strip() or "Theta Researcher",
             version=self.edit_version.text().strip() or "1.0.0",
         )
 
-        res = self.exporter.export(self.experiment_id, options=opts)
+        if is_bundle:
+            res = self.exporter.export_group(self.group, options=opts)
+        else:
+            res = self.exporter.export(self.experiment_id, options=opts)
         self.export_result = res
 
         if res.success:

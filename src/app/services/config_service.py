@@ -37,7 +37,7 @@ _COMPOSE_CACHE_LOCK = threading.Lock()
 def _inputs_fingerprint() -> int:
     """Hash of everything a compose can depend on: the files (paths and exact contents) and the
     agents registered in memory (hot reload and tests register agents without touching files)."""
-    registry_module = sys.modules.get("src.usr.methods.agent_registry")  # don't import it just to look
+    registry_module = sys.modules.get("src.usr.algorithms.agent_registry")  # don't import it just to look
     registry = getattr(registry_module, "AGENT_REGISTRY", None) or {}
     parts: list[Any] = [tuple(sorted((name, id(cls)) for name, cls in registry.items()))]
     for root, pattern in ((CONFIG_DIR, "*.yaml"), (_USER_CODE_DIR, "*.py")):
@@ -81,6 +81,7 @@ def _cached_on_inputs(fn):
 def clear_compose_cache() -> None:
     with _COMPOSE_CACHE_LOCK:
         _COMPOSE_CACHE.clear()
+
 
 # The GUI composes GUI_BASE_EXPERIMENT plus one override per field; defaults are read from the
 # composed config rather than duplicated in the GUI.
@@ -201,9 +202,14 @@ def config_schema() -> dict[str, Any]:
     method_prefix = f"methods.{GUI_METHOD['name']}"
     return {
         "base_experiment": composed.experiment,
-        "paradigm": composed.cfg.get("paradigm"),
-        "environment": {"name": composed.cfg.env.name, "env_id": composed.cfg.env.get("env_id")},
-        "method": GUI_METHOD,
+        "environment": {
+            "name": getattr(composed.cfg.env, "name", None)
+            if hasattr(composed.cfg, "env") and composed.cfg.env
+            else None,
+            "env_id": composed.cfg.env.get("env_id")
+            if hasattr(composed.cfg, "env") and composed.cfg.env and hasattr(composed.cfg.env, "get")
+            else None,
+        },
         "fixed_overrides": [
             f"++{method_prefix}.agent={GUI_METHOD['agent']}",
             f"++{method_prefix}.model={GUI_METHOD['model']}",

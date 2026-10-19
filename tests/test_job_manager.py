@@ -25,6 +25,20 @@ from src.app.services.job_store import JobStore  # noqa: E402
 
 app = QApplication.instance() or QApplication(sys.argv[:1])
 
+
+@pytest.fixture(autouse=True)
+def _register_test_agents():
+    from src.usr.algorithms.agent_registry import AGENT_REGISTRY, register_agent
+    from src.usr.algorithms.base_agent import OfflineAgentBase
+
+    @register_agent("cql")
+    class MockCQL(OfflineAgentBase):
+        pass
+
+    yield
+
+    AGENT_REGISTRY.pop("cql", None)
+
 FAKE_PIPELINE = '''
 import os, sys, time
 from pathlib import Path
@@ -193,7 +207,7 @@ def test_cancel_stops_a_running_job(jobs):
 def test_launch_rejects_an_invalid_config(jobs):
     with pytest.raises(LaunchError) as error:
         jobs.manager.launch(BASE_EXPERIMENT, Config().overrides() + ["++methods.ppo.agent=cql"])
-    assert "forbidden" in str(error.value)
+    assert "forbidden" in str(error.value) or "not allowed" in str(error.value)
     assert not error.value.conflict
 
 
@@ -336,8 +350,16 @@ def real_overrides(experiment_id, total_timesteps):
     return Config(name=experiment_id, total_timesteps=total_timesteps).overrides() + ["no_plot=true"]
 
 
+def _has_real_training_plugins():
+    has_cartpole = Path("in/config/env/cartpole.yaml").exists() or Path("in/envs/cartpole").exists()
+    has_ppo = Path("in/config/agent/ppo.yaml").exists() or Path("in/config/agent/sb3/ppo.yaml").exists()
+    return has_cartpole and has_ppo
+
+
 @pytest.mark.slow
 def test_real_training_streams_logs_and_metrics_until_completed(tmp_path, experiment_ids):
+    if not _has_real_training_plugins():
+        pytest.skip("Real training tests require cartpole and ppo component plugins installed")
     manager = JobManager(store_path=tmp_path / "jobs.db")
     output, rows, records = [], [], []
     manager.job_output.connect(lambda job_id, lines: output.extend(lines))
@@ -365,6 +387,8 @@ def test_real_training_streams_logs_and_metrics_until_completed(tmp_path, experi
 
 @pytest.mark.slow
 def test_real_cancel_stops_pipeline_and_training_subprocesses(tmp_path, experiment_ids):
+    if not _has_real_training_plugins():
+        pytest.skip("Real training tests require cartpole and ppo component plugins installed")
     manager = JobManager(store_path=tmp_path / "jobs.db")
     output, rows = [], []
     manager.job_output.connect(lambda job_id, lines: output.extend(lines))

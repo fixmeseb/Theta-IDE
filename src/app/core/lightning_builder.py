@@ -126,7 +126,13 @@ def infer_dynamic_timesteps(cfg):
 
 def setup_loggers(cfg, base_root):
     method_name = get_method_name(cfg)
-    log_dir = os.path.join(base_root, "results/logs", cfg.group, cfg.experiment_id)
+    group_name = str(
+        cfg.get("group", "default_group") if hasattr(cfg, "get") else getattr(cfg, "group", "default_group")
+    )
+    exp_id = str(
+        cfg.get("experiment_id", "default_exp") if hasattr(cfg, "get") else getattr(cfg, "experiment_id", "default_exp")
+    )
+    log_dir = os.path.join(base_root, "results/logs", group_name, exp_id)
     loggers = [CSVLogger(log_dir, name=method_name)]
 
     use_tb = False
@@ -136,7 +142,7 @@ def setup_loggers(cfg, base_root):
         use_tb = bool(cfg.agent.tensorboard)
 
     if use_tb:
-        tb_dir = os.path.join(base_root, "results/tensorboard", cfg.group, cfg.experiment_id)
+        tb_dir = os.path.join(base_root, "results/tensorboard", group_name, exp_id)
         tb_logger = TensorBoardLogger(tb_dir, name=method_name, default_hp_metric=False)
         _ = tb_logger.experiment
         loggers.append(tb_logger)
@@ -172,13 +178,14 @@ def build_trainer(cfg, model=None):
     print_hardware_diagnostics()
     infer_dynamic_timesteps(cfg)
 
+    default_seed = cfg.get("seed", 42) if hasattr(cfg, "get") else getattr(cfg, "seed", 42)
     agent_seed = (
-        cfg.agent.get("seed", cfg.seed)
+        cfg.agent.get("seed", default_seed)
         if hasattr(cfg, "agent") and cfg.agent is not None and hasattr(cfg.agent, "get")
-        else cfg.seed
+        else default_seed
     )
     if isinstance(agent_seed, DictConfig):
-        agent_seed = agent_seed.get("seed", cfg.seed)
+        agent_seed = agent_seed.get("seed", default_seed)
     L.seed_everything(agent_seed)
 
     from hydra.utils import get_original_cwd
@@ -203,7 +210,13 @@ def build_trainer(cfg, model=None):
         except Exception as e:
             logger.debug("Could not inspect Hydra job num: %s", e)
     method_name = get_method_name(cfg)
-    ckpt_dir = os.path.join(base_root, "results/checkpoints", cfg.group, cfg.experiment_id, method_name, trial_id)
+    group_name = str(
+        cfg.get("group", "default_group") if hasattr(cfg, "get") else getattr(cfg, "group", "default_group")
+    )
+    exp_id = str(
+        cfg.get("experiment_id", "default_exp") if hasattr(cfg, "get") else getattr(cfg, "experiment_id", "default_exp")
+    )
+    ckpt_dir = os.path.join(base_root, "results/checkpoints", group_name, exp_id, method_name, trial_id)
 
     def graceful_shutdown(signum, frame):
         print(f"\n[SIGTERM] Received termination signal {signum}. Attempting graceful shutdown...")
@@ -222,47 +235,84 @@ def build_trainer(cfg, model=None):
     is_online = cfg.get("paradigm") == "online_rl"
     callbacks = [SaveInitialCheckpointCallback(ckpt_dir, cfg)]
 
-    if not is_online:
-        monitor_metric = cfg.env.get("monitor_metric", "val/loss")
-        monitor_mode = "max" if any(k in str(monitor_metric).lower() for k in ["f1", "reward", "auc", "acc"]) else "min"
+    has_explicit_ckpt = "checkpoint" in cfg and cfg.get("checkpoint") is not None
+    ckpt_cfg = cfg.get("checkpoint") if has_explicit_ckpt else None
+    enable_checkpoint = True
+    if has_explicit_ckpt and (ckpt_cfg is False or str(ckpt_cfg).lower() in ("none", "false", "disabled")):
+        enable_checkpoint = False
+
+    if enable_checkpoint:
+        default_monitor = "eval/reward" if is_online else cfg.env.get("monitor_metric", "val/loss")
+        default_mode = (
+            "max"
+            if is_online
+            else (
+                "max"
+                if any(k in str(default_monitor).lower() for k in ["f1", "reward", "auc", "acc", "prc"])
+                else "min"
+            )
+        )
+        default_save_top_k = 1
+        default_save_last = not is_online
+        default_filename = "best_model"
+
+        if hasattr(ckpt_cfg, "get"):
+            monitor_metric = ckpt_cfg.get("monitor", default_monitor)
+            monitor_mode = ckpt_cfg.get("mode")
+            if not monitor_mode:
+                monitor_mode = (
+                    "max"
+                    if any(k in str(monitor_metric).lower() for k in ["f1", "reward", "auc", "acc", "prc"])
+                    else "min"
+                )
+            save_top_k = int(ckpt_cfg.get("save_top_k", default_save_top_k))
+            save_last = bool(ckpt_cfg.get("save_last", default_save_last))
+            filename = str(ckpt_cfg.get("filename", default_filename))
+        else:
+            monitor_metric = default_monitor
+            monitor_mode = default_mode
+            save_top_k = default_save_top_k
+            save_last = default_save_last
+            filename = default_filename
+
         callbacks.append(
             ModelCheckpoint(
                 dirpath=ckpt_dir,
-                filename="best_model",
+                filename=filename,
                 monitor=monitor_metric,
                 mode=monitor_mode,
-                save_top_k=1,
-                save_last=True,
+                save_top_k=save_top_k,
+                save_last=save_last,
                 enable_version_counter=False,
             )
         )
-        eval_every_n_epochs = _agent_or_global(cfg, "eval_every_n_epochs", 1)
-        if eval_every_n_epochs:
-            callbacks.append(
-                ModelCheckpoint(
-                    dirpath=ckpt_dir,
-                    filename="epoch_{epoch:03d}",
-                    every_n_epochs=eval_every_n_epochs,
-                    save_top_k=-1,
-                    save_on_train_epoch_end=False,
-                )
-            )
-    else:
-        from src.app.core.callbacks import EnvironmentEvaluatorCallback
 
-        callbacks.extend(
-            [
-                ModelCheckpoint(
-                    dirpath=ckpt_dir,
-                    filename="best_model",
-                    monitor="eval/reward",
-                    mode="max",
-                    save_top_k=1,
-                    enable_version_counter=False,
-                ),
-                EnvironmentEvaluatorCallback(cfg),
-            ]
-        )
+        if not is_online:
+            eval_every_n_epochs = (
+                ckpt_cfg.get("every_n_epochs")
+                if hasattr(ckpt_cfg, "get") and "every_n_epochs" in ckpt_cfg
+                else _agent_or_global(cfg, "eval_every_n_epochs", 1)
+            )
+            if eval_every_n_epochs:
+                callbacks.append(
+                    ModelCheckpoint(
+                        dirpath=ckpt_dir,
+                        filename="epoch_{epoch:03d}",
+                        every_n_epochs=eval_every_n_epochs,
+                        save_top_k=-1,
+                        save_on_train_epoch_end=False,
+                    )
+                )
+
+    if is_online:
+        from src.app.core.callbacks import EnvironmentEvaluatorCallback, PeriodicCheckpointCallback
+        from src.app.core.checkpoints import checkpoint_interval
+
+        callbacks.append(EnvironmentEvaluatorCallback(cfg))
+
+        interval = checkpoint_interval(cfg)
+        if interval:
+            callbacks.append(PeriodicCheckpointCallback(ckpt_dir, interval, int(cfg.get("total_timesteps") or 0)))
 
     if cfg.get("paradigm") == "online_rl":
         num_envs = getattr(model, "num_envs", cfg.env.num_envs) if model else cfg.env.num_envs
