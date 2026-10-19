@@ -882,6 +882,10 @@ total_timesteps: 100000
 eval_episodes: 20
 num_checkpoints: 10              # or checkpoint_every_steps: 10000 (one or the other)</code></pre>
 <p><b>Checkpoints</b> (online RL): set <code>checkpoint_every_steps</code> to save a checkpoint each time training passes another N timesteps, or <code>num_checkpoints</code> to save that many, spread evenly over <code>total_timesteps</code>. The last one always falls at the end of the run. They are saved as <code>step_&lt;timesteps&gt;.ckpt</code> (<code>.zip</code> for Stable-Baselines3) next to <code>best_model</code>. Setting both is an error. In the experiment editor, <b>+ &rarr; Checkpoints</b> adds the row; its menu switches between the two.</p>
+<p><b>Recorded metrics</b>: list the metrics a run records, by name or by whole section, and the work behind the others is skipped, so the run is faster:</p>
+<pre><code>telemetry:
+  metrics: [eval/reward, losses/]   # a name, or a section ending in /</code></pre>
+<p>Only the listed metrics reach <code>metrics.csv</code>, the live feed and TensorBoard; step, epoch and transitions are always kept. With no <code>eval/</code> entry, no evaluation episodes run (and no best-by-reward checkpoint is kept; the final model is still saved); with no <code>system/</code> entry, CPU and memory are not sampled. Leaving the list out records everything. A sweep must keep the metric it optimises. In the experiment editor, <b>+ &rarr; Recorded Metrics</b> adds a box of checkboxes: a section's own box records all of it, and the metrics under it are the ones this experiment's newest earlier run logged.</p>
 
 <hr style="border: 0; border-top: 1px solid rgba(255,255,255,0.1); margin: 20px 0;" />
 
