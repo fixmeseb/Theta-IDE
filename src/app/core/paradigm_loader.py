@@ -96,6 +96,7 @@ def _auto_discover_components():
     # Discover components declared via pyproject.toml entry-points
     try:
         from src.app.core.plugin_discovery import discover_entry_points
+
         for group in ("theta.datamodules", "theta.components"):
             for comp_name, comp_cls in discover_entry_points(group).items():
                 if isinstance(comp_cls, type):

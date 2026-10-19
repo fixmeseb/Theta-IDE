@@ -29,6 +29,7 @@ def register_datamodule(*names: str) -> Callable[[Type[Any]], Type[Any]]:
             # Also register into paradigm_loader component registry for cross-compatibility
             try:
                 from src.app.core.paradigm_loader import register_component
+
                 register_component(clean_name)(cls)
             except Exception:
                 pass
@@ -37,7 +38,7 @@ def register_datamodule(*names: str) -> Callable[[Type[Any]], Type[Any]]:
     return decorator
 
 
-def get_datamodule_class(dm_name: str) -> Optional[Type[Any]]:
+def get_datamodule_class(dm_name: str) -> Type[Any] | None:
     """Resolve a data module name to its registered class.
 
     Args:
@@ -61,6 +62,7 @@ def get_datamodule_class(dm_name: str) -> Optional[Type[Any]]:
     # Fallback to paradigm_loader's component registry
     try:
         from src.app.core.paradigm_loader import get_component
+
         cls = get_component(clean_name)
         if cls is not None:
             return cls
@@ -103,30 +105,35 @@ def _register_builtins() -> None:
     """Ensure core built-in data modules are registered."""
     try:
         from src.app.data.rl_data_module import RLDataModule
+
         register_datamodule("RLDataModule")(RLDataModule)
     except Exception:
         pass
 
     try:
         from src.app.core.paradigm_impls.base.online_rl import SimulatorDataModule
+
         register_datamodule("SimulatorDataModule")(SimulatorDataModule)
     except Exception:
         pass
 
     try:
         from src.app.core.paradigm_impls.base.offline_rl import RLReplayBufferDataModule
+
         register_datamodule("RLReplayBufferDataModule")(RLReplayBufferDataModule)
     except Exception:
         pass
 
     try:
         from src.app.core.paradigm_impls.base.supervised import SupervisedDataModule
+
         register_datamodule("SupervisedDataModule", "CrossValidationDataModule")(SupervisedDataModule)
     except Exception:
         pass
 
     try:
-        from src.app.core.paradigm_impls.base.tabular import TabularNpzDataModule, SupervisedNpzDataModule
+        from src.app.core.paradigm_impls.base.tabular import SupervisedNpzDataModule, TabularNpzDataModule
+
         register_datamodule("TabularNpzDataModule")(TabularNpzDataModule)
         register_datamodule("SupervisedNpzDataModule")(SupervisedNpzDataModule)
     except Exception:
@@ -134,12 +141,14 @@ def _register_builtins() -> None:
 
     try:
         from src.app.core.paradigm_impls.base.unsupervised import UnsupervisedDataModule
+
         register_datamodule("UnsupervisedDataModule")(UnsupervisedDataModule)
     except Exception:
         pass
 
     try:
         from src.usr.eval.early_prediction.data_module import EPSepsisDataModule
+
         register_datamodule("EPSepsisDataModule", "SepsisDataModule")(EPSepsisDataModule)
     except Exception:
         pass

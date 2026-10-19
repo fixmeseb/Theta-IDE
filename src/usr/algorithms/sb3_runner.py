@@ -92,8 +92,12 @@ def main(cfg: DictConfig):
                 path = ckpt_dir / f"{checkpoint_name(self.num_timesteps)}.zip"
                 self.model.save(str(path))
                 self.run.artifact(path, kind="checkpoint", transitions=self.num_timesteps)
-                self.run.event("checkpoint", f"Saved {path.name} at {self.num_timesteps:,} transitions",
-                               path=str(path), transitions=self.num_timesteps)
+                self.run.event(
+                    "checkpoint",
+                    f"Saved {path.name} at {self.num_timesteps:,} transitions",
+                    path=str(path),
+                    transitions=self.num_timesteps,
+                )
             # Check episodic rewards from monitor or locals
             if self.n_calls % self.eval_freq == 0:
                 infos = self.locals.get("infos", [])

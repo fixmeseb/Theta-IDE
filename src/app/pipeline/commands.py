@@ -147,10 +147,7 @@ def build_method_overrides(
         "search_space",
         "from_study",
     }
-    if (
-        not method_cfg.get("explicit_modules", False)
-        and not merged_model_params.get("explicit_modules", False)
-    ):
+    if not method_cfg.get("explicit_modules", False) and not merged_model_params.get("explicit_modules", False):
         _INTERNAL_KEYS.add("modules")
     _MODEL_KEYS = {
         "architecture",

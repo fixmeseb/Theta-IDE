@@ -13,8 +13,8 @@ The pipeline resolves plotters via get_plotter_class():
 import importlib
 import logging
 import os
-from pathlib import Path
 import pkgutil
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Type
 
 log = logging.getLogger(__name__)
@@ -33,6 +33,7 @@ def register_plotter(*names: str) -> Callable[[Type[Any]], Type[Any]]:
             # Also register into paradigm_loader component registry for cross-compatibility
             try:
                 from src.app.core.paradigm_loader import register_component
+
                 register_component(clean_name)(cls)
             except Exception:
                 pass
@@ -41,7 +42,7 @@ def register_plotter(*names: str) -> Callable[[Type[Any]], Type[Any]]:
     return decorator
 
 
-def get_plotter_class(name: str) -> Optional[Type[Any]]:
+def get_plotter_class(name: str) -> Type[Any] | None:
     """Resolve a plotter name to its registered class.
 
     Args:
@@ -65,6 +66,7 @@ def get_plotter_class(name: str) -> Optional[Type[Any]]:
     # Fallback to paradigm_loader's component registry
     try:
         from src.app.core.paradigm_loader import get_component
+
         cls = get_component(clean_name)
         if cls is not None:
             return cls
@@ -110,11 +112,7 @@ def auto_discover_plotters() -> None:
                 # Auto-register any BasePlotter subclasses if not already registered
                 for attr_name in dir(mod):
                     cls = getattr(mod, attr_name)
-                    if (
-                        isinstance(cls, type)
-                        and issubclass(cls, BasePlotter)
-                        and cls is not BasePlotter
-                    ):
+                    if isinstance(cls, type) and issubclass(cls, BasePlotter) and cls is not BasePlotter:
                         name = getattr(cls, "name", None)
                         if not name or name == "base":
                             try:
@@ -139,11 +137,7 @@ def auto_discover_plotters() -> None:
                         mod = importlib.import_module(full_mod_path)
                         for attr_name in dir(mod):
                             cls = getattr(mod, attr_name)
-                            if (
-                                isinstance(cls, type)
-                                and issubclass(cls, BasePlotter)
-                                and cls is not BasePlotter
-                            ):
+                            if isinstance(cls, type) and issubclass(cls, BasePlotter) and cls is not BasePlotter:
                                 name = getattr(cls, "name", None)
                                 if not name or name == "base":
                                     try:

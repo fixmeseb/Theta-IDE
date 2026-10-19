@@ -3,6 +3,7 @@
 import os
 import sys
 import tempfile
+import time
 from pathlib import Path
 
 import pytest
@@ -389,7 +390,8 @@ def test_the_overview_scrolls_rather_than_squashing_its_charts(window):
     window.tabs.setCurrentWidget(window.monitor_panel)
     window.show()
     monitor.refresh_live()
-    for _ in range(5):
+    deadline = time.monotonic() + 3  # the layout can take a few passes to settle when the machine is busy
+    while time.monotonic() < deadline and not monitor.overview_scroll.verticalScrollBar().maximum():
         app.processEvents()
     assert monitor.reward_chart.height() >= OVERVIEW_REWARD_HEIGHT
     assert monitor.overview_scroll.verticalScrollBar().maximum() > 0

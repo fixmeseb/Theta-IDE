@@ -4,15 +4,16 @@ Packages experiment configurations, base templates, environment hooks/valuations
 domain rules, custom model architectures, and optional checkpoint weights into a
 self-contained, installable Theta Hub component package (.zip).
 """
+
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
 import json
 import logging
+import zipfile
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
-import zipfile
 
 import yaml
 
@@ -24,6 +25,7 @@ log = logging.getLogger(__name__)
 @dataclass
 class ExportOptions:
     """Configuration options for exporting an experiment or experiment group plugin."""
+
     include_checkpoints: bool = False
     include_environment: bool = True
     include_models: bool = True
@@ -32,32 +34,33 @@ class ExportOptions:
     include_plotters: bool = True
     include_data_modules: bool = True
     include_all_group_experiments: bool = True
-    output_path: Optional[Path] = None
+    output_path: Path | None = None
     author: str = "Theta Researcher"
     version: str = "1.0.0"
-    description: Optional[str] = None
+    description: str | None = None
 
 
 @dataclass
 class ExportResult:
     """Result of an experiment export operation."""
+
     success: bool
-    archive_path: Optional[Path] = None
-    manifest: Optional[Dict[str, Any]] = None
+    archive_path: Path | None = None
+    manifest: Dict[str, Any] | None = None
     files_included: List[str] = field(default_factory=list)
-    error: Optional[str] = None
+    error: str | None = None
 
 
 class ExperimentExporter:
     """Extracts, traces dependencies, and packages experiments into installable Hub components."""
 
-    def __init__(self, workspace_root: Optional[Path] = None):
+    def __init__(self, workspace_root: Path | None = None):
         self.workspace_root = Path(workspace_root) if workspace_root else PROJECT_ROOT
 
     def export(
         self,
         experiment_id_or_path: str | Path,
-        options: Optional[ExportOptions] = None,
+        options: ExportOptions | None = None,
     ) -> ExportResult:
         """Export an experiment and its full dependency closure to a .zip archive.
 
@@ -161,6 +164,7 @@ class ExperimentExporter:
 
             # Validate manifest against formal JSON schema
             from src.app.core.manifest_schema import validate_manifest_data
+
             is_valid, schema_err = validate_manifest_data(manifest)
             if not is_valid:
                 return ExportResult(
@@ -211,7 +215,7 @@ class ExperimentExporter:
         else:
             s = str(target).strip()
             if s.startswith("in/config/experiment/"):
-                s = s[len("in/config/experiment/"):]
+                s = s[len("in/config/experiment/") :]
             rel = Path(s)
 
         parts = rel.parts
@@ -259,7 +263,7 @@ class ExperimentExporter:
                 rel = mfile.relative_to(self.workspace_root).as_posix()
                 files_to_pack[rel] = mfile
 
-    def _resolve_env_name(self, cfg: Dict[str, Any], group: str) -> Optional[str]:
+    def _resolve_env_name(self, cfg: Dict[str, Any], group: str) -> str | None:
         """Extract environment name from configuration or defaults."""
         if "env" in cfg and isinstance(cfg["env"], str):
             return cfg["env"]
@@ -321,7 +325,7 @@ class ExperimentExporter:
                     rel = p.relative_to(self.workspace_root).as_posix()
                     files_to_pack[rel] = p
 
-    def _trace_evaluators(self, group: str, env_name: Optional[str], files_to_pack: Dict[str, Path]) -> None:
+    def _trace_evaluators(self, group: str, env_name: str | None, files_to_pack: Dict[str, Path]) -> None:
         """Trace evaluator implementations and YAML configurations."""
         candidates = {group}
         if env_name:
@@ -350,7 +354,7 @@ class ExperimentExporter:
                 for p in sorted(cfg_dir.rglob("*.yaml")):
                     files_to_pack[p.relative_to(self.workspace_root).as_posix()] = p
 
-    def _trace_plotters(self, group: str, env_name: Optional[str], files_to_pack: Dict[str, Path]) -> None:
+    def _trace_plotters(self, group: str, env_name: str | None, files_to_pack: Dict[str, Path]) -> None:
         """Trace plotters and visualization configs."""
         candidates = {group}
         if env_name:
@@ -372,7 +376,7 @@ class ExperimentExporter:
                 for p in sorted(pcfg_dir.rglob("*.yaml")):
                     files_to_pack[p.relative_to(self.workspace_root).as_posix()] = p
 
-    def _trace_data_modules(self, group: str, env_name: Optional[str], files_to_pack: Dict[str, Path]) -> None:
+    def _trace_data_modules(self, group: str, env_name: str | None, files_to_pack: Dict[str, Path]) -> None:
         """Trace data modules and configurations."""
         candidates = {group}
         if env_name:
@@ -417,7 +421,7 @@ class ExperimentExporter:
     def export_group(
         self,
         group: str,
-        options: Optional[ExportOptions] = None,
+        options: ExportOptions | None = None,
     ) -> ExportResult:
         """Export an entire experiment group and its full component ecosystem as an installable Experiment Plugin."""
         opts = options or ExportOptions()
@@ -438,7 +442,7 @@ class ExperimentExporter:
         agents_found: Set[str] = set()
         models_found: Set[str] = set()
         paradigms_found: Set[str] = set()
-        env_name: Optional[str] = None
+        env_name: str | None = None
 
         for exp_yaml in sorted(group_dir.rglob("*.yaml")):
             try:
@@ -497,6 +501,7 @@ class ExperimentExporter:
         )
 
         from src.app.core.manifest_schema import validate_manifest_data
+
         is_valid, schema_err = validate_manifest_data(manifest)
         if not is_valid:
             return ExportResult(
@@ -522,7 +527,6 @@ class ExperimentExporter:
             manifest=manifest,
             files_included=file_list,
         )
-
 
     def _trace_methods_and_models(
         self,
@@ -605,12 +609,12 @@ class ExperimentExporter:
         self,
         group: str,
         exp_name: str,
-        env_name: Optional[str],
+        env_name: str | None,
         agents: List[str],
         models: List[str],
         files: List[str],
         options: ExportOptions,
-        paradigms: Optional[List[str]] = None,
+        paradigms: List[str] | None = None,
     ) -> Dict[str, Any]:
         """Generate component manifest matching Theta Hub specifications."""
         is_group_bundle = exp_name in ("all", group)
@@ -621,7 +625,8 @@ class ExperimentExporter:
             "name": f"{group.replace('_', ' ').title()} Experiment Suite" if is_group_bundle else f"{group}/{exp_name}",
             "kind": "experiment",
             "version": options.version,
-            "description": options.description or f"Complete {group} experiment suite: recipes, group defaults, environment hooks, evaluators, and plotters.",
+            "description": options.description
+            or f"Complete {group} experiment suite: recipes, group defaults, environment hooks, evaluators, and plotters.",
             "author": {"name": options.author},
             "created_at": datetime.now(timezone.utc).isoformat(),
             "target_path": f"in/config/experiment/{group}",
@@ -630,9 +635,7 @@ class ExperimentExporter:
             "environment": env_name,
             "agents": agents,
             "models": models,
-            "dependencies": {
-                "components": ["thetalib"]
-            },
+            "dependencies": {"components": ["thetalib"]},
             "package_contents": files,
         }
         if not is_group_bundle:
@@ -645,7 +648,7 @@ class ExperimentExporter:
         self,
         group: str,
         exp_name: str,
-        env_name: Optional[str],
+        env_name: str | None,
         options: ExportOptions,
     ) -> str:
         """Generate descriptive reproduction README."""

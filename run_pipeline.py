@@ -75,6 +75,7 @@ def main():
                 out_path = Path(a.split("=", 1)[1])
 
         from src.app.services.experiment_exporter import ExperimentExporter, ExportOptions
+
         exporter = ExperimentExporter(workspace_root=Path(PROJECT_ROOT))
         opts = ExportOptions(include_checkpoints=include_weights, output_path=out_path)
         res = exporter.export(target_exp, options=opts)
@@ -104,6 +105,7 @@ def main():
                 desc = extra_args[i + 1]
 
         from src.app.services.plugin_scaffolder import PluginScaffolder, ScaffoldOptions
+
         scaffolder = PluginScaffolder(workspace_root=Path(PROJECT_ROOT))
         opts = ScaffoldOptions(name=name, kind=kind, is_composite=is_composite, author=author, description=desc)
         res = scaffolder.scaffold(opts)
@@ -123,6 +125,7 @@ def main():
     if any(a.lower() in ("export=true", "export=1", "--export") for a in extra_args):
         include_weights = any(a.lower() in ("include_weights=true", "include_checkpoints=true") for a in extra_args)
         from src.app.services.experiment_exporter import ExperimentExporter, ExportOptions
+
         exporter = ExperimentExporter(workspace_root=Path(PROJECT_ROOT))
         opts = ExportOptions(include_checkpoints=include_weights)
         res = exporter.export(experiment_arg, options=opts)
