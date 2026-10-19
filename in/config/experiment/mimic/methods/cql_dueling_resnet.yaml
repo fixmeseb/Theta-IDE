@@ -1,8 +1,0 @@
-agent: cql
-model: dueling_resnet
-
-style:
-  label: "Dueling ResNet"
-  color: "#08519c"
-  marker: "D"
-  linestyle: "-"

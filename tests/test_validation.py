@@ -43,12 +43,12 @@ def mock_cfg_offline():
 def mock_cfg_supervised():
     cfg = MockCfg(
         paradigm="supervised",
-        methods={"ep_lstm": {"model": "lstm"}},
+        methods={"ep_mlp": {"model": "mlp_classifier"}},
         eval_episodes=0,
         group="early_prediction",
         experiment_id="quick_test"
     )
-    cfg.env.name = "mimic"
+    cfg.env.name = "cartpole"
     return cfg
 
 
@@ -279,4 +279,40 @@ def test_agent_supported_paradigms_from_installed_manifest(tmp_path, monkeypatch
     monkeypatch.chdir(tmp_path)
     paradigms = _get_agent_supported_paradigms("custom_agent")
     assert paradigms == ["offline_rl"]
+
+
+def test_find_missing_components_detects_uninstalled():
+    """find_missing_components identifies uninstalled agents, models, submodels, and environments."""
+    from src.app.pipeline.validation import find_missing_components
+
+    spec = {
+        "env": "nonexistent_env_xyz",
+        "methods": {
+            "test_m": {
+                "agent": "nonexistent_agent_abc",
+                "model": {
+                    "blendrl": {
+                        "symbolic": "nsfr",
+                        "neural": "dueling_resnet",
+                    }
+                }
+            }
+        }
+    }
+    missing = find_missing_components(spec)
+    assert any("environment: nonexistent_env_xyz" in m for m in missing)
+    assert any("agent: nonexistent_agent_abc" in m for m in missing)
+    assert any("model: blendrl" in m for m in missing)
+    assert any("symbolic: nsfr" in m for m in missing)
+
+
+@patch("src.app.pipeline.validation._load_raw_experiment_yaml", return_value={})
+def test_missing_components_raises_configuration_error(mock_yaml, mock_cfg_online):
+    """validate_experiment_config must raise ConfigurationError when components are missing."""
+    mock_cfg_online.__dict__["methods"] = {
+        "bad_model_method": {"agent": "ppo", "model": "nonexistent_model_123"}
+    }
+    with pytest.raises(ConfigurationError, match="references missing component"):
+        validate_experiment_config(mock_cfg_online, "test_exp")
+
 

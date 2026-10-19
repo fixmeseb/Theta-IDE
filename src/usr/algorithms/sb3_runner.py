@@ -140,6 +140,12 @@ def main(cfg: DictConfig):
             gym.register_envs(ale_py)
         except Exception:
             pass
+        try:
+            from ale_py.registration import register_v0_v4_envs, register_v5_envs
+            register_v0_v4_envs()
+            register_v5_envs()
+        except Exception:
+            pass
         game_stem = (str(env_name).split("/")[-1] if "/" in str(env_name) else str(env_id)).lower()
         if "ale/" not in game_stem:
             game_stem = f"ALE/{game_stem.capitalize()}-v5"

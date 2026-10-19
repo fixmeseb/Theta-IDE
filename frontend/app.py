@@ -1611,14 +1611,6 @@ class Window(QMainWindow):
             return []
 
         missing = []
-        ct = getattr(self, "config_tree", None)
-        tree = getattr(ct, "tree_model", None) if ct is not None else None
-        if tree is None:
-            try:
-                from frontend.config_model import config_tree
-                tree = config_tree()
-            except Exception:
-                tree = None
 
         # 1. Check from compose errors if any
         compose_err = getattr(self, "compose_error", "") or ""
@@ -1626,62 +1618,48 @@ class Window(QMainWindow):
         find_matches = re.findall(r"Could not find '(agent|model|env|paradigms)/([^']+)'", compose_err)
         for cat, name in find_matches:
             missing.append(f"{cat}: {name}")
+        err_matches = re.findall(r"missing component[s]?: ([^.]+)", compose_err, re.IGNORECASE)
+        for m in err_matches:
+            for item in m.split(","):
+                item_clean = item.strip()
+                if item_clean:
+                    missing.append(item_clean)
 
         # 2. Check from current viewer or experiment file
+        data = None
         viewer = getattr(self, "config_viewer", None)
         if viewer and getattr(viewer, "raw_data", None):
             data = viewer.raw_data
-            # Environment check
-            env_val = viewer._get_explicit_env() or viewer._get_base_env()
-            if env_val and tree:
-                env_exists = (
-                    env_val in tree.environments
-                    or any(e.name == env_val for e in tree.environments.values())
-                    or (tree.config_root / "env" / f"{env_val}.yaml").is_file()
-                )
-                if not env_exists:
-                    missing.append(f"environment: {env_val}")
+        if not data and hasattr(self, "active_config_path") and self.active_config_path:
+            try:
+                import yaml
+                data = yaml.safe_load(Path(self.active_config_path).read_text(encoding="utf-8"))
+            except Exception:
+                data = None
+        if not data:
+            exp_target = getattr(self, "current_experiment", None)
+            if exp_target:
+                p = Path("in/config/experiment") / f"{exp_target}.yaml"
+                if p.is_file():
+                    try:
+                        import yaml
+                        data = yaml.safe_load(p.read_text(encoding="utf-8"))
+                    except Exception:
+                        data = None
 
-            # Methods check
-            methods = data.get("methods", {})
-            if isinstance(methods, dict):
-                for m_name, m_spec in methods.items():
-                    if not isinstance(m_spec, dict):
-                        continue
-                    ag = m_spec.get("agent")
-                    if isinstance(ag, dict):
-                        ag = ag.get("algorithm") or ag.get("name")
-                    if ag and tree:
-                        ag_str = str(ag)
-                        ag_exists = (
-                            ag_str in tree.agents
-                            or any(a.name == ag_str or a.algorithm == ag_str for a in tree.agents.values())
-                            or (tree.config_root / "agent" / f"{ag_str}.yaml").is_file()
-                        )
-                        if not ag_exists:
-                            missing.append(f"algorithm: {ag_str}")
-
-                    mo = m_spec.get("model")
-                    if isinstance(mo, dict):
-                        mo = next(iter(mo)) if mo else None
-                    if mo and tree:
-                        mo_str = str(mo)
-                        mo_stem = mo_str.split("/")[-1]
-                        mo_exists = (
-                            mo_str in tree.models
-                            or mo_stem in tree.models
-                            or (tree.config_root / "model" / f"{mo_str}.yaml").is_file()
-                            or (tree.config_root / "model" / "basics" / f"{mo_stem}.yaml").is_file()
-                        )
-                        if not mo_exists:
-                            missing.append(f"model: {mo_str}")
+        if data:
+            try:
+                from src.app.pipeline.validation import find_missing_components
+                missing.extend(find_missing_components(data))
+            except Exception:
+                pass
 
         return list(dict.fromkeys(missing))
 
     def update_launch_state(self):
         idle = self.active is None
         has_experiment = bool(getattr(self, "current_experiment", None))
-        missing_components = Window.check_missing_components(self) if has_experiment else []
+        missing_components = self.check_missing_components() if has_experiment else []
         ready = idle and self.compose_valid and has_experiment and not missing_components
         for button in launch_buttons(self):  # the experiment tree's and the Queue tab's
             button.setEnabled(ready)

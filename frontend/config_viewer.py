@@ -2651,6 +2651,12 @@ class ConfigViewer(QWidget):
                                 combo_gen.addItems(choices)
                                 if cur_type and cur_type not in choices:
                                     combo_gen.insertItem(0, cur_type)
+                                    try:
+                                        from src.app.pipeline.validation import _model_exists
+                                        if not _model_exists(cur_type):
+                                            combo_gen.setToolTip(f"Missing component: {s_name} module '{cur_type}' is not installed. Install it via Component Hub.")
+                                    except Exception:
+                                        pass
                                 if cur_type:
                                     combo_gen.setCurrentText(cur_type)
                                 combo_gen.currentTextChanged.connect(
@@ -2660,6 +2666,12 @@ class ConfigViewer(QWidget):
                             elif cur_type:
                                 line_gen = QLineEdit(str(cur_type))
                                 line_gen.setMaximumWidth(TEXT_FIELD_WIDTH)
+                                try:
+                                    from src.app.pipeline.validation import _model_exists
+                                    if not _model_exists(str(cur_type)):
+                                        line_gen.setToolTip(f"Missing component: {s_name} module '{cur_type}' is not installed. Install it via Component Hub.")
+                                except Exception:
+                                    pass
                                 line_gen.textChanged.connect(
                                     lambda v, mn=m_name, sn=s_name: self._on_method_subcomponent_type_changed(mn, sn, v)
                                 )
