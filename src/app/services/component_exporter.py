@@ -48,6 +48,250 @@ class ComponentExportResult:
     error: str | None = None
 
 
+def find_workspace_root(start_path: Optional[Path] = None) -> Path:
+    """Find the workspace root by looking for 'in' and 'src' directories upwards."""
+    curr = (start_path or Path.cwd()).resolve()
+    if curr.is_file():
+        curr = curr.parent
+
+    for p in [curr, *curr.parents]:
+        if (p / "in").is_dir() and (p / "src").is_dir():
+            return p
+    return Path.cwd().resolve()
+
+
+def find_component_assets(
+    config_path: Path,
+    rel_path: Optional[str] = None,
+    workspace_dir: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """Resolve all associated assets for a component given its configuration YAML path.
+
+    Returns a dict with:
+        comp_id: Component identifier stem
+        comp_name: Display name
+        kind: Component category (model, agent, env, etc.)
+        config_path: Path to the active config YAML
+        code_dir: Path to directory containing source code (if any)
+        primary_code_file: Path to the most relevant .py file to open in an editor
+        files_to_delete: List of Path objects (config files, source directories, rules)
+        is_component: True if this is an installed/managed component, False if a loose config
+        is_hub_installed: True if installed from Theta Hub
+        action_type: 'uninstall', 'delete_component', or 'delete_config'
+        meta: Parsed .theta_component.json dict if managed by Hub / scaffolder
+    """
+    ws = workspace_dir or find_workspace_root(config_path)
+    cfg = Path(config_path).resolve()
+    comp_id = cfg.stem
+
+    # 1. Attempt lookup via HubInstaller / .theta_component.json
+    meta: Optional[Dict[str, Any]] = None
+    try:
+        from frontend.hub.installer import HubInstaller
+        inst = HubInstaller(workspace_dir=ws, data_dir=ws / ".thetaide")
+        meta = inst.find_component_for_path(cfg)
+    except Exception:
+        # Fallback direct scan for .theta_component.json if HubInstaller unavailable
+        scan_roots = [
+            ws / "in" / "envs",
+            ws / "src" / "usr" / "algorithms",
+            ws / "src" / "usr" / "methods",
+            ws / "src" / "usr" / "models",
+            ws / "src" / "usr" / "data",
+            ws / "src" / "usr" / "eval",
+            ws / "plot",
+        ]
+        for root in scan_roots:
+            if not root.is_dir():
+                continue
+            for meta_file in root.rglob(".theta_component.json"):
+                try:
+                    data = json.loads(meta_file.read_text(encoding="utf-8"))
+                    comp_dir = meta_file.parent.resolve()
+                    if cfg == comp_dir or comp_dir in cfg.parents:
+                        data["target_dir"] = comp_dir
+                        meta = data
+                        break
+                    for cfg_rel in data.get("config_paths", []):
+                        if (ws / cfg_rel).resolve() == cfg:
+                            data["target_dir"] = comp_dir
+                            meta = data
+                            break
+                    if meta:
+                        break
+                    if data.get("config_path") and (ws / data["config_path"]).resolve() == cfg:
+                        data["target_dir"] = comp_dir
+                        meta = data
+                        break
+                except Exception:
+                    continue
+            if meta:
+                break
+
+    code_dir: Optional[Path] = None
+    primary_code_file: Optional[Path] = None
+    files_to_delete: List[Path] = [cfg]
+    kind = "component"
+    comp_name = comp_id
+    is_component = False
+
+    if meta:
+        is_component = True
+        comp_id = meta.get("id") or comp_id
+        comp_name = meta.get("name") or comp_id
+        kind = meta.get("kind") or kind
+        if meta.get("target_dir"):
+            code_dir = Path(meta["target_dir"]).resolve()
+            if code_dir.exists() and code_dir not in files_to_delete:
+                files_to_delete.append(code_dir)
+
+        # Include all declared config paths
+        for c_rel in meta.get("config_paths", []):
+            cp = (ws / c_rel).resolve()
+            if cp.exists() and cp not in files_to_delete:
+                files_to_delete.append(cp)
+        if meta.get("config_path"):
+            cp = (ws / meta["config_path"]).resolve()
+            if cp.exists() and cp not in files_to_delete:
+                files_to_delete.append(cp)
+
+    # 2. Heuristic fallback resolution if no metadata found
+    rel = rel_path or str(cfg.relative_to(ws / "in" / "config") if (ws / "in" / "config") in cfg.parents else cfg.name)
+    rel = rel.replace("\\", "/").lstrip("/")
+    if rel.startswith("in/config/"):
+        rel = rel[len("in/config/"):]
+
+    if not code_dir:
+        candidate_dir: Optional[Path] = None
+        candidate_file: Optional[Path] = None
+
+        prefix_map = {
+            "model/": ("model", ws / "src" / "usr" / "models"),
+            "agent/": ("algorithm", ws / "src" / "usr" / "algorithms"),
+            "algorithm/": ("algorithm", ws / "src" / "usr" / "algorithms"),
+            "env/": ("env", ws / "in" / "envs"),
+            "data/": ("datamodule", ws / "src" / "usr" / "data"),
+            "datamodule/": ("datamodule", ws / "src" / "usr" / "data"),
+            "eval/": ("evaluator", ws / "src" / "usr" / "eval"),
+            "evaluator/": ("evaluator", ws / "src" / "usr" / "eval"),
+            "plot/": ("plotter", ws / "plot"),
+        }
+
+        for pfx, (k, base_dir) in prefix_map.items():
+            if rel.startswith(pfx):
+                kind = k
+                sub = rel[len(pfx):]
+                sub_parent = Path(sub).parent
+                # 1. Namespaced candidate (if in subfolder)
+                if str(sub_parent) != ".":
+                    cand_d = base_dir / sub_parent / comp_id
+                    cand_f = base_dir / sub_parent / f"{comp_id}.py"
+                    if cand_d.is_dir():
+                        candidate_dir = cand_d
+                    elif cand_f.is_file():
+                        candidate_file = cand_f
+
+                # 2. Flat candidate under base_dir
+                if not candidate_dir and not candidate_file:
+                    cand_d = base_dir / comp_id
+                    cand_f = base_dir / f"{comp_id}.py"
+                    if cand_d.is_dir():
+                        candidate_dir = cand_d
+                    elif cand_f.is_file():
+                        candidate_file = cand_f
+
+                # Fallback for algorithm -> methods
+                if k == "algorithm" and not candidate_dir and not candidate_file:
+                    methods_dir = ws / "src" / "usr" / "methods"
+                    if str(sub_parent) != ".":
+                        cand_d = methods_dir / sub_parent / comp_id
+                        cand_f = methods_dir / sub_parent / f"{comp_id}.py"
+                        if cand_d.is_dir():
+                            candidate_dir = cand_d
+                        elif cand_f.is_file():
+                            candidate_file = cand_f
+                    if not candidate_dir and not candidate_file:
+                        cand_d = methods_dir / comp_id
+                        cand_f = methods_dir / f"{comp_id}.py"
+                        if cand_d.is_dir():
+                            candidate_dir = cand_d
+                        elif cand_f.is_file():
+                            candidate_file = cand_f
+
+                if k == "env":
+                    rules_dir = ws / "in" / "rules" / comp_id
+                    if rules_dir.is_dir() and rules_dir not in files_to_delete:
+                        files_to_delete.append(rules_dir)
+                break
+
+        if candidate_dir and candidate_dir.is_dir():
+            code_dir = candidate_dir
+            is_component = True
+            if code_dir not in files_to_delete:
+                files_to_delete.append(code_dir)
+        elif candidate_file and candidate_file.is_file():
+            primary_code_file = candidate_file
+
+    # 3. Dedicated subfolder check
+    cfg_parent = cfg.parent
+    in_config = (ws / "in" / "config").resolve()
+    if is_component and cfg_parent != in_config and in_config in cfg_parent.parents:
+        folder_matches = (
+            cfg_parent.name == comp_id
+            or (code_dir and cfg_parent.name == code_dir.name)
+            or (meta and meta.get("id") and cfg_parent.name in meta["id"])
+        )
+        if folder_matches:
+            for sibling_yaml in cfg_parent.glob("*.yaml"):
+                if sibling_yaml not in files_to_delete:
+                    files_to_delete.append(sibling_yaml)
+            for sibling_yml in cfg_parent.glob("*.yml"):
+                if sibling_yml not in files_to_delete:
+                    files_to_delete.append(sibling_yml)
+
+    # 4. Determine primary code file
+    if not primary_code_file and code_dir and code_dir.is_dir():
+        named_candidates = [
+            code_dir / f"{comp_id}_model.py",
+            code_dir / f"{comp_id}_agent.py",
+            code_dir / "env_vectorized.py",
+            code_dir / "env.py",
+            code_dir / f"{comp_id}_evaluator.py",
+            code_dir / f"{comp_id}_datamodule.py",
+            code_dir / f"{comp_id}_plotter.py",
+            code_dir / "plotter.py",
+            code_dir / f"{comp_id}.py",
+        ]
+        for c in named_candidates:
+            if c.is_file():
+                primary_code_file = c
+                break
+
+        if not primary_code_file:
+            py_files = sorted([f for f in code_dir.glob("*.py") if f.name != "__init__.py"])
+            if py_files:
+                primary_code_file = py_files[0]
+            elif (code_dir / "__init__.py").is_file():
+                primary_code_file = code_dir / "__init__.py"
+
+    is_hub_installed = bool(meta and meta.get("installed_from"))
+    action_type = "uninstall" if is_hub_installed else ("delete_component" if is_component else "delete_config")
+
+    return {
+        "comp_id": comp_id,
+        "comp_name": comp_name,
+        "kind": kind,
+        "config_path": cfg,
+        "code_dir": code_dir,
+        "primary_code_file": primary_code_file or code_dir or cfg,
+        "files_to_delete": files_to_delete,
+        "is_component": is_component,
+        "is_hub_installed": is_hub_installed,
+        "action_type": action_type,
+        "meta": meta,
+    }
+
+
 class ComponentExporter:
     """Extracts, traces dependencies, and packages components into installable Hub packages or Git repos."""
 
@@ -71,12 +315,6 @@ class ComponentExporter:
         opts = options or ComponentExportOptions()
 
         try:
-            from frontend.component_actions import find_component_assets
-        except Exception:
-            # Fallback inline resolution if frontend cannot be imported
-            find_component_assets = None
-
-        try:
             # 1. Resolve component config path
             cfg_path, rel_path = self._resolve_config_path(config_path_or_id)
             if not cfg_path.exists():
@@ -86,10 +324,7 @@ class ComponentExporter:
                 )
 
             # 2. Discover component assets
-            if find_component_assets is not None:
-                assets = find_component_assets(cfg_path, rel_path, workspace_dir=self.workspace_root)
-            else:
-                assets = self._fallback_find_assets(cfg_path, rel_path)
+            assets = find_component_assets(cfg_path, rel_path, workspace_dir=self.workspace_root)
 
             comp_id = assets["comp_id"]
             comp_name = assets.get("comp_name") or comp_id

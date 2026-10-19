@@ -348,14 +348,26 @@ def discover_datasets(env_name: str | None = None) -> list[str]:
     found = []
     base_dirs = [Path("in/datasets"), Path("results/datasets")]
     for b in base_dirs:
-        if b.is_dir():
+        try:
+            if not b.is_dir():
+                continue
             for p in b.glob("**/*"):
-                if p.name.startswith(".") or p.name.startswith("__"):
+                try:
+                    if p.name.startswith(".") or p.name.startswith("__"):
+                        continue
+                    if p.is_file() and p.suffix in (".pkl", ".csv", ".parquet", ".h5", ".pt"):
+                        found.append(p.as_posix())
+                    elif p.is_dir():
+                        try:
+                            has_files = any(p.iterdir())
+                        except OSError:
+                            has_files = False
+                        if has_files:
+                            found.append(p.as_posix())
+                except OSError:
                     continue
-                if p.is_file() and p.suffix in (".pkl", ".csv", ".parquet", ".h5", ".pt"):
-                    found.append(p.as_posix())
-                elif p.is_dir() and any(p.iterdir()):
-                    found.append(p.as_posix())
+        except OSError:
+            continue
     return sorted(list(set(found)))
 
 

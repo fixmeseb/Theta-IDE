@@ -93,10 +93,7 @@ class SupervisedDataModule(L.LightningDataModule, BaseDataModule):
                     self.input_dim = getattr(self._delegate, "input_dim", 64)
                     return
 
-            if hasattr(self._cfg, "get") and (
-                self._cfg.get("early_prediction")
-                or (hasattr(self._cfg, "env") and getattr(self._cfg.env, "name", None) == "mimic")
-            ):
+            if hasattr(self._cfg, "get") and self._cfg.get("early_prediction"):
                 try:
                     from src.usr.eval.early_prediction.data_module import EPSepsisDataModule
 

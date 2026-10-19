@@ -561,13 +561,23 @@ def default_method_model(
     return sorted(names)[0]
 
 
-def group_base_yaml(env: str, paradigm: str, rules: Paradigm | None = None, seed: int = 1) -> str:
+def group_base_yaml(env: str | None, paradigm: str, rules: Paradigm | None = None, seed: int = 1) -> str:
     """The _base.yaml for a new group, which is what binds env and paradigm."""
     lines = [
         "# @package _global_",
-        "defaults:",
-        f"  - override /env: {env}",
-        "",
+    ]
+    if env and str(env).strip().lower() not in ("", "none"):
+        lines += [
+            "defaults:",
+            f"  - override /env: {env}",
+            "",
+        ]
+    else:
+        lines += [
+            "defaults: []",
+            "",
+        ]
+    lines += [
         f"paradigm: {paradigm}",
         "",
     ]

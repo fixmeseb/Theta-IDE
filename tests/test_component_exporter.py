@@ -195,3 +195,35 @@ def test_export_plotter_component_zip(tmp_path):
         assert manifest["id"] == "pareto"
         assert manifest["kind"] == "plotter"
 
+
+def test_export_namespaced_component(tmp_path):
+    ws = tmp_path / "workspace"
+    cfg_dir = ws / "in" / "config" / "model" / "basics"
+    cfg_dir.mkdir(parents=True)
+    cfg_file = cfg_dir / "mlp.yaml"
+    cfg_file.write_text("name: mlp\ntype: mlp\n", encoding="utf-8")
+
+    code_dir = ws / "src" / "usr" / "models" / "basics" / "mlp"
+    code_dir.mkdir(parents=True)
+    (code_dir / "mlp_model.py").write_text("# mlp model code\n", encoding="utf-8")
+
+    exporter = ComponentExporter(workspace_root=ws)
+    out_zip = tmp_path / "mlp_export.zip"
+    opts = ComponentExportOptions(
+        export_format="zip",
+        output_path=out_zip,
+        author="Tester",
+        version="1.0.0",
+    )
+
+    res = exporter.export(cfg_file, options=opts)
+    assert res.success is True
+    assert out_zip.is_file()
+
+    with zipfile.ZipFile(out_zip, "r") as zf:
+        namelist = zf.namelist()
+        assert ".theta_component.json" in namelist
+        assert "in/config/model/basics/mlp.yaml" in namelist
+        assert any("mlp_model.py" in n for n in namelist)
+
+

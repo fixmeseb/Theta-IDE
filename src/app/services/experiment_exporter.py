@@ -301,11 +301,30 @@ class ExperimentExporter:
 
         return None
 
+    def _find_config_file(self, folder: str, name: str) -> Path | None:
+        """Find a configuration file in in/config/<folder>/ directly or recursively."""
+        root = self.workspace_root / "in" / "config" / folder
+        if not root.is_dir():
+            return None
+        direct = root / f"{name}.yaml"
+        if direct.is_file():
+            return direct
+        direct_yml = root / f"{name}.yml"
+        if direct_yml.is_file():
+            return direct_yml
+        for p in sorted(root.rglob(f"{name}.yaml")):
+            if p.is_file():
+                return p
+        for p in sorted(root.rglob(f"{name}.yml")):
+            if p.is_file():
+                return p
+        return None
+
     def _trace_environment_assets(self, env_name: str, files_to_pack: Dict[str, Path]) -> None:
         """Trace environment YAML config and custom environment code directory."""
-        # 1. in/config/env/<env_name>.yaml
-        env_yaml = self.workspace_root / "in" / "config" / "env" / f"{env_name}.yaml"
-        if env_yaml.is_file():
+        # 1. in/config/env/<env_name>.yaml (direct or recursive)
+        env_yaml = self._find_config_file("env", env_name)
+        if env_yaml and env_yaml.is_file():
             rel = env_yaml.relative_to(self.workspace_root).as_posix()
             files_to_pack[rel] = env_yaml
 
@@ -601,32 +620,53 @@ class ExperimentExporter:
             agent_name = m_cfg.get("agent")
             if agent_name and isinstance(agent_name, str):
                 agents_found.add(agent_name)
-                # in/config/agent/<agent>.yaml
-                agent_yaml = self.workspace_root / "in" / "config" / "agent" / f"{agent_name}.yaml"
-                if agent_yaml.is_file():
+                # in/config/agent/<agent>.yaml (direct or recursive)
+                agent_yaml = self._find_config_file("agent", agent_name)
+                if agent_yaml and agent_yaml.is_file():
                     rel = agent_yaml.relative_to(self.workspace_root).as_posix()
                     files_to_pack[rel] = agent_yaml
 
             # Extract model names (handle flat or nested composite specs)
-            model_spec = m_cfg.get("model")
             extracted_models: List[str] = []
-            if isinstance(model_spec, str):
-                extracted_models.append(model_spec)
-            elif isinstance(model_spec, dict):
-                for k, v in model_spec.items():
-                    extracted_models.append(k)
-                    if isinstance(v, dict):
-                        for sub_k, sub_v in v.items():
-                            if isinstance(sub_v, str):
-                                extracted_models.append(sub_v)
-                            elif isinstance(sub_v, dict):
-                                extracted_models.append(sub_k)
 
-            for m in extracted_models:
+            def _collect_models(val: Any):
+                if isinstance(val, str):
+                    clean = val.strip()
+                    if clean and clean.lower() not in (
+                        "default", "none", "true", "false", "identity", "neural", "symbolic",
+                        "blender", "learned", "heuristic", "linear", "softmax"
+                    ):
+                        extracted_models.append(clean)
+                elif isinstance(val, dict):
+                    arch = val.get("architecture") or val.get("name") or val.get("type") or val.get("base")
+                    if arch and isinstance(arch, str):
+                        extracted_models.append(arch)
+                    for k, sub in val.items():
+                        if k in ("architecture", "name", "type", "base", "slots", "rules", "mode", "lr"):
+                            continue
+                        if isinstance(sub, dict):
+                            if len(sub) == 1 and not any(ik in sub for ik in ("lr", "hidden_sizes", "activation", "dim")):
+                                first_k = next(iter(sub))
+                                if isinstance(sub[first_k], dict):
+                                    extracted_models.append(first_k)
+                                    _collect_models(sub[first_k])
+                                    continue
+                            if k not in ("symbolic", "neural", "blender", "encoder", "decoder", "head"):
+                                extracted_models.append(k)
+                            _collect_models(sub)
+                        elif isinstance(sub, str):
+                            _collect_models(sub)
+
+            _collect_models(m_cfg.get("model"))
+            for slot in ("neural", "symbolic", "blender", "encoder", "decoder", "head"):
+                if slot in m_cfg:
+                    _collect_models(m_cfg[slot])
+
+            for m in sorted(set(extracted_models)):
                 models_found.add(m)
-                # in/config/model/<m>.yaml
-                model_yaml = self.workspace_root / "in" / "config" / "model" / f"{m}.yaml"
-                if model_yaml.is_file():
+                # in/config/model/<m>.yaml (direct or recursive)
+                model_yaml = self._find_config_file("model", m)
+                if model_yaml and model_yaml.is_file():
                     rel = model_yaml.relative_to(self.workspace_root).as_posix()
                     files_to_pack[rel] = model_yaml
 

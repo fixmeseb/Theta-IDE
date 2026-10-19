@@ -41,11 +41,15 @@ def _float(value) -> float | None:
 
 def list_environments() -> list[dict[str, Any]]:
     envs = []
-    for f in sorted((CONFIG_DIR / "env").glob("*.yaml")):
-        if f.name.startswith("_"):
+    env_dir = CONFIG_DIR / "env"
+    if not env_dir.is_dir():
+        return envs
+    for f in sorted(env_dir.rglob("*.yaml")):
+        if f.name.startswith("_") or "/_" in f.as_posix():
             continue
         try:
-            envs.append({"name": f.stem, "config": yaml.safe_load(f.read_text(encoding="utf-8"))})
+            rel_name = f.relative_to(env_dir).with_suffix("").as_posix()
+            envs.append({"name": rel_name, "stem": f.stem, "config": yaml.safe_load(f.read_text(encoding="utf-8"))})
         except (OSError, yaml.YAMLError):
             pass
     return envs
