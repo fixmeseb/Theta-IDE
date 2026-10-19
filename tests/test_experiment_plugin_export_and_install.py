@@ -12,6 +12,9 @@ from frontend.hub.dialog import HubView
 from frontend.hub.client import HubClient
 from PyQt6.QtWidgets import QApplication
 
+# A small registry index, so the Hub tests don't depend on a developer's .thetaide cache
+HUB_INDEX = Path(__file__).resolve().parent / "fixtures" / "hub_index.json"
+
 
 @pytest.fixture(scope="session")
 def qapp():
@@ -96,12 +99,11 @@ def test_experiment_exporter_export_pyrenees_group():
         res.archive_path.unlink()
 
 
-def test_hub_experiment_filtering_and_hidden_subcomponents(qapp):
+def test_hub_experiment_filtering_and_hidden_subcomponents(qapp, tmp_path):
     """Verify that experiment plugins are shown under 'experiment' tab, while subcomponents are hidden."""
     ws = Path(__file__).resolve().parent.parent
-    client = HubClient(workspace_dir=ws, data_dir=ws / ".thetaide")
-    index_path = ws / ".thetaide" / "cache" / "hub" / "index.json"
-    data = json.loads(index_path.read_text(encoding="utf-8"))
+    client = HubClient(workspace_dir=ws, data_dir=tmp_path / ".thetaide")
+    data = json.loads(HUB_INDEX.read_text(encoding="utf-8"))
     client.components = [HubComponent.from_dict(c) for c in data["components"]]
 
     # 1. Component Hub view
@@ -139,15 +141,14 @@ def test_experiment_plugin_mock_install_and_clean_uninstall(mock_isolated_worksp
     ws = mock_isolated_workspace
     installer = HubInstaller(workspace_dir=ws, data_dir=ws / ".thetaide")
 
-    # Load component definition from index
-    index_path = Path(__file__).resolve().parent.parent / ".thetaide" / "cache" / "hub" / "index.json"
-    data = json.loads(index_path.read_text(encoding="utf-8"))
-    pyrenees_data = next(c for c in data["components"] if c["id"] == "pyrenees")
-    comp = HubComponent.from_dict(pyrenees_data)
-
     dist_pkg = Path(__file__).resolve().parents[2] / "theta-plugins" / "dist" / "pyrenees-1.0.0.zip"
     if not dist_pkg.is_file():
         pytest.skip("pyrenees-1.0.0.zip dist package not built")
+
+    # Load component definition from index
+    data = json.loads(HUB_INDEX.read_text(encoding="utf-8"))
+    pyrenees_data = next(c for c in data["components"] if c["id"] == "pyrenees")
+    comp = HubComponent.from_dict(pyrenees_data)
 
     comp.releases["1.0.0"].url = f"file://{dist_pkg.resolve()}"
 

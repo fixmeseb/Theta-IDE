@@ -149,7 +149,7 @@ class TestTerminalPanelAndWidget(unittest.TestCase):
         for _ in range(20):
             app.processEvents()
             time.sleep(0.05)
-            if "TP=ghostty" in "".join(received):
+            if "CT=" in "".join(received):  # the second line: TP= has arrived by then too
                 break
         output = "".join(received)
         self.assertIn("TP=ghostty", output)
