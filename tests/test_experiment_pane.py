@@ -672,7 +672,9 @@ class TestConfigViewer(unittest.TestCase):
 class TestComponentsPanel(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
-        self.root = Path(self.temp_dir.name)
+        # The real layout, <workspace>/in/config: the panel takes the workspace (and the Hub's
+        # .thetaide) from two levels up, which for a bare temp dir is "/" on Linux and unwritable
+        self.root = Path(self.temp_dir.name) / "in" / "config"
         (self.root / "experiment" / "cartpole").mkdir(parents=True)
         (self.root / "agent").mkdir(parents=True)
         (self.root / "env").mkdir(parents=True)
