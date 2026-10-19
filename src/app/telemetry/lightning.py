@@ -51,8 +51,9 @@ class ThetaLogger(Logger):
     def run(self) -> Run:
         """The telemetry run, started on first use (the CSVLogger's version folder is known by then)."""
         if self._run is None:
-            self._run = Run(self._version_dir(), self._sinks, self._config, self._meta, self._system_interval,
-                            self._metrics)
+            self._run = Run(
+                self._version_dir(), self._sinks, self._config, self._meta, self._system_interval, self._metrics
+            )
         return self._run
 
     @property

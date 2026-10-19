@@ -21,8 +21,8 @@ import hydra
 from omegaconf import DictConfig, OmegaConf
 
 from src.app import telemetry
-from src.app.telemetry.selection import selection_from_config
 from src.app.core.checkpoints import CheckpointSchedule, checkpoint_interval, checkpoint_name
+from src.app.telemetry.selection import selection_from_config
 
 
 @hydra.main(version_base=None, config_path="../../../in/config", config_name="config")

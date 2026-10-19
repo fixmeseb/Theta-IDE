@@ -16,10 +16,10 @@ from typing import Any
 import yaml
 
 from src.app.core.checkpoints import checkpoint_errors
-from src.app.telemetry.selection import selection_errors
 from src.app.pipeline.config import normalize_agent_name, parse_methods_dict, resolve_experiment_config_name
 from src.app.pipeline.datasets import resolve_dataset_path
 from src.app.pipeline.exceptions import ConfigurationError
+from src.app.telemetry.selection import selection_errors
 
 # ---------------------------------------------------------------------------
 # Paradigm registry loading
