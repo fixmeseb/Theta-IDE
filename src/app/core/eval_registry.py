@@ -37,7 +37,7 @@ def register_evaluator(*names: str) -> Callable[[Type[Any]], Type[Any]]:
     return decorator
 
 
-def get_evaluator_class(name: str) -> Optional[Type[Any]]:
+def get_evaluator_class(name: str) -> Type[Any] | None:
     """Resolve an evaluator name to its registered class.
 
     Args:

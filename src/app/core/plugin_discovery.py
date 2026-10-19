@@ -12,8 +12,8 @@ standard pyproject.toml entry-point groups:
 from __future__ import annotations
 
 import importlib
-from importlib.metadata import entry_points
 import logging
+from importlib.metadata import entry_points
 from typing import Any, Callable, Dict, List, Optional
 
 log = logging.getLogger(__name__)

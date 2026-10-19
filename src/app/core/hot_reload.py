@@ -14,7 +14,7 @@ from typing import List, Optional
 log = logging.getLogger(__name__)
 
 
-def reload_component_modules(target_prefix: Optional[str] = None) -> List[str]:
+def reload_component_modules(target_prefix: str | None = None) -> List[str]:
     """Reload active research modules in sys.modules and refresh component registries.
 
     Args:

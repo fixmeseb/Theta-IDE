@@ -13,8 +13,8 @@ The pipeline resolves plotters via get_plotter_class():
 import importlib
 import logging
 import os
-from pathlib import Path
 import pkgutil
+from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Type
 
 log = logging.getLogger(__name__)
@@ -41,7 +41,7 @@ def register_plotter(*names: str) -> Callable[[Type[Any]], Type[Any]]:
     return decorator
 
 
-def get_plotter_class(name: str) -> Optional[Type[Any]]:
+def get_plotter_class(name: str) -> Type[Any] | None:
     """Resolve a plotter name to its registered class.
 
     Args:

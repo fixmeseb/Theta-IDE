@@ -6,14 +6,14 @@ directories ready for GitHub distribution.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
 import json
 import logging
-from pathlib import Path
 import shutil
-from typing import Any, Dict, List, Optional, Set
 import zipfile
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Set
 
 import yaml
 
@@ -26,10 +26,10 @@ log = logging.getLogger(__name__)
 class ComponentExportOptions:
     """Configuration options for exporting a Theta component plugin."""
     export_format: str = "zip"  # "zip" or "folder"
-    output_path: Optional[Path] = None
+    output_path: Path | None = None
     version: str = "1.0.0"
     author: str = "Theta Researcher"
-    description: Optional[str] = None
+    description: str | None = None
     include_configs: bool = True
     include_rules: bool = True
     generate_git_scaffold: bool = True
@@ -39,22 +39,22 @@ class ComponentExportOptions:
 class ComponentExportResult:
     """Result of a component export operation."""
     success: bool
-    export_path: Optional[Path] = None
-    manifest: Optional[Dict[str, Any]] = None
+    export_path: Path | None = None
+    manifest: Dict[str, Any] | None = None
     files_included: List[str] = field(default_factory=list)
-    error: Optional[str] = None
+    error: str | None = None
 
 
 class ComponentExporter:
     """Extracts, traces dependencies, and packages components into installable Hub packages or Git repos."""
 
-    def __init__(self, workspace_root: Optional[Path] = None):
+    def __init__(self, workspace_root: Path | None = None):
         self.workspace_root = Path(workspace_root) if workspace_root else PROJECT_ROOT
 
     def export(
         self,
         config_path_or_id: str | Path,
-        options: Optional[ComponentExportOptions] = None,
+        options: ComponentExportOptions | None = None,
     ) -> ComponentExportResult:
         """Export a component plugin to a .zip archive or standalone directory.
 
@@ -289,7 +289,7 @@ class ComponentExporter:
         comp_id: str,
         comp_name: str,
         kind: str,
-        code_dir: Optional[Path],
+        code_dir: Path | None,
         config_files: List[Path],
         existing_meta: Dict[str, Any],
         options: ComponentExportOptions,

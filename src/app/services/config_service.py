@@ -37,7 +37,7 @@ _COMPOSE_CACHE_LOCK = threading.Lock()
 def _inputs_fingerprint() -> int:
     """Hash of everything a compose can depend on: the files (paths and exact contents) and the
     agents registered in memory (hot reload and tests register agents without touching files)."""
-    registry_module = sys.modules.get("src.usr.methods.agent_registry")  # don't import it just to look
+    registry_module = sys.modules.get("src.usr.algorithms.agent_registry")  # don't import it just to look
     registry = getattr(registry_module, "AGENT_REGISTRY", None) or {}
     parts: list[Any] = [tuple(sorted((name, id(cls)) for name, cls in registry.items()))]
     for root, pattern in ((CONFIG_DIR, "*.yaml"), (_USER_CODE_DIR, "*.py")):

@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
 import re
+from pathlib import Path
 from typing import Any, Dict, Optional, Tuple
 
 COMPONENT_MANIFEST_SCHEMA: Dict[str, Any] = {
@@ -112,7 +112,7 @@ VALID_KINDS = {
 }
 
 
-def validate_manifest_data(data: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
+def validate_manifest_data(data: Dict[str, Any]) -> Tuple[bool, str | None]:
     """Validate component manifest dictionary against schema.
 
     Uses `jsonschema` if available, falling back to a pure-Python schema validator.
@@ -157,7 +157,7 @@ def validate_manifest_data(data: Dict[str, Any]) -> Tuple[bool, Optional[str]]:
     return True, None
 
 
-def validate_manifest_file(manifest_path: str | Path) -> Tuple[bool, Optional[str]]:
+def validate_manifest_file(manifest_path: str | Path) -> Tuple[bool, str | None]:
     """Validate a .theta_component.json file from disk."""
     path = Path(manifest_path)
     if not path.is_file():

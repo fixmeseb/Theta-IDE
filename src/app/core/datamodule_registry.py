@@ -37,7 +37,7 @@ def register_datamodule(*names: str) -> Callable[[Type[Any]], Type[Any]]:
     return decorator
 
 
-def get_datamodule_class(dm_name: str) -> Optional[Type[Any]]:
+def get_datamodule_class(dm_name: str) -> Type[Any] | None:
     """Resolve a data module name to its registered class.
 
     Args:
@@ -126,7 +126,7 @@ def _register_builtins() -> None:
         pass
 
     try:
-        from src.app.core.paradigm_impls.base.tabular import TabularNpzDataModule, SupervisedNpzDataModule
+        from src.app.core.paradigm_impls.base.tabular import SupervisedNpzDataModule, TabularNpzDataModule
         register_datamodule("TabularNpzDataModule")(TabularNpzDataModule)
         register_datamodule("SupervisedNpzDataModule")(SupervisedNpzDataModule)
     except Exception:

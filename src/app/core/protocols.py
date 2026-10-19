@@ -295,8 +295,9 @@ class StandardModelActorCriticWrapper(nn.Module):
         return self.critic(obs.float().reshape(obs.shape[0], -1))
 
     def get_action_and_value(self, obs: torch.Tensor, action: torch.Tensor = None) -> Any:
-        from src.app.core.types import ActionResult
         from torch.distributions.categorical import Categorical
+
+        from src.app.core.types import ActionResult
 
         if hasattr(self.backbone, "get_action_and_value"):
             return self.backbone.get_action_and_value(obs, action=action)

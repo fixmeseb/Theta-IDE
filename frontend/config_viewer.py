@@ -4447,6 +4447,8 @@ class ConfigViewer(QWidget):
         methods = self.raw_data.get("methods", {})
         m_spec = methods.get(method_name, {}) if isinstance(methods, dict) else {}
         tree = config_tree()
+        model_raw = m_spec.get("model")
+        model_name = next(iter(model_raw), None) if isinstance(model_raw, dict) else model_raw
         sub_dict = {}
         if isinstance(m_spec.get("model"), dict):
             for arch_dict in m_spec["model"].values():
