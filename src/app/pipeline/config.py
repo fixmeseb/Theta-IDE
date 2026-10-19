@@ -252,11 +252,13 @@ _BUILTIN_MODEL_DEFAULTS: dict[str, dict[str, Any]] = {
 
 
 def load_model_base_config(model_name: str, config_dir=None) -> dict:
-    """Load the base YAML configuration for a model architecture from in/config/model/<model_name>.yaml."""
+    """Load the base YAML configuration for a model architecture from in/config/model/<model_name>.yaml
+    or from installed component manifests in src/usr/models/<model_name>.
+    """
     if not model_name:
         return {}
     from pathlib import Path
-
+    import json
     import yaml
 
     if config_dir is None:
@@ -270,14 +272,43 @@ def load_model_base_config(model_name: str, config_dir=None) -> dict:
         found = list(Path(config_dir).rglob(f"{model_name}.yaml"))
         if found:
             target = found[0]
-        else:
-            return dict(_BUILTIN_MODEL_DEFAULTS.get(model_name, {}))
-    try:
-        with open(target) as f:
-            data = yaml.safe_load(f)
-        return dict(data) if isinstance(data, dict) else dict(_BUILTIN_MODEL_DEFAULTS.get(model_name, {}))
-    except Exception:
-        return dict(_BUILTIN_MODEL_DEFAULTS.get(model_name, {}))
+
+    if target.exists():
+        try:
+            with open(target) as f:
+                data = yaml.safe_load(f)
+            if isinstance(data, dict):
+                return dict(data)
+        except Exception:
+            pass
+
+    # Dynamic check: look in src/usr/models/ for component manifests or configs
+    workspace = Path(__file__).resolve().parents[3]
+    candidate_dirs = [
+        Path("src/usr/models") / model_name,
+        workspace / "src" / "usr" / "models" / model_name,
+    ]
+    for cdir in candidate_dirs:
+        if cdir.is_dir():
+            for meta_name in [".theta_component.json", "plugin.json"]:
+                meta_file = cdir / meta_name
+                if meta_file.is_file():
+                    try:
+                        meta = json.loads(meta_file.read_text(encoding="utf-8"))
+                        cfg_rel = meta.get("config_path")
+                        if cfg_rel:
+                            cfg_path = (workspace / cfg_rel) if not Path(cfg_rel).is_absolute() else Path(cfg_rel)
+                            if cfg_path.is_file():
+                                with open(cfg_path) as f:
+                                    data = yaml.safe_load(f)
+                                if isinstance(data, dict):
+                                    return dict(data)
+                        if "parameters" in meta and isinstance(meta["parameters"], dict):
+                            return dict(meta["parameters"])
+                    except Exception:
+                        pass
+
+    return dict(_BUILTIN_MODEL_DEFAULTS.get(model_name, {}))
 
 
 def resolve_composite_submodel(

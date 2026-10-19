@@ -42,8 +42,13 @@ class JobManager(QObject):
     def __init__(self, store_path: Path | None = None, python: str | None = None,
                  project_root: Path | None = None, logs_dir: Path | None = None, parent=None):
         super().__init__(parent)
-        self.python = python or sys.executable
         self.project_root = Path(project_root or PROJECT_ROOT)
+        if not python:
+            venv_bin = self.project_root / "venv" / ("Scripts" if sys.platform == "win32" else "bin")
+            venv_python = venv_bin / ("python.exe" if sys.platform == "win32" else "python")
+            if venv_python.is_file():
+                python = str(venv_python)
+        self.python = python or sys.executable
         self.logs_dir = Path(logs_dir or LOGS_DIR)  # where run_pipeline.py writes results/logs/<group>/<id>
         self.jobs_dir = Path(store_path).parent if store_path else JOBS_DIR
         self.store = JobStore(store_path or JOBS_DIR / "jobs.db")

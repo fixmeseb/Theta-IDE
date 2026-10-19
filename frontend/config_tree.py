@@ -1532,11 +1532,7 @@ class ConfigTreeWidget(TreeHeaderActions, QWidget):
         if not (group_obj and group_obj.base_methods) and tree and group_paradigm:
             permitted = [a.name for a in tree.agents_for(group_paradigm)]
             agent = permitted[0] if permitted else None
-            model = (
-                default_method_model(group_obj, tree.models, paradigm=tree.paradigms.get(group_paradigm))
-                if not agent
-                else "dnn"
-            )
+            model = default_method_model(group_obj, tree.models, paradigm=tree.paradigms.get(group_paradigm))
             if agent or model:
                 m_name = unique_method_name((), agent, model)
                 lines += ["", "methods:", f"  {m_name}:"]

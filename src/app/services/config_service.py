@@ -13,7 +13,11 @@ from typing import Any
 import yaml
 from omegaconf import OmegaConf
 
+from hydra import compose, initialize_config_dir
+from hydra.core.global_hydra import GlobalHydra
+
 from src.app.pipeline.compose import (
+    _HYDRA_LOCK,
     CONFIG_DIR,
     compose_experiment,
     effective_config,
@@ -187,34 +191,63 @@ def effective_timesteps(plans: dict[str, dict], total_timesteps):
 @_cached_on_inputs
 def config_schema() -> dict[str, Any]:
     """The builder's fields with defaults read from the composed base experiment."""
-    composed = compose_experiment(GUI_BASE_EXPERIMENT)
-    fields = []
-    for field in GUI_FIELDS:
-        field = dict(field)
-        source = field.pop("default_from", None)
-        if source:
-            val = OmegaConf.select(composed.cfg, source)
-            if val is None and source == "agent.lr":
-                val = OmegaConf.select(composed.cfg, "agent.learning_rate")
-            if val is not None:
-                field["default"] = val
-        fields.append(field)
-    method_prefix = f"methods.{GUI_METHOD['name']}"
+    composed = None
+    try:
+        composed = compose_experiment(GUI_BASE_EXPERIMENT)
+    except Exception:
+        exp_dir = CONFIG_DIR / "experiment"
+        if exp_dir.is_dir():
+            candidates = sorted(
+                p for p in exp_dir.rglob("*.yaml")
+                if not p.name.startswith("_") and "/methods/" not in p.as_posix() and p.is_file()
+            )
+            if candidates:
+                try:
+                    composed = compose_experiment(str(candidates[0].relative_to(exp_dir).with_suffix("")))
+                except Exception:
+                    pass
+
+    if composed is not None:
+        fields = []
+        for field in GUI_FIELDS:
+            field = dict(field)
+            source = field.pop("default_from", None)
+            if source:
+                val = OmegaConf.select(composed.cfg, source)
+                if val is None and source == "agent.lr":
+                    val = OmegaConf.select(composed.cfg, "agent.learning_rate")
+                if val is not None:
+                    field["default"] = val
+            fields.append(field)
+        method_prefix = f"methods.{GUI_METHOD['name']}"
+        return {
+            "base_experiment": composed.experiment,
+            "environment": {
+                "name": getattr(composed.cfg.env, "name", None)
+                if hasattr(composed.cfg, "env") and composed.cfg.env
+                else None,
+                "env_id": composed.cfg.env.get("env_id")
+                if hasattr(composed.cfg, "env") and composed.cfg.env and hasattr(composed.cfg.env, "get")
+                else None,
+            },
+            "fixed_overrides": [
+                f"++{method_prefix}.agent={GUI_METHOD['agent']}",
+                f"++{method_prefix}.model={GUI_METHOD['model']}",
+            ],
+            "fields": fields,
+        }
+
+    # Clean setup fallback: verify Hydra composition without requiring any experiment files
+    with _HYDRA_LOCK:
+        GlobalHydra.instance().clear()
+        initialize_config_dir(version_base=None, config_dir=str(CONFIG_DIR))
+        cfg = compose(config_name="config", return_hydra_config=True)
+
     return {
-        "base_experiment": composed.experiment,
-        "environment": {
-            "name": getattr(composed.cfg.env, "name", None)
-            if hasattr(composed.cfg, "env") and composed.cfg.env
-            else None,
-            "env_id": composed.cfg.env.get("env_id")
-            if hasattr(composed.cfg, "env") and composed.cfg.env and hasattr(composed.cfg.env, "get")
-            else None,
-        },
-        "fixed_overrides": [
-            f"++{method_prefix}.agent={GUI_METHOD['agent']}",
-            f"++{method_prefix}.model={GUI_METHOD['model']}",
-        ],
-        "fields": fields,
+        "base_experiment": None,
+        "environment": {"name": None, "env_id": None},
+        "fixed_overrides": [],
+        "fields": [dict(f) for f in GUI_FIELDS],
     }
 
 

@@ -402,19 +402,22 @@ class Window(QMainWindow):
         return dock
 
     def init_default_experiment(self):
-        default_exp = "experiment/cartpole/quick_test.yaml"
-        if not (self.config_tree.root_dir / default_exp).exists():
-            default_exp = "experiment/thetaide/cartpole_ppo_reference.yaml"
-        if not (self.config_tree.root_dir / default_exp).exists():
+        default_exp = None
+        for pref in [
+            "experiment/thetaide/cartpole_ppo_reference.yaml",
+            "experiment/cartpole/quick_test.yaml",
+        ]:
+            if (self.config_tree.root_dir / pref).exists():
+                default_exp = pref
+                break
+        if not default_exp:
             exp_dir = self.config_tree.root_dir / "experiment"
             candidates = sorted(
                 p for p in exp_dir.rglob("*.yaml")
-                if not p.name.startswith("_") and p.is_file()
+                if not p.name.startswith("_") and p.is_file() and "/methods/" not in p.as_posix()
             ) if exp_dir.is_dir() else []
             if candidates:
                 default_exp = str(candidates[0].relative_to(self.config_tree.root_dir))
-            else:
-                default_exp = None
         if default_exp:
             self.config_tree.select_file(default_exp)
 
@@ -1456,7 +1459,7 @@ class Window(QMainWindow):
     def config(self):
         if hasattr(self, "config_viewer") and getattr(self.config_viewer, "raw_data", None):
             d = self.config_viewer.raw_data
-            exp_id = d.get("experiment_id") or (self.config_viewer.current_path.stem if getattr(self.config_viewer, "current_path", None) else "cartpole_ppo_baseline")
+            exp_id = d.get("experiment_id") or (self.config_viewer.current_path.stem if getattr(self.config_viewer, "current_path", None) else "default_experiment")
             seed = int(d.get("seed") if d.get("seed") is not None else 42)
             steps = int(d.get("total_timesteps") or 10000)
             tb = bool(d.get("tensorboard", False))
@@ -1474,7 +1477,17 @@ class Window(QMainWindow):
     def request_compose(self):
         self.compose_serial += 1
         serial, config = self.compose_serial, self.config()
-        exp_target = getattr(self, "current_experiment", None) or BASE_EXPERIMENT
+        exp_target = getattr(self, "current_experiment", None)
+        if not exp_target:
+            if hasattr(self, "config_tree") and (self.config_tree.root_dir / f"experiment/{BASE_EXPERIMENT}.yaml").exists():
+                exp_target = BASE_EXPERIMENT
+            else:
+                self.preview.setPlainText("# No experiment currently selected.\n# Select an experiment from the tree or click 'New Experiment' to create one.")
+                self.preview_status.setText("No experiment selected")
+                self.compose_valid = False
+                self.compose_error = None
+                self.update_launch_state()
+                return
         overrides = self.config_viewer.get_overrides() if hasattr(self, "config_viewer") else config.overrides()
         self.backend.compose(exp_target, overrides,
                              lambda data, error: self.compose_finished(serial, config, data, error))
@@ -1804,7 +1817,13 @@ class Window(QMainWindow):
             self.config_viewer.save_to_disk()
 
         config = self.config()
-        exp_target = getattr(self, "current_experiment", None) or BASE_EXPERIMENT
+        exp_target = getattr(self, "current_experiment", None)
+        if not exp_target:
+            if hasattr(self, "config_tree") and (self.config_tree.root_dir / f"experiment/{BASE_EXPERIMENT}.yaml").exists():
+                exp_target = BASE_EXPERIMENT
+            else:
+                self.statusBar().showMessage("Please select or create an experiment to launch.", 5000)
+                return
         is_recover = False
         if hasattr(self, "config_viewer") and getattr(self.config_viewer, "raw_data", None):
             is_recover = bool(self.config_viewer.raw_data.get("recover", False))
@@ -2029,7 +2048,13 @@ class Window(QMainWindow):
             self.config_viewer.save_to_disk()
 
         config = self.config()
-        exp_target = getattr(self, "current_experiment", None) or BASE_EXPERIMENT
+        exp_target = getattr(self, "current_experiment", None)
+        if not exp_target:
+            if hasattr(self, "config_tree") and (self.config_tree.root_dir / f"experiment/{BASE_EXPERIMENT}.yaml").exists():
+                exp_target = BASE_EXPERIMENT
+            else:
+                self.statusBar().showMessage("Please select or create an experiment to queue.", 5000)
+                return
         is_recover = False
         if hasattr(self, "config_viewer") and getattr(self.config_viewer, "raw_data", None):
             is_recover = bool(self.config_viewer.raw_data.get("recover", False))

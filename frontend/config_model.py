@@ -349,6 +349,8 @@ class ConfigTree:
 
         self.sites = tuple(s.stem for s in _yaml_files(self.config_root / "site"))
 
+        self._discover_plugin_manifests()
+
         experiment_root = self.config_root / "experiment"
         self.experiments: dict[str, Experiment] = {}
         if experiment_root.is_dir():
@@ -357,6 +359,66 @@ class ConfigTree:
                     continue
                 experiment = Experiment.from_file(path, experiment_root)
                 self.experiments[experiment.name] = experiment
+
+    def _discover_plugin_manifests(self) -> None:
+        """Scan workspace for installed plugin manifests (.theta_component.json / plugin.json)
+        and register them into self.agents, self.models, and self.environments if not already present.
+        """
+        import json
+
+        # Infer workspace root
+        if self.config_root.name == "config" and self.config_root.parent.name == "in":
+            ws_root = self.config_root.parent.parent
+        else:
+            ws_root = self.config_root.parent
+
+        scan_dirs = [
+            (ws_root / "src" / "usr" / "algorithms", "agent"),
+            (ws_root / "src" / "usr" / "methods", "agent"),
+            (ws_root / "src" / "usr" / "models", "model"),
+            (ws_root / "in" / "envs", "env"),
+        ]
+
+        for sdir, default_kind in scan_dirs:
+            if not sdir.is_dir():
+                continue
+            for meta_file in sorted(list(sdir.glob("*/.theta_component.json")) + list(sdir.glob("*/plugin.json"))):
+                try:
+                    meta = json.loads(meta_file.read_text(encoding="utf-8"))
+                    kind = str(meta.get("kind", default_kind)).lower()
+                    comp_id = str(meta.get("id") or meta_file.parent.name)
+                    paradigms = meta.get("paradigms") or meta.get("compatible_paradigms") or ()
+                    if isinstance(paradigms, list):
+                        paradigms_tuple = tuple(str(p) for p in paradigms)
+                    elif isinstance(paradigms, str):
+                        paradigms_tuple = (paradigms,)
+                    else:
+                        paradigms_tuple = ()
+
+                    if kind in ("agent", "algorithm") and comp_id not in self.agents:
+                        self.agents[comp_id] = Agent(
+                            name=comp_id,
+                            algorithm=str(meta.get("algorithm") or comp_id),
+                            compatible_paradigms=paradigms_tuple,
+                            hyperparameters=dict(meta.get("hyperparameters", {})),
+                            raw=meta,
+                        )
+                    elif kind == "model" and comp_id not in self.models:
+                        self.models[comp_id] = Model(
+                            name=comp_id,
+                            architecture=str(meta.get("architecture") or comp_id),
+                            compatible_paradigms=paradigms_tuple,
+                            parameters=dict(meta.get("parameters", {})),
+                            raw=meta,
+                        )
+                    elif kind == "env" and comp_id not in self.environments:
+                        self.environments[comp_id] = Environment(
+                            name=comp_id,
+                            compatible_paradigms=paradigms_tuple,
+                            raw=meta,
+                        )
+                except Exception:
+                    continue
 
     def create_folder(self, group: str, subpath: str) -> Path:
         """Create a new organizational folder under an experiment group."""

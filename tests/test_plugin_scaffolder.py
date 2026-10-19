@@ -47,6 +47,11 @@ def test_scaffold_model_composite(tmp_path):
     assert "compute_auxiliary_losses" in code
     assert "configure_optimizer_groups" in code
 
+    from frontend.config_model import ConfigTree
+    tree = ConfigTree(tmp_path / "in" / "config")
+    assert "custom_composite" in tree.models
+    assert tree.models["custom_composite"].is_composite is True
+
 
 def test_scaffold_agent(tmp_path):
     scaffolder = PluginScaffolder(workspace_root=tmp_path)
@@ -73,6 +78,7 @@ def test_scaffold_datamodule(tmp_path):
     res = scaffolder.scaffold(opts)
     assert res.success is True
     assert (res.target_dir / "trajectory_streamer_data_module.py").is_file()
+    assert (tmp_path / "in" / "config" / "data" / "trajectory_streamer.yaml").is_file()
 
 
 def test_scaffold_evaluator(tmp_path):
@@ -81,6 +87,7 @@ def test_scaffold_evaluator(tmp_path):
     res = scaffolder.scaffold(opts)
     assert res.success is True
     assert (res.target_dir / "reachability_checker_evaluator.py").is_file()
+    assert (tmp_path / "in" / "config" / "eval" / "reachability_checker.yaml").is_file()
 
 
 def test_scaffold_plotter(tmp_path):

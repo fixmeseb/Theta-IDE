@@ -3095,34 +3095,60 @@ class ConfigViewer(QWidget):
 
                 # Agent Algorithm row
                 if tree and tree.paradigms.get(paradigm):
+                    from src.app.pipeline.validation import paradigm_uses_agents
                     p_permitted = [a.name for a in tree.agents_for(paradigm)]
-                    p_txt_agent = ComboBox()
-                    p_txt_agent.setMaximumWidth(TEXT_FIELD_WIDTH)
-                    p_txt_agent.setPlaceholderText("Select algorithm...")
-                    p_txt_agent.addItems(p_permitted)
-                    init_agent = self._pending_new_method_spec.get("agent")
-                    if init_agent and init_agent in p_permitted:
-                        p_txt_agent.setCurrentText(str(init_agent))
-                    else:
-                        p_txt_agent.setCurrentIndex(-1)
-                    p_txt_agent.currentTextChanged.connect(
-                        lambda v: self._pending_new_method_spec.__setitem__("agent", v) if v else self._pending_new_method_spec.pop("agent", None)
-                    )
-                    pc_layout.addRow("Algorithm", p_txt_agent)
+                    if p_permitted:
+                        p_txt_agent = ComboBox()
+                        p_txt_agent.setEditable(True)
+                        p_txt_agent.setMaximumWidth(TEXT_FIELD_WIDTH)
+                        p_txt_agent.setPlaceholderText("Select or enter algorithm...")
+                        p_txt_agent.addItems(p_permitted)
+                        init_agent = self._pending_new_method_spec.get("agent")
+                        if init_agent:
+                            p_txt_agent.setCurrentText(str(init_agent))
+                        else:
+                            p_txt_agent.setCurrentIndex(-1)
+                        p_txt_agent.currentTextChanged.connect(
+                            lambda v: self._pending_new_method_spec.__setitem__("agent", v.strip()) if v.strip() else self._pending_new_method_spec.pop("agent", None)
+                        )
+                        pc_layout.addRow("Algorithm", p_txt_agent)
+                    elif paradigm_uses_agents(paradigm):
+                        p_txt_agent = QLineEdit()
+                        p_txt_agent.setMaximumWidth(TEXT_FIELD_WIDTH)
+                        p_txt_agent.setPlaceholderText("Algorithm (e.g. ppo, cql)...")
+                        init_agent = self._pending_new_method_spec.get("agent")
+                        if init_agent:
+                            p_txt_agent.setText(str(init_agent))
+                        p_txt_agent.textChanged.connect(
+                            lambda v: self._pending_new_method_spec.__setitem__("agent", v.strip()) if v.strip() else self._pending_new_method_spec.pop("agent", None)
+                        )
+                        pc_layout.addRow("Algorithm", p_txt_agent)
 
-                # Model row
+                # Model row — required for all paradigms
                 if tree and tree.models:
                     p_txt_model = ComboBox()
+                    p_txt_model.setEditable(True)
                     p_txt_model.setMaximumWidth(TEXT_FIELD_WIDTH)
-                    p_txt_model.setPlaceholderText("Select model...")
+                    p_txt_model.setPlaceholderText("Select or enter model...")
                     p_txt_model.addItems(sorted(tree.models))
                     init_model = self._pending_new_method_spec.get("model")
-                    if init_model and init_model in tree.models:
+                    if init_model:
                         p_txt_model.setCurrentText(str(init_model))
                     else:
                         p_txt_model.setCurrentIndex(-1)
                     p_txt_model.currentTextChanged.connect(
-                        lambda v: self._pending_new_method_spec.__setitem__("model", v) if v else self._pending_new_method_spec.pop("model", None)
+                        lambda v: self._pending_new_method_spec.__setitem__("model", v.strip()) if v.strip() else self._pending_new_method_spec.pop("model", None)
+                    )
+                    pc_layout.addRow("Model", p_txt_model)
+                else:
+                    p_txt_model = QLineEdit()
+                    p_txt_model.setMaximumWidth(TEXT_FIELD_WIDTH)
+                    p_txt_model.setPlaceholderText("Model architecture (e.g. dnn)...")
+                    init_model = self._pending_new_method_spec.get("model")
+                    if init_model:
+                        p_txt_model.setText(str(init_model))
+                    p_txt_model.textChanged.connect(
+                        lambda v: self._pending_new_method_spec.__setitem__("model", v.strip()) if v.strip() else self._pending_new_method_spec.pop("model", None)
                     )
                     pc_layout.addRow("Model", p_txt_model)
 

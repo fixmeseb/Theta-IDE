@@ -8,7 +8,10 @@ The loader resolves those strings to actual classes at runtime.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import logging
 from typing import Any, Type
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Component registry
@@ -50,9 +53,10 @@ def get_component(name: str | None) -> Type[Any] | None:
         _auto_discover_components()
         _discovered = True
     if name not in _COMPONENT_REGISTRY:
-        raise KeyError(
-            f"Component '{name}' is not registered. Registered components: {sorted(_COMPONENT_REGISTRY.keys())}"
-        )
+        msg = f"Component '{name}' is not registered. Registered components: {sorted(_COMPONENT_REGISTRY.keys())}."
+        if not _COMPONENT_REGISTRY:
+            msg += " No components could be registered; ensure the project backend virtual environment (venv/) is active and dependencies (e.g. lightning, torch) are installed."
+        raise KeyError(msg)
     return _COMPONENT_REGISTRY[name]
 
 
@@ -74,8 +78,8 @@ def _auto_discover_components():
                 continue
             try:
                 importlib.import_module(f"src.app.core.paradigm_impls.{sub}.{module_info.name}")
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Failed to auto-discover paradigm implementation %s.%s: %s", sub, module_info.name, e)
 
     # Dynamically discover user data modules, evaluators, and components in src/usr/
     usr_dir = Path(__file__).resolve().parents[2] / "usr"
@@ -90,8 +94,8 @@ def _auto_discover_components():
                 rel = mod_path.relative_to(usr_dir.parent)
                 mod_name = ".".join(rel.with_suffix("").parts)
                 importlib.import_module(mod_name)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug("Failed to auto-discover user component %s: %s", mod_name, e)
 
     # Discover components declared via pyproject.toml entry-points
     try:

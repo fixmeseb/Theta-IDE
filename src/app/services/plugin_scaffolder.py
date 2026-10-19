@@ -617,6 +617,17 @@ class {class_name}(L.LightningDataModule, DataModulePluginProtocol, TrajectorySa
         init_file.write_text(f"from . import {name}_data_module  # noqa: F401\n", encoding="utf-8")
         created.append(init_file)
 
+        # 3. Base config in in/config/data/<name>.yaml
+        cfg_file = self.workspace_root / "in" / "config" / "data" / f"{name}.yaml"
+        cfg_file.parent.mkdir(parents=True, exist_ok=True)
+        cfg_yaml = f"""# Default configuration for {name}
+data_module: {name}
+batch_size: 64
+num_workers: 0
+"""
+        cfg_file.write_text(cfg_yaml, encoding="utf-8")
+        created.append(cfg_file)
+
         meta_file = target_dir / ".theta_component.json"
         meta = {
             "id": name,
@@ -627,6 +638,7 @@ class {class_name}(L.LightningDataModule, DataModulePluginProtocol, TrajectorySa
             "author": {"name": opts.author},
             "created_at": datetime.now(timezone.utc).isoformat(),
             "target_path": f"src/usr/data/{name}",
+            "config_path": f"in/config/data/{name}.yaml",
             "compatibility": {"theta": ">=2.0.0"},
             "paradigms": paradigms,
         }
@@ -652,8 +664,10 @@ class {class_name}(L.LightningDataModule, DataModulePluginProtocol, TrajectorySa
         code_content = f'''"""Custom evaluator adhering to EvaluationHookProtocol."""
 from typing import Any, Dict, List
 from src.app.core.protocols import EvaluationHookProtocol
+from src.app.core.eval_registry import register_evaluator
 
 
+@register_evaluator("{name}")
 class {class_name}(EvaluationHookProtocol):
     """Evaluates agent safety, verification bounds, or saliency attributions."""
 
@@ -683,6 +697,17 @@ class {class_name}(EvaluationHookProtocol):
         init_file.write_text(f"from . import {name}_evaluator  # noqa: F401\n", encoding="utf-8")
         created.append(init_file)
 
+        # 3. Base config in in/config/eval/<name>.yaml
+        cfg_file = self.workspace_root / "in" / "config" / "eval" / f"{name}.yaml"
+        cfg_file.parent.mkdir(parents=True, exist_ok=True)
+        cfg_yaml = f"""# Default configuration for {name}
+evaluator: {name}
+enabled: true
+frequency: 1
+"""
+        cfg_file.write_text(cfg_yaml, encoding="utf-8")
+        created.append(cfg_file)
+
         meta_file = target_dir / ".theta_component.json"
         meta = {
             "id": name,
@@ -693,6 +718,7 @@ class {class_name}(EvaluationHookProtocol):
             "author": {"name": opts.author},
             "created_at": datetime.now(timezone.utc).isoformat(),
             "target_path": f"src/usr/eval/{name}",
+            "config_path": f"in/config/eval/{name}.yaml",
             "compatibility": {"theta": ">=2.0.0"},
             "paradigms": paradigms,
         }

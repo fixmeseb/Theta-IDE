@@ -4,9 +4,10 @@ defaults:
 - override /env: atari/pong
 methods:
   test:
-    model: myfourthmlp
-    agent: ppo
+    model: basics/dnn
+    agent: sb3/ppo
     hidden_sizes:
-    - 64
-    - 64
+    - 4
+    - 4
 total_timesteps: 10000
+description: sweet
