@@ -44,11 +44,7 @@ def parse_package_name(requirement: str) -> Tuple[str, str]:
         return cleaned, cleaned.replace("-", "_")
 
     pkg_name = match.group(1).lower()
-    extras = match.group(2)
-    if pkg_name == "gymnasium" and extras and "atari" in extras.lower():
-        mod_name = "ale_py"
-    else:
-        mod_name = PACKAGE_TO_MODULE_MAP.get(pkg_name, pkg_name.replace("-", "_"))
+    mod_name = PACKAGE_TO_MODULE_MAP.get(pkg_name, pkg_name.replace("-", "_"))
     return pkg_name, mod_name
 
 
@@ -68,9 +64,11 @@ def check_missing_dependencies(requirements: List[str]) -> List[str]:
         req_clean = req.strip()
         if not req_clean or req_clean.startswith("#"):
             continue
-        _, mod_name = parse_package_name(req_clean)
+        pkg_name, mod_name = parse_package_name(req_clean)
         if not is_module_installed(mod_name):
             missing.append(req_clean)
+        elif "[atari]" in req_clean.lower() and not is_module_installed("ale_py"):
+            missing.append("ale-py>=0.8.1")
     return missing
 
 

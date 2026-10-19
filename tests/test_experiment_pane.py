@@ -928,7 +928,7 @@ class TestExperimentPaneWindowIntegration(unittest.TestCase):
         top_texts = [self.window.config_tree.tree.topLevelItem(i).text(0) for i in range(self.window.config_tree.tree.topLevelItemCount())]
         self.assertFalse(any(t == "experiment" for t in top_texts))
         self.assertFalse(any(t in ("agent", "env", "model", "paradigms", "site") for t in top_texts))
-        self.assertTrue(any(t in ("cartpole", "mimic") for t in top_texts))
+        self.assertTrue(any(t in ("thetaide", "tabular_classification", "cartpole", "mimic") for t in top_texts))
 
     def test_components_pane_integrated_in_window(self):
         self.assertIsNotNone(self.window.components_panel)

@@ -49,7 +49,7 @@ def test_experiment_exporter_export_group():
     ws = Path(__file__).resolve().parent.parent
     exporter = ExperimentExporter(workspace_root=ws)
 
-    # Export mimic group
+    # Export tabular_classification group
     opts = ExportOptions(
         include_checkpoints=False,
         include_environment=True,
@@ -61,22 +61,22 @@ def test_experiment_exporter_export_group():
         author="Theta Team",
         version="1.0.0",
     )
-    res = exporter.export_group("mimic", options=opts)
-    assert res.success, f"Failed to export mimic group: {res.error}"
+    res = exporter.export_group("tabular_classification", options=opts)
+    assert res.success, f"Failed to export tabular_classification group: {res.error}"
     assert res.archive_path is not None and res.archive_path.is_file()
     assert res.manifest is not None
-    assert res.manifest["id"] == "mimic"
+    assert res.manifest["id"] == "tabular_classification"
     assert res.manifest["kind"] == "experiment"
-    assert "in/config/experiment/mimic/_base.yaml" in res.manifest["config_paths"]
-    assert "in/config/experiment/mimic/all_mimic.yaml" in res.manifest["config_paths"]
+    assert "in/config/experiment/tabular_classification/_base.yaml" in res.manifest["config_paths"]
+    assert "in/config/experiment/tabular_classification/quick_test.yaml" in res.manifest["config_paths"]
 
     # Clean up exported test zip
     if res.archive_path.exists():
         res.archive_path.unlink()
 
 
-def test_experiment_exporter_export_pyrenees_group():
-    """Test exporting pyrenees experiment group."""
+def test_experiment_exporter_export_thetaide_group():
+    """Test exporting thetaide experiment group."""
     ws = Path(__file__).resolve().parent.parent
     exporter = ExperimentExporter(workspace_root=ws)
 
@@ -89,11 +89,12 @@ def test_experiment_exporter_export_pyrenees_group():
         include_all_group_experiments=True,
         version="1.0.0",
     )
-    res = exporter.export_group("pyrenees", options=opts)
-    assert res.success, f"Failed to export pyrenees group: {res.error}"
-    assert res.manifest["id"] == "pyrenees"
+    res = exporter.export_group("thetaide", options=opts)
+    assert res.success, f"Failed to export thetaide group: {res.error}"
+    assert res.manifest["id"] == "thetaide"
     assert res.manifest["kind"] == "experiment"
-    assert "in/config/experiment/pyrenees/_base.yaml" in res.manifest["config_paths"]
+    assert "in/config/experiment/thetaide/_base.yaml" in res.manifest["config_paths"]
+    assert "in/config/experiment/thetaide/cartpole_ppo_reference.yaml" in res.manifest["config_paths"]
 
     if res.archive_path.exists():
         res.archive_path.unlink()
@@ -142,8 +143,13 @@ def test_experiment_plugin_mock_install_and_clean_uninstall(mock_isolated_worksp
     installer = HubInstaller(workspace_dir=ws, data_dir=ws / ".thetaide")
 
     dist_pkg = Path(__file__).resolve().parents[2] / "theta-plugins" / "dist" / "pyrenees-1.0.0.zip"
-    if not dist_pkg.is_file():
-        pytest.skip("pyrenees-1.0.0.zip dist package not built")
+    try:
+        if not dist_pkg.is_file():
+            pytest.skip("pyrenees-1.0.0.zip dist package not built")
+        with dist_pkg.open("rb"):
+            pass
+    except (OSError, PermissionError):
+        pytest.skip("pyrenees-1.0.0.zip dist package not accessible")
 
     # Load component definition from index
     data = json.loads(HUB_INDEX.read_text(encoding="utf-8"))

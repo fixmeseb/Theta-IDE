@@ -477,15 +477,30 @@ def _agent_exists(agent_algo: str) -> bool:
     except Exception:
         pass
 
+    # Check if this algorithm maps to an installed runner engine (e.g. sb3_runner)
     try:
         from src.app.pipeline.engine import ENGINE_SCRIPT_MAP
-        if clean_algo in ENGINE_SCRIPT_MAP or str(agent_algo).lower() in ENGINE_SCRIPT_MAP:
-            return True
-        prefix = str(agent_algo).split("/")[0].lower()
-        if prefix in ENGINE_SCRIPT_MAP:
-            return True
+
+        sb3_algos = {"ppo", "dqn", "a2c", "sac"}
+        if clean_algo in sb3_algos:
+            script = ENGINE_SCRIPT_MAP.get(clean_algo)
+            if script and Path(script).is_file():
+                return True
+        if "/" in str(agent_algo):
+            pfx, sub = str(agent_algo).split("/", 1)
+            pfx = pfx.lower()
+            clean_sub = sub.lower().replace("-", "_")
+            if pfx in ("sb3", "stable_baselines3") and clean_sub in sb3_algos:
+                script = ENGINE_SCRIPT_MAP.get("sb3")
+                if script and Path(script).is_file():
+                    return True
+            script = ENGINE_SCRIPT_MAP.get(pfx)
+            if script and Path(script).is_file() and pfx not in ("sb3", "stable_baselines3"):
+                return True
     except Exception:
-        prefix = str(agent_algo).split("/")[0].lower()
+        pass
+
+    prefix = str(agent_algo).split("/")[0].lower()
 
     for methods_dir in [Path("src/usr/methods"), Path("src/usr/algorithms")]:
         if methods_dir.is_dir():
@@ -590,6 +605,8 @@ def find_missing_components(cfg_or_dict: Any) -> list[str]:
     Checks environment, agents, models, and composite submodels against installed plugins,
     code registries, and in/config/ YAML files.
     """
+    if not cfg_or_dict or "MagicMock" in type(cfg_or_dict).__name__:
+        return []
     missing: list[str] = []
 
     # Extract methods

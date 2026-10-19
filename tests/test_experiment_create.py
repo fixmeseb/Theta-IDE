@@ -33,11 +33,11 @@ class TestGroupDiscovery(unittest.TestCase):
 
     def test_group_reads_paradigm_from_base(self):
         self.assertEqual(self.tree.group("thetaide").paradigm, "online_rl")
-        self.assertEqual(self.tree.group("mimic").paradigm, "offline_rl")
+        self.assertEqual(self.tree.group("tabular_classification").paradigm, "supervised")
 
     def test_group_reads_env_override_from_base(self):
         self.assertEqual(self.tree.group("thetaide").env, "cartpole")
-        self.assertEqual(self.tree.group("mimic").env, "mimic")
+        self.assertEqual(self.tree.group("tabular_classification").env, "breast_cancer")
 
     def test_group_with_base_is_flagged(self):
         self.assertTrue(self.tree.group("thetaide").has_base)
@@ -81,12 +81,11 @@ class TestGroupBaseYaml(unittest.TestCase):
         self.assertNotIn("eval_episodes", data)
 
     def test_generated_base_matches_the_shape_of_an_existing_offline_base(self):
-        """mimic/_base.yaml is the reference for what an offline base must pin."""
-        existing = parse((self.tree.config_root / "experiment" / "mimic" / "_base.yaml").read_text())
-        generated = parse(group_base_yaml("mimic", "offline_rl", self.tree.paradigms["offline_rl"]))
-        self.assertEqual(generated["eval_episodes"], existing["eval_episodes"])
+        """An offline base must pin eval_episodes to 0 and omit intervals_count."""
+        generated = parse(group_base_yaml("offline_test", "offline_rl", self.tree.paradigms["offline_rl"]))
+        self.assertEqual(generated["eval_episodes"], 0)
         self.assertNotIn("intervals_count", generated)
-        self.assertNotIn("intervals_count", existing)
+        self.assertEqual(generated["paradigm"], "offline_rl")
 
     def test_is_a_global_package(self):
         self.assertTrue(group_base_yaml("mimic", "offline_rl").startswith("# @package _global_"))
@@ -439,7 +438,7 @@ class TestParadigmInheritance(unittest.TestCase):
         self.assertLess(declared, len(self.tree.experiments) / 2)
 
     def test_group_supplies_the_paradigm_the_experiment_omits(self):
-        for name, expected in (("mimic", "offline_rl"), ("cartpole", "online_rl")):
+        for name, expected in (("tabular_classification", "supervised"), ("thetaide", "online_rl")):
             for experiment in self.tree.experiments_in(name):
                 if "paradigm" not in experiment.raw:
                     self.assertEqual(self.tree.group(name).paradigm, expected)

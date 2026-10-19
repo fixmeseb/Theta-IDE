@@ -1625,11 +1625,58 @@ class Window(QMainWindow):
                 if item_clean:
                     missing.append(item_clean)
 
+        ct = getattr(self, "config_tree", None)
+        tree = getattr(ct, "tree_model", None) if ct is not None else None
+
         # 2. Check from current viewer or experiment file
         data = None
         viewer = getattr(self, "config_viewer", None)
-        if viewer and getattr(viewer, "raw_data", None):
+        if viewer and getattr(viewer, "raw_data", None) and isinstance(viewer.raw_data, dict):
             data = viewer.raw_data
+            if tree is not None:
+                env_val = getattr(viewer, "_get_explicit_env", lambda: None)() or getattr(viewer, "_get_base_env", lambda: None)()
+                if env_val and hasattr(tree, "environments"):
+                    env_exists = (
+                        env_val in tree.environments
+                        or any(getattr(e, "name", None) == env_val for e in tree.environments.values())
+                        or (getattr(tree, "config_root", Path("in/config")) / "env" / f"{env_val}.yaml").is_file()
+                    )
+                    if not env_exists:
+                        missing.append(f"environment: {env_val}")
+
+                methods = data.get("methods", {})
+                if isinstance(methods, dict):
+                    for m_name, m_spec in methods.items():
+                        if not isinstance(m_spec, dict):
+                            continue
+                        ag = m_spec.get("agent")
+                        if isinstance(ag, dict):
+                            ag = ag.get("algorithm") or ag.get("name")
+                        if ag and hasattr(tree, "agents"):
+                            ag_str = str(ag)
+                            ag_exists = (
+                                ag_str in tree.agents
+                                or any(getattr(a, "name", None) == ag_str or getattr(a, "algorithm", None) == ag_str for a in tree.agents.values())
+                                or (getattr(tree, "config_root", Path("in/config")) / "agent" / f"{ag_str}.yaml").is_file()
+                            )
+                            if not ag_exists:
+                                missing.append(f"agent: {ag_str}")
+
+                        mo = m_spec.get("model")
+                        if isinstance(mo, dict):
+                            mo = next(iter(mo)) if mo else None
+                        if mo and hasattr(tree, "models"):
+                            mo_str = str(mo)
+                            mo_stem = mo_str.split("/")[-1]
+                            mo_exists = (
+                                mo_str in tree.models
+                                or mo_stem in tree.models
+                                or (getattr(tree, "config_root", Path("in/config")) / "model" / f"{mo_str}.yaml").is_file()
+                                or (getattr(tree, "config_root", Path("in/config")) / "model" / "basics" / f"{mo_stem}.yaml").is_file()
+                            )
+                            if not mo_exists:
+                                missing.append(f"model: {mo_str}")
+
         if not data and hasattr(self, "active_config_path") and self.active_config_path:
             try:
                 import yaml
@@ -1659,7 +1706,9 @@ class Window(QMainWindow):
     def update_launch_state(self):
         idle = self.active is None
         has_experiment = bool(getattr(self, "current_experiment", None))
-        missing_components = self.check_missing_components() if has_experiment else []
+        missing_components = Window.check_missing_components(self) if has_experiment else []
+        if not isinstance(missing_components, list):
+            missing_components = []
         ready = idle and self.compose_valid and has_experiment and not missing_components
         for button in launch_buttons(self):  # the experiment tree's and the Queue tab's
             button.setEnabled(ready)

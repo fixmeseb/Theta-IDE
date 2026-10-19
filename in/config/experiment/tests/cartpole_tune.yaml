@@ -1,6 +1,6 @@
 # @package _global_
 defaults:
-  - cartpole/_base
+  - thetaide/_base
 
 total_timesteps: 640
 eval_episodes: 2

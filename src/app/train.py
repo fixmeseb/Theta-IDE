@@ -68,8 +68,11 @@ def main(cfg: DictConfig):
     # === OS ENVIRON BRIDGE PATTERN ===
     # We copy certain Hydra config values into os.environ to pass them down to nested components
     # (like gym environments or legacy hooks) that cannot easily receive the `cfg` object directly.
-    # While some components have been refactored to read from `cfg`, others still rely on this.
-    if "env" in cfg and "reward_type" in cfg.env:
+    if "env" in cfg and hasattr(cfg.env, "get") and cfg.env.get("reward_type"):
+        os.environ["REWARD_TYPE"] = str(cfg.env.reward_type)
+        env_name = str(cfg.env.get("name", getattr(cfg.env, "id", "env"))).upper()
+        os.environ[f"{env_name}_REWARD_TYPE"] = str(cfg.env.reward_type)
+        # Retain for backward compatibility with external plugins
         os.environ["MIMIC_REWARD_TYPE"] = str(cfg.env.reward_type)
 
     paradigm_name = cfg.get("paradigm", "online_rl")
@@ -145,10 +148,8 @@ def main(cfg: DictConfig):
                 SupervisedModelCls = TabularClassifierLightningModule
             else:
                 try:
-                    from src.usr.eval.early_prediction.lightning_module import EPSepsisLightningModule
-
-                    SupervisedModelCls = EPSepsisLightningModule
-                except ImportError:
+                    SupervisedModelCls = get_component(arch_name)
+                except KeyError:
                     from src.app.core.paradigm_impls.base.tabular import TabularClassifierLightningModule
 
                     SupervisedModelCls = TabularClassifierLightningModule

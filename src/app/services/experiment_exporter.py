@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import zipfile
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -123,7 +124,7 @@ class ExperimentExporter:
 
             # 6. Evaluators
             if opts.include_evaluators:
-                self._trace_evaluators(group, env_name, files_to_pack)
+                self._trace_evaluators(group, env_name, files_to_pack, raw_cfg=raw_cfg)
 
             # 7. Plotters
             if opts.include_plotters:
@@ -131,10 +132,10 @@ class ExperimentExporter:
 
             # 8. Data modules
             if opts.include_data_modules:
-                self._trace_data_modules(group, env_name, files_to_pack)
+                self._trace_data_modules(group, env_name, files_to_pack, raw_cfg=raw_cfg)
 
             # 9. Workflows
-            self._trace_workflows(group, files_to_pack)
+            self._trace_workflows(group, files_to_pack, raw_cfg=raw_cfg)
 
             # 10. Checkpoints (optional)
             if opts.include_checkpoints:
@@ -325,15 +326,24 @@ class ExperimentExporter:
                     rel = p.relative_to(self.workspace_root).as_posix()
                     files_to_pack[rel] = p
 
-    def _trace_evaluators(self, group: str, env_name: str | None, files_to_pack: Dict[str, Path]) -> None:
+    def _trace_evaluators(
+        self,
+        group: str,
+        env_name: str | None,
+        files_to_pack: Dict[str, Path],
+        raw_cfg: Dict[str, Any] | None = None,
+    ) -> None:
         """Trace evaluator implementations and YAML configurations."""
         candidates = {group}
         if env_name:
             candidates.add(env_name)
-        if group == "mimic" or env_name == "mimic":
-            candidates.update(["early_prediction", "reward_shaping"])
-        elif group == "pyrenees" or env_name == "pyrenees":
-            candidates.add("pyrenees_evaluator")
+        if raw_cfg:
+            for k in ("evaluator", "evaluators"):
+                v = raw_cfg.get(k)
+                if isinstance(v, str):
+                    candidates.add(v)
+                elif isinstance(v, (list, tuple)):
+                    candidates.update(str(x) for x in v if x)
 
         for name in candidates:
             eval_dir = self.workspace_root / "src" / "usr" / "eval" / name
@@ -376,13 +386,28 @@ class ExperimentExporter:
                 for p in sorted(pcfg_dir.rglob("*.yaml")):
                     files_to_pack[p.relative_to(self.workspace_root).as_posix()] = p
 
-    def _trace_data_modules(self, group: str, env_name: str | None, files_to_pack: Dict[str, Path]) -> None:
+    def _trace_data_modules(
+        self,
+        group: str,
+        env_name: str | None,
+        files_to_pack: Dict[str, Path],
+        raw_cfg: Dict[str, Any] | None = None,
+    ) -> None:
         """Trace data modules and configurations."""
         candidates = {group}
         if env_name:
             candidates.add(env_name)
-        if group == "mimic" or env_name == "mimic":
-            candidates.add("clinical_timeseries")
+        if raw_cfg:
+            for k in ("data_module", "datamodule", "data"):
+                v = raw_cfg.get(k)
+                if isinstance(v, str):
+                    candidates.add(v)
+                    candidates.add(re.sub(r'(?<!^)(?=[A-Z])', '_', v).lower())
+                elif isinstance(v, (list, tuple)):
+                    for item in v:
+                        if isinstance(item, str):
+                            candidates.add(item)
+                            candidates.add(re.sub(r'(?<!^)(?=[A-Z])', '_', item).lower())
 
         for name in candidates:
             data_dir = self.workspace_root / "src" / "usr" / "data" / name
@@ -403,13 +428,24 @@ class ExperimentExporter:
             if dcfg_file.is_file():
                 files_to_pack[dcfg_file.relative_to(self.workspace_root).as_posix()] = dcfg_file
 
-    def _trace_workflows(self, group: str, files_to_pack: Dict[str, Path]) -> None:
+    def _trace_workflows(
+        self,
+        group: str,
+        files_to_pack: Dict[str, Path],
+        raw_cfg: Dict[str, Any] | None = None,
+    ) -> None:
         """Trace any associated DAG workflows in in/config/workflow/."""
         wf_dir = self.workspace_root / "in" / "config" / "workflow"
-        if wf_dir.is_dir():
-            for p in sorted(wf_dir.glob("*.yaml")):
-                if group in p.stem or (group == "mimic" and "sepsis" in p.stem):
-                    files_to_pack[p.relative_to(self.workspace_root).as_posix()] = p
+        if not wf_dir.is_dir():
+            return
+        workflow_names = set()
+        if raw_cfg and raw_cfg.get("workflow"):
+            workflow_names.add(str(raw_cfg["workflow"]))
+
+        for p in sorted(wf_dir.glob("*.yaml")):
+            if group in p.stem or p.stem in workflow_names:
+                files_to_pack[p.relative_to(self.workspace_root).as_posix()] = p
+
 
     def _trace_all_group_experiments(self, group: str, files_to_pack: Dict[str, Path]) -> None:
         """Trace all experiment recipe YAML files in the group directory."""
@@ -442,6 +478,9 @@ class ExperimentExporter:
         agents_found: Set[str] = set()
         models_found: Set[str] = set()
         paradigms_found: Set[str] = set()
+        workflows_found: Set[str] = set()
+        data_modules_found: Set[str] = set()
+        evaluators_found: Set[str] = set()
         env_name: str | None = None
 
         for exp_yaml in sorted(group_dir.rglob("*.yaml")):
@@ -451,6 +490,12 @@ class ExperimentExporter:
                     env_name = self._resolve_env_name(cfg, group)
                 if "paradigm" in cfg and cfg["paradigm"]:
                     paradigms_found.add(str(cfg["paradigm"]))
+                if "workflow" in cfg and cfg["workflow"]:
+                    workflows_found.add(str(cfg["workflow"]))
+                if "data_module" in cfg and cfg["data_module"]:
+                    data_modules_found.add(str(cfg["data_module"]))
+                if "evaluator" in cfg and cfg["evaluator"]:
+                    evaluators_found.add(str(cfg["evaluator"]))
                 self._trace_methods_and_models(
                     cfg, files_to_pack, agents_found, models_found, include_models=opts.include_models
                 )
@@ -468,15 +513,23 @@ class ExperimentExporter:
             self._trace_rules(env_name, files_to_pack)
 
         if opts.include_evaluators:
-            self._trace_evaluators(group, env_name, files_to_pack)
+            self._trace_evaluators(
+                group, env_name, files_to_pack, raw_cfg={"evaluators": list(evaluators_found)}
+            )
 
         if opts.include_plotters:
             self._trace_plotters(group, env_name, files_to_pack)
 
         if opts.include_data_modules:
-            self._trace_data_modules(group, env_name, files_to_pack)
+            self._trace_data_modules(
+                group, env_name, files_to_pack, raw_cfg={"data": list(data_modules_found)}
+            )
 
-        self._trace_workflows(group, files_to_pack)
+        self._trace_workflows(
+            group,
+            files_to_pack,
+            raw_cfg={"workflow": list(workflows_found)[0] if workflows_found else None},
+        )
 
         # 4. Output archive path
         output_path = opts.output_path

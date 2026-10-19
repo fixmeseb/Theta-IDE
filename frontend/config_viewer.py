@@ -4307,7 +4307,8 @@ class ConfigViewer(QWidget):
         elif block_name == "env":
             self.raw_data["env"] = {"num_envs": 4, "num_steps": 128}
         elif block_name == "dataset":
-            self.raw_data["dataset_path"] = "in/datasets/mimic"
+            env_name = self.env_selection() or self._get_explicit_env() or self._inherited_env() or self._group_name() or "dataset"
+            self.raw_data["dataset_path"] = f"in/datasets/{env_name}"
         elif block_name == "sweeper":
             exp_stem = self.current_path.stem if self.current_path else "sweep"
             self.raw_data.setdefault("hydra", {})["sweeper"] = {
