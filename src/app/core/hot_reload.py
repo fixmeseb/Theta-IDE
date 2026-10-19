@@ -4,6 +4,7 @@ Allows researchers to modify model layers, loss functions, environment step logi
 or data modules on disk and reload them live into the running process without
 restarting Theta-IDE.
 """
+
 from __future__ import annotations
 
 import importlib
@@ -26,8 +27,7 @@ def reload_component_modules(target_prefix: str | None = None) -> List[str]:
     """
     prefixes = (target_prefix,) if target_prefix else ("src.usr.", "in.envs.")
     candidates = [
-        name for name, mod in list(sys.modules.items())
-        if mod is not None and any(name.startswith(p) for p in prefixes)
+        name for name, mod in list(sys.modules.items()) if mod is not None and any(name.startswith(p) for p in prefixes)
     ]
 
     reloaded: List[str] = []
@@ -48,6 +48,7 @@ def reload_component_modules(target_prefix: str | None = None) -> List[str]:
     # Refresh entry points and dynamic registries
     try:
         from src.app.core.plugin_discovery import load_all_plugins
+
         load_all_plugins(force_reload=True)
     except Exception as exc:
         log.warning("Error refreshing entry points during hot-reload: %s", exc)

@@ -1,4 +1,5 @@
 """Legacy backward-compatibility forwarding module for src.usr.methods -> src.usr.algorithms."""
+
 import sys
 
 import src.usr.algorithms as algorithms

@@ -190,5 +190,9 @@ class PeriodicCheckpointCallback(L.Callback):
         for lg in trainer.loggers:
             if isinstance(lg, ThetaLogger):
                 lg.run.artifact(path, kind="checkpoint", transitions=transitions)
-                lg.run.event("checkpoint", f"Saved {Path(path).name} at {transitions:,} transitions",
-                             path=path, transitions=transitions)
+                lg.run.event(
+                    "checkpoint",
+                    f"Saved {Path(path).name} at {transitions:,} transitions",
+                    path=path,
+                    transitions=transitions,
+                )

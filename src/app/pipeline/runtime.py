@@ -79,7 +79,6 @@ def get_shell_env_block(site_cfg=None) -> str:
     else:
         lines = ['export PROJECT_ROOT="${PROJECT_ROOT:-${SLURM_SUBMIT_DIR:-$(pwd)}}"']
 
-
     # Module loads (safe initialization for non-interactive Slurm subshells)
     mod_list = getattr(site_cfg, "module_loads", []) or []
     if mod_list:

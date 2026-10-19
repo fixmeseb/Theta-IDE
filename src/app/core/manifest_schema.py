@@ -1,4 +1,5 @@
 """Formal JSON Schema definition and validator for .theta_component.json manifests."""
+
 from __future__ import annotations
 
 import json
@@ -127,6 +128,7 @@ def validate_manifest_data(data: Dict[str, Any]) -> Tuple[bool, str | None]:
     # Try standard jsonschema library first
     try:
         import jsonschema
+
         try:
             jsonschema.validate(instance=data, schema=COMPONENT_MANIFEST_SCHEMA)
             return True, None
@@ -144,7 +146,10 @@ def validate_manifest_data(data: Dict[str, Any]) -> Tuple[bool, str | None]:
 
     comp_id = str(data["id"])
     if not ID_REGEX.match(comp_id):
-        return False, f"Invalid 'id': '{comp_id}'. Must contain alphanumeric characters, underscores, dashes, or slashes."
+        return (
+            False,
+            f"Invalid 'id': '{comp_id}'. Must contain alphanumeric characters, underscores, dashes, or slashes.",
+        )
 
     kind = str(data["kind"]).lower()
     if kind not in VALID_KINDS:

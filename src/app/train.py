@@ -141,13 +141,16 @@ def main(cfg: DictConfig):
         if SupervisedModelCls is None:
             if "classif" in arch_name or "mlp" in arch_name:
                 from src.app.core.paradigm_impls.base.tabular import TabularClassifierLightningModule
+
                 SupervisedModelCls = TabularClassifierLightningModule
             else:
                 try:
                     from src.usr.eval.early_prediction.lightning_module import EPSepsisLightningModule
+
                     SupervisedModelCls = EPSepsisLightningModule
                 except ImportError:
                     from src.app.core.paradigm_impls.base.tabular import TabularClassifierLightningModule
+
                     SupervisedModelCls = TabularClassifierLightningModule
 
         kwargs = {}

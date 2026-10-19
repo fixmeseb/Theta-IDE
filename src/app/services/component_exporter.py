@@ -4,6 +4,7 @@ Packages models, algorithms/agents, environments, datamodules, and evaluators in
 self-contained, installable Theta Hub component packages (.zip) or standalone
 directories ready for GitHub distribution.
 """
+
 from __future__ import annotations
 
 import json
@@ -25,6 +26,7 @@ log = logging.getLogger(__name__)
 @dataclass
 class ComponentExportOptions:
     """Configuration options for exporting a Theta component plugin."""
+
     export_format: str = "zip"  # "zip" or "folder"
     output_path: Path | None = None
     version: str = "1.0.0"
@@ -38,6 +40,7 @@ class ComponentExportOptions:
 @dataclass
 class ComponentExportResult:
     """Result of a component export operation."""
+
     success: bool
     export_path: Path | None = None
     manifest: Dict[str, Any] | None = None
@@ -210,7 +213,7 @@ class ComponentExporter:
         # Check candidate locations under in/config/
         target_str = str(target).replace("\\", "/").strip()
         if target_str.startswith("in/config/"):
-            target_str = target_str[len("in/config/"):]
+            target_str = target_str[len("in/config/") :]
         if not target_str.endswith((".yaml", ".yml")):
             target_str_yaml = f"{target_str}.yaml"
         else:
@@ -301,7 +304,9 @@ class ComponentExporter:
         manifest["name"] = existing_meta.get("name") or comp_name
         manifest["kind"] = existing_meta.get("kind") or kind
         manifest["version"] = options.version
-        manifest["description"] = options.description or existing_meta.get("description") or f"{comp_name} component for Theta-IDE"
+        manifest["description"] = (
+            options.description or existing_meta.get("description") or f"{comp_name} component for Theta-IDE"
+        )
         author_val = options.author or existing_meta.get("author") or "Theta Researcher"
         manifest["author"] = {"name": author_val} if isinstance(author_val, str) else author_val
         manifest["created_at"] = datetime.now(timezone.utc).isoformat()
@@ -383,39 +388,49 @@ class ComponentExporter:
         ]
 
         if kind == "model":
-            lines.extend([
-                "methods:",
-                "  my_run:",
-                "    agent: ppo",
-                f"    model: {comp_id}",
-            ])
+            lines.extend(
+                [
+                    "methods:",
+                    "  my_run:",
+                    "    agent: ppo",
+                    f"    model: {comp_id}",
+                ]
+            )
         elif kind == "agent":
-            lines.extend([
-                "methods:",
-                "  my_run:",
-                f"    agent: {comp_id}",
-                "    model: dnn",
-            ])
+            lines.extend(
+                [
+                    "methods:",
+                    "  my_run:",
+                    f"    agent: {comp_id}",
+                    "    model: dnn",
+                ]
+            )
         elif kind == "env":
-            lines.extend([
-                f"env: {comp_id}",
-                "methods:",
-                "  my_run:",
-                "    agent: ppo",
-            ])
+            lines.extend(
+                [
+                    f"env: {comp_id}",
+                    "methods:",
+                    "  my_run:",
+                    "    agent: ppo",
+                ]
+            )
         else:
-            lines.extend([
-                f"{kind}: {comp_id}",
-            ])
+            lines.extend(
+                [
+                    f"{kind}: {comp_id}",
+                ]
+            )
 
-        lines.extend([
-            "```",
-            "",
-            "Run using the Theta execution engine:",
-            "```bash",
-            "python run_pipeline.py <group>/<experiment_name>",
-            "```",
-        ])
+        lines.extend(
+            [
+                "```",
+                "",
+                "Run using the Theta execution engine:",
+                "```bash",
+                "python run_pipeline.py <group>/<experiment_name>",
+                "```",
+            ]
+        )
         return "\n".join(lines) + "\n"
 
     def _export_to_zip(
@@ -514,7 +529,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "theta-component-{comp_id}"
 version = "{options.version}"
-description = "{manifest.get('description', '')}"
+description = "{manifest.get("description", "")}"
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [
@@ -522,7 +537,7 @@ dependencies = [
 ]
 
 [project.entry-points."theta.components"]
-{comp_id} = "{manifest.get('target_path', '').replace('/', '.')}:{manifest.get('name', comp_id)}"
+{comp_id} = "{manifest.get("target_path", "").replace("/", ".")}:{manifest.get("name", comp_id)}"
 """
                 pyproject_file.write_text(pyproject_content, encoding="utf-8")
                 files_copied.append("pyproject.toml")

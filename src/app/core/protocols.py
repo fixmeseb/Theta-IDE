@@ -116,9 +116,7 @@ class AuxiliaryLossProtocol(Protocol):
 class OptimizerGroupsProtocol(Protocol):
     """Protocol for models requiring custom PyTorch optimizer parameter groups."""
 
-    def configure_optimizer_groups(
-        self, base_lr: float, weight_decay: float, cfg: Any = None
-    ) -> list[dict[str, Any]]:
+    def configure_optimizer_groups(self, base_lr: float, weight_decay: float, cfg: Any = None) -> list[dict[str, Any]]:
         """Return custom parameter group dictionaries with individual learning rates."""
         ...
 
@@ -205,9 +203,7 @@ class DataModulePluginProtocol(Protocol):
 class TrajectorySamplerProtocol(Protocol):
     """Protocol for trajectory sequence and window samplers (e.g. Decision Transformers, RNNs)."""
 
-    def sample_trajectory_window(
-        self, batch_size: int, context_len: int
-    ) -> dict[str, torch.Tensor]:
+    def sample_trajectory_window(self, batch_size: int, context_len: int) -> dict[str, torch.Tensor]:
         """Return a batch of variable- or fixed-length trajectory slices."""
         ...
 
@@ -318,4 +314,3 @@ class StandardModelActorCriticWrapper(nn.Module):
             return self.backbone.get_action_probs(obs)
         logits = self.backbone(obs.float().reshape(obs.shape[0], -1))
         return torch.softmax(logits, dim=-1)
-

@@ -4,6 +4,7 @@ Packages experiment configurations, base templates, environment hooks/valuations
 domain rules, custom model architectures, and optional checkpoint weights into a
 self-contained, installable Theta Hub component package (.zip).
 """
+
 from __future__ import annotations
 
 import json
@@ -24,6 +25,7 @@ log = logging.getLogger(__name__)
 @dataclass
 class ExportOptions:
     """Configuration options for exporting an experiment or experiment group plugin."""
+
     include_checkpoints: bool = False
     include_environment: bool = True
     include_models: bool = True
@@ -41,6 +43,7 @@ class ExportOptions:
 @dataclass
 class ExportResult:
     """Result of an experiment export operation."""
+
     success: bool
     archive_path: Path | None = None
     manifest: Dict[str, Any] | None = None
@@ -161,6 +164,7 @@ class ExperimentExporter:
 
             # Validate manifest against formal JSON schema
             from src.app.core.manifest_schema import validate_manifest_data
+
             is_valid, schema_err = validate_manifest_data(manifest)
             if not is_valid:
                 return ExportResult(
@@ -211,7 +215,7 @@ class ExperimentExporter:
         else:
             s = str(target).strip()
             if s.startswith("in/config/experiment/"):
-                s = s[len("in/config/experiment/"):]
+                s = s[len("in/config/experiment/") :]
             rel = Path(s)
 
         parts = rel.parts
@@ -497,6 +501,7 @@ class ExperimentExporter:
         )
 
         from src.app.core.manifest_schema import validate_manifest_data
+
         is_valid, schema_err = validate_manifest_data(manifest)
         if not is_valid:
             return ExportResult(
@@ -522,7 +527,6 @@ class ExperimentExporter:
             manifest=manifest,
             files_included=file_list,
         )
-
 
     def _trace_methods_and_models(
         self,
@@ -621,7 +625,8 @@ class ExperimentExporter:
             "name": f"{group.replace('_', ' ').title()} Experiment Suite" if is_group_bundle else f"{group}/{exp_name}",
             "kind": "experiment",
             "version": options.version,
-            "description": options.description or f"Complete {group} experiment suite: recipes, group defaults, environment hooks, evaluators, and plotters.",
+            "description": options.description
+            or f"Complete {group} experiment suite: recipes, group defaults, environment hooks, evaluators, and plotters.",
             "author": {"name": options.author},
             "created_at": datetime.now(timezone.utc).isoformat(),
             "target_path": f"in/config/experiment/{group}",
@@ -630,9 +635,7 @@ class ExperimentExporter:
             "environment": env_name,
             "agents": agents,
             "models": models,
-            "dependencies": {
-                "components": ["thetalib"]
-            },
+            "dependencies": {"components": ["thetalib"]},
             "package_contents": files,
         }
         if not is_group_bundle:

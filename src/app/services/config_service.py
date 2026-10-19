@@ -82,6 +82,7 @@ def clear_compose_cache() -> None:
     with _COMPOSE_CACHE_LOCK:
         _COMPOSE_CACHE.clear()
 
+
 # The GUI composes GUI_BASE_EXPERIMENT plus one override per field; defaults are read from the
 # composed config rather than duplicated in the GUI.
 GUI_BASE_EXPERIMENT = "thetaide/_base"
@@ -202,8 +203,12 @@ def config_schema() -> dict[str, Any]:
     return {
         "base_experiment": composed.experiment,
         "environment": {
-            "name": getattr(composed.cfg.env, "name", None) if hasattr(composed.cfg, "env") and composed.cfg.env else None,
-            "env_id": composed.cfg.env.get("env_id") if hasattr(composed.cfg, "env") and composed.cfg.env and hasattr(composed.cfg.env, "get") else None,
+            "name": getattr(composed.cfg.env, "name", None)
+            if hasattr(composed.cfg, "env") and composed.cfg.env
+            else None,
+            "env_id": composed.cfg.env.get("env_id")
+            if hasattr(composed.cfg, "env") and composed.cfg.env and hasattr(composed.cfg.env, "get")
+            else None,
         },
         "fixed_overrides": [
             f"++{method_prefix}.agent={GUI_METHOD['agent']}",
