@@ -13,6 +13,7 @@ classes; letting them reach the model would make the run supervised.
 
 from __future__ import annotations
 
+import inspect
 import logging
 from pathlib import Path
 from typing import Any
@@ -180,6 +181,32 @@ class SupervisedNpzDataModule(TabularNpzDataModule):
         return DataLoader(TensorDataset(x, y), batch_size=batch_size, shuffle=shuffle)
 
 
+def _architecture_kwargs(arch: Any, kwargs: dict[str, Any]) -> dict[str, Any]:
+    """The subset of *kwargs* the architecture's constructor can actually take.
+
+    This used to be a fixed allowlist of the four parameters MLPClassifier
+    accepts, which silently dropped anything else. A config-authored
+    architecture declares parameters no hand-written classifier has (`layers`,
+    `input_shape`), and dropping them left the model to fail far from the
+    cause, so the signature decides instead. Mirrors model_registry's own
+    _safe_instantiate.
+    """
+    target = arch.__init__ if isinstance(arch, type) else arch
+    try:
+        params = inspect.signature(target).parameters
+    except (TypeError, ValueError):
+        return {}
+
+    takes_anything = any(p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values())
+    return {
+        k: v
+        for k, v in kwargs.items()
+        # input_dim is passed positionally by the caller; forwarding it here too
+        # would be a duplicate keyword argument.
+        if v is not None and k != "input_dim" and (takes_anything or k in params)
+    }
+
+
 @register_component("TabularClassifierLightningModule")
 class TabularClassifierLightningModule(L.LightningModule):
     """Trains a registered classifier architecture on labelled data.
@@ -214,10 +241,17 @@ class TabularClassifierLightningModule(L.LightningModule):
                 f"Registered classifiers: {sorted(k for k in MODEL_REGISTRY if 'classif' in k)}"
             )
 
-        accepted = ("hidden_sizes", "dropout", "n_classes", "activation")
-        arch_kwargs = {k: kwargs[k] for k in accepted if k in kwargs and kwargs[k] is not None}
+        arch_kwargs = _architecture_kwargs(arch, kwargs)
         self.n_classes = int(arch_kwargs.get("n_classes", 1))
         self.model = arch(input_dim=input_dim, **arch_kwargs)
+
+        # A config-authored stack declares its own output width, so trust that
+        # over the n_classes default. Otherwise a three-wide head would be
+        # trained against BCEWithLogitsLoss, which runs without complaint and
+        # scores nonsense.
+        declared = getattr(self.model, "out_shape", None)
+        if "n_classes" not in arch_kwargs and isinstance(declared, tuple) and len(declared) == 1:
+            self.n_classes = int(declared[0])
 
         if self.n_classes > 1:
             self.loss_fn: nn.Module = nn.CrossEntropyLoss()
