@@ -1,6 +1,7 @@
 defaults:
   - optional agent: ppo
   - optional model: dnn
+  - optional env: null
   - site: local
   - optional workflow: null
   - _self_

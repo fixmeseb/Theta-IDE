@@ -184,6 +184,9 @@ class TestSettingsViewAndAboutIntegration(unittest.TestCase):
 
     def tearDown(self):
         self.window.close()
+        self.window.deleteLater()
+        if HAS_PYQT6 and QApplication.instance():
+            QApplication.instance().processEvents()
         self.temp_dir.cleanup()
 
     def test_animation_settings_button_on_splash(self):
@@ -199,3 +202,5 @@ class TestSettingsViewAndAboutIntegration(unittest.TestCase):
         self.assertEqual(about.anim_btn.text(), "Animation Settings")
         about.close()
         about.deleteLater()
+        if HAS_PYQT6 and QApplication.instance():
+            QApplication.instance().processEvents()

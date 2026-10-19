@@ -31,8 +31,28 @@ except ImportError:
 @unittest.skipIf(not HAS_PYQT6, "PyQt6 not installed in current environment")
 class TestUIAdjustments(unittest.TestCase):
     def setUp(self):
+        from frontend.config_model import ConfigTree
+        from frontend.config_viewer import set_config_tree
+
         self.temp_dir = tempfile.TemporaryDirectory()
         self.tmp_root = Path(self.temp_dir.name)
+
+        config_dir = self.tmp_root / "config"
+        agent_dir = config_dir / "agent"
+        agent_dir.mkdir(parents=True, exist_ok=True)
+        (agent_dir / "ppo.yaml").write_text("algorithm: ppo\nlr: 0.0003\nclip_range: 0.2\n", encoding="utf-8")
+
+        model_dir = config_dir / "model"
+        model_dir.mkdir(parents=True, exist_ok=True)
+        (model_dir / "dnn.yaml").write_text("architecture: dnn\nhidden_sizes: [64, 64]\nactivation: relu\n", encoding="utf-8")
+
+        paradigm_dir = config_dir / "paradigms"
+        paradigm_dir.mkdir(parents=True, exist_ok=True)
+        (paradigm_dir / "online_rl.yaml").write_text("allowed_agents: [ppo]\n", encoding="utf-8")
+
+        self.mock_tree = ConfigTree(config_dir)
+        set_config_tree(self.mock_tree)
+
         self.exp_file = self.tmp_root / "test_exp.yaml"
         self.exp_file.write_text(
             "experiment_id: test_exp\n"
@@ -50,6 +70,8 @@ class TestUIAdjustments(unittest.TestCase):
         self.viewer.load_file(self.exp_file, "experiment/cartpole/test_exp.yaml")
 
     def tearDown(self):
+        from frontend.config_viewer import invalidate_config_tree
+        invalidate_config_tree()
         self.viewer.close()
         self.temp_dir.cleanup()
 
@@ -256,7 +278,21 @@ class TestUIAdjustments(unittest.TestCase):
     def test_blendrl_param_adder_fixed_next_to_model(self):
         """Add blendrl parameter button stays anchored next to Model: blendrl when params are added or removed."""
         from PyQt6.QtWidgets import QFormLayout, QHBoxLayout
-        from frontend.config_viewer import IndentedHierarchyBlock
+        from frontend.config_viewer import IndentedHierarchyBlock, set_config_tree
+        from frontend.config_model import ConfigTree
+
+        config_dir = self.tmp_root / "config"
+        model_dir = config_dir / "model"
+        model_dir.mkdir(parents=True, exist_ok=True)
+        (model_dir / "blendrl.yaml").write_text(
+            "architecture: blendrl\n"
+            "slots: [neural]\n"
+            "blend_q_values: false\n"
+            "neural:\n"
+            "  type: dnn\n",
+            encoding="utf-8"
+        )
+        set_config_tree(ConfigTree(config_dir))
 
         blend_file = self.tmp_root / "blend_exp.yaml"
         blend_file.write_text(

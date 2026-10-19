@@ -381,9 +381,6 @@ class MonitorPanel(QWidget):
         button.setText(f"System · CPU {hw['cpu_percent']:.0f}%")
         button.setToolTip("  •  ".join(parts) + "\nClick for CPU, memory and GPU memory over time")
 
-    def show_comparison(self, series):
-        """Overlay several runs' reward curves (the Results browser's multi-selection)."""
-        self.reward_chart.set_series(series)
 
     def render(self):
         host = self.host

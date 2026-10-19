@@ -105,10 +105,14 @@ def find_component_assets(
             kind = "model"
             candidate_dir = ws / "src" / "usr" / "models" / comp_id
             candidate_file = ws / "src" / "usr" / "models" / f"{comp_id}.py"
-        elif rel.startswith("agent/"):
-            kind = "agent"
-            candidate_dir = ws / "src" / "usr" / "methods" / comp_id
-            candidate_file = ws / "src" / "usr" / "methods" / f"{comp_id}.py"
+        elif rel.startswith("agent/") or rel.startswith("algorithm/"):
+            kind = "algorithm"
+            candidate_dir = ws / "src" / "usr" / "algorithms" / comp_id
+            if not candidate_dir.is_dir():
+                candidate_dir = ws / "src" / "usr" / "methods" / comp_id
+            candidate_file = ws / "src" / "usr" / "algorithms" / f"{comp_id}.py"
+            if not candidate_file.is_file():
+                candidate_file = ws / "src" / "usr" / "methods" / f"{comp_id}.py"
         elif rel.startswith("env/"):
             kind = "env"
             candidate_dir = ws / "in" / "envs" / comp_id
@@ -121,6 +125,10 @@ def find_component_assets(
         elif rel.startswith("eval/") or rel.startswith("evaluator/"):
             kind = "evaluator"
             candidate_dir = ws / "src" / "usr" / "eval" / comp_id
+        elif rel.startswith("plot/"):
+            kind = "plotter"
+            candidate_dir = ws / "plot" / comp_id
+            candidate_file = ws / "plot" / f"{comp_id}.py"
 
         if candidate_dir and candidate_dir.is_dir():
             code_dir = candidate_dir
@@ -159,6 +167,8 @@ def find_component_assets(
             code_dir / "env.py",
             code_dir / f"{comp_id}_evaluator.py",
             code_dir / f"{comp_id}_datamodule.py",
+            code_dir / f"{comp_id}_plotter.py",
+            code_dir / "plotter.py",
             code_dir / f"{comp_id}.py",
         ]
         for c in named_candidates:

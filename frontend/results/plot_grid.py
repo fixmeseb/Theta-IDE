@@ -160,6 +160,9 @@ class PlotGrid(QScrollArea):
             widget = self.grid.takeAt(0).widget()
             if widget is None:
                 continue
+            # Hide before detaching. Adding a widget to a layout queues a call that shows it; when the
+            # grid is laid out again before that call runs (a run's metrics arriving right after
+            # "Loading metrics…"), it would show the detached, parentless widget as its own window.
             widget.hide()
             widget.setParent(None)
             if id(widget) not in keep:
@@ -251,6 +254,11 @@ class PlotGrid(QScrollArea):
                 self._place(cell, row + i // per_row, (i % per_row) * span, 1, columns if alone else span)
             row += (len(cells) + per_row - 1) // per_row
         self.grid.setRowStretch(row, 1)
+
+    def _place(self, widget, row, column, row_span=1, column_span=1):
+        """Put `widget` in the grid and show it (set_metrics hid it, and a layout does not show a hidden widget)."""
+        self.grid.addWidget(widget, row, column, row_span, column_span)
+        widget.show()
 
     def charts(self) -> dict[str, Chart]:
         return {metric: card.chart for metric, card in self.cards.items()}

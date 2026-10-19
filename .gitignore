@@ -106,3 +106,8 @@ temp/
 !/src/usr/models/__init__.py
 !/src/usr/models/.gitkeep
 
+/docs
+in/config/experiment/csc510/cartpole_demo.yaml
+in/config/experiment/cartpole/quick_test.yaml
+in/config/experiment/csc510/cartpole_demo.yaml
+in/config/experiment/csc510/cartpole_demo.yaml

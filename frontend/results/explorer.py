@@ -1,18 +1,33 @@
-"""Run explorer: a checkable tree of group → experiment → agent → version."""
+"""Run explorer: a checkable tree of group → experiment → agent → version.
+
+It looks and behaves like the Experiment tab's tree, from the same code (frontend/tree_tools.py): the
+square reload / collapse all / expand all / search buttons (Esc closes the search), bold group headings
+with a rule under them, and folders for experiments. Groups are headings only; experiments, agents and
+versions are ticked.
+"""
 
 from __future__ import annotations
 
 from PyQt6.QtCore import Qt, pyqtSignal
-from PyQt6.QtWidgets import QLineEdit, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget
+from PyQt6.QtWidgets import QHBoxLayout, QLineEdit, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget
 
+from ..tree_tools import GroupItemDelegate, TreeHeaderActions, folder_icon, refresh_tool_icons, square_tool_button
 from .data import Manifest, Source
 
 _KIND, _DATA = Qt.ItemDataRole.UserRole, Qt.ItemDataRole.UserRole + 1
 _CHECKABLE = Qt.ItemFlag.ItemIsUserCheckable | Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable
 _PARENT = _CHECKABLE | Qt.ItemFlag.ItemIsAutoTristate
+_HEADING = Qt.ItemFlag.ItemIsEnabled  # a group: a heading, not ticked itself
 
 
-class RunExplorer(QWidget):
+class _RunGroupDelegate(GroupItemDelegate):
+    """The experiment tree's group heading look, for this tree's group rows."""
+
+    def is_group(self, index) -> bool:
+        return index.data(_KIND) == "group"
+
+
+class RunExplorer(TreeHeaderActions, QWidget):
     """Tick experiments, agents or versions; every ticked leaf is a series source.
 
     An agent is a leaf (its newest version) until its manifest shows more than one version;
@@ -21,23 +36,52 @@ class RunExplorer(QWidget):
 
     selection_changed = pyqtSignal(list)  # list[Source]
     manifest_wanted = pyqtSignal(str, str)  # group, experiment_id
+    refresh_requested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(6)
-        self.filter = QLineEdit()
-        self.filter.setPlaceholderText("Filter runs…")
-        self.filter.setClearButtonEnabled(True)
-        self.filter.textChanged.connect(self.apply_filter)
-        layout.addWidget(self.filter)
+        header = QHBoxLayout()
+        header.setContentsMargins(0, 0, 0, 0)
+        header.setSpacing(4)
+        self.btn_refresh = square_tool_button("reload", "Re-read results/ from disk")
+        self.btn_refresh.clicked.connect(self.refresh_requested)
+        self.btn_collapse = square_tool_button("collapse_all", "Collapse all groups")
+        self.btn_collapse.clicked.connect(self.collapse_all)
+        self.btn_expand = square_tool_button("expand_all", "Expand all groups and experiments")
+        self.btn_expand.clicked.connect(self.expand_all)
+        self.btn_search = square_tool_button("search", "Filter runs")
+        for button in (self.btn_refresh, self.btn_collapse, self.btn_expand, self.btn_search):
+            header.addWidget(button)
+        header.addStretch(1)
+        layout.addLayout(header)
+        self.search = QLineEdit()
+        self.search.setPlaceholderText("Filter runs…")
+        self.search.setClearButtonEnabled(True)
+        self.search.textChanged.connect(self.apply_filter)
+        layout.addWidget(self.search)
+        self.watch_search()  # hidden until the search button shows it, as in the Experiment tab
         self.tree = QTreeWidget()
+        self.tree.setItemDelegate(_RunGroupDelegate(self.tree))
         self.tree.setHeaderHidden(True)
+        self.tree.setIndentation(14)
         self.tree.itemChanged.connect(self._item_changed)
         self.tree.itemExpanded.connect(self._item_expanded)
+        self.tree.itemCollapsed.connect(self._item_collapsed)
         layout.addWidget(self.tree, 1)
+        self._collapsed_groups: set[str] = set()  # groups start expanded, as in the Experiment tab
         self._emitting = True
+
+    # ── Theme ────────────────────────────────────────────────────────────────
+
+    def refresh_icons(self):
+        """Re-render the header and folder icons in the current theme's colors."""
+        refresh_tool_icons(self)
+        for item in self._items():
+            if item.data(0, _KIND) == "experiment":
+                item.setIcon(0, folder_icon())
 
     # ── Building ─────────────────────────────────────────────────────────────
 
@@ -54,18 +98,20 @@ class RunExplorer(QWidget):
             if not agents:
                 continue
             if group not in groups:
-                groups[group] = self._item(self.tree.invisibleRootItem(), group, "group", group, _PARENT)
+                groups[group] = self._item(self.tree.invisibleRootItem(), group, "group", group, _HEADING)
             exp_item = self._item(groups[group], exp, "experiment", f"{group}/{exp}", _PARENT)
             exp_item.setToolTip(0, f"results/logs/{group}/{exp}")
+            exp_item.setIcon(0, folder_icon())
             for agent in agents:
                 self._item(exp_item, agent, "agent", Source(group, exp, agent), _CHECKABLE)
         for item in self._items():
-            if item.data(0, _DATA) in expanded:
+            group = item.data(0, _KIND) == "group"
+            if (group and item.data(0, _DATA) not in self._collapsed_groups) or item.data(0, _DATA) in expanded:
                 item.setExpanded(True)
         for item in self._leaves():
             if item.data(0, _DATA) in checked:
                 item.setCheckState(0, Qt.CheckState.Checked)
-        self.apply_filter(self.filter.text())
+        self.apply_filter(self.search.text())
         self._emitting = True
         self._emit()
 
@@ -100,7 +146,8 @@ class RunExplorer(QWidget):
         item.setData(0, _KIND, kind)
         item.setData(0, _DATA, data)
         item.setFlags(flags)
-        item.setCheckState(0, Qt.CheckState.Unchecked)
+        if flags & Qt.ItemFlag.ItemIsUserCheckable:  # a group heading has no checkbox
+            item.setCheckState(0, Qt.CheckState.Unchecked)
         return item
 
     # ── Reading ──────────────────────────────────────────────────────────────
@@ -138,7 +185,13 @@ class RunExplorer(QWidget):
             self.manifest_wanted.emit(source.group, source.experiment_id)
         self._emit()
 
+    def _item_collapsed(self, item):
+        if item.data(0, _KIND) == "group" and self._emitting:
+            self._collapsed_groups.add(item.data(0, _DATA))
+
     def _item_expanded(self, item):
+        if item.data(0, _KIND) == "group":
+            self._collapsed_groups.discard(item.data(0, _DATA))
         if item.data(0, _KIND) == "experiment":
             group, exp = item.data(0, _DATA).split("/", 1)
             self.manifest_wanted.emit(group, exp)

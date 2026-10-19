@@ -92,10 +92,10 @@ class TestEngineResolution:
 
     def test_known_engine_mapping(self):
         script_sb3, _ = resolve_engine(method_cfg={"engine": "sb3"})
-        assert script_sb3 == "src/usr/methods/sb3_runner.py"
+        assert script_sb3 == "src/usr/algorithms/sb3_runner.py"
 
         script_cleanrl, _ = resolve_engine(method_cfg={"engine": "cleanrl"})
-        assert script_cleanrl == "src/usr/methods/cleanrl_runner.py"
+        assert script_cleanrl == "src/usr/algorithms/cleanrl_runner.py"
 
         script_torch, _ = resolve_engine(method_cfg={"engine": "pytorch"})
         assert script_torch == DEFAULT_ENGINE_SCRIPT
@@ -108,7 +108,7 @@ class TestEngineResolution:
         py_bin.touch()
 
         script, resolved_py = resolve_engine(method_cfg={"engine": "sb3", "venv": str(fake_venv)})
-        assert script == "src/usr/methods/sb3_runner.py"
+        assert script == "src/usr/algorithms/sb3_runner.py"
         assert resolved_py == str(py_bin)
 
     def test_resolve_from_cfg_agent(self):
@@ -116,5 +116,5 @@ class TestEngineResolution:
             agent = {"engine": "sb3"}
 
         script, py_bin = resolve_engine(method_cfg={}, cfg=FakeCfg())
-        assert script == "src/usr/methods/sb3_runner.py"
+        assert script == "src/usr/algorithms/sb3_runner.py"
         assert py_bin is None

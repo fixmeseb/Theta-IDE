@@ -291,6 +291,14 @@ class BaseAgent(L.LightningModule, ABC):
         return None
 
 
+class OnlineAgentBase(BaseAgent):
+    """Base class for all online RL agents (PPO, etc.)."""
+
+    @classmethod
+    def get_supported_paradigms(cls) -> list[str]:
+        return ["online_rl"]
+
+
 class OfflineAgentBase(BaseAgent):
     """Base class for all offline RL agents (IQL, CQL, CEW, and their BlendRL variants).
 
@@ -299,6 +307,10 @@ class OfflineAgentBase(BaseAgent):
         - Interval-based dataset limit management (on_train_epoch_start)
         - Common offline training epoch tracking
     """
+
+    @classmethod
+    def get_supported_paradigms(cls) -> list[str]:
+        return ["offline_rl"]
 
     def on_train_start(self):
         """Preload datasets to agent device on training start."""

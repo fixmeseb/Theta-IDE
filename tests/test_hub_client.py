@@ -111,7 +111,7 @@ class TestHubClientAndInstaller(unittest.TestCase):
         env_comp = HubComponent(id="my_env", name="E", kind="env", version="1.0")
 
         self.assertEqual(installer.resolve_target_dir(plugin_comp), self.data_dir / "plugins" / "my_plugin")
-        self.assertEqual(installer.resolve_target_dir(method_comp), self.workspace_dir / "src" / "usr" / "methods" / "my_method")
+        self.assertEqual(installer.resolve_target_dir(method_comp), self.workspace_dir / "src" / "usr" / "algorithms" / "my_method")
         self.assertEqual(installer.resolve_target_dir(model_comp), self.workspace_dir / "src" / "usr" / "models" / "my_model")
         self.assertEqual(installer.resolve_target_dir(env_comp), self.workspace_dir / "in" / "envs" / "my_env")
 
@@ -153,7 +153,7 @@ class TestHubClientAndInstaller(unittest.TestCase):
         self.assertTrue(success)
 
         # Verify files on disk
-        dest = self.workspace_dir / "src" / "usr" / "methods" / "sample-rl-agent"
+        dest = self.workspace_dir / "src" / "usr" / "algorithms" / "sample-rl-agent"
         deployed_cfg = self.workspace_dir / "in" / "config" / "agent" / "sample-rl-agent.yaml"
         self.assertTrue((dest / "main.py").exists())
         self.assertTrue((dest / "config.yaml").exists())
@@ -201,11 +201,15 @@ class TestHubClientAndInstaller(unittest.TestCase):
 
     def test_hub_dialog_ui_initialization(self):
         """HubDialog builds UI and filter pills cleanly."""
-        dialog = HubDialog(self.client)
+        dialog = HubDialog(self.client, mode="components")
         self.assertEqual(dialog.windowTitle(), "Theta Community Hub")
-        self.assertIn("plugin", dialog.pills)
         self.assertIn("method", dialog.pills)
         dialog.close()
+
+        plugins_dialog = HubDialog(self.client, mode="plugins")
+        self.assertEqual(plugins_dialog.windowTitle(), "Theta Community Plugins")
+        self.assertIn("plugin", plugins_dialog.pills)
+        plugins_dialog.close()
 
     def test_hub_component_card_button_colors_and_state(self):
         """HubComponentCard displays green Install and red Uninstall buttons and transitions cleanly."""
@@ -245,4 +249,166 @@ class TestHubClientAndInstaller(unittest.TestCase):
         card.update_action_state()
         self.assertEqual(card.btn_action.text(), "Install")
         self.assertIn(theme_color("primary"), card.btn_action.styleSheet())  # Install follows the theme
+
+    def test_thetalib_suite_filtering_and_dialog_display(self):
+        """Verify thetalib subcomponents are hidden from search and dialog, while thetalib shows as a plugin."""
+        thetalib = HubComponent.from_dict({
+            "id": "thetalib",
+            "name": "ThetaLib Core Foundation Suite",
+            "kind": "suite",
+            "version": "1.0.0",
+            "description": "Core foundation",
+            "provides": ["standard-figures", "image-data", "replay-buffer", "tabular-data"],
+        })
+        std_fig = HubComponent.from_dict({
+            "id": "standard-figures",
+            "name": "Standard Figures",
+            "kind": "plotter",
+            "version": "1.0.0",
+            "suite": "thetalib",
+            "hidden": True,
+        })
+        img_data = HubComponent.from_dict({
+            "id": "image-data",
+            "name": "Image Data",
+            "kind": "datamodule",
+            "version": "1.0.0",
+            "suite": "thetalib",
+            "hidden": True,
+        })
+        plugin_comp = HubComponent.from_dict({
+            "id": "obsidian-notes",
+            "name": "Obsidian Notes",
+            "kind": "plugin",
+            "version": "0.1.0",
+        })
+
+        self.client.components = [thetalib, std_fig, img_data, plugin_comp]
+
+        # 1. Search with include_internal=False (default)
+        results = self.client.search()
+        result_ids = [c.id for c in results]
+        self.assertIn("thetalib", result_ids)
+        self.assertIn("obsidian-notes", result_ids)
+        self.assertNotIn("standard-figures", result_ids)
+        self.assertNotIn("image-data", result_ids)
+
+        # 2. Search with include_internal=True
+        all_results = self.client.search(include_internal=True)
+        all_ids = [c.id for c in all_results]
+        self.assertIn("standard-figures", all_ids)
+        self.assertIn("image-data", all_ids)
+
+        # 3. HubDialog filtering for plugins mode
+        plugin_dialog = HubDialog(self.client, mode="plugins")
+        self.assertTrue(plugin_dialog._matches_mode(thetalib))
+        self.assertTrue(plugin_dialog._matches_mode(plugin_comp))
+        self.assertFalse(plugin_dialog._matches_mode(std_fig))
+        self.assertFalse(plugin_dialog._matches_mode(img_data))
+        plugin_dialog.close()
+
+        # 4. HubDialog filtering for components mode
+        comp_dialog = HubDialog(self.client, mode="components")
+        self.assertTrue(comp_dialog._matches_mode(thetalib))
+        self.assertFalse(comp_dialog._matches_mode(plugin_comp))
+        self.assertFalse(comp_dialog._matches_mode(std_fig))
+        self.assertFalse(comp_dialog._matches_mode(img_data))
+        comp_dialog.close()
+
+    def test_thetalib_unified_installation_and_clean_uninstall(self):
+        """Verify thetalib installs root-relative files and subcomponent detection works, and uninstalls cleanly."""
+        zip_path = self.temp_dir / "thetalib-1.0.0.zip"
+        with ZipFile(zip_path, "w") as zf:
+            zf.writestr(".theta_component.json", json.dumps({
+                "id": "thetalib",
+                "name": "ThetaLib Core Foundation Suite",
+                "kind": "suite",
+                "version": "1.0.0",
+                "provides": ["standard-figures", "image-data", "replay-buffer", "tabular-data"],
+                "installed_dirs": [
+                    "plot/standard_figures",
+                    "src/usr/data/image_data",
+                ],
+                "config_paths": [
+                    "in/config/plot/thetalib/convergence.yaml",
+                    "in/config/data/thetalib/image_data.yaml",
+                ]
+            }))
+            zf.writestr("plot/standard_figures/__init__.py", "")
+            zf.writestr("plot/standard_figures/convergence.py", "# Convergence plotter")
+            zf.writestr("src/usr/data/image_data/__init__.py", "")
+            zf.writestr("src/usr/data/image_data/image_data.py", "# Image data module")
+            zf.writestr("in/config/plot/thetalib/convergence.yaml", "title: Convergence\n")
+            zf.writestr("in/config/data/thetalib/image_data.yaml", "batch_size: 64\n")
+
+        sha256_hash = hashlib.sha256(zip_path.read_bytes()).hexdigest()
+
+        thetalib_comp = HubComponent(
+            id="thetalib",
+            name="ThetaLib Core Foundation Suite",
+            kind="suite",
+            version="1.0.0",
+            extra={
+                "provides": ["standard-figures", "image-data", "replay-buffer", "tabular-data"],
+                "installed_dirs": ["plot/standard_figures", "src/usr/data/image_data"],
+                "config_paths": ["in/config/plot/thetalib/convergence.yaml", "in/config/data/thetalib/image_data.yaml"],
+            },
+            releases={
+                "1.0.0": ReleaseInfo(
+                    tag="v1.0.0",
+                    url=f"file://{zip_path.resolve()}",
+                    sha256=sha256_hash,
+                )
+            }
+        )
+
+        installer = self.client.installer
+        is_installed, _ = installer.check_installed(thetalib_comp)
+        self.assertFalse(is_installed)
+
+        # Install thetalib
+        success = installer.install(thetalib_comp, "1.0.0")
+        self.assertTrue(success)
+
+        # Verify files deployed
+        conv_py = self.workspace_dir / "plot" / "standard_figures" / "convergence.py"
+        img_py = self.workspace_dir / "src" / "usr" / "data" / "image_data" / "image_data.py"
+        conv_cfg = self.workspace_dir / "in" / "config" / "plot" / "thetalib" / "convergence.yaml"
+        img_cfg = self.workspace_dir / "in" / "config" / "data" / "thetalib" / "image_data.yaml"
+
+        self.assertTrue(conv_py.exists())
+        self.assertTrue(img_py.exists())
+        self.assertTrue(conv_cfg.exists())
+        self.assertTrue(img_cfg.exists())
+
+        # Check installed status
+        is_installed, ver = installer.check_installed(thetalib_comp)
+        self.assertTrue(is_installed)
+        self.assertEqual(ver, "1.0.0")
+
+        # Constituent component lookup and check_installed
+        std_fig_comp = HubComponent(id="standard-figures", name="Standard Figures", kind="plotter", version="1.0.0")
+        sub_installed, sub_ver = installer.check_installed(std_fig_comp)
+        self.assertTrue(sub_installed)
+        self.assertEqual(sub_ver, "1.0.0")
+
+        # Uninstall thetalib
+        uninstalled = installer.uninstall(thetalib_comp)
+        self.assertTrue(uninstalled)
+
+        # Verify all files cleaned up
+        self.assertFalse(conv_py.exists())
+        self.assertFalse(img_py.exists())
+        self.assertFalse(conv_cfg.exists())
+        self.assertFalse(img_cfg.exists())
+
+        # Verify empty dirs pruned
+        self.assertFalse((self.workspace_dir / "plot" / "standard_figures").exists())
+        self.assertFalse((self.workspace_dir / "src" / "usr" / "data" / "image_data").exists())
+        self.assertFalse((self.workspace_dir / "in" / "config" / "plot" / "thetalib").exists())
+        self.assertFalse((self.workspace_dir / "in" / "config" / "data" / "thetalib").exists())
+
+        is_installed, _ = installer.check_installed(thetalib_comp)
+        self.assertFalse(is_installed)
+
 

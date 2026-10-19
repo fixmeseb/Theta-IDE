@@ -640,10 +640,10 @@ class MyPlugin(Plugin):
     <td><code>PluginManager</code> scans <code>plugin.json</code></td>
   </tr>
   <tr>
-    <td><b><code>method</code></b></td>
-    <td><code>src/usr/methods/&lt;id&gt;/</code></td>
+    <td><b><code>algorithm</code></b></td>
+    <td><code>src/usr/algorithms/&lt;id&gt;/</code></td>
     <td><code>in/config/agent/&lt;id&gt;.yaml</code></td>
-    <td><code>@register_agent("&lt;prefix&gt;")</code> from <code>src/usr/methods/agent_registry.py</code></td>
+    <td><code>@register_algorithm("&lt;prefix&gt;")</code> from <code>src/usr/algorithms/agent_registry.py</code></td>
   </tr>
   <tr>
     <td><b><code>model</code></b></td>
@@ -735,16 +735,16 @@ class MyToolPlugin(Plugin):
 └── plugin.json       # Optional component metadata</code></pre>
 
 <div style="background-color: rgba(254, 128, 25, 0.12); border-left: 4px solid #fe8019; padding: 10px 14px; margin: 12px 0; border-radius: 4px;">
-  <b>Crucial Rule:</b> The directory <i>must</i> contain an <code>__init__.py</code> file. Theta-IDE's agent registry uses <code>pkgutil.iter_modules()</code> to auto-discover modules in <code>src/usr/methods/</code>. Without <code>__init__.py</code>, the subdirectory will not be imported!
+  <b>Crucial Rule:</b> The directory <i>must</i> contain an <code>__init__.py</code> file. Theta-IDE's algorithm registry uses <code>pkgutil.iter_modules()</code> to auto-discover modules in <code>src/usr/algorithms/</code>. Without <code>__init__.py</code>, the subdirectory will not be imported!
 </div>
 
 <h4>Python Implementation (<code>agent.py</code>)</h4>
 <pre><code>import torch
-from src.usr.methods.base_agent import OfflineAgentBase  # or OnlineAgentBase
-from src.usr.methods.agent_registry import register_agent
+from src.usr.algorithms.base_agent import OfflineAgentBase  # or OnlineAgentBase
+from src.usr.algorithms.agent_registry import register_algorithm, register_agent
 
-@register_agent("my_cql", "my_cql_variant")
-class MyCQLAgent(OfflineAgentBase):
+@register_algorithm("my_algo", "my_algo_variant")
+class MyCustomAlgorithm(OfflineAgentBase):
     def __init__(self, obs_dim, n_actions, cfg=None, **kwargs):
         super().__init__()
         self.save_hyperparameters()
@@ -762,15 +762,15 @@ class MyCQLAgent(OfflineAgentBase):
         return torch.optim.Adam(self.parameters(), lr=self.hparams.get("lr", 3e-4))</code></pre>
 
 <h4>Export in <code>__init__.py</code></h4>
-<pre><code>from .agent import MyCQLAgent
+<pre><code>from .agent import MyCustomAlgorithm
 
-__all__ = ["MyCQLAgent"]</code></pre>
+__all__ = ["MyCustomAlgorithm"]</code></pre>
 
-<h4>Default Configuration (<code>my_method.yaml</code>)</h4>
-<p>Deployed automatically to <code>in/config/agent/my_method.yaml</code>:</p>
+<h4>Default Configuration (<code>my_algo.yaml</code>)</h4>
+<p>Deployed automatically to <code>in/config/agent/my_algo.yaml</code>:</p>
 <pre><code># @package _global_
 agent:
-  name: my_cql
+  name: my_algo
   lr: 3e-4
   cql_alpha: 5.0
   batch_size: 256

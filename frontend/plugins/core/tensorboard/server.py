@@ -120,6 +120,9 @@ class TensorBoardServer(QObject):
                 kill_process_tree(pid)
         except Exception:
             pass
-        if self.process is not None and self.process.state() != QProcess.ProcessState.NotRunning:
-            self.process.kill()
-            self.process.waitForFinished(2000)
+        if self.process is not None:
+            if self.process.state() != QProcess.ProcessState.NotRunning:
+                self.process.kill()
+                self.process.waitForFinished(2000)
+            if self.url is not None:
+                self._on_finished()

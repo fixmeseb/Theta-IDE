@@ -4,10 +4,11 @@ from __future__ import annotations
 import os
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 
-from PyQt6.QtCore import QProcess
+from PyQt6.QtCore import QCoreApplication, QProcess
 from PyQt6.QtWidgets import QApplication, QLabel, QPushButton, QWidget
 
 from frontend.app import Window
@@ -108,13 +109,27 @@ class TestPluginAuthoringAndTensorboard(unittest.TestCase):
         proc.start()
         self.assertTrue(proc.waitForStarted(2000))
         self.assertEqual(proc.state(), QProcess.ProcessState.Running)
+        pid = int(proc.processId())
+        self.assertGreater(pid, 0)
 
-        # Context cleanup must kill the process tree cleanly. Termination is
-        # asynchronous, so wait for it rather than reading the state straight
-        # after the call: under a loaded full suite it has not always landed yet.
+        # Context cleanup must kill the process tree cleanly.
         context.cleanup()
-        proc.waitForFinished(5000)
-        self.assertEqual(proc.state(), QProcess.ProcessState.NotRunning)
+        deadline = time.time() + 3.0
+        while time.time() < deadline and proc.state() != QProcess.ProcessState.NotRunning:
+            proc.waitForFinished(100)
+            QCoreApplication.processEvents()
+            time.sleep(0.02)
+
+        if proc.state() != QProcess.ProcessState.NotRunning:
+            import psutil
+            try:
+                p = psutil.Process(pid)
+                is_alive = p.is_running() and p.status() != psutil.STATUS_ZOMBIE
+            except (psutil.NoSuchProcess, psutil.AccessDenied):
+                is_alive = False
+            self.assertFalse(is_alive, f"PID {pid} should have been terminated")
+        else:
+            self.assertEqual(proc.state(), QProcess.ProcessState.NotRunning)
 
     def test_tensorboard_core_plugin_lifecycle(self):
         """TensorBoard plugin mounts tab, contributes footer button, registers command, and deactivates cleanly."""

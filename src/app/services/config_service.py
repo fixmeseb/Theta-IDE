@@ -131,9 +131,10 @@ def config_schema() -> dict[str, Any]:
     method_prefix = f"methods.{GUI_METHOD['name']}"
     return {
         "base_experiment": composed.experiment,
-        "paradigm": composed.cfg.get("paradigm"),
-        "environment": {"name": composed.cfg.env.name, "env_id": composed.cfg.env.get("env_id")},
-        "method": GUI_METHOD,
+        "environment": {
+            "name": getattr(composed.cfg.env, "name", None) if hasattr(composed.cfg, "env") and composed.cfg.env else None,
+            "env_id": composed.cfg.env.get("env_id") if hasattr(composed.cfg, "env") and composed.cfg.env and hasattr(composed.cfg.env, "get") else None,
+        },
         "fixed_overrides": [
             f"++{method_prefix}.agent={GUI_METHOD['agent']}",
             f"++{method_prefix}.model={GUI_METHOD['model']}",

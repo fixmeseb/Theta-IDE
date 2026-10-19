@@ -340,6 +340,13 @@ class HubView(QWidget):
 
     def _matches_mode(self, comp: HubComponent) -> bool:
         """Enforce strict separation between UI plugins and modular components."""
+        # Never display internal sub-components belonging to the thetalib foundation suite or experiment packages
+        if comp.is_thetalib_component or comp.is_grouped_component or comp.hidden:
+            return False
+
+        if comp.id == "thetalib":
+            return True
+
         if self.mode == "plugins":
             return comp.kind == "plugin"
         elif self.mode == "components":
@@ -418,10 +425,14 @@ class HubView(QWidget):
         if self.mode == "components":
             kind_options = [
                 ("all", "All Components"),
+                ("experiment", "Experiments"),
                 ("suite", "Suites"),  # Replaces Plugins tab with Suites tab
-                ("method", "RL Methods"),
+                ("method", "Algorithms"),
                 ("model", "Models"),
                 ("env", "Environments"),
+                ("data", "Data Loaders"),
+                ("eval", "Evaluators"),
+                ("plot", "Plotters"),
             ]
         elif self.mode == "plugins":
             kind_options = [
@@ -430,11 +441,15 @@ class HubView(QWidget):
         else:
             kind_options = [
                 ("all", "All"),
+                ("experiment", "Experiments"),
                 ("plugin", "Plugins"),
                 ("suite", "Suites"),
-                ("method", "RL Methods"),
+                ("method", "Algorithms"),
                 ("model", "Models"),
                 ("env", "Environments"),
+                ("data", "Data Loaders"),
+                ("eval", "Evaluators"),
+                ("plot", "Plotters"),
             ]
 
         for kind_id, label_text in kind_options:

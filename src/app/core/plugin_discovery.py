@@ -85,7 +85,7 @@ def load_all_plugins(force_reload: bool = False) -> Dict[str, Dict[str, Any]]:
             register_model(name)(model_cls)
 
     # 2. Register discovered agents / algorithms
-    from src.usr.methods.agent_registry import register_agent
+    from src.usr.algorithms.agent_registry import register_agent
     for name, agent_cls in results.get("agents", {}).items():
         if isinstance(agent_cls, type):
             register_agent(name)(agent_cls)

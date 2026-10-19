@@ -57,6 +57,60 @@ def mock_cfg_supervised():
 
 
 
+@pytest.fixture(autouse=True)
+def _register_test_agents():
+    """Register test agent components with declared supported paradigms."""
+    from src.usr.algorithms.agent_registry import AGENT_REGISTRY, register_agent
+    from src.usr.algorithms.base_agent import OfflineAgentBase, OnlineAgentBase
+
+    old_registry = AGENT_REGISTRY.copy()
+
+    @register_agent("ppo")
+    class MockPPO(OnlineAgentBase):
+        def get_action_and_value(self, obs, logic_obs=None, action=None):
+            pass
+
+        def get_value(self, obs, logic_obs=None):
+            pass
+
+    @register_agent("cql")
+    class MockCQL(OfflineAgentBase):
+        def get_action_and_value(self, obs, logic_obs=None, action=None):
+            pass
+
+        def get_value(self, obs, logic_obs=None):
+            pass
+
+    @register_agent("iql")
+    class MockIQL(OfflineAgentBase):
+        def get_action_and_value(self, obs, logic_obs=None, action=None):
+            pass
+
+        def get_value(self, obs, logic_obs=None):
+            pass
+
+    @register_agent("cew")
+    class MockCEW(OfflineAgentBase):
+        def get_action_and_value(self, obs, logic_obs=None, action=None):
+            pass
+
+        def get_value(self, obs, logic_obs=None):
+            pass
+
+    @register_agent("unsupported_algo")
+    class MockUnsupported(OfflineAgentBase):
+        def get_action_and_value(self, obs, logic_obs=None, action=None):
+            pass
+
+        def get_value(self, obs, logic_obs=None):
+            pass
+
+    yield
+
+    AGENT_REGISTRY.clear()
+    AGENT_REGISTRY.update(old_registry)
+
+
 @patch("src.app.pipeline.validation._load_raw_experiment_yaml", return_value={})
 def test_missing_paradigm(mock_yaml, mock_cfg_online):
     mock_cfg_online.__dict__.update({"paradigm": None})
@@ -148,7 +202,7 @@ def test_ppo_forbidden_in_offline_rl(mock_yaml, mock_cfg_offline):
     mock_cfg_offline.__dict__["methods"] = {
         "ppo_dnn": {"agent": "ppo", "model": "dnn"}
     }
-    with pytest.raises(ConfigurationError, match="forbidden in paradigm 'offline_rl'"):
+    with pytest.raises(ConfigurationError, match="(not allowed in paradigm 'offline_rl'|forbidden in paradigm 'offline_rl')"):
         validate_experiment_config(mock_cfg_offline, "test_exp")
 
 
@@ -158,7 +212,7 @@ def test_disallowed_agent_in_online_rl(mock_yaml, mock_cfg_online):
     mock_cfg_online.__dict__["methods"] = {
         "bad_method": {"agent": "unsupported_algo", "model": "dnn"}
     }
-    with pytest.raises(ConfigurationError, match="not allowed in paradigm 'online_rl'"):
+    with pytest.raises(ConfigurationError, match="(not allowed in paradigm 'online_rl'|forbidden in paradigm 'online_rl')"):
         validate_experiment_config(mock_cfg_online, "test_exp")
 
 
@@ -168,7 +222,7 @@ def test_cql_forbidden_in_online_rl(mock_yaml, mock_cfg_online):
     mock_cfg_online.__dict__["methods"] = {
         "cql_dnn": {"agent": "cql", "model": "dnn"}
     }
-    with pytest.raises(ConfigurationError, match="forbidden in paradigm 'online_rl'"):
+    with pytest.raises(ConfigurationError, match="(not allowed in paradigm 'online_rl'|forbidden in paradigm 'online_rl')"):
         validate_experiment_config(mock_cfg_online, "test_exp")
 
 
@@ -178,7 +232,7 @@ def test_iql_forbidden_in_online_rl(mock_yaml, mock_cfg_online):
     mock_cfg_online.__dict__["methods"] = {
         "iql_dnn": {"agent": "iql", "model": "dnn"}
     }
-    with pytest.raises(ConfigurationError, match="forbidden in paradigm 'online_rl'"):
+    with pytest.raises(ConfigurationError, match="(not allowed in paradigm 'online_rl'|forbidden in paradigm 'online_rl')"):
         validate_experiment_config(mock_cfg_online, "test_exp")
 
 
@@ -210,4 +264,19 @@ def test_offline_rl_method_missing_agent_raises(mock_yaml, mock_cfg_offline):
     }
     with pytest.raises(ConfigurationError, match="requires an agent harness"):
         validate_experiment_config(mock_cfg_offline, "test_exp")
+
+
+def test_agent_supported_paradigms_from_installed_manifest(tmp_path, monkeypatch):
+    """Component manifests (.theta_component.json) in methods directory define supported paradigms."""
+    import json
+    from src.app.pipeline.validation import _get_agent_supported_paradigms
+
+    method_dir = tmp_path / "src" / "usr" / "algorithms" / "custom_agent"
+    method_dir.mkdir(parents=True, exist_ok=True)
+    manifest = method_dir / ".theta_component.json"
+    manifest.write_text(json.dumps({"id": "custom_agent", "paradigms": ["offline_rl"]}), encoding="utf-8")
+
+    monkeypatch.chdir(tmp_path)
+    paradigms = _get_agent_supported_paradigms("custom_agent")
+    assert paradigms == ["offline_rl"]
 

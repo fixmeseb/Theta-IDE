@@ -39,13 +39,85 @@ from .config_model import add_method as add_method_to
 from .config_model import remove_method as remove_method_from
 from .sidetabs import svg_icon
 from .theme import theme_color
-from .widgets import ComboBox, DoubleSpinBox, SpinBox, label, SmoothScrollArea, ToggleSlider
+from .widgets import (
+    ComboBox, DoubleSpinBox, SpinBox, label, SmoothScrollArea, ToggleSlider,
+    TagCloudWidget, LayerStackWidget,
+)
+from src.app.services import PROJECT_ROOT
 
 # Forms stay readable on wide windows: the column of boxes stops growing past CONTENT_WIDTH,
 # and fields in label/field rows are capped by kind so a number doesn't get a 1,000px box.
 CONTENT_WIDTH = 960
 NUMBER_FIELD_WIDTH = 140
 TEXT_FIELD_WIDTH = 220
+
+CATEGORICAL_CHOICES = {
+    "activation": ["relu", "gelu", "tanh", "elu", "silu", "sigmoid", "leaky_relu", "identity"],
+    "activation_fn": ["relu", "gelu", "tanh", "elu", "silu", "sigmoid", "leaky_relu", "identity"],
+    "act_fn": ["relu", "gelu", "tanh", "elu", "silu", "sigmoid", "leaky_relu", "identity"],
+    "optimizer": ["adam", "adamw", "sgd", "rmsprop"],
+    "opt": ["adam", "adamw", "sgd", "rmsprop"],
+    "engine": ["sb3", "d3rlpy", "cleanrl", "custom"],
+    "runner": ["sb3", "d3rlpy", "cleanrl", "custom"],
+    "mode": ["min", "max"],
+    "direction": ["min", "max"],
+    "blender_mode": ["gate", "threshold", "hierarchical", "fixed"],
+    "blender": ["gate", "threshold", "hierarchical", "fixed"],
+}
+
+
+def _get_available_paradigms() -> list[str]:
+    """Return all paradigm names defined in in/config/paradigms/*.yaml."""
+    paradigms_dir = PROJECT_ROOT / "in" / "config" / "paradigms"
+    if paradigms_dir.is_dir():
+        names = [p.stem for p in paradigms_dir.glob("*.yaml") if not p.name.startswith(("_", "."))]
+        if names:
+            return sorted(names)
+    return ["online_rl", "offline_rl", "supervised", "unsupervised"]
+
+
+def _get_component_kind(rel_path: str) -> tuple[str, str]:
+    """Return (Category Display Name, Pill Accent Role)."""
+    p = (rel_path or "").lower()
+    if p.startswith("agent/"):
+        return ("Algorithm", "secondary")
+    elif p.startswith("env/"):
+        return ("Environment", "primary")
+    elif p.startswith("model/"):
+        return ("Model", "accent")
+    elif p.startswith("data/"):
+        return ("Data Loader", "number")
+    elif p.startswith("eval/"):
+        return ("Evaluator", "focus")
+    elif p.startswith(("plot/", "plots/")):
+        return ("Figure", "primary_hover")
+    elif p.startswith(("paradigms/", "paradigm/")):
+        return ("Paradigm", "accent")
+    elif p.startswith("site/"):
+        return ("Site Profile", "secondary")
+    elif p.startswith("workflow/"):
+        return ("Workflow", "primary")
+    elif p.startswith(("hydra/", "sweeper/")):
+        return ("Hydra / Sweeper", "muted")
+    parts = Path(rel_path).parts
+    return (parts[0].capitalize() if parts else "Component", "secondary")
+
+
+def _make_categorical_combo(key: str, current_val: Any, on_change) -> ComboBox:
+    combo = ComboBox()
+    options = list(CATEGORICAL_CHOICES.get(key.lower(), []))
+    str_val = str(current_val) if current_val is not None else ""
+    if str_val and str_val not in options:
+        options.insert(0, str_val)
+    for opt in options:
+        combo.addItem(opt)
+    if str_val in options:
+        combo.setCurrentText(str_val)
+    combo.setEditable(True)
+    combo.setMaximumWidth(TEXT_FIELD_WIDTH)
+    combo.currentTextChanged.connect(on_change)
+    return combo
+
 
 SUBTLE_ICON_COLORS = {
     (QIcon.Mode.Normal, QIcon.State.Off): "muted",
@@ -196,25 +268,6 @@ def get_agent_candidate_hyperparameters(
             if k not in ("algorithm", "name", "type") and k not in TRAINING_HYPERPARAMETERS:
                 if k not in current_keys and k not in candidates:
                     candidates.append(k)
-    fallbacks = {
-        "cql": ["cql_alpha", "soft_target_tau", "use_actor", "target_entropy", "cql_weight"],
-        "ppo": [
-            "clip_coef",
-            "clip_range",
-            "ent_coef",
-            "vf_coef",
-            "gae_lambda",
-            "num_steps",
-            "num_envs",
-            "update_epochs",
-            "max_grad_norm",
-            "target_kl",
-        ],
-        "iql": ["expectile", "temperature", "soft_target_tau"],
-    }
-    for k in fallbacks.get(agent_name, []):
-        if k not in current_keys and k not in candidates:
-            candidates.append(k)
     return candidates
 
 
@@ -234,14 +287,6 @@ def get_model_candidate_hyperparameters(
             if k not in ("architecture", "type", "lightning_module", "name", "slots"):
                 if k not in current_keys and k not in candidates:
                     candidates.append(k)
-    if not candidates:
-        if model_name == "dnn":
-            candidates = ["hidden_sizes", "activation"]
-        elif model_name == "dueling_resnet":
-            candidates = ["hidden_sizes"]
-        elif model_name in ("dense_autoencoder", "autoencoder"):
-            candidates = ["hidden_dim", "latent_dim", "dropout"]
-        candidates = [k for k in candidates if k not in current_keys]
     return candidates
 
 
@@ -397,6 +442,7 @@ FIXED_BOX_KEYS = frozenset(
         # the same setting twice.
         "hydra",
         "dataset_path",
+        "offline_datasets",
         "description",
         "eval_freq_steps",
         "eval_freq",
@@ -434,6 +480,13 @@ def invalidate_config_tree():
     global _CONFIG_TREE, _CONFIG_TREE_LOADED
     _CONFIG_TREE = None
     _CONFIG_TREE_LOADED = False
+
+
+def set_config_tree(tree: ConfigTree | None):
+    """Explicitly set or override the active ConfigTree (useful for tests and dependency injection)."""
+    global _CONFIG_TREE, _CONFIG_TREE_LOADED
+    _CONFIG_TREE = tree
+    _CONFIG_TREE_LOADED = True
 
 
 def config_tree(force_reload: bool = False):
@@ -1573,6 +1626,26 @@ class ConfigViewer(QWidget):
                 self.combo_env.setCurrentIndex(0)
             form_base.addWidget(self.combo_env, 0, 3)
 
+            form_base.addWidget(label("Data Module"), 1, 0)
+            self.combo_datamodule = ComboBox()
+            self.combo_datamodule.addItem("— Default for Paradigm —", None)
+            try:
+                from src.app.core.datamodule_registry import list_registered_datamodules
+                dm_names = sorted(set(name for name in list_registered_datamodules() if any(c.isupper() for c in name)))
+                self.combo_datamodule.addItems(dm_names)
+            except Exception:
+                pass
+            base_dm = data.get("data_module")
+            if isinstance(base_dm, dict):
+                base_dm_name = base_dm.get("name") or base_dm.get("class")
+            else:
+                base_dm_name = base_dm
+            if base_dm_name:
+                self.combo_datamodule.setCurrentText(str(base_dm_name))
+            else:
+                self.combo_datamodule.setCurrentIndex(0)
+            form_base.addWidget(self.combo_datamodule, 1, 1)
+
             def _on_base_p_changed(p_text):
                 val = None if p_text in ("", "— Select Paradigm —") else p_text
                 self.raw_data["paradigm"] = val
@@ -1583,11 +1656,21 @@ class ConfigViewer(QWidget):
                 val = None if e_text in ("", "— Select Environment —") else e_text
                 self._set_base_env(val)
 
+            def _on_base_dm_changed(dm_text):
+                val = None if dm_text in ("", "— Default for Paradigm —") else dm_text
+                if val is None:
+                    self.raw_data.pop("data_module", None)
+                else:
+                    self.raw_data["data_module"] = val
+                self._mark_dirty()
+
             self.combo_paradigm.currentTextChanged.connect(_on_base_p_changed)
             self.combo_env.currentTextChanged.connect(_on_base_e_changed)
+            self.combo_datamodule.currentTextChanged.connect(_on_base_dm_changed)
 
             self.field_widgets["paradigm"] = self.combo_paradigm
             self.field_widgets["env"] = self.combo_env
+            self.field_widgets["data_module"] = self.combo_datamodule
 
             box_base.add_layout(form_base)
             self.boxes_layout.addWidget(box_base)
@@ -2646,8 +2729,6 @@ class ConfigViewer(QWidget):
                         model_defs = dict(tree.model_parameters(model_name)) if tree else {}
                         model_keys_raw = set(model_defs.keys())
                         model_keys = model_keys_raw - {"architecture", "type", "lightning_module"}
-                        if model_name == "dnn":
-                            model_keys.update(["hidden_sizes", "activation"])
 
                         for mk in list(model_keys):
                             val = None
@@ -2728,12 +2809,7 @@ class ConfigViewer(QWidget):
                                 if mk not in model_keys_present:
                                     def_val = model_defs.get(mk)
                                     if def_val is None:
-                                        if mk == "hidden_sizes" and model_name == "dnn":
-                                            def_val = "[64, 64]"
-                                        elif mk == "activation" and model_name == "dnn":
-                                            def_val = "relu"
-                                        else:
-                                            continue
+                                        continue
                                     row_mp = QHBoxLayout()
                                     if isinstance(def_val, bool):
                                         cb_mp = ToggleSlider(checked=def_val)
@@ -3153,6 +3229,64 @@ class ConfigViewer(QWidget):
             box_tr.add_layout(grid_t)
             self.boxes_layout.addWidget(box_tr)
 
+        # --- MODULAR BOX: CHECKPOINT SETTINGS ---
+        has_checkpoint = "checkpoint" in data and isinstance(data["checkpoint"], dict)
+        show_checkpoint = has_checkpoint or (self.view_mode == "resolved" and "checkpoint" in resolved and isinstance(resolved["checkpoint"], dict))
+
+        if show_checkpoint:
+            box_ckpt = ConfigBox("Checkpoint Settings", "Model checkpointing and validation metric monitoring")
+            ckpt_header = QHBoxLayout()
+            ckpt_header.addStretch()
+            if has_checkpoint:
+                btn_rm_ckpt = _make_subtle_tool_button("trash", "Remove checkpoint overrides", size=24, icon_size=14)
+                btn_rm_ckpt.clicked.connect(lambda: self.remove_block("checkpoint"))
+                ckpt_header.addWidget(btn_rm_ckpt)
+            else:
+                ckpt_header.addWidget(label("(inherited defaults)", "muted"))
+            box_ckpt.add_layout(ckpt_header)
+
+            grid_c = QGridLayout()
+            grid_c.setVerticalSpacing(10)
+            grid_c.setHorizontalSpacing(16)
+            ckpt_source = data.get("checkpoint", {}) if has_checkpoint else resolved.get("checkpoint", {})
+            if not isinstance(ckpt_source, dict):
+                ckpt_source = {}
+
+            grid_c.addWidget(label("Monitor Metric"), 0, 0)
+            edit_mon = QLineEdit()
+            edit_mon.setMaximumWidth(NUMBER_FIELD_WIDTH)
+            edit_mon.setPlaceholderText("e.g. val/loss")
+            edit_mon.setText(str(ckpt_source.get("monitor") or ""))
+            edit_mon.textChanged.connect(lambda v: self._on_nested_edited("checkpoint", "monitor", v.strip() or None))
+            grid_c.addWidget(edit_mon, 0, 1)
+
+            grid_c.addWidget(label("Mode"), 0, 2)
+            combo_mode = ComboBox()
+            combo_mode.setMaximumWidth(NUMBER_FIELD_WIDTH)
+            combo_mode.addItems(["min", "max"])
+            combo_mode.setCurrentText(str(ckpt_source.get("mode") or "min"))
+            combo_mode.currentTextChanged.connect(lambda v: self._on_nested_edited("checkpoint", "mode", v))
+            grid_c.addWidget(combo_mode, 0, 3)
+
+            grid_c.addWidget(label("Save Top K"), 1, 0)
+            spin_topk = SpinBox()
+            spin_topk.setMaximumWidth(NUMBER_FIELD_WIDTH)
+            spin_topk.setRange(0, 50)
+            spin_topk.setValue(int(ckpt_source.get("save_top_k") if ckpt_source.get("save_top_k") is not None else 1))
+            spin_topk.valueChanged.connect(lambda v: self._on_nested_edited("checkpoint", "save_top_k", v))
+            grid_c.addWidget(spin_topk, 1, 1)
+
+            grid_c.addWidget(label("Every N Epochs"), 1, 2)
+            spin_every = SpinBox()
+            spin_every.setMaximumWidth(NUMBER_FIELD_WIDTH)
+            spin_every.setRange(1, 1000)
+            spin_every.setValue(int(ckpt_source.get("every_n_epochs") or 1))
+            spin_every.valueChanged.connect(lambda v: self._on_nested_edited("checkpoint", "every_n_epochs", v))
+            grid_c.addWidget(spin_every, 1, 3)
+
+            box_ckpt.add_layout(grid_c)
+            self.boxes_layout.addWidget(box_ckpt)
+
         # --- MODULAR BOX: DATASET SPECIFICATION ---
         has_dataset = "dataset_path" in data
         is_offline_req = paradigm in ("offline_rl", "supervised")
@@ -3214,6 +3348,41 @@ class ConfigViewer(QWidget):
             ds_path_row.addWidget(lbl_status)
             ds_path_row.addStretch()
             ds_form.addRow("Dataset Path", ds_path_row)
+
+            # Data Module selector
+            ds_dm_row = QHBoxLayout()
+            ds_dm_row.setSpacing(6)
+            self.combo_ds_datamodule = ComboBox()
+            self.combo_ds_datamodule.setMaximumWidth(320)
+            self.combo_ds_datamodule.addItem("— Default (inherit from Group / Paradigm) —", None)
+            try:
+                from src.app.core.datamodule_registry import list_registered_datamodules
+                dm_names = sorted(set(name for name in list_registered_datamodules() if any(c.isupper() for c in name)))
+                self.combo_ds_datamodule.addItems(dm_names)
+            except Exception:
+                pass
+            cur_dm = data.get("data_module")
+            if isinstance(cur_dm, dict):
+                cur_dm_name = cur_dm.get("name") or cur_dm.get("class")
+            else:
+                cur_dm_name = cur_dm
+            if cur_dm_name:
+                self.combo_ds_datamodule.setCurrentText(str(cur_dm_name))
+            else:
+                self.combo_ds_datamodule.setCurrentIndex(0)
+
+            def _on_ds_dm_changed(dm_text):
+                val = None if dm_text in ("", "— Default (inherit from Group / Paradigm) —") else dm_text
+                if val is None:
+                    self.raw_data.pop("data_module", None)
+                else:
+                    self.raw_data["data_module"] = val
+                self._mark_dirty()
+
+            self.combo_ds_datamodule.currentTextChanged.connect(_on_ds_dm_changed)
+            ds_dm_row.addWidget(self.combo_ds_datamodule)
+            ds_dm_row.addStretch()
+            ds_form.addRow("Data Module", ds_dm_row)
 
             box_ds.add_layout(ds_form)
             self.boxes_layout.addWidget(box_ds)
@@ -3376,6 +3545,10 @@ class ConfigViewer(QWidget):
         act_tr.triggered.connect(lambda: self.add_block("trainer"))
         act_tr.setEnabled("trainer" not in data)
 
+        act_ckpt = add_menu.addAction("Checkpoint Settings")
+        act_ckpt.triggered.connect(lambda: self.add_block("checkpoint"))
+        act_ckpt.setEnabled("checkpoint" not in data)
+
         act_env = add_menu.addAction("Environment Overrides")
         act_env.triggered.connect(lambda: self.add_block("env"))
         act_env.setEnabled(not isinstance(data.get("env"), dict))
@@ -3476,17 +3649,75 @@ class ConfigViewer(QWidget):
             box.add_layout(form)
             self.boxes_layout.addWidget(box)
 
+    def _use_visual_layer_editor(self) -> bool:
+        if self.settings_manager:
+            return getattr(self.settings_manager, "visual_layer_editor", True)
+        return True
+
     def _render_generic_boxes(self):
         """Render clean boxes for modular YAML configs (agent/*.yaml, env/*.yaml, model/*.yaml, etc.)."""
         self.paradigm_badge.hide()
         data = self.raw_data
 
         stem = self.current_path.stem if self.current_path else ""
+        rel_path = str(self.current_rel_path or "")
+
+        # --- Component Overview Header Card ---
+        overview_box = ConfigBox()
+        ov_layout = QVBoxLayout()
+        ov_layout.setContentsMargins(14, 12, 14, 12)
+        ov_layout.setSpacing(8)
+
+        top_row = QHBoxLayout()
+        top_row.setSpacing(10)
+
+        title_lbl = QLabel(stem)
+        title_lbl.setStyleSheet(f"font-size: 15px; font-weight: bold; color: {theme_color('text')};")
+        top_row.addWidget(title_lbl)
+
+        kind_name, pill_color_role = _get_component_kind(rel_path)
+        kind_badge = QLabel(f" {kind_name} ")
+        kind_badge.setStyleSheet(f"""
+            background-color: {theme_color('surface')};
+            color: {theme_color(pill_color_role)};
+            border: 1px solid {theme_color('border')};
+            border-radius: 10px;
+            padding: 2px 8px;
+            font-size: 11px;
+            font-weight: 600;
+        """)
+        top_row.addWidget(kind_badge)
+        top_row.addStretch()
+        ov_layout.addLayout(top_row)
+
+        desc = str(self.raw_data.get("description", "") or "").strip()
+        desc_edit = QLineEdit(desc)
+        desc_edit.setPlaceholderText("Add a brief description for this component...")
+        desc_edit.setStyleSheet(f"""
+            QLineEdit {{
+                background: {theme_color('base')};
+                border: 1px dashed {theme_color('border')};
+                border-radius: 4px;
+                color: {theme_color('text')};
+                font-size: 12px;
+                padding: 4px 8px;
+            }}
+            QLineEdit:focus {{
+                border: 1px solid {theme_color('accent')};
+                background-color: {theme_color('surface')};
+            }}
+        """)
+        desc_edit.textChanged.connect(lambda val: self._on_field_edited("description", val.strip()))
+        ov_layout.addWidget(desc_edit)
+
+        overview_box.add_layout(ov_layout)
+        self.boxes_layout.addWidget(overview_box)
+
         leaf_params = {}
         nested_sections = {}
 
         for k, v in data.items():
-            if k in ("name", "algorithm", "architecture", "reasoner", "experiment_id", "id"):
+            if k in ("name", "algorithm", "architecture", "reasoner", "experiment_id", "id", "description"):
                 continue
             if k in ("type", "env_id") and str(v).lower() == stem.lower():
                 continue
@@ -3517,7 +3748,22 @@ class ConfigViewer(QWidget):
             for k, v in leaf_params.items():
                 row = QHBoxLayout()
                 row.setSpacing(8)
-                if isinstance(v, bool):
+                k_lower = k.lower()
+                if k in ("compatible_paradigms", "paradigms"):
+                    tag_cloud = TagCloudWidget(
+                        tags=v if isinstance(v, list) else ([v] if v else []),
+                        available_options=_get_available_paradigms(),
+                    )
+                    tag_cloud.tagsChanged.connect(lambda tags, key=k: self._on_field_edited(key, tags))
+                    row.addWidget(tag_cloud)
+                elif k in ("hidden_sizes", "hidden_dims", "latent_sizes") and self._use_visual_layer_editor() and isinstance(v, list):
+                    layer_stack = LayerStackWidget(layers=v)
+                    layer_stack.layersChanged.connect(lambda layers, key=k: self._on_field_edited(key, layers))
+                    row.addWidget(layer_stack)
+                elif k_lower in CATEGORICAL_CHOICES:
+                    combo = _make_categorical_combo(k, v, lambda val, key=k: self._on_field_edited(key, val))
+                    row.addWidget(combo)
+                elif isinstance(v, bool):
                     chk = ToggleSlider(checked=v)
                     chk.toggled.connect(lambda val, key=k: self._on_field_edited(key, val))
                     row.addWidget(chk)
@@ -3596,7 +3842,22 @@ class ConfigViewer(QWidget):
             else:
                 row = QHBoxLayout()
                 row.setSpacing(8)
-                if isinstance(v, bool):
+                k_lower = k.lower()
+                if k in ("compatible_paradigms", "paradigms"):
+                    tag_cloud = TagCloudWidget(
+                        tags=v if isinstance(v, list) else ([v] if v else []),
+                        available_options=_get_available_paradigms(),
+                    )
+                    tag_cloud.tagsChanged.connect(lambda tags, p=path + (k,): self._on_generic_path_edited(p, tags))
+                    row.addWidget(tag_cloud)
+                elif k in ("hidden_sizes", "hidden_dims", "latent_sizes") and self._use_visual_layer_editor() and isinstance(v, list):
+                    layer_stack = LayerStackWidget(layers=v)
+                    layer_stack.layersChanged.connect(lambda layers, p=path + (k,): self._on_generic_path_edited(p, layers))
+                    row.addWidget(layer_stack)
+                elif k_lower in CATEGORICAL_CHOICES:
+                    combo = _make_categorical_combo(k, v, lambda val, p=path + (k,): self._on_generic_path_edited(p, val))
+                    row.addWidget(combo)
+                elif isinstance(v, bool):
                     chk = ToggleSlider(checked=v)
                     chk.toggled.connect(lambda val, p=path + (k,): self._on_generic_path_edited(p, val))
                     row.addWidget(chk)
@@ -3796,7 +4057,7 @@ class ConfigViewer(QWidget):
         default_model = (
             (def_spec.get("model") if def_spec else None)
             or (p_obj.raw.get("default_model") if p_obj else None)
-            or "dnn"
+            or (next(iter(tree.models)) if tree and tree.models else "")
         )
 
         methods = self.raw_data.setdefault("methods", {})
@@ -3993,12 +4254,15 @@ class ConfigViewer(QWidget):
             self.raw_data.pop("resources", None)
         elif block_name == "trainer":
             self.raw_data.pop("trainer", None)
+        elif block_name == "checkpoint":
+            self.raw_data.pop("checkpoint", None)
         elif block_name == "env":
             if isinstance(self.raw_data.get("env"), dict):
                 self.raw_data.pop("env", None)
         elif block_name == "dataset":
             self.raw_data.pop("dataset_path", None)
             self.raw_data.pop("offline_datasets", None)
+            self.raw_data.pop("data_module", None)
         elif block_name == "sweeper":
             self.raw_data.pop("sweeper", None)
             if "hydra" in self.raw_data and isinstance(self.raw_data["hydra"], dict):
@@ -4017,6 +4281,8 @@ class ConfigViewer(QWidget):
             self.raw_data["resources"] = {"time": "02:00:00", "gpus": 1, "cores": 8, "memory": "16G"}
         elif block_name == "trainer":
             self.raw_data["trainer"] = {"accelerator": "cpu", "max_epochs": 25}
+        elif block_name == "checkpoint":
+            self.raw_data["checkpoint"] = {"monitor": "val/loss", "mode": "min", "save_top_k": 1, "every_n_epochs": 1}
         elif block_name == "env":
             self.raw_data["env"] = {"num_envs": 4, "num_steps": 128}
         elif block_name == "dataset":
@@ -4218,13 +4484,13 @@ class ConfigViewer(QWidget):
         m_spec = methods.setdefault(method_name, {})
         tree = config_tree()
         model_val = m_spec.get("model")
-        model_name = next(iter(model_val)) if isinstance(model_val, dict) else str(model_val or "dnn")
+        model_name = next(iter(model_val)) if isinstance(model_val, dict) else str(model_val or (tree.models[0] if tree and tree.models else ""))
 
         tree = config_tree()
         subcomps = tree.model_subcomponents(model_name) if tree else {}
         sub_default = dict(subcomps.get(subcomp_name, {}))
         if not sub_default:
-            sub_default = {"type": "dnn"}
+            sub_default = {}
 
         if isinstance(m_spec.get("model"), dict):
             m_spec["model"].setdefault(model_name, {})[subcomp_name] = sub_default

@@ -45,37 +45,28 @@ _RESERVED_METHOD_KEYS = {
 }
 
 
-_KNOWN_ALGORITHMS = {"cql", "ppo", "iql"}
-_KNOWN_MODELS = {
-    "dnn",
-    "mlp",
-    "dueling_resnet",
-    "resnet",
-    "blendrl",
-    "blender",
-    "transformer",
-    "cross_attention",
-    "sepsis_transformer",
-    "sepsis_cross_attention",
-    "lstm",
-    "gru",
-    "cnn",
-    "nature_cnn",
-    "cew",
-    "nsfr",
-    "neumann",
-}
+_KNOWN_ALGORITHMS: set[str] = set()
+_KNOWN_MODELS: set[str] = set()
 
 
 def get_known_algorithms() -> set[str]:
     """Return all known algorithm names, including any registered dynamically."""
     algos = set(_KNOWN_ALGORITHMS)
     try:
-        from src.usr.methods.agent_registry import AGENT_REGISTRY
+        from src.usr.algorithms.agent_registry import AGENT_REGISTRY
 
         algos.update(AGENT_REGISTRY.keys())
     except Exception:
         pass
+    agent_dir = Path("in/config/agent")
+    if agent_dir.is_dir():
+        for p in agent_dir.glob("**/*.yaml"):
+            algos.add(p.stem)
+            try:
+                rel = p.relative_to(agent_dir).with_suffix("").as_posix()
+                algos.add(rel)
+            except Exception:
+                pass
     return algos
 
 
@@ -88,28 +79,24 @@ def get_known_models() -> set[str]:
         models.update(MODEL_REGISTRY.keys())
     except Exception:
         pass
+    model_dir = Path("in/config/model")
+    if model_dir.is_dir():
+        for p in model_dir.glob("**/*.yaml"):
+            models.add(p.stem)
+            try:
+                rel = p.relative_to(model_dir).with_suffix("").as_posix()
+                models.add(rel)
+            except Exception:
+                pass
     return models
 
 
 _MODEL_KEYS = {
     "architecture",
     "modules",
-    "rules",
-    "ecm_dthr",
-    "fyd",
-    "fyd_top_k",
-    "actor_mode",
-    "blender_mode",
-    "blend_function",
-    "blender",
-    "blender_actor",
-    "neural_actor",
-    "symbolic_actor",
-    "neural",
-    "symbolic",
+    "slots",
     "hidden_sizes",
     "activation",
-    "blend_q_values",
 }
 
 
@@ -250,6 +237,20 @@ def _extract_name_and_subparams(
     return None, {}
 
 
+_BUILTIN_MODEL_DEFAULTS: dict[str, dict[str, Any]] = {
+    "dnn": {"architecture": "dnn", "hidden_sizes": [256, 256], "activation": "relu"},
+    "dueling_resnet": {"architecture": "dueling_resnet", "hidden_sizes": [512, 512, 256, 128]},
+    "nsfr": {"type": "nsfr", "rules": "default"},
+    "cew": {"type": "cew", "fyd": False, "fyd_top_k": 50, "ecm_dthr": 0.03},
+    "blendrl": {
+        "slots": ["neural", "symbolic", "blender"],
+        "neural": {"type": "dnn", "architecture": "dnn", "hidden_sizes": [256, 256]},
+        "symbolic": {"type": "nsfr", "rules": "default"},
+        "blender": {"mode": "neural", "blend_function": "softmax"},
+    },
+}
+
+
 def load_model_base_config(model_name: str, config_dir=None) -> dict:
     """Load the base YAML configuration for a model architecture from in/config/model/<model_name>.yaml."""
     if not model_name:
@@ -270,13 +271,13 @@ def load_model_base_config(model_name: str, config_dir=None) -> dict:
         if found:
             target = found[0]
         else:
-            return {}
+            return dict(_BUILTIN_MODEL_DEFAULTS.get(model_name, {}))
     try:
         with open(target) as f:
             data = yaml.safe_load(f)
-        return dict(data) if isinstance(data, dict) else {}
+        return dict(data) if isinstance(data, dict) else dict(_BUILTIN_MODEL_DEFAULTS.get(model_name, {}))
     except Exception:
-        return {}
+        return dict(_BUILTIN_MODEL_DEFAULTS.get(model_name, {}))
 
 
 def resolve_composite_submodel(
@@ -325,6 +326,8 @@ def resolve_composite_submodel(
     # Ensure canonical architecture/reasoner keys are preserved
     if "architecture" in base_cfg and "architecture" not in result:
         result["architecture"] = base_cfg["architecture"]
+    if "architecture" not in result and resolved_type:
+        result["architecture"] = resolved_type
     if "reasoner" in base_cfg and "reasoner" not in result:
         result["reasoner"] = base_cfg["reasoner"]
 
@@ -542,6 +545,8 @@ def parse_methods_dict(cfg) -> dict[str, dict]:
             (model_cls is not None and hasattr(model_cls, "get_model_slots"))
             or (isinstance(base_model_cfg, dict) and any(isinstance(v, dict) for v in base_model_cfg.values()))
             or (isinstance(base_model_cfg, dict) and "slots" in base_model_cfg)
+            or (isinstance(m_model_sub, dict) and any(isinstance(v, dict) for v in m_model_sub.values()))
+            or (isinstance(model_params, dict) and any(isinstance(v, dict) for v in model_params.values()))
         )
 
         if is_composite:
@@ -558,6 +563,25 @@ def parse_methods_dict(cfg) -> dict[str, dict]:
 
                     def_t = v.get("type", k)
                     declared_slots.append(ModelSlot(name=k, default=def_t))
+                    slot_names.append(k)
+
+            if isinstance(m_model_sub, dict):
+                for k, v in m_model_sub.items():
+                    if k not in slot_names and (isinstance(v, dict) or k in ("neural", "symbolic", "blender")):
+                        from src.app.core.protocols import ModelSlot
+
+                        def_t = v.get("type", k) if isinstance(v, dict) else (str(v) if v else k)
+                        declared_slots.append(ModelSlot(name=k, default=def_t))
+                        slot_names.append(k)
+
+            if isinstance(model_params, dict):
+                for k, v in model_params.items():
+                    if k not in slot_names and (isinstance(v, dict) or k in ("neural", "symbolic", "blender")):
+                        from src.app.core.protocols import ModelSlot
+
+                        def_t = v.get("type", k) if isinstance(v, dict) else (str(v) if v else k)
+                        declared_slots.append(ModelSlot(name=k, default=def_t))
+                        slot_names.append(k)
 
             # 1. Resolve submodels for each declared slot
             resolved_submodels = []

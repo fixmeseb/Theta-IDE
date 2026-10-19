@@ -5,7 +5,7 @@ from pathlib import Path
 
 import yaml
 from PyQt6.QtCore import QByteArray, QMimeData, QPoint, QRect, QSettings, QSize, Qt, pyqtSignal
-from PyQt6.QtGui import QBrush, QColor, QDrag, QFont, QIcon, QPainter, QPen, QPixmap
+from PyQt6.QtGui import QColor, QDrag, QIcon, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
     QComboBox,
@@ -21,8 +21,6 @@ from PyQt6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QStyle,
-    QStyleOptionViewItem,
-    QStyledItemDelegate,
     QToolButton,
     QTreeWidget,
     QTreeWidgetItem,
@@ -41,19 +39,17 @@ from .config_model import (
     unique_method_name,
 )
 from .sidetabs import svg_icon
+from .tree_tools import (  # noqa: F401  (TOOL_ICON_COLORS and GroupItemDelegate are re-exported)
+    TOOL_ICON_COLORS,
+    GroupItemDelegate,
+    TreeHeaderActions,
+    folder_icon,
+    group_heading_font,
+    refresh_tool_icons,
+    style_tool_button,
+)
 from .theme import theme_color
 from .widgets import label
-
-TOOL_ICON_COLORS = {
-    (QIcon.Mode.Normal, QIcon.State.Off): "text",
-    (QIcon.Mode.Active, QIcon.State.Off): "accent",
-    (QIcon.Mode.Selected, QIcon.State.Off): "accent",
-    (QIcon.Mode.Disabled, QIcon.State.Off): "disabled",
-    (QIcon.Mode.Normal, QIcon.State.On): "accent",
-    (QIcon.Mode.Active, QIcon.State.On): "accent",
-    (QIcon.Mode.Selected, QIcon.State.On): "accent",
-    (QIcon.Mode.Disabled, QIcon.State.On): "disabled",
-}
 
 TREE_GEAR_COLORS = {
     (QIcon.Mode.Normal, QIcon.State.Off): "secondary",
@@ -69,12 +65,20 @@ CATEGORY_ICONS = {
     "agent": "backend",
     "model": "components",
     "env": "monitor",
+    "data": "storage",
+    "eval": "results",
+    "plot": "plots",
+    "plots": "plots",
+    "datamodule": "storage",
+    "evaluator": "results",
+    "plotter": "plots",
     "paradigms": "hotkeys",
     "site": "storage",
     "hydra": "gear",
     "sweeper": "gear",
     "hydra/sweeper": "gear",
     "methods": "components",
+    "workflow": "workflow",
 }
 
 
@@ -249,40 +253,6 @@ def find_config_root():
         if p.exists() and p.is_dir():
             return p.resolve()
     return (Path(__file__).resolve().parent.parent / "in" / "config").resolve()
-
-
-class GroupItemDelegate(QStyledItemDelegate):
-    """Delegate rendering larger text, subtle underline, and extra vertical breathing room for group nodes."""
-
-    def initStyleOption(self, option, index):
-        super().initStyleOption(option, index)
-        data = index.data(Qt.ItemDataRole.UserRole)
-        if isinstance(data, dict) and data.get("is_group"):
-            f = QFont(option.font)
-            base_pt = option.font.pointSize()
-            target_pt = max(base_pt + 4, 16) if base_pt > 0 else 16
-            f.setPointSize(target_pt)
-            f.setBold(True)
-            option.font = f
-
-    def paint(self, painter, option, index):
-        super().paint(painter, option, index)
-        data = index.data(Qt.ItemDataRole.UserRole)
-        if isinstance(data, dict) and data.get("is_group"):
-            painter.save()
-            painter.setPen(QPen(QColor("#504945"), 1))
-            y = option.rect.bottom() - 1
-            painter.drawLine(option.rect.left() + 4, y, option.rect.right() - 4, y)
-            painter.restore()
-
-    def sizeHint(self, option, index):
-        opt = QStyleOptionViewItem(option)
-        self.initStyleOption(opt, index)
-        hint = super().sizeHint(opt, index)
-        data = index.data(Qt.ItemDataRole.UserRole)
-        if isinstance(data, dict) and data.get("is_group"):
-            return QSize(hint.width(), hint.height() + 10)
-        return hint
 
 
 TREE_BUTTON_MIME = "application/x-theta-tree-button"
@@ -562,7 +532,7 @@ class TreeHeaderWidget(QWidget):
             painter.end()
 
 
-class ConfigTreeWidget(QWidget):
+class ConfigTreeWidget(TreeHeaderActions, QWidget):
     """File tree that mirrors in/config/ and allows selecting, duplicating,
 
     and creating experiments in groups.
@@ -700,9 +670,6 @@ class ConfigTreeWidget(QWidget):
 
         self.btn_search = self._tool_button("search", button_id="search")
         self.btn_search.setToolTip("Filter configurations")
-        self.btn_search.setCheckable(True)
-        self.btn_search.setChecked(False)
-        self.btn_search.clicked.connect(self.toggle_search)
 
         if self.mode == "components":
             self.btn_plus = self._tool_button("plus", "+", button_id="plus")
@@ -801,8 +768,7 @@ class ConfigTreeWidget(QWidget):
             placeholder = "Filter configs…"
         self.search.setPlaceholderText(placeholder)
         self.search.textChanged.connect(self.filter_tree)
-        self.search.hide()
-        self.search.installEventFilter(self)
+        self.watch_search()
         layout.addWidget(self.search)
 
         # Tree widget
@@ -881,33 +847,112 @@ class ConfigTreeWidget(QWidget):
                     self._add_file_node(self.tree, f)
         elif self.mode == "components":
             # Display all modular configuration directories and files OUTSIDE experiment
-            # Pinned Global Pipeline Defaults at top
-            global_config = self.root_dir / "config.yaml"
-            if global_config.is_file():
-                self._add_file_node(self.tree, global_config, custom_display_name="Global Defaults (config)", is_global_config=True)
+            # 1. Component Headers (styled identically to experiment groups: is_group=True, bold large font, underline, no icon)
+            # agent -> Algorithms
+            # env -> Environments
+            # model -> Models
+            # data -> Data Loaders
+            # eval -> Evaluators
+            # plot -> Figures
+            component_headers = [
+                ("agent", "Algorithms"),
+                ("env", "Environments"),
+                ("model", "Models"),
+                ("data", "Data Loaders"),
+                ("eval", "Evaluators"),
+                ("plot", "Figures"),
+            ]
+            standard_create = {"agent", "env", "model", "data", "eval", "plot"}
 
-            preferred_comp_order = ["agent", "env", "model", "paradigms", "site", "hydra"]
-            for cat in preferred_comp_order:
+            for cat, header_title in component_headers:
                 cat_dir = self.root_dir / cat
-                if not cat_dir.is_dir():
+                if cat == "plot" and not cat_dir.is_dir() and (self.root_dir / "plots").is_dir():
+                    cat_dir = self.root_dir / "plots"
+
+                if not cat_dir.is_dir() and cat in standard_create:
                     try:
                         cat_dir.mkdir(parents=True, exist_ok=True)
                     except OSError:
                         pass
                 if cat_dir.is_dir():
-                    self._add_dir_node(self.tree, cat_dir, expand=False, expanded_set=expanded_paths, has_previous_state=has_previous_state)
+                    self._add_dir_node(
+                        self.tree,
+                        cat_dir,
+                        expand=True,
+                        expanded_set=expanded_paths,
+                        has_previous_state=has_previous_state,
+                        is_group=True,
+                        custom_display_name=header_title,
+                    )
+
+            # 2. System Header at the end
+            # "Put a System header at the end, and have the paradigm, site, hydra, and workflow config "groups" stay as they are under this system header."
+            system_node = QTreeWidgetItem(self.tree, ["System"])
+            f = group_heading_font(self.tree.font())
+            system_node.setFont(0, f)
+            system_node.setData(0, Qt.ItemDataRole.FontRole, f)
+            system_node.setData(0, Qt.ItemDataRole.UserRole, {
+                "type": "dir",
+                "path": str(self.root_dir / "system"),
+                "rel_path": "system",
+                "is_group": True,
+            })
+            system_node.setToolTip(0, "System configurations (paradigms, site, hydra, workflow, and global defaults)")
+
+            # Under System:
+            # - Global Pipeline Defaults (config.yaml) pinned at top
+            global_config = self.root_dir / "config.yaml"
+            if global_config.is_file():
+                self._add_file_node(system_node, global_config, custom_display_name="Global Defaults (config)", is_global_config=True)
+
+            # - System config groups (normal folder/category items with icons)
+            system_groups = ["paradigms", "site", "hydra", "workflow"]
+            for grp in system_groups:
+                grp_dir = self.root_dir / grp
+                if not grp_dir.is_dir() and grp in ("paradigms", "site", "hydra", "workflow"):
+                    try:
+                        grp_dir.mkdir(parents=True, exist_ok=True)
+                    except OSError:
+                        pass
+                if grp_dir.is_dir():
+                    self._add_dir_node(
+                        system_node,
+                        grp_dir,
+                        expand=False,
+                        expanded_set=expanded_paths,
+                        has_previous_state=has_previous_state,
+                        is_group=False,
+                    )
+
+            # Any other custom directories outside components, system groups, and experiment
+            all_known = set(c[0] for c in component_headers) | {"plots", "experiment", "experiments"} | set(system_groups)
             for name, dir_path in sorted(existing_dirs.items()):
-                if name not in preferred_comp_order and name not in ("experiment", "experiments"):
-                    self._add_dir_node(self.tree, dir_path, expand=False, expanded_set=expanded_paths, has_previous_state=has_previous_state)
+                if name not in all_known:
+                    self._add_dir_node(
+                        system_node,
+                        dir_path,
+                        expand=False,
+                        expanded_set=expanded_paths,
+                        has_previous_state=has_previous_state,
+                        is_group=False,
+                    )
+
             for f in top_files:
                 if f.name != "config.yaml":
-                    self._add_file_node(self.tree, f)
+                    self._add_file_node(system_node, f)
+
+            if has_previous_state:
+                if "system" in expanded_paths:
+                    system_node.setExpanded(True)
+            else:
+                system_node.setExpanded(True)
         else:
             # "all": Top-level directory ordering with experiment first
-            preferred_order = ["experiment", "agent", "env", "model", "paradigms", "site", "hydra"]
+            preferred_order = ["experiment", "agent", "env", "model", "data", "eval", "plot", "paradigms", "site", "hydra"]
+            standard_create = {"experiment", "agent", "env", "model", "data", "eval", "plot", "paradigms", "site", "hydra"}
             for cat in preferred_order:
                 cat_dir = self.root_dir / cat
-                if not cat_dir.is_dir():
+                if not cat_dir.is_dir() and cat in standard_create:
                     try:
                         cat_dir.mkdir(parents=True, exist_ok=True)
                     except OSError:
@@ -926,22 +971,14 @@ class ConfigTreeWidget(QWidget):
 
     def _tool_button(self, icon_name, text=None, button_id=None):
         """Square header button with a themed SVG icon; text, if any, becomes its accessible name."""
-        button = DraggableToolButton(button_id or icon_name)
-        button.setProperty("svg_icon", icon_name)
-        button.setIcon(svg_icon(icon_name, TOOL_ICON_COLORS))
-        button.setIconSize(QSize(16, 16))
-        button.setFixedSize(30, 30)
-        button.setStyleSheet("padding: 0;")
+        button = style_tool_button(DraggableToolButton(button_id or icon_name), icon_name)
         if text:
             button.setAccessibleName(text)
         return button
 
     def refresh_icons(self):
         """Re-render the header and tree icons in the current theme's colors."""
-        for button in self.findChildren(QToolButton):
-            name = button.property("svg_icon")
-            if name:
-                button.setIcon(svg_icon(name, TOOL_ICON_COLORS))
+        refresh_tool_icons(self)
         if hasattr(self, "header_widget"):
             self.header_widget.update()
 
@@ -958,42 +995,47 @@ class ConfigTreeWidget(QWidget):
                     elif data.get("type") == "dir":
                         if data.get("is_group"):
                             child.setIcon(0, QIcon())
-                            continue
-                        rel = data.get("rel_path", "")
-                        dname = Path(data.get("path", "")).name
-                        c_icon = CATEGORY_ICONS.get(dname) or CATEGORY_ICONS.get(rel)
-                        if c_icon:
-                            child.setIcon(0, svg_icon(c_icon, TOOL_ICON_COLORS))
-                        elif dname == "methods":
-                            child.setIcon(0, svg_icon("components", TOOL_ICON_COLORS))
                         else:
-                            child.setIcon(0, svg_icon("folder", TOOL_ICON_COLORS))
+                            rel = data.get("rel_path", "")
+                            dname = Path(data.get("path", "")).name
+                            c_icon = CATEGORY_ICONS.get(dname) or CATEGORY_ICONS.get(rel)
+                            if c_icon:
+                                child.setIcon(0, svg_icon(c_icon, TOOL_ICON_COLORS))
+                            elif dname == "methods":
+                                child.setIcon(0, svg_icon("components", TOOL_ICON_COLORS))
+                            else:
+                                child.setIcon(0, folder_icon())
                 _update_tree(child)
 
         _update_tree(self.tree)
 
-    def _add_dir_node(self, parent_widget, dir_path: Path, expand=False, expanded_set=None, has_previous_state=False):
+    def _add_dir_node(
+        self,
+        parent_widget,
+        dir_path: Path,
+        expand=False,
+        expanded_set=None,
+        has_previous_state=False,
+        is_group: bool | None = None,
+        custom_display_name: str | None = None,
+    ):
         name = dir_path.name
         rel_path = str(dir_path.relative_to(self.root_dir)).replace("\\", "/").strip("/")
 
-        display_name = name
+        display_name = custom_display_name or name
         if rel_path == "hydra/sweeper" or (name == "sweeper" and "hydra" in rel_path):
             display_name = "Hyperparameter Sweepers"
 
         node = QTreeWidgetItem(parent_widget, [display_name])
 
-        is_group = bool(self.mode in ("experiments", "experiment") and (dir_path.parent == self.root_dir or dir_path.parent.name in ("experiment", "experiments")))
+        if is_group is None:
+            is_group = bool(self.mode in ("experiments", "experiment") and (dir_path.parent == self.root_dir or dir_path.parent.name in ("experiment", "experiments")))
 
         # Semantic icon based on directory category / purpose
         icon_name = CATEGORY_ICONS.get(name) or CATEGORY_ICONS.get(rel_path)
         if is_group:
-            # Top-level experiment group (e.g. cartpole, mimic): no icon, larger text, subtle line
-            base_f = self.tree.font()
-            f = QFont(base_f)
-            base_pt = base_f.pointSize()
-            target_pt = max(base_pt + 4, 16) if base_pt > 0 else 16
-            f.setPointSize(target_pt)
-            f.setBold(True)
+            # Top-level group / component header (e.g. cartpole, Algorithms, Figures): no icon, larger text, subtle line
+            f = group_heading_font(self.tree.font())
             node.setFont(0, f)
             node.setData(0, Qt.ItemDataRole.FontRole, f)
         elif icon_name:
@@ -1001,7 +1043,7 @@ class ConfigTreeWidget(QWidget):
         elif name == "methods":
             node.setIcon(0, svg_icon("components", TOOL_ICON_COLORS))
         else:
-            node.setIcon(0, svg_icon("folder", TOOL_ICON_COLORS))
+            node.setIcon(0, folder_icon())
 
         node.setData(0, Qt.ItemDataRole.UserRole, {
             "type": "dir",
@@ -1137,25 +1179,6 @@ class ConfigTreeWidget(QWidget):
 
         for i in range(self.tree.topLevelItemCount()):
             match_and_filter(self.tree.topLevelItem(i))
-
-    def toggle_search(self, checked: bool | None = None):
-        """Toggle the visibility of the search/filter bar."""
-        if checked is None:
-            checked = self.search.isHidden()
-        self.btn_search.setChecked(checked)
-        self.search.setVisible(checked)
-        if checked:
-            self.search.setFocus()
-            self.search.selectAll()
-        else:
-            self.search.clear()
-
-    def eventFilter(self, obj, event):
-        if obj is self.search and event.type() == event.Type.KeyPress:
-            if event.key() == Qt.Key.Key_Escape:
-                self.toggle_search(False)
-                return True
-        return super().eventFilter(obj, event)
 
     def find_file_item(self, target_rel_path: str):
         """Find the QTreeWidgetItem corresponding to a relative path."""
@@ -1327,12 +1350,7 @@ class ConfigTreeWidget(QWidget):
         item = QTreeWidgetItem([""])
         item.setData(0, Qt.ItemDataRole.UserRole, {"type": "dir", "is_group": True})
 
-        base_f = self.tree.font()
-        f = QFont(base_f)
-        base_pt = base_f.pointSize()
-        target_pt = max(base_pt + 4, 16) if base_pt > 0 else 16
-        f.setPointSize(target_pt)
-        f.setBold(True)
+        f = group_heading_font(self.tree.font())
         item.setFont(0, f)
         item.setData(0, Qt.ItemDataRole.FontRole, f)
 
@@ -1844,6 +1862,8 @@ class ConfigTreeWidget(QWidget):
                 action_new.triggered.connect(lambda: self._create_in_specific_group(group_name))
                 action_new_folder = menu.addAction("New Subfolder…")
                 action_new_folder.triggered.connect(lambda: self.prompt_new_folder(rel))
+                action_export_plugin = menu.addAction("Export Experiment Plugin…")
+                action_export_plugin.triggered.connect(lambda: self.prompt_export_experiment_group(group_name))
                 action_refresh = menu.addAction("Refresh Group")
                 action_refresh.triggered.connect(self.populate)
                 action_delete_dir = menu.addAction("Delete Group…")
@@ -1858,15 +1878,20 @@ class ConfigTreeWidget(QWidget):
                 action_delete_dir = menu.addAction("Delete Folder…")
                 action_delete_dir.triggered.connect(lambda: self.prompt_delete_dir(rel))
             else:
-                action_new = menu.addAction("New Component in this category…")
-                cat_name = Path(data["rel_path"]).name
-                action_new.triggered.connect(lambda: self._create_in_specific_component_category(cat_name))
-                action_new_folder = menu.addAction("New Subfolder…")
-                action_new_folder.triggered.connect(lambda: self.prompt_new_folder(rel))
-                action_rename_dir = menu.addAction("Rename Folder…")
-                action_rename_dir.triggered.connect(lambda: self.prompt_rename_dir(rel))
-                action_delete_dir = menu.addAction("Delete Folder…")
-                action_delete_dir.triggered.connect(lambda: self.prompt_delete_dir(rel))
+                if rel == "system":
+                    action_new_folder = menu.addAction("New Subfolder…")
+                    action_new_folder.triggered.connect(lambda: self.prompt_new_folder(rel))
+                else:
+                    action_new = menu.addAction("New Component in this category…")
+                    cat_name = Path(data["rel_path"]).name
+                    action_new.triggered.connect(lambda: self._create_in_specific_component_category(cat_name))
+                    action_new_folder = menu.addAction("New Subfolder…")
+                    action_new_folder.triggered.connect(lambda: self.prompt_new_folder(rel))
+                    if not data.get("is_group"):
+                        action_rename_dir = menu.addAction("Rename Folder…")
+                        action_rename_dir.triggered.connect(lambda: self.prompt_rename_dir(rel))
+                        action_delete_dir = menu.addAction("Delete Folder…")
+                        action_delete_dir.triggered.connect(lambda: self.prompt_delete_dir(rel))
 
         menu.addSeparator()
         action_collapse = menu.addAction("Collapse All")
@@ -1876,20 +1901,26 @@ class ConfigTreeWidget(QWidget):
 
         menu.exec(self.tree.viewport().mapToGlobal(position))
 
-    def collapse_all(self):
-        """Collapse all folders/nodes in the tree."""
-        self.tree.collapseAll()
-
-    def expand_all(self):
-        """Expand all folders/nodes in the tree."""
-        self.tree.expandAll()
-
     def _create_in_specific_group(self, group_name):
         self.prompt_new_in_group(group=group_name)
 
+    def prompt_export_experiment_group(self, group_name: str):
+        """Prompt to export an entire experiment group as an installable Experiment Plugin."""
+        try:
+            from .export_dialog import ExportExperimentDialog
+            dlg = ExportExperimentDialog(
+                experiment_id=group_name,
+                workspace_root=self.root_dir.parent.parent,
+                group=group_name,
+                parent=self,
+            )
+            dlg.exec()
+        except Exception as exc:
+            QMessageBox.critical(self, "Export Failed", f"Could not launch export dialog:\n{exc}")
+
     def prompt_new_component(self):
         """Prompt to create a new component configuration (agent, env, model, etc.)."""
-        categories = ["agent", "env", "model", "paradigms", "site", "hydra"]
+        categories = ["agent", "env", "model", "data", "eval", "plot", "paradigms", "site", "hydra", "workflow"]
         existing = [p.name for p in self.root_dir.iterdir() if p.is_dir() and not p.name.startswith(".") and p.name not in ("experiment", "experiments")]
         for e in sorted(existing):
             if e not in categories:

@@ -11,11 +11,30 @@ from frontend.hub.models import AuthorInfo, HubComponent, ReleaseInfo
 from src.app.services.experiment_exporter import ExperimentExporter, ExportOptions, ExportResult
 
 
-def test_export_experiment_success(tmp_path):
-    workspace_root = Path(__file__).resolve().parents[1]
-    exporter = ExperimentExporter(workspace_root=workspace_root)
+def _setup_test_experiment(workspace: Path) -> str:
+    """Helper to create a minimal experiment in a test workspace."""
+    exp_dir = workspace / "in" / "config" / "experiment" / "demo"
+    exp_dir.mkdir(parents=True, exist_ok=True)
+    env_dir = workspace / "in" / "config" / "env"
+    env_dir.mkdir(parents=True, exist_ok=True)
 
-    out_zip = tmp_path / "test_cartpole_export.zip"
+    (exp_dir / "_base.yaml").write_text("paradigm: online_rl\n", encoding="utf-8")
+    (exp_dir / "quick_test.yaml").write_text(
+        "defaults:\n  - demo/_base\nexperiment_id: quick_test\nenv: demo_env\nmethods:\n  test_method:\n    agent: ppo\n",
+        encoding="utf-8",
+    )
+    (env_dir / "demo_env.yaml").write_text("name: demo_env\n", encoding="utf-8")
+    return "demo/quick_test"
+
+
+def test_export_experiment_success(tmp_path):
+    workspace = tmp_path / "src_workspace"
+    workspace.mkdir()
+    exp_name = _setup_test_experiment(workspace)
+
+    exporter = ExperimentExporter(workspace_root=workspace)
+
+    out_zip = tmp_path / "test_export.zip"
     opts = ExportOptions(
         include_checkpoints=False,
         include_environment=True,
@@ -24,10 +43,10 @@ def test_export_experiment_success(tmp_path):
         output_path=out_zip,
         author="Tester",
         version="1.2.3",
-        description="Test export of CartPole experiment",
+        description="Test export of experiment",
     )
 
-    result = exporter.export("cartpole/quick_test", options=opts)
+    result = exporter.export(exp_name, options=opts)
     assert result.success is True
     assert result.archive_path == out_zip
     assert out_zip.is_file()
@@ -37,9 +56,9 @@ def test_export_experiment_success(tmp_path):
         namelist = zf.namelist()
         assert ".theta_component.json" in namelist
         assert "README.md" in namelist
-        assert "in/config/experiment/cartpole/quick_test.yaml" in namelist
-        assert "in/config/experiment/cartpole/_base.yaml" in namelist
-        assert "in/config/env/cartpole.yaml" in namelist
+        assert "in/config/experiment/demo/quick_test.yaml" in namelist
+        assert "in/config/experiment/demo/_base.yaml" in namelist
+        assert "in/config/env/demo_env.yaml" in namelist
 
         # Inspect manifest
         manifest_raw = zf.read(".theta_component.json").decode("utf-8")
@@ -47,7 +66,7 @@ def test_export_experiment_success(tmp_path):
         assert manifest["kind"] == "experiment"
         assert manifest["version"] == "1.2.3"
         assert manifest["author"]["name"] == "Tester"
-        assert manifest["environment"] == "cartpole"
+        assert manifest["environment"] == "demo_env"
         assert "ppo" in manifest["agents"]
 
 
@@ -60,12 +79,15 @@ def test_export_nonexistent_experiment(tmp_path):
 
 
 def test_hub_installer_roundtrip(tmp_path):
-    workspace_root = Path(__file__).resolve().parents[1]
-    exporter = ExperimentExporter(workspace_root=workspace_root)
+    workspace = tmp_path / "src_workspace"
+    workspace.mkdir()
+    exp_name = _setup_test_experiment(workspace)
 
-    pkg_zip = tmp_path / "cartpole_pkg.zip"
+    exporter = ExperimentExporter(workspace_root=workspace)
+
+    pkg_zip = tmp_path / "demo_pkg.zip"
     res = exporter.export(
-        "cartpole/quick_test",
+        exp_name,
         options=ExportOptions(output_path=pkg_zip, version="2.0.0"),
     )
     assert res.success is True
@@ -79,8 +101,8 @@ def test_hub_installer_roundtrip(tmp_path):
     installer = HubInstaller(workspace_dir=mock_workspace, data_dir=mock_data)
 
     comp = HubComponent(
-        id="cartpole_quick_test",
-        name="cartpole/quick_test",
+        id="demo_quick_test",
+        name=exp_name,
         kind="experiment",
         version="2.0.0",
         description="Roundtrip test",
@@ -97,11 +119,11 @@ def test_hub_installer_roundtrip(tmp_path):
     assert installed is True
 
     # Check that experiment yaml was unpacked to target workspace
-    dest_exp_yaml = mock_workspace / "in" / "config" / "experiment" / "cartpole" / "quick_test.yaml"
+    dest_exp_yaml = mock_workspace / "in" / "config" / "experiment" / "demo" / "quick_test.yaml"
     assert dest_exp_yaml.is_file()
 
     # Check that env config was unpacked to target workspace
-    dest_env_yaml = mock_workspace / "in" / "config" / "env" / "cartpole.yaml"
+    dest_env_yaml = mock_workspace / "in" / "config" / "env" / "demo_env.yaml"
     assert dest_env_yaml.is_file()
 
     # Check installer detection
