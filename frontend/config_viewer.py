@@ -24,6 +24,7 @@ from PyQt6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMenu,
+    QDialog,
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
@@ -2881,6 +2882,17 @@ class ConfigViewer(QWidget):
                     row_mo.addWidget(txt_model)
                     if btn_add_mp:
                         row_mo.addWidget(btn_add_mp)
+                    btn_design = QPushButton("Design...")
+                    btn_design.setToolTip(
+                        "Design this architecture by wiring layer blocks together.\n"
+                        "Saves a new architecture into in/config/model/."
+                    )
+                    # clicked passes a checked flag, which would arrive as the
+                    # method name if the slot took it positionally.
+                    btn_design.clicked.connect(
+                        lambda _checked=False, mn=m_name, cur=model_name: self._open_model_builder(mn, cur)
+                    )
+                    row_mo.addWidget(btn_design)
                     row_mo.addStretch()
                     sc_layout.addRow("Model", row_mo)
 
@@ -4837,6 +4849,53 @@ class ConfigViewer(QWidget):
         """True while the user is typing into one of this viewer's text boxes."""
         focus = QApplication.focusWidget()
         return isinstance(focus, (QLineEdit, QPlainTextEdit, QTextEdit)) and self.isAncestorOf(focus)
+
+    def _open_model_builder(self, method_name: str, current_model: str) -> None:
+        """Open the visual builder, then point this method at what it saved.
+
+        Pre-loads the current architecture when it is one the builder wrote, so
+        reopening a design edits it instead of starting over. Anything else is
+        a Python class with no layer list to show, so the canvas starts empty.
+        """
+        from .model_builder.dialog import ModelBuilderDialog
+
+        tree = config_tree()
+        if tree is None:
+            QMessageBox.warning(self, "No configuration", "The config tree is not loaded yet.")
+            return
+
+        params = dict(tree.models[current_model].parameters) if current_model in tree.models else {}
+        layers = params.get("layers") if isinstance(params.get("layers"), list) else None
+        shape = params.get("input_shape")
+        input_shape = tuple(int(d) for d in shape) if isinstance(shape, (list, tuple)) and shape else (30,)
+
+        declared = params.get("lightning_module")
+        if not isinstance(declared, str):
+            paradigm = str(self.raw_data.get("paradigm", "") or "")
+            declared = (
+                "AutoencoderLightningModule" if paradigm == "unsupervised" else "TabularClassifierLightningModule"
+            )
+
+        dialog = ModelBuilderDialog(
+            model_dir=tree.config_root / "model",
+            input_shape=input_shape,
+            lightning_module=declared,
+            initial_layers=layers,
+            initial_layout=params.get("builder_layout"),
+            initial_name=current_model if layers else "",
+            parent=self,
+        )
+        if dialog.exec() != QDialog.DialogCode.Accepted or not dialog.saved_name:
+            return
+
+        methods = self.raw_data.setdefault("methods", {})
+        spec = methods.setdefault(method_name, {})
+        spec["model"] = dialog.saved_name
+        self._mark_dirty()
+        # The combo is filled from in/config/model/, so the cached tree has to
+        # re-scan before the row is rebuilt or the new name will not be there.
+        config_tree(force_reload=True)
+        self._render_boxes()
 
     def _mark_dirty(self):
         self.is_dirty = True
