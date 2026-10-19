@@ -241,7 +241,7 @@ class TestHubClientAndInstaller(unittest.TestCase):
         self.assertTrue(comp.has_update)
         card.update_action_state()
         self.assertIn("Update to v2.0.0", card.btn_action.text())
-        self.assertIn("#458588", card.btn_action.styleSheet())
+        self.assertIn(theme_color("secondary"), card.btn_action.styleSheet())  # Update follows the theme
 
         # Simulate uninstall completion
         comp.is_installed = False

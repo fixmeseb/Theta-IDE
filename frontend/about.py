@@ -1,4 +1,4 @@
-"""About dialog with a shaded, software-rendered ASCII theta sculpture and animation settings."""
+"""About page and dialog with a shaded, software-rendered ASCII theta sculpture, and its animation settings."""
 import math
 import sys
 import time
@@ -529,4 +529,61 @@ class AboutDialog(QDialog):
 
     def open_animation_settings(self):
         dialog = AnimationSettingsDialog(target=self.logo, parent=self)
+        dialog.exec()
+
+
+def app_version() -> str:
+    """The installed package's version, or "" when running from a checkout that isn't installed."""
+    try:
+        from importlib.metadata import PackageNotFoundError, version
+    except ImportError:  # pragma: no cover - stdlib on every supported Python
+        return ""
+    try:
+        return version("nesyrl")
+    except PackageNotFoundError:
+        return ""
+
+
+class AboutView(QWidget):
+    """The About page (the sidebar's logo button): the rotating theta, name, version and description.
+
+    Animation settings open as a dialog over this page, so the logo behind it is the live preview.
+    """
+
+    def __init__(self, window=None, parent=None):
+        super().__init__(parent)
+        self.window = window
+        self.setObjectName("aboutView")
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 20, 24, 24)
+        layout.setSpacing(6)
+
+        self.logo = AsciiTheta(self, settings_manager=getattr(window, "settings_manager", None))
+        layout.addWidget(self.logo, 1)
+
+        title = label("ThetaIDE", "brand")
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(title)
+        tagline = label("Research workspace for NeSyRL experiments", "muted")
+        tagline.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(tagline)
+        version = app_version()
+        self.version_label = label(f"Version {version}" if version else "Development checkout", "muted")
+        self.version_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.version_label)
+
+        buttons = QHBoxLayout()
+        buttons.addStretch()
+        self.anim_btn = QPushButton("Animation settings…")
+        self.anim_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.anim_btn.setToolTip("Configure the rotating theta's speed, size, thickness and 3D effects")
+        self.anim_btn.clicked.connect(self.open_animation_settings)
+        buttons.addWidget(self.anim_btn)
+        buttons.addStretch()
+        layout.addSpacing(10)
+        layout.addLayout(buttons)
+
+    def open_animation_settings(self):
+        dialog = AnimationSettingsDialog(target=self.logo, settings_manager=getattr(self.window, "settings_manager", None),
+                                         parent=self)
         dialog.exec()

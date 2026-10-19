@@ -37,7 +37,7 @@ from .settings import SettingsManager
 from .theme import STYLE, ThemeManager, theme_color
 from .theme_builder import ThemeBuilder
 from .widgets import ToggleSlider, YamlHighlighter, label
-from .about import AboutDialog
+from .about import AboutDialog, AboutView
 from .app_icon import DESKTOP_FILE_NAME, ICON_PATH, app_icon, install_desktop_entry, set_windows_app_id
 from .components_panel import ComponentsPanel
 from .config_tree import ConfigTreeWidget
@@ -236,8 +236,7 @@ class Window(QMainWindow):
         return button
 
     def make_center(self):
-        self.tabs = SideTabs()
-        self.tabs.logoClicked.connect(self.show_about)
+        self.tabs = SideTabs()  # its gear opens Settings and its logo opens About
         self.setCentralWidget(self.tabs)
 
         # 1. Components Panel
@@ -391,7 +390,8 @@ class Window(QMainWindow):
 
         self.settings_panel = self.make_settings()
         self.tabs.set_settings_widget(self.settings_panel)
-        self.tabs.logoClicked.connect(lambda: getattr(self, "settings_view", None) and self.settings_view.reset_to_ascii())
+        self.about_panel = self.make_about()
+        self.tabs.set_about_widget(self.about_panel)
         self.tabs.currentChanged.connect(self.tab_changed)
 
     def dock(self, title, name, widget, area):
@@ -594,6 +594,11 @@ class Window(QMainWindow):
         from .settings_view import SettingsView
         self.settings_view = SettingsView(self)
         return self.settings_view
+
+    def make_about(self):
+        self.about_view = AboutView(self)
+        self.settings_ascii = self.about_view.logo  # the rotating theta; Settings > Appearance can pause it
+        return self.about_view
 
 
     def settings_theme_selected(self, theme_name):
@@ -1213,7 +1218,7 @@ class Window(QMainWindow):
         view_menu.addAction("Job queue", lambda: self.tabs.setCurrentWidget(self.queue_panel))
         view_menu.addAction("Terminal", lambda: self.tabs.setCurrentWidget(self.terminal_panel))
         view_menu.addAction("Console", lambda: self.tabs.setCurrentWidget(self.console_panel))
-        view_menu.addAction("Settings & About", lambda: self.tabs.setCurrentWidget(self.settings_panel))
+        view_menu.addAction("Settings", self.show_settings)
         view_menu.addAction("Restore default layout", lambda: self.restoreState(self.default_layout))
         self.auto_hide_action = QAction("Auto-hide sidebar", self, checkable=True)
         self.auto_hide_action.setChecked(self.tabs.auto_hide)
@@ -1222,7 +1227,7 @@ class Window(QMainWindow):
         view_menu.addSeparator()
         view_menu.addAction("Preferences: Open Settings File", self.open_settings_file)
         help_menu = self.menuBar().addMenu("Help")
-        help_menu.addAction("Settings & About", self.show_about)
+        help_menu.addAction("About ThetaIDE", self.show_about)
 
     def open_settings_file(self):
         """Open the workspace settings.toml in the user's default text editor."""
@@ -1306,8 +1311,10 @@ class Window(QMainWindow):
         if hasattr(self, "zoom_percent_label") and self.zoom_percent_label:
             self.zoom_percent_label.setText(f"{int(round(factor * 100))}%")
 
-        # 7. Status bar confirmation
-        if hasattr(self, "statusBar") and self.statusBar():
+        # 7. Status bar confirmation, for zooms the user makes. Not while starting up: a message shown
+        # before the window is visible doesn't hide the status bar's normal widgets (QStatusBar only
+        # hides visible ones), so for its 1.5 s it was drawn on top of the theme label.
+        if self.isVisible() and hasattr(self, "statusBar") and self.statusBar():
             self.statusBar().showMessage(f"Zoom: {int(round(factor * 100))}%", 1500)
 
     def _persist_zoom(self):
@@ -1359,7 +1366,6 @@ class Window(QMainWindow):
         if hasattr(self, "settings_panel") and self.tabs.widget(index) is self.settings_panel:
             self.test_backend_connection()
             if hasattr(self, "settings_view"):
-                self.settings_view.reset_to_ascii()
                 # Theme changes restyle it immediately; only a zoom made while it was hidden is pending.
                 if getattr(self, "_settings_styles_stale", False):
                     self._settings_styles_stale = False
@@ -1372,11 +1378,19 @@ class Window(QMainWindow):
         holder._config_fingerprint = fingerprint
         return changed
 
-    def show_about(self):
+    def show_settings(self, tab_id=None):
+        """Open Settings, on `tab_id` (e.g. "hotkeys") if given."""
         if hasattr(self, "settings_panel"):
             self.tabs.setCurrentWidget(self.settings_panel)
-            if hasattr(self, "settings_view"):
-                self.settings_view.reset_to_ascii()
+            if tab_id and hasattr(self, "settings_view"):
+                self.settings_view.show_tab(tab_id)
+
+    def show_about(self, animation_settings=False):
+        """Open the About page; with `animation_settings`, also its animation dialog over the logo."""
+        if hasattr(self, "about_panel"):
+            self.tabs.setCurrentWidget(self.about_panel)
+            if animation_settings:
+                QTimer.singleShot(0, self.about_view.open_animation_settings)  # once the page has shown
         else:
             dialog = AboutDialog(self)
             dialog.exec()

@@ -1,4 +1,4 @@
-"""Unit tests for the refactored SettingsView and overlay on ASCII Theta."""
+"""SettingsView (the sidebar gear) and its separation from the About page (the sidebar logo)."""
 import os
 import sys
 import tempfile
@@ -13,7 +13,8 @@ try:
     QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
     app = QApplication.instance() or QApplication(sys.argv[:1])
     from frontend.app import Window
-    from frontend.settings_view import AsciiThetaSplash, SettingsDetailWindow, SettingsView
+    from frontend.about import AboutView
+    from frontend.settings_view import SettingsDetailWindow, SettingsView
     HAS_PYQT6 = True
 except ImportError:
     HAS_PYQT6 = False
@@ -50,141 +51,151 @@ class TestSettingsViewStructureAndNavigation(unittest.TestCase):
         self.assertIsNotNone(self.window.settings_backend_status)  # Training pipeline page
         self.assertIsNotNone(self.window.settings_backend_status)
         self.assertIsNotNone(self.window.settings_runs_count_label)
-        self.assertIsNotNone(self.window.settings_ascii)
-        self.assertIsNotNone(self.window.anim_toggle_btn)
+        self.assertIs(self.window.settings_ascii, self.window.about_view.logo)  # Appearance pauses the About logo
         self.assertEqual(set(self.window.pane_sliders), set(self.window.tabs.tabs))  # built-in panes and plugin tabs
 
-    def test_initial_state_shows_ascii_and_not_settings(self):
-        """On entering settings, content stack is at index 0 (ASCII Theta)."""
-        self.assertIsNone(self.settings.active_tab_id)
-        self.assertEqual(self.settings.content_stack.currentIndex(), 0)
-        self.assertIs(self.settings.content_stack.currentWidget(), self.settings.ascii_splash)
-
-        # No sidebar tabs should be checked
-        for btn in self.settings.tab_buttons.values():
-            self.assertFalse(btn.isChecked())
-
-    def test_click_tab_switches_to_settings_window(self):
-        """Clicking a tab displays the settings window on top (index 1)."""
-        self.settings.tab_buttons["appearance"].click()
-
+    def test_opens_on_the_first_category(self):
+        """Settings shows a page straight away: Appearance, with no landing view in front."""
+        app.processEvents()
         self.assertEqual(self.settings.active_tab_id, "appearance")
-        self.assertEqual(self.settings.content_stack.currentIndex(), 1)
-        self.assertIs(self.settings.content_stack.currentWidget(), self.settings.settings_window)
         self.assertTrue(self.settings.tab_buttons["appearance"].isChecked())
-        self.assertEqual(
-            self.settings.settings_window.pages_stack.currentWidget(),
-            self.settings.page_widgets["appearance"],
-        )
-        self.assertIn("Appearance", self.settings.settings_window.title_label.text())
+        self.assertTrue(self.settings.settings_window.isVisible())
+        self.assertIs(self.settings.settings_window.pages_stack.currentWidget(), self.settings.page_widgets["appearance"])
+
+    def test_click_tab_shows_its_page(self):
+        self.settings.tab_buttons["hotkeys"].click()
+
+        self.assertEqual(self.settings.active_tab_id, "hotkeys")
+        self.assertTrue(self.settings.tab_buttons["hotkeys"].isChecked())
+        self.assertFalse(self.settings.tab_buttons["appearance"].isChecked())
+        self.assertIs(self.settings.settings_window.pages_stack.currentWidget(), self.settings.page_widgets["hotkeys"])
+        self.assertIn("Hotkeys", self.settings.settings_window.title_label.text())
 
     def test_tab_switching_updates_settings_content(self):
         """Switching between tabs smoothly updates the title and page widget."""
-        # Click Core Plugins
         self.settings.tab_buttons["core_plugins"].click()
         self.assertEqual(self.settings.active_tab_id, "core_plugins")
-        self.assertEqual(self.settings.content_stack.currentIndex(), 1)
         self.assertIn("Core Plugins", self.settings.settings_window.title_label.text())
 
-        # Click Hotkeys
         self.settings.tab_buttons["hotkeys"].click()
         self.assertEqual(self.settings.active_tab_id, "hotkeys")
         self.assertTrue(self.settings.tab_buttons["hotkeys"].isChecked())
         self.assertFalse(self.settings.tab_buttons["core_plugins"].isChecked())
         self.assertIn("Hotkeys", self.settings.settings_window.title_label.text())
 
-        # Click Community Plugins
         self.settings.tab_buttons["community_plugins"].click()
         self.assertEqual(self.settings.active_tab_id, "community_plugins")
         self.assertIn("Community Plugins", self.settings.settings_window.title_label.text())
 
-    def test_close_button_returns_to_ascii_theta(self):
-        """Clicking the close '✕' button returns to ASCII Theta (index 0)."""
-        self.settings.tab_buttons["appearance"].click()
-        self.assertEqual(self.settings.content_stack.currentIndex(), 1)
-
-        # Click close
-        self.settings.settings_window.btn_close.click()
-        self.assertEqual(self.settings.content_stack.currentIndex(), 0)
-        self.assertIsNone(self.settings.active_tab_id)
-        self.assertFalse(self.settings.tab_buttons["appearance"].isChecked())
-
-    def test_click_active_tab_again_toggles_back_to_ascii(self):
-        """Clicking the active tab button toggles back to ASCII Theta."""
+    def test_clicking_the_active_tab_keeps_its_page(self):
         btn = self.settings.tab_buttons["hotkeys"]
         btn.click()
-        self.assertEqual(self.settings.content_stack.currentIndex(), 1)
-
-        # Click again to dismiss
         btn.click()
-        self.assertEqual(self.settings.content_stack.currentIndex(), 0)
-        self.assertIsNone(self.settings.active_tab_id)
-        self.assertFalse(btn.isChecked())
-
-    def test_reset_to_ascii_helper(self):
-        """reset_to_ascii() cleanly returns to ASCII Theta."""
-        self.settings.tab_buttons["backend"].click()
-        self.assertEqual(self.settings.content_stack.currentIndex(), 1)
-
-        self.settings.reset_to_ascii()
-        self.assertEqual(self.settings.content_stack.currentIndex(), 0)
-        self.assertIsNone(self.settings.active_tab_id)
-
-    def test_overlay_sizing_per_tab(self):
-        """Settings detail card is appropriately sized per tab, and its shadow is painted
-        rather than a QGraphicsEffect (which re-renders the whole card on every scroll step)."""
-        from frontend.settings_view import TAB_SIZES
-        self.assertIsNone(self.settings.settings_window.card.graphicsEffect())
-
-        # Backend panel sizing
-        self.settings.tab_buttons["backend"].click()
-        self.assertEqual(self.settings.settings_window.target_size, TAB_SIZES["backend"])
-        self.assertEqual(self.settings.settings_window.card.maximumWidth(), TAB_SIZES["backend"][0])
-
-        # Storage panel sizing
-        self.settings.tab_buttons["storage"].click()
-        self.assertEqual(self.settings.settings_window.target_size, TAB_SIZES["storage"])
-        self.assertEqual(self.settings.settings_window.card.maximumWidth(), TAB_SIZES["storage"][0])
-
-        # Core plugins panel sizing
-        self.settings.tab_buttons["core_plugins"].click()
-        self.assertEqual(self.settings.settings_window.target_size, TAB_SIZES["core_plugins"])
-        self.assertEqual(self.settings.settings_window.card.maximumWidth(), TAB_SIZES["core_plugins"][0])
-
-        # Appearance panel sizing
-        self.settings.tab_buttons["appearance"].click()
-        self.assertEqual(self.settings.settings_window.target_size, TAB_SIZES["appearance"])
-        self.assertEqual(self.settings.settings_window.card.maximumWidth(), TAB_SIZES["appearance"][0])
-
-    def test_ascii_sculpture_stays_active_in_overlay(self):
-        """ASCII splash remains visible in background when overlay is shown."""
-        self.settings.tab_buttons["appearance"].click()
+        self.assertEqual(self.settings.active_tab_id, "hotkeys")
+        self.assertTrue(btn.isChecked())
         self.assertTrue(self.settings.settings_window.isVisible())
-        self.assertTrue(self.settings.ascii_splash.isVisible())
 
-    def test_click_backdrop_dismisses_overlay(self):
-        """Clicking on the translucent backdrop outside the card dismisses the overlay."""
-        from PyQt6.QtCore import QPointF
-        from PyQt6.QtGui import QMouseEvent
+    def test_page_fills_the_area_up_to_a_readable_width(self):
+        self.window.resize(1800, 900)
+        app.processEvents()
+        card = self.settings.settings_window.card
+        self.assertIsNone(card.graphicsEffect())
+        self.assertEqual(card.width(), SettingsDetailWindow.MAX_PAGE_WIDTH)
+        self.assertEqual(card.height(), self.settings.settings_window.height())
 
-        self.settings.tab_buttons["appearance"].click()
-        self.assertEqual(self.settings.content_stack.currentIndex(), 1)
+    def test_rebuilt_pane_switches_leave_no_stale_widgets_on_screen(self):
+        """Plugins add tabs while the window is built, rebuilding the switches before the event loop runs;
+        the old labels used to stay visible (stacked at the card's corner) until deleteLater fired."""
+        from PyQt6.QtWidgets import QLabel
 
-        # Synthesize a click in the outer margin outside the card (to the right and underneath)
-        click_x = float(self.settings.settings_window.width() - 10)
-        click_y = float(self.settings.settings_window.height() - 10)
-        click_event = QMouseEvent(
-            QMouseEvent.Type.MouseButtonPress,
-            QPointF(click_x, click_y),
-            Qt.MouseButton.LeftButton,
-            Qt.MouseButton.LeftButton,
-            Qt.KeyboardModifier.NoModifier,
-        )
-        self.settings.settings_window.mousePressEvent(click_event)
+        self.settings.rebuild_pane_switches()  # a rebuild, with no event loop to run deleteLater
+        card = self.settings.panes_grid.parentWidget()
+        visible = [lbl.text() for lbl in card.findChildren(QLabel) if lbl.isVisible()]
+        for _pid, entry in self.window.tabs.tabs.items():
+            name = entry.get("text") or entry.get("short")
+            self.assertLessEqual(visible.count(name), 1, name)
 
-        # Overlay should now be dismissed back to index 0
-        self.assertEqual(self.settings.content_stack.currentIndex(), 0)
-        self.assertIsNone(self.settings.active_tab_id)
+    def test_startup_zoom_posts_no_status_message_but_user_zoom_does(self):
+        """A message posted before the window is visible doesn't hide the status bar's own widgets,
+        so it was drawn over the theme label. Startup has nothing to confirm; user zooms still do."""
+        with tempfile.TemporaryDirectory() as temp:
+            fresh = Window(Path(temp))
+            try:
+                self.assertEqual(fresh.statusBar().currentMessage(), "")
+            finally:
+                fresh._quitting = True
+                fresh.close()
+        self.window.set_zoom(1.1, persist=False)
+        self.assertEqual(self.window.statusBar().currentMessage(), "Zoom: 110%")
+        self.window.set_zoom(1.0, persist=False)
+
+    def test_no_animation_or_about_content_in_settings(self):
+        self.assertNotIn("animation", self.settings.tab_buttons)
+        self.assertNotIn("animation", self.settings.page_widgets)
+        self.assertFalse(self.settings.findChildren(AboutView))
+
+
+@unittest.skipIf(not HAS_PYQT6, "PyQt6 not installed in current environment")
+class TestSettingsAndAboutAreSeparate(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.window = Window(Path(self.temp_dir.name))
+        self.window.show()
+        self.tabs = self.window.tabs
+
+    def tearDown(self):
+        self.window.close()
+        self.temp_dir.cleanup()
+
+    def test_gear_opens_settings_and_logo_opens_about(self):
+        self.tabs.settings_button.click()
+        self.assertIs(self.tabs.currentWidget(), self.window.settings_panel)
+        self.assertTrue(self.tabs.settings_button.isChecked())
+        self.assertFalse(self.tabs.logo_button.isChecked())
+
+        self.tabs.logo_button.click()
+        self.assertIs(self.tabs.currentWidget(), self.window.about_panel)
+        self.assertIsInstance(self.window.about_panel, AboutView)
+        self.assertTrue(self.tabs.logo_button.isChecked())
+        self.assertFalse(self.tabs.settings_button.isChecked())
+
+        self.tabs.setCurrentWidget(self.window.console_panel)
+        self.assertFalse(self.tabs.logo_button.isChecked() or self.tabs.settings_button.isChecked())
+
+    def test_about_page_shows_the_logo_name_and_version(self):
+        about = self.window.about_view
+        self.assertIsNotNone(about.logo)
+        self.assertTrue(about.version_label.text())
+        self.assertEqual(about.anim_btn.text(), "Animation settings…")
+
+    def test_menus_and_hotkeys_reach_each_page(self):
+        self.window.show_settings("hotkeys")
+        self.assertIs(self.tabs.currentWidget(), self.window.settings_panel)
+        self.assertEqual(self.window.settings_view.active_tab_id, "hotkeys")
+        self.window.show_about()
+        self.assertIs(self.tabs.currentWidget(), self.window.about_panel)
+
+        hotkeys = self.window.hotkey_manager
+        self.assertTrue(hotkeys.switch_to_pane("settings"))
+        self.assertIs(self.tabs.currentWidget(), self.window.settings_panel)
+        self.assertTrue(hotkeys.switch_to_pane("about"))
+        self.assertIs(self.tabs.currentWidget(), self.window.about_panel)
+        self.assertTrue(hotkeys.switch_to_pane("settings_about"))  # the combined pane's old name
+        self.assertIs(self.tabs.currentWidget(), self.window.settings_panel)
+
+
+@unittest.skipIf(not HAS_PYQT6, "PyQt6 not installed in current environment")
+class TestSettingsViewPages(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.window = Window(Path(self.temp_dir.name))
+        self.settings = self.window.settings_view
+        self.window.show()
+        self.window.tabs.setCurrentWidget(self.settings)
+
+    def tearDown(self):
+        self.window.close()
+        self.temp_dir.cleanup()
 
     def test_no_horizontal_scrollbars_in_settings(self):
         """Settings scroll area policy is ScrollBarAlwaysOff and no horizontal scroll range exists."""
@@ -192,78 +203,34 @@ class TestSettingsViewStructureAndNavigation(unittest.TestCase):
             self.settings.settings_window.scroll_area.horizontalScrollBarPolicy(),
             Qt.ScrollBarPolicy.ScrollBarAlwaysOff,
         )
-        for tab_id in ["appearance", "core_plugins", "community_plugins", "backend", "storage", "animation"]:
+        for tab_id in ["appearance", "core_plugins", "community_plugins", "backend", "storage"]:
             self.settings.tab_buttons[tab_id].click()
             QApplication.processEvents()
             h_bar = self.settings.settings_window.scroll_area.horizontalScrollBar()
             self.assertEqual(h_bar.maximum(), 0)
 
-    def test_splash_removes_thetaide_title_and_header(self):
-        """Splash view background contains the ASCII sculpture without ThetaIDE title header."""
-        from PyQt6.QtWidgets import QLabel
-        labels = self.settings.ascii_splash.findChildren(QLabel)
-        for lbl in labels:
-            self.assertNotEqual(lbl.text(), "ThetaIDE")
-        self.assertIsNotNone(self.settings.ascii_splash.ascii_sculpture)
+    def test_appearance_animation_button_opens_them_on_the_about_page(self):
+        """Animation settings preview on the About logo, so Settings sends you there to change them."""
+        from unittest import mock
 
-    def test_animation_settings_button_in_sidebar_bottom_left(self):
-        """Animation settings button is located in the settings sidebar at the bottom left."""
-        btn = self.settings.anim_settings_btn
-        self.assertIsNotNone(btn)
-        self.assertEqual(btn.text(), "Animation Settings")
-        self.assertIn("animation", self.settings.tab_buttons)
-        self.assertIs(self.settings.tab_buttons["animation"], btn)
-        # Check it is in sidebar_frame children
-        self.assertIn(btn, self.settings.sidebar_frame.findChildren(type(btn)))
+        with mock.patch.object(self.window.about_view, "open_animation_settings") as open_dialog:
+            self.settings._open_animation_settings_dialog()
+            self.assertIs(self.window.tabs.currentWidget(), self.window.about_panel)
+            for _ in range(3):
+                QApplication.processEvents()  # the dialog opens once the page has shown
+            open_dialog.assert_called_once()
 
-    def test_animation_settings_box_docks_bottom_left(self):
-        """Clicking animation settings opens the detail box docked in the bottom left."""
-        self.settings.anim_settings_btn.click()
-        self.assertEqual(self.settings.active_tab_id, "animation")
-        self.assertEqual(self.settings.content_stack.currentIndex(), 1)
-        self.assertTrue(self.settings.anim_settings_btn.isChecked())
+    def test_animation_dialog_drives_the_about_logo(self):
+        from frontend.about import AnimationSettingsDialog
 
-        # Check detail window docking and styling property
-        detail_win = self.settings.settings_window
-        self.assertEqual(detail_win.dock_position, "bottom_left")
-        self.assertEqual(detail_win.outer_layout.alignment(), Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignLeft)
-        self.assertEqual(detail_win.card.property("dock"), "bottom-left")
-        self.assertIn("Animation Settings", detail_win.title_label.text())
-
-        # Switching to another tab restores top-left docking
-        self.settings.tab_buttons["appearance"].click()
-        self.assertEqual(self.settings.active_tab_id, "appearance")
-        self.assertEqual(detail_win.dock_position, "top_left")
-        self.assertEqual(detail_win.outer_layout.alignment(), Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
-        self.assertEqual(detail_win.card.property("dock"), "top-left")
-
-    def test_animation_settings_controls_update_parameters(self):
-        """Animation settings sliders, preset selection, and reset defaults update live sculpture."""
-        self.settings.anim_settings_btn.click()
-        target = self.settings.ascii_splash.ascii_sculpture
-
-        # Slider speed
-        self.settings.anim_slider_speed.setValue(180)
-        self.assertAlmostEqual(target.speed, 1.8)
-        self.assertEqual(self.settings.anim_preset_combo.currentText(), "Custom")
-
-        # Preset selection
-        self.settings.anim_preset_combo.setCurrentText("Bold & Chunky")
-        self.assertAlmostEqual(target.speed, 0.8)
-        self.assertAlmostEqual(target.scale, 1.1)
-        self.assertAlmostEqual(target.thickness, 1.9)
-
-        # Toggle playback
-        self.settings.anim_toggle_active.setChecked(False)
-        self.assertTrue(target.paused)
-        self.assertEqual(self.settings.anim_status_lbl.text(), "Paused")
-
-        # Reset defaults
-        self.settings._reset_anim_defaults()
-        self.assertAlmostEqual(target.speed, 1.0)
-        self.assertAlmostEqual(target.scale, 1.0)
-        self.assertAlmostEqual(target.thickness, 1.0)
-        self.assertEqual(self.settings.anim_preset_combo.currentText(), "Default (Balanced)")
+        logo = self.window.about_view.logo
+        dialog = AnimationSettingsDialog(target=logo, settings_manager=self.window.settings_manager)
+        dialog.slider_speed.setValue(180)
+        self.assertAlmostEqual(logo.speed, 1.8)
+        dialog.reset_to_defaults()
+        self.assertAlmostEqual(logo.speed, 1.0)
+        dialog.close()
+        dialog.deleteLater()
 
 
 @unittest.skipIf(not HAS_PYQT6, "PyQt6 not installed in current environment")

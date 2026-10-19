@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import QApplication  # noqa: E402
 
 app = QApplication.instance() or QApplication(sys.argv[:1])
 
-from frontend.splash import SplashScreen, splash_theme  # noqa: E402
+from frontend.splash import PHASES, SplashScreen, splash_theme  # noqa: E402
 from frontend.theme import BUILTINS, DEFAULT  # noqa: E402
 
 
@@ -24,6 +24,39 @@ def test_progress_only_moves_forward_and_is_clamped():
     assert splash.progress == 0.5 and splash.message == "Starting plugins…"
     splash.set_progress("Opening window…", 7)
     assert splash.progress == 1.0
+
+
+def test_phase_follows_known_steps_and_never_moves_backwards():
+    splash = SplashScreen()
+    assert splash.phase == -1
+    splash.set_progress("Starting plugins…", 0.56)
+    assert splash.phase == PHASES.index("Starting plugins…")
+    splash.set_progress("Loading settings…", 0.02)  # an earlier phase
+    assert splash.phase == PHASES.index("Starting plugins…")
+    splash.set_progress("Doing something unlisted…", 0.6)
+    assert splash.message == "Doing something unlisted…" and splash.phase == PHASES.index("Starting plugins…")
+
+
+def test_phase_circles_fill_as_phases_complete():
+    theme = BUILTINS["Gruvbox Dark"]
+    splash = SplashScreen(theme)
+    splash.set_progress(PHASES[3], 0.08)
+    splash.show()
+    app.processEvents()
+    image = splash.grab().toImage()
+    scale = image.width() / splash.width()
+    accent = QColor(theme["colors"]["accent"])
+
+    def is_accent(point):
+        pixel = image.pixelColor(int(point.x() * scale), int(point.y() * scale))
+        return abs(pixel.red() - accent.red()) + abs(pixel.green() - accent.green()) + abs(pixel.blue() - accent.blue()) < 40
+
+    centers = splash.phase_centers()
+    assert len(centers) == len(PHASES)
+    assert all(is_accent(centers[i]) for i in range(3))  # completed: filled
+    assert is_accent(centers[3])  # under way: the centre dot
+    assert not any(is_accent(centers[i]) for i in range(4, len(PHASES)))  # still to come: hollow
+    splash.close()
 
 
 def test_splash_paints_the_painting_faded_into_the_theme():
@@ -87,6 +120,9 @@ def test_window_reports_startup_steps_in_order():
             fractions = [fraction for _, fraction in steps]
             assert len(steps) >= 5 and fractions == sorted(fractions) and fractions[-1] < 1
             assert steps[0][0] == "Loading settings…"
+            # every step has a circle, in order (main() reports the last one, "Opening window…")
+            messages = [message for message, _ in steps]
+            assert messages == list(PHASES[:len(messages)]) and PHASES[len(messages):] == ("Opening window…",)
         finally:
             window._quitting = True
             window.close()
