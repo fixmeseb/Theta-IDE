@@ -37,6 +37,7 @@ from .about import AsciiTheta, AnimationSettingsDialog
 from .hotkeys import parse_action_key
 from .results.layouts import DEFAULT_LAYOUT, LAYOUTS
 from .theme import current_theme, theme_color
+from .toast import Toast
 from .widgets import ToggleSlider, label, SmoothScrollArea
 
 if TYPE_CHECKING:
@@ -2366,8 +2367,66 @@ class SettingsView(QWidget):
         bc_layout.addWidget(tip_lbl)
 
         layout.addWidget(backend_card)
+        layout.addWidget(self._build_run_notifications_card())
         layout.addStretch()
         return container
+
+    def _build_run_notifications_card(self) -> QFrame:
+        """Training pipeline → Run notifications: the toast and the chime when a run ends."""
+        sm = self.window.settings_manager
+        card = QFrame()
+        card.setObjectName("card")
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(18, 16, 18, 16)
+        card_layout.setSpacing(10)
+        card_layout.addWidget(label("Run notifications", "cardTitle"))
+        sub = label("When a run completes, fails or is stopped. If ThetaIDE isn't in front, the toast becomes "
+                    "a system notification.", "muted")
+        sub.setWordWrap(True)
+        card_layout.addWidget(sub)
+
+        self.notification_toggles = {}
+        for key, title, detail in (
+            ("toast", "Show a toast", "A notice in the bottom-right corner, with a button to view the results."),
+            ("sound", "Play a sound", "A short chime: brighter when a run completes, lower when it fails."),
+        ):
+            row = QHBoxLayout()
+            info = QVBoxLayout()
+            info.setSpacing(1)
+            row_title = label(title)
+            row_title.setStyleSheet("font-weight: 500; font-size: 12px;")
+            info.addWidget(row_title)
+            row_sub = label(detail, "muted")
+            row_sub.setWordWrap(True)
+            info.addWidget(row_sub)
+            row.addLayout(info, 1)
+            toggle = ToggleSlider(checked=bool(sm.get("notifications", key, default=True)))
+            toggle.setAccessibleName(title)
+            toggle.toggled.connect(lambda on, k=key: sm.set("notifications", k, bool(on)))
+            row.addWidget(toggle)
+            card_layout.addLayout(row)
+            self.notification_toggles[key] = toggle
+
+        try_row = QHBoxLayout()
+        btn_try = QPushButton("Try it")
+        btn_try.setToolTip("Show a sample toast and play the completed chime (each only if switched on)")
+        btn_try.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn_try.clicked.connect(self._try_run_notification)
+        try_row.addWidget(btn_try)
+        try_row.addStretch()
+        card_layout.addLayout(try_row)
+        return card
+
+    def _try_run_notification(self):
+        from .run_notifier import describe
+
+        notifier = self.window.run_notifier
+        info = describe("completed", "example_run", 134)
+        if notifier.enabled("toast"):
+            toast = Toast(info["mark"], info["title"], info["detail"], color=info["color"])
+            notifier.toasts.show(toast)
+        if notifier.enabled("sound"):
+            notifier.play(info["kind"])
 
     def _build_storage_page(self) -> QWidget:
         container = QWidget()

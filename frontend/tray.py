@@ -1,8 +1,8 @@
 """System tray icon: closing the window while training hides ThetaIDE to the tray so runs keep going.
 
 Training runs are children of the app (QProcess), so they only survive the window closing if the app
-itself keeps running. The tray keeps it running, shows what is training, notifies when runs finish, and
-offers Show / Stop all training / Quit.
+itself keeps running. The tray keeps it running, shows what is training, carries RunNotifier's notices
+when a run ends while ThetaIDE is not in front, and offers Show / Stop all training / Quit.
 """
 from __future__ import annotations
 
@@ -12,7 +12,6 @@ from PyQt6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 from .app_icon import app_icon
 
-FINAL_STATUSES = ("completed", "failed", "cancelled", "error", "interrupted")
 # Badge in the icon's bottom-right corner: green while a run is training, blue while the queue waits to start
 # the next job. No badge when idle.
 BADGE_COLORS = {"training": "#2ea043", "queued": "#3b82f6"}
@@ -142,19 +141,10 @@ class TrayController(QObject):
 
     def _on_job_changed(self, job):
         self.refresh()
-        status = job.get("status")
-        if status not in FINAL_STATUSES or self.window.isVisible():
-            return
-        name = job.get("experiment_id", "A run")
-        if status == "completed":
-            title, icon = f"{name} finished", QSystemTrayIcon.MessageIcon.Information
-            body = "Training completed. Open ThetaIDE to see the results."
-        elif status == "cancelled":
-            title, icon, body = f"{name} stopped", QSystemTrayIcon.MessageIcon.Information, "The run was stopped."
-        else:
-            code = job.get("returncode")
-            title, icon = f"{name} failed", QSystemTrayIcon.MessageIcon.Warning
-            body = f"Training ended with exit code {code}." if code is not None else "Training could not run."
+
+    def notify(self, title: str, body: str, warning: bool = False):
+        """A system notification. RunNotifier sends one when a run ends while ThetaIDE is not in front."""
+        icon = QSystemTrayIcon.MessageIcon.Warning if warning else QSystemTrayIcon.MessageIcon.Information
         self.icon.showMessage(title, body, icon, 8000)
 
     def remove(self):
