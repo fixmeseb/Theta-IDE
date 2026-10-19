@@ -99,6 +99,7 @@ class SupervisedDataModule(L.LightningDataModule, BaseDataModule):
             ):
                 try:
                     from src.usr.eval.early_prediction.data_module import EPSepsisDataModule
+
                     self._delegate = EPSepsisDataModule(self._cfg)
                     self.input_dim = getattr(self._delegate, "input_dim", 64)
                     return

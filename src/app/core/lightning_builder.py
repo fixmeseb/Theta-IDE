@@ -144,8 +144,12 @@ def setup_loggers(cfg, base_root):
 
     selection = selection_from_config(cfg)
     method_name = get_method_name(cfg)
-    group_name = str(cfg.get("group", "default_group") if hasattr(cfg, "get") else getattr(cfg, "group", "default_group"))
-    exp_id = str(cfg.get("experiment_id", "default_exp") if hasattr(cfg, "get") else getattr(cfg, "experiment_id", "default_exp"))
+    group_name = str(
+        cfg.get("group", "default_group") if hasattr(cfg, "get") else getattr(cfg, "group", "default_group")
+    )
+    exp_id = str(
+        cfg.get("experiment_id", "default_exp") if hasattr(cfg, "get") else getattr(cfg, "experiment_id", "default_exp")
+    )
     log_dir = os.path.join(base_root, "results/logs", group_name, exp_id)
     loggers = [_record_only(CSVLogger(log_dir, name=method_name), selection)]
 
@@ -225,8 +229,12 @@ def build_trainer(cfg, model=None):
         except Exception as e:
             logger.debug("Could not inspect Hydra job num: %s", e)
     method_name = get_method_name(cfg)
-    group_name = str(cfg.get("group", "default_group") if hasattr(cfg, "get") else getattr(cfg, "group", "default_group"))
-    exp_id = str(cfg.get("experiment_id", "default_exp") if hasattr(cfg, "get") else getattr(cfg, "experiment_id", "default_exp"))
+    group_name = str(
+        cfg.get("group", "default_group") if hasattr(cfg, "get") else getattr(cfg, "group", "default_group")
+    )
+    exp_id = str(
+        cfg.get("experiment_id", "default_exp") if hasattr(cfg, "get") else getattr(cfg, "experiment_id", "default_exp")
+    )
     ckpt_dir = os.path.join(base_root, "results/checkpoints", group_name, exp_id, method_name, trial_id)
 
     def graceful_shutdown(signum, frame):
@@ -257,7 +265,15 @@ def build_trainer(cfg, model=None):
 
     if enable_checkpoint:
         default_monitor = "eval/reward" if is_online else cfg.env.get("monitor_metric", "val/loss")
-        default_mode = "max" if is_online else ("max" if any(k in str(default_monitor).lower() for k in ["f1", "reward", "auc", "acc", "prc"]) else "min")
+        default_mode = (
+            "max"
+            if is_online
+            else (
+                "max"
+                if any(k in str(default_monitor).lower() for k in ["f1", "reward", "auc", "acc", "prc"])
+                else "min"
+            )
+        )
         default_save_top_k = 1
         default_save_last = not is_online
         default_filename = "best_model"
@@ -266,7 +282,11 @@ def build_trainer(cfg, model=None):
             monitor_metric = ckpt_cfg.get("monitor", default_monitor)
             monitor_mode = ckpt_cfg.get("mode")
             if not monitor_mode:
-                monitor_mode = "max" if any(k in str(monitor_metric).lower() for k in ["f1", "reward", "auc", "acc", "prc"]) else "min"
+                monitor_mode = (
+                    "max"
+                    if any(k in str(monitor_metric).lower() for k in ["f1", "reward", "auc", "acc", "prc"])
+                    else "min"
+                )
             save_top_k = int(ckpt_cfg.get("save_top_k", default_save_top_k))
             save_last = bool(ckpt_cfg.get("save_last", default_save_last))
             filename = str(ckpt_cfg.get("filename", default_filename))
@@ -292,7 +312,8 @@ def build_trainer(cfg, model=None):
 
         if not is_online:
             eval_every_n_epochs = (
-                ckpt_cfg.get("every_n_epochs") if hasattr(ckpt_cfg, "get") and "every_n_epochs" in ckpt_cfg
+                ckpt_cfg.get("every_n_epochs")
+                if hasattr(ckpt_cfg, "get") and "every_n_epochs" in ckpt_cfg
                 else _agent_or_global(cfg, "eval_every_n_epochs", 1)
             )
             if eval_every_n_epochs:

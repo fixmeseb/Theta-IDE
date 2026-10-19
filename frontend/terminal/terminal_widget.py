@@ -760,8 +760,13 @@ class TerminalPanel(QWidget):
 
         self.status_timer = QTimer(self)
         self.status_timer.setInterval(2000)
-        self.status_timer.timeout.connect(self._update_status)
+        # Polls for tmux starting or stopping; nobody sees the title while the panel is hidden.
+        self.status_timer.timeout.connect(lambda: self.isVisible() and self._update_status())
         self.status_timer.start()
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        self._update_status()  # the poll skips while hidden, so catch up as soon as it's seen
 
     # ── Shells ───────────────────────────────────────────────────────────────
 

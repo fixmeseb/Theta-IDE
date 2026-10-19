@@ -17,6 +17,13 @@ import torch
 
 from src.app.core.paradigm_loader import get_component
 
+# The autoencoders come from the Hub's `neural` model component
+needs_neural = pytest.mark.skipif(
+    importlib.util.find_spec("src.usr.models.neural") is None  # checked first: a missing parent raises
+    or importlib.util.find_spec("src.usr.models.neural.autoencoder") is None,
+    reason="the 'neural' model component is not installed",
+)
+
 PREPARE = Path("in/datasets/prepare_tabular.py")
 
 
@@ -127,6 +134,7 @@ def test_a_missing_dataset_says_how_to_build_it(tmp_path):
         get_component("TabularNpzDataModule")(cfg)
 
 
+@needs_neural
 def test_the_module_feeds_the_autoencoder(tmp_path):
     """End of the chain: a file on disk trains the paradigm's own model."""
     from src.app.core.paradigm_loader import load_paradigm_definition

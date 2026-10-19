@@ -14,10 +14,10 @@ import shutil
 
 from plot.base import BasePlotter
 from src.app.core.plotter_registry import (
+    PLOTTER_REGISTRY,
     auto_discover_plotters,
     get_plotter_class,
     list_registered_plotters,
-    PLOTTER_REGISTRY,
 )
 
 FALLBACK_PLOTS = ["convergence", "losses", "reports"]

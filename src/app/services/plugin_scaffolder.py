@@ -8,12 +8,13 @@ base configuration profiles, and .theta_component.json manifests for:
   - DataModules & Trajectory Samplers
   - Evaluators, Safety & Verification Hooks
 """
+
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
 import json
 import logging
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -25,6 +26,7 @@ log = logging.getLogger(__name__)
 @dataclass
 class ScaffoldOptions:
     """Options for generating a new component plugin scaffold."""
+
     name: str
     kind: str  # "model", "agent", "env", "datamodule", "evaluator"
     author: str = "Theta Researcher"
@@ -38,6 +40,7 @@ class ScaffoldOptions:
 @dataclass
 class ScaffoldResult:
     """Result of component scaffolding operation."""
+
     success: bool
     component_id: str
     target_dir: Path
@@ -366,7 +369,7 @@ class {class_name}(L.LightningModule):
 
         # 2. __init__.py
         init_file = target_dir / "__init__.py"
-        init_file.write_text(f'from . import {name}_agent  # noqa: F401\n', encoding="utf-8")
+        init_file.write_text(f"from . import {name}_agent  # noqa: F401\n", encoding="utf-8")
         created.append(init_file)
 
         # 3. Base config in in/config/agent/<name>.yaml
@@ -492,7 +495,9 @@ class {class_name}(EnvironmentPluginProtocol):
 
         # 2. __init__.py
         init_file = target_dir / "__init__.py"
-        init_file.write_text(f'from .env import {class_name}, {name.capitalize()}GymEnv  # noqa: F401\n', encoding="utf-8")
+        init_file.write_text(
+            f"from .env import {class_name}, {name.capitalize()}GymEnv  # noqa: F401\n", encoding="utf-8"
+        )
         created.append(init_file)
 
         # 3. Base config in in/config/env/<name>.yaml
@@ -518,7 +523,9 @@ env:
         rules_dir = self.workspace_root / "in" / "rules" / name
         rules_dir.mkdir(parents=True, exist_ok=True)
         rules_file = rules_dir / "default.rules"
-        rules_file.write_text(f"# Domain rules for {name}\n# Example: action_preferred(X) :- state_positive(X).\n", encoding="utf-8")
+        rules_file.write_text(
+            f"# Domain rules for {name}\n# Example: action_preferred(X) :- state_positive(X).\n", encoding="utf-8"
+        )
         created.append(rules_file)
 
         # 5. Manifest
@@ -607,7 +614,7 @@ class {class_name}(L.LightningDataModule, DataModulePluginProtocol, TrajectorySa
         created.append(code_file)
 
         init_file = target_dir / "__init__.py"
-        init_file.write_text(f'from . import {name}_data_module  # noqa: F401\n', encoding="utf-8")
+        init_file.write_text(f"from . import {name}_data_module  # noqa: F401\n", encoding="utf-8")
         created.append(init_file)
 
         meta_file = target_dir / ".theta_component.json"
@@ -673,7 +680,7 @@ class {class_name}(EvaluationHookProtocol):
         created.append(code_file)
 
         init_file = target_dir / "__init__.py"
-        init_file.write_text(f'from . import {name}_evaluator  # noqa: F401\n', encoding="utf-8")
+        init_file.write_text(f"from . import {name}_evaluator  # noqa: F401\n", encoding="utf-8")
         created.append(init_file)
 
         meta_file = target_dir / ".theta_component.json"
@@ -740,14 +747,14 @@ class {class_name}(BasePlotter):
         created.append(code_file)
 
         init_file = target_dir / "__init__.py"
-        init_file.write_text(f'from . import {name}_plotter  # noqa: F401\n', encoding="utf-8")
+        init_file.write_text(f"from . import {name}_plotter  # noqa: F401\n", encoding="utf-8")
         created.append(init_file)
 
         # Default configuration in in/config/plot/<name>.yaml
         config_dir = self.workspace_root / "in" / "config" / "plot"
         config_dir.mkdir(parents=True, exist_ok=True)
         config_file = config_dir / f"{name}.yaml"
-        config_content = f'''# Default configuration profile for {name} plotter component
+        config_content = f"""# Default configuration profile for {name} plotter component
 metrics:
   - "eval/reward"
   - "train/reward"
@@ -756,7 +763,7 @@ smoothing_window: 10
 dpi: 300
 format: "png"
 output_dir: null
-'''
+"""
         config_file.write_text(config_content, encoding="utf-8")
         created.append(config_file)
 

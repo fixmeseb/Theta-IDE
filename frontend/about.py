@@ -3,6 +3,8 @@ import math
 import sys
 import time
 
+import numpy as np
+
 from PyQt6.QtCore import QPointF, QRectF, Qt, QTimer
 from PyQt6.QtGui import QColor, QFont, QFontMetricsF, QPainter, QPixmap
 from PyQt6.QtWidgets import (
@@ -77,6 +79,7 @@ class AsciiTheta(QWidget):
                 points.append((-1 + 2 * i / 99, r_bar * math.cos(v), r_bar * math.sin(v),
                                 0, math.cos(v), math.sin(v)))
         self.points = points
+        self._points_array = np.array(points, dtype=float)
         self.update()
 
     def showEvent(self, event):
@@ -162,33 +165,38 @@ class AsciiTheta(QWidget):
         self.update()
 
     def frame(self):
-        cells = {}
+        # Vectorized over all ~7k points: the per-point Python loop took ~22 ms a frame, which at
+        # 30 fps kept most of a core busy whenever the Settings page was open.
         ca, sa = math.cos(self.angle), math.sin(self.angle)
         tilt = (.20 + .12 * math.sin(self.angle)) * self.tilt_factor
         ct, st = math.cos(tilt), math.sin(tilt)
         dist = self.distance
         base_x = 19 * self.scale
         base_y = 8.8 * self.scale
-        for x, y, z, nx, ny, nz in self.points:
-            # Rotate about the vertical axis, then gently tilt toward the viewer.
-            x, z = ca * x + sa * z, -sa * x + ca * z
-            nx, nz = ca * nx + sa * nz, -sa * nx + ca * nz
-            y, z = ct * y - st * z, st * y + ct * z
-            ny, nz = ct * ny - st * nz, st * ny + ct * nz
-            denom = max(0.1, dist - z)
-            perspective = dist / denom
-            col = round(self.columns / 2 + x * perspective * base_x)
-            row = round(self.rows / 2 - y * perspective * base_y)
-            if not (0 <= col < self.columns and 0 <= row < self.rows):
-                continue
-            key = (col, row)
-            if key in cells and cells[key][0] >= z:
-                continue
-            normal_length = max(1e-6, math.sqrt(nx * nx + ny * ny + nz * nz))
-            brightness = .20 + .80 * max(0, (-.35 * nx + .45 * ny + .82 * nz) / normal_length)
-            index = min(len(self.ramp) - 1, int(brightness * (len(self.ramp) - 1)))
-            cells[key] = (z, self.ramp[index], brightness)
-        return cells
+        x, y, z, nx, ny, nz = self._points_array.T
+        # Rotate about the vertical axis, then gently tilt toward the viewer.
+        x, z = ca * x + sa * z, -sa * x + ca * z
+        nx, nz = ca * nx + sa * nz, -sa * nx + ca * nz
+        y, z = ct * y - st * z, st * y + ct * z
+        ny, nz = ct * ny - st * nz, st * ny + ct * nz
+        perspective = dist / np.maximum(0.1, dist - z)
+        col = np.round(self.columns / 2 + x * perspective * base_x).astype(np.int64)  # both round half to even
+        row = np.round(self.rows / 2 - y * perspective * base_y).astype(np.int64)
+        visible = np.flatnonzero((col >= 0) & (col < self.columns) & (row >= 0) & (row < self.rows))
+        if visible.size == 0:
+            return {}
+        # Per cell keep the nearest point (largest z); on a tie the earliest point wins, as before.
+        key = row[visible] * self.columns + col[visible]
+        order = np.lexsort((visible, -z[visible], key))
+        _, first = np.unique(key[order], return_index=True)
+        winners = visible[order[first]]
+        normal_length = np.maximum(1e-6, np.sqrt(nx * nx + ny * ny + nz * nz))
+        brightness = .20 + .80 * np.maximum(0, (-.35 * nx + .45 * ny + .82 * nz) / normal_length)
+        top = len(self.ramp) - 1
+        index = np.minimum(top, (brightness * top).astype(np.int64))
+        ramp = self.ramp
+        return {(int(col[i]), int(row[i])): (float(z[i]), ramp[index[i]], float(brightness[i]))
+                for i in winners.tolist()}
 
     def update(self, *args):
         """Every state change goes through update(): drop the cached frame, then schedule a paint."""

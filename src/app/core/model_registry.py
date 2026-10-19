@@ -84,7 +84,10 @@ def get_model_class(model_name: str) -> Any:
     matches = [
         (prefix, cls)
         for prefix, cls in MODEL_REGISTRY.items()
-        if clean_name == prefix or clean_name.startswith(prefix + "_") or basename == prefix or basename.startswith(prefix + "_")
+        if clean_name == prefix
+        or clean_name.startswith(prefix + "_")
+        or basename == prefix
+        or basename.startswith(prefix + "_")
     ]
     if matches:
         return max(matches, key=lambda x: len(x[0]))[1]

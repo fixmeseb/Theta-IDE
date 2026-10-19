@@ -11,6 +11,17 @@ from src.app.core.utils import load_module
 logger = logging.getLogger(__name__)
 
 
+def _neural_architecture(name):
+    """A class from the Hub-installed `neural` model component (src/usr/models/neural/)."""
+    try:
+        from src.usr.models.neural import architectures
+    except ImportError as e:
+        raise ImportError(
+            f"{name} comes from the 'neural' model component, which is not installed. Install it from the Component Hub."
+        ) from e
+    return getattr(architectures, name)
+
+
 def get_neural_agent(env_name, n_actions, device, arch_name=None, hidden_sizes=None, num_in_features=None, **kwargs):
     from src.app.core.model_registry import build_model
 
@@ -69,13 +80,13 @@ def get_blender(
             return get_blender_neumann_model(env.name, blender_rules, device, train=train, explain=explain)
     if blender_mode == "neural":
         if architecture == "cnn":
-            net = NatureCNNActor(out_size=out_size)
+            net = _neural_architecture("NatureCNNActor")(out_size=out_size)
         else:
             obs = env.reset()
             if isinstance(obs, tuple):
                 obs = obs[0]
             num_in_features = np.prod(obs.shape[1:])
-            net = StandardMLPActor(num_in_features=num_in_features, out_size=out_size)
+            net = _neural_architecture("StandardMLPActor")(num_in_features=num_in_features, out_size=out_size)
         net.to(device)
         return net
 
@@ -103,7 +114,7 @@ def load_cleanrl_agent(
     n_actions: int = 18,
 ):
     """Load CleanRL CNNActor, optionally restoring weights from a checkpoint path."""
-    agent = CNNActor(n_actions=n_actions)
+    agent = _neural_architecture("CNNActor")(n_actions=n_actions)
     if pretrained:
         if not model_path or not os.path.exists(model_path):
             raise FileNotFoundError(

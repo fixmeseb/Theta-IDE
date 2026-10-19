@@ -233,7 +233,8 @@ def validate_experiment_config(cfg: Any, experiment_name: str, is_sweep: bool = 
 
     # --- Recorded metrics: telemetry.metrics ---
     env = cfg.get("env") if hasattr(cfg, "get") else None
-    monitor = paradigm_def.get("monitor_metric") or (env.get("monitor_metric") if hasattr(env, "get") else None)
+    env_monitor = env.get("monitor_metric") if env is not None and hasattr(env, "get") else None
+    monitor = paradigm_def.get("monitor_metric") or env_monitor
     for problem in selection_errors(cfg, monitor):
         raise ConfigurationError(f"[ConfigurationError] Experiment '{experiment_name}': {problem}")
 
@@ -330,9 +331,7 @@ def _validate_methods_for_paradigm(cfg: Any, paradigm_name: str, paradigm_def: d
                 )
 
         # Check if paradigm requires an agent harness (e.g. constraints.requires.agent: required or allowed_agents)
-        requires_agent = (
-            allowed_agents is not None and len(allowed_agents) > 0
-        ) or (
+        requires_agent = (allowed_agents is not None and len(allowed_agents) > 0) or (
             paradigm_def.get("constraints", {}).get("requires", {}).get("agent") == "required"
         )
 
@@ -369,12 +368,12 @@ def _validate_methods_for_paradigm(cfg: Any, paradigm_name: str, paradigm_def: d
                     )
 
 
-
 def _get_agent_supported_paradigms(agent_algo: str) -> list[str] | None:
     """Query supported paradigms from agent class or config YAML."""
     clean_algo = agent_algo.lower().replace("-", "_")
     try:
         from src.usr.algorithms.agent_registry import AGENT_REGISTRY, auto_discover, get_agent_class
+
         if not AGENT_REGISTRY:
             auto_discover()
         agent_cls = None
@@ -410,7 +409,9 @@ def _get_agent_supported_paradigms(agent_algo: str) -> list[str] | None:
             if p.is_file():
                 try:
                     data = yaml.safe_load(p.read_text(encoding="utf-8")) or {}
-                    paradigms = data.get("paradigms") or data.get("compatible_paradigms") or data.get("supported_paradigms")
+                    paradigms = (
+                        data.get("paradigms") or data.get("compatible_paradigms") or data.get("supported_paradigms")
+                    )
                     if paradigms:
                         if isinstance(paradigms, list):
                             return [str(x).lower() for x in paradigms]
@@ -423,7 +424,9 @@ def _get_agent_supported_paradigms(agent_algo: str) -> list[str] | None:
             if y.stem.lower() in (clean_algo, agent_algo.lower()):
                 try:
                     data = yaml.safe_load(y.read_text(encoding="utf-8")) or {}
-                    paradigms = data.get("paradigms") or data.get("compatible_paradigms") or data.get("supported_paradigms")
+                    paradigms = (
+                        data.get("paradigms") or data.get("compatible_paradigms") or data.get("supported_paradigms")
+                    )
                     if paradigms:
                         if isinstance(paradigms, list):
                             return [str(x).lower() for x in paradigms]
@@ -446,6 +449,7 @@ def _get_agent_supported_paradigms(agent_algo: str) -> list[str] | None:
                         if meta_file.is_file():
                             try:
                                 import json
+
                                 meta = json.loads(meta_file.read_text(encoding="utf-8"))
                                 paradigms = meta.get("paradigms") or meta.get("compatible_paradigms")
                                 if paradigms:
@@ -463,6 +467,7 @@ def _agent_exists(agent_algo: str) -> bool:
     clean_algo = agent_algo.lower().replace("-", "_")
     try:
         from src.usr.algorithms.agent_registry import AGENT_REGISTRY, auto_discover
+
         if not AGENT_REGISTRY:
             auto_discover()
         if clean_algo in AGENT_REGISTRY or agent_algo in AGENT_REGISTRY:

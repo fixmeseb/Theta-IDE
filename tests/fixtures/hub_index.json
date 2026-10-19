@@ -1,0 +1,16 @@
+{
+  "components": [
+    {"id": "mimic", "name": "MIMIC", "kind": "experiment", "version": "1.0.0"},
+    {"id": "pyrenees", "name": "Pyrenees", "kind": "experiment", "version": "1.0.0",
+     "releases": {"1.0.0": {"url": "https://example.invalid/pyrenees-1.0.0.zip"}}},
+    {"id": "mimic-env", "name": "MIMIC env", "kind": "env", "version": "1.0.0"},
+    {"id": "mimic-clinical-suite", "name": "MIMIC clinical suite", "kind": "eval", "version": "1.0.0"},
+    {"id": "mimic-early-prediction", "name": "MIMIC early prediction", "kind": "eval", "version": "1.0.0"},
+    {"id": "reward-shaping", "name": "Reward shaping", "kind": "eval", "version": "1.0.0"},
+    {"id": "clinical-timeseries-data", "name": "Clinical time series", "kind": "data", "version": "1.0.0"},
+    {"id": "pyrenees-env", "name": "Pyrenees env", "kind": "env", "version": "1.0.0"},
+    {"id": "pyrenees-benchmark-suite", "name": "Pyrenees benchmark suite", "kind": "plot", "version": "1.0.0"},
+    {"id": "pyrenees-evaluator", "name": "Pyrenees evaluator", "kind": "eval", "version": "1.0.0"},
+    {"id": "neural", "name": "Neural models", "kind": "model", "version": "1.0.0"}
+  ]
+}
