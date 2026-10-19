@@ -26,6 +26,7 @@ from ..results.metrics_catalog import describe, group_sort_key, metric_group
 from ..widgets import ElidedLabel, MetricCard, label
 from .live_view import ChartsView, FeedView, FilesView, LogView, StatusStrip, SystemView, latest_problem
 from .pipeline_strip import PipelineStrip
+from .run_switcher import RunSwitcher
 from .runs_sidebar import RunsSidebar
 
 if TYPE_CHECKING:
@@ -168,6 +169,11 @@ class MonitorPanel(QWidget):
         layout = QVBoxLayout(content)
         layout.setContentsMargins(16, 0, 0, 0)
         layout.setSpacing(12)
+
+        # Several experiments training at once: a chip for each picks which one this panel shows.
+        self.switcher = RunSwitcher()
+        self.switcher.chosen.connect(self._switch_to)
+        layout.addWidget(self.switcher)
 
         # One status row: badge, the run's name and description, its numbers, and the other views.
         self.status_strip = StatusStrip()
@@ -382,11 +388,17 @@ class MonitorPanel(QWidget):
         button.setToolTip("  •  ".join(parts) + "\nClick for CPU, memory and GPU memory over time")
 
 
+    def _switch_to(self, run_id):
+        run = self.host.by_id(run_id)
+        if run is not None and run is not self.host.selected:
+            self.host.select_run(run)
+
     def render(self):
         host = self.host
         run = host.selected
         if not run:
             return
+        self.switcher.show_runs(list(getattr(host, "active_runs", [])), run["id"])
         config = run["config"]
         metrics = run["metrics"]
         live = not run["simulated"]

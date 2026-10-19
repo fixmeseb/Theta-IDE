@@ -144,7 +144,7 @@ class Window(QMainWindow):
         # catalog.list_runs() entries by (group, experiment_id): every results/logs folder, however it was launched.
         self.disk_entries = {}
         self.backend_connected = False  # True once the training pipeline imports and composes in-process
-        self.active = None
+        self.active_runs: list[dict] = []  # runs training now (several when the queue runs N at once)
         self.selected = None
         self.pinned_baseline_run = None
         self.timer = QTimer(self)
@@ -154,6 +154,7 @@ class Window(QMainWindow):
         self.backend = LocalBackend(self)
         self.jobs = JobManager(store_path=Path(data_dir) / "jobs" / "jobs.db", parent=self)
         self.jobs.job_changed.connect(self.on_job_changed)
+        self.jobs.max_parallel = max(1, int(self.settings_manager.get("queue", "max_parallel", default=1) or 1))
         self.jobs.job_output.connect(self.on_job_output)
         self.jobs.job_metrics.connect(self.on_job_metrics)
         self.jobs.job_records.connect(self.on_job_records)
@@ -374,7 +375,9 @@ class Window(QMainWindow):
         # 6. Job Queue Panel
         self.queue_panel = QueuePanel(self.move_queued, self.remove_queued, self.open_job, self.set_queue_running,
                                       on_launch=self.launch_training, on_add=self.add_to_queue,
-                                      on_stop=self.stop_run, on_demo=self.start_demo)
+                                      on_stop=self.stop_run, on_demo=self.start_demo,
+                                      on_parallel=self.set_max_parallel)
+        self.queue_panel.set_parallel(self.jobs.max_parallel)
         self.queue_button = self.queue_panel.add_button
         self.stop_button = self.queue_panel.stop_button
         self.tabs.addTab(self.queue_panel, "Job queue", "queue", "Queue", tab_id="queue")
@@ -1654,19 +1657,44 @@ class Window(QMainWindow):
 
         return list(dict.fromkeys(missing))
 
+    @property
+    def active(self):
+        """The active run you are looking at: the shown run if it is training, else the newest active one."""
+        if self.selected is not None and any(run is self.selected for run in self.active_runs):
+            return self.selected
+        return self.active_runs[-1] if self.active_runs else None
+
+    @active.setter
+    def active(self, run):
+        """`None` clears every active run; a run is added to them (tests and old callers set it directly)."""
+        if run is None:
+            self.active_runs = []
+        elif not any(r is run for r in self.active_runs):
+            self.active_runs = [*self.active_runs, run]
+
+    def launch_capacity(self) -> int:
+        """How many runs may train at once (the Queue tab's "Run up to N at once")."""
+        return max(1, int(getattr(self.jobs, "max_parallel", 1) or 1))
+
     def update_launch_state(self):
-        idle = self.active is None
+        training = len(self.active_runs)
+        idle = not training
+        full = training >= Window.launch_capacity(self)
         has_experiment = bool(getattr(self, "current_experiment", None))
         missing_components = Window.check_missing_components(self) if has_experiment else []
-        ready = idle and self.compose_valid and has_experiment and not missing_components
+        ready = not full and self.compose_valid and has_experiment and not missing_components
         for button in launch_buttons(self):  # the experiment tree's and the Queue tab's
             button.setEnabled(ready)
         if self.queue_button is not None:
             self.queue_button.setEnabled(self.compose_valid and has_experiment and not missing_components)
         if self.stop_button is not None:
             self.stop_button.setEnabled(not idle)
-        if not idle:
-            tip = "Cannot run: A run is currently active. Stop it before launching another."
+        if full and training == 1:
+            tip = "Cannot run: A run is currently active. Stop it, or let more run at once in the Queue tab."
+            btn_text = "Running..."
+        elif full:
+            tip = (f"Cannot run: {training} runs are training, the most at once. Stop one, or let more run at "
+                   "once in the Queue tab.")
             btn_text = "Running..."
         elif not has_experiment:
             rel = getattr(self, "active_config_rel_path", "") or ""
@@ -1702,19 +1730,21 @@ class Window(QMainWindow):
                                             getattr(self, "active_config_rel_path", "") or "")
             self.queue_panel.stop_button.setToolTip("Stop the active run (Shift+F5)" if not idle else "No run is active")
             self.queue_panel.add_button.setToolTip(
-                tip.replace("Cannot run", "Cannot queue") if not ready and idle
+                tip.replace("Cannot run", "Cannot queue") if not ready and not full
                 else f"Add {getattr(self, 'current_experiment', 'the experiment')} to the queue (Ctrl+Shift+Q)")
         if getattr(self, "state_label", None) is not None:
             run = self.active
             if run is None:
                 self.state_label.setText("TRAINING   •   idle  ")
+            elif training > 1:
+                self.state_label.setText(f"TRAINING   •   {training} runs  ")
             elif run.get("simulated"):
                 self.state_label.setText(f"DEMO   •   {run['status']}  ")
             else:
                 self.state_label.setText(f"TRAINING   •   {run['status']}   •   {run.get('backend', {}).get('experiment_id', '')}  ")
 
     def activate(self, run):
-        self.active = run
+        self.active = run  # added to the active runs
         if run not in self.runs:
             self.runs.insert(0, run)
         self.select_run(run)
@@ -1725,8 +1755,10 @@ class Window(QMainWindow):
     # ── Live training (run_pipeline.py as a QProcess, reported through signals) ──
 
     def launch_training(self):
-        if self.active:
-            self.statusBar().showMessage("A run is already active. Stop it before launching another.", 4000)
+        if len(self.active_runs) >= self.launch_capacity():
+            self.statusBar().showMessage(
+                "As many runs are training as may run at once. Stop one, or raise \"Run up to\" in the Queue tab.",
+                5000)
             return
         missing = self.check_missing_components()
         if missing:
@@ -1814,10 +1846,11 @@ class Window(QMainWindow):
         run = self.run_for_job(job_id)
         if run is not None and run is self.selected and hasattr(self, "monitor"):
             self.monitor.append_log(run, lines)
-        if run is None or run is not self.active:
+        if run is None or not any(r is run for r in self.active_runs):
             return
+        prefix = f"{run['backend'].get('experiment_id', '')} " if len(self.active_runs) > 1 else ""
         for line in lines:
-            self.log(f"│ {line}")
+            self.log(f"│ {prefix}{line}")
             if "Auto-Generating" in line:
                 run["phase"] = "plotting"
 
@@ -1851,7 +1884,7 @@ class Window(QMainWindow):
         run = self.run_for_job(job_id)
         if run is not None and run is self.selected and hasattr(self, "monitor"):
             self.monitor.live_changed()
-        if run is not None and run is self.active:
+        if run is not None and any(r is run for r in self.active_runs):
             marks = {"warning": "⚠", "error": "✖"}
             for event in events:
                 self.log(f"{marks.get(event.get('level'), '◆')} {agent}: {event.get('message', '')}")
@@ -1897,7 +1930,7 @@ class Window(QMainWindow):
 
     def on_job_hardware(self, job_id, hardware):
         run = self.run_for_job(job_id)
-        if run is not None and run is self.active and hardware.get("cpu_percent") is not None:
+        if run is not None and run is self.selected and hardware.get("cpu_percent") is not None:
             self.monitor.show_hardware(hardware)
 
     def on_job_changed(self, job):
@@ -1906,19 +1939,18 @@ class Window(QMainWindow):
             return
         status = {"pending": "starting"}.get(job.get("status"), job.get("status"))
         if run["status"] == "queued" and status in ("starting", "running"):
-            if self.active is None:
-                self.log(f"Queue: {run['backend']['experiment_id']} started.")
-                run["status"] = status
-                self.persist(run)
-                self.activate(run)
+            self.log(f"Queue: {run['backend']['experiment_id']} started.")
+            run["status"] = status
+            self.persist(run)
+            self.activate(run)
             return
-        if run is self.active:
+        if any(r is run for r in self.active_runs):
             if status in FINAL_STATUSES:
                 code = job.get("returncode")
                 detail = f" (exit code {code})" if code not in (None, 0) else ""
                 if job.get("error"):
                     self.log(f"Job error: {job['error']}")
-                self.finish(status, detail)
+                self.finish(status, detail, run=run)
             elif run["status"] != status:
                 run["status"] = status
                 self.update_launch_state()
@@ -2020,6 +2052,15 @@ class Window(QMainWindow):
             self.refresh_runs()
             self.render_run()
 
+    def set_max_parallel(self, count):
+        """Queue tab → Run up to N at once: saved, and a running queue starts more jobs if it now can."""
+        self.jobs.set_max_parallel(count)
+        if hasattr(self, "queue_panel"):
+            self.queue_panel.set_parallel(self.jobs.max_parallel)
+        if hasattr(self, "settings_manager"):
+            self.settings_manager.set("queue", "max_parallel", int(count))
+        self.update_launch_state()
+
     def set_queue_running(self, running):
         action = "start" if running else "pause"
         data = self.jobs.start_queue() if running else self.jobs.pause_queue()
@@ -2070,8 +2111,11 @@ class Window(QMainWindow):
 
     # ── Simulated demo (no training environment needed) ──────────────────────
 
+    def demo_run(self):
+        return next((run for run in self.active_runs if run["simulated"]), None)
+
     def start_demo(self):
-        if self.active:
+        if self.demo_run() is not None or len(self.active_runs) >= self.launch_capacity():
             self.statusBar().showMessage("A run is already active. Stop it before starting another.", 4000)
             return
         run = new_run(self.config())
@@ -2082,9 +2126,9 @@ class Window(QMainWindow):
         self.timer.start()
 
     def tick(self):
-        if not self.active or not self.active["simulated"]:
+        run = self.demo_run()
+        if run is None:
             return
-        run = self.active
         metric = sample(Config(**run["config"]), len(run["metrics"]) + 1)
         run["metrics"].append(metric)
         self.plot_viewer.update_runs(self.runs)
@@ -2094,7 +2138,7 @@ class Window(QMainWindow):
             self.log(f"[demo] step={metric['step']:>6}  reward={metric['reward']:.2f}  loss={metric['loss']:.4f}")
             self.persist(run)
         if len(run["metrics"]) >= 60:
-            self.finish("completed")
+            self.finish("completed", run=run)
 
     # ── Shared lifecycle ─────────────────────────────────────────────────────
 
@@ -2103,7 +2147,7 @@ class Window(QMainWindow):
         if not run:
             return
         if run["simulated"]:
-            self.finish("stopped")
+            self.finish("stopped", run=run)
             return
         if self.stop_button is not None:
             self.stop_button.setEnabled(False)
@@ -2111,18 +2155,22 @@ class Window(QMainWindow):
         try:
             self.jobs.cancel(run["backend"]["job_id"])  # job_changed reports "cancelled" and finishes the run
         except KeyError:
-            self.finish("stopped")
+            self.finish("stopped", run=run)
 
-    def finish(self, status, detail=""):
-        self.timer.stop()
-        run = self.active
+    def finish(self, status, detail="", run=None):
+        """`run` (by default the active run you are looking at) ended with `status`."""
+        run = run if run is not None else self.active
+        if run is None:
+            return
+        if run["simulated"]:
+            self.timer.stop()
         run["status"] = status
         self.persist(run)
         prefix = "[demo] " if run["simulated"] else ""
         self.log(f"{prefix}{status.capitalize()}{detail} · {run['id']} · config and metrics saved locally")
         if status == "failed":
             self.statusBar().showMessage("Training failed; the console shows the pipeline output.", 10000)
-        self.active = None
+        self.active_runs = [r for r in self.active_runs if r is not run]
         self.update_launch_state()
         self.refresh_runs()
         if not run["simulated"] and self.backend_connected:
@@ -2373,14 +2421,10 @@ class Window(QMainWindow):
         elif command == "help":
             self.log("help    Show commands\nstatus  Show the active run\nconfig  Show the equivalent run_pipeline command\nclear   Clear output\n(Use the Terminal tab for an interactive shell with tmux support.)")
         elif command == "status":
-            run = self.active
-            if run is None:
-                state = "idle"
-            elif run["simulated"]:
-                state = f"simulated demo {run['status']}"
-            else:
-                state = f"{run['status']} · {run['backend']['experiment_id']} · job {run['backend']['job_id']}"
-            self.log(f"Training: {state} · {len(self.runs)} records")
+            states = [f"simulated demo {run['status']}" if run["simulated"] else
+                      f"{run['status']} · {run['backend']['experiment_id']} · job {run['backend']['job_id']}"
+                      for run in self.active_runs]
+            self.log(f"Training: {' | '.join(states) or 'idle'} · {len(self.runs)} records")
         elif command == "config":
             self.log(self.config().command())
         elif command:
@@ -2412,10 +2456,11 @@ class Window(QMainWindow):
             if answer != QMessageBox.StandardButton.Yes:
                 event.ignore()
                 return
-        if self.active and self.active["simulated"]:
-            self.stop_run()
-        elif self.active:
-            self.persist(self.active)
+        for run in list(self.active_runs):
+            if run["simulated"]:
+                self.finish("stopped", run=run)
+            else:
+                self.persist(run)
         self.jobs.shutdown()
         if hasattr(self, "plugin_manager") and self.plugin_manager is not None:
             self.plugin_manager.shutdown()

@@ -169,6 +169,7 @@ python -m frontend</code></pre>
 <p>Real-time telemetry and telemetry replay for live and finished training runs:</p>
 <ul>
   <li>The monitor is for the run training now: it shows that run, or the most recent one when nothing is training. Past runs are viewed in the <b>Plot Viewer</b> (see below).</li>
+  <li><b>Several runs training at once:</b> a <b>TRAINING NOW</b> row of chips appears above the status row, one per running experiment with how far along it is. Click a chip to show that run; Stop stops the run shown.</li>
   <li><b>Status row:</b> the run's status, name, paradigm and seed, then elapsed time, training speed (steps per second, eased so it does not jitter) and time left. A running job that goes quiet for two minutes shows <b>STALLED</b> and when it last reported; a finished run shows when it last wrote. Hover the name for the environment, methods and where the run's files are.</li>
   <li><b>System &middot; Logs &middot; Feed &middot; Files:</b> buttons at the end of the status row. Each opens that view in place of the charts; click it again to go back. The System button shows the training process's CPU use while it runs.</li>
   <li><b>Pipeline strip:</b> the run's methods in training order, one segment each (done, training with its progress, or waiting), with checkpoints &#9670;, the latest new best &#9733; and warnings &#9888; marked under it. Click a segment to show only that method's curves; click it again to show them all.</li>
@@ -187,7 +188,7 @@ python -m frontend</code></pre>
 <ul>
   <li>The top row names the experiment open in the Experiment tab. <b>Launch now</b> (<code>F5</code>) trains it straight away, <b>Stop</b> (<code>Shift+F5</code>) ends the active run, and <b>Start simulated demo</b> (<code>Ctrl+F5</code>) runs a simulated one that needs no training environment.</li>
   <li>Add the open experiment with <b>Add to queue</b> (<code>Ctrl+Shift+Q</code>). Adding does not start it.</li>
-  <li><b>Start queue</b> (<code>Ctrl+Shift+R</code>) trains queued experiments one at a time, in order. The Training Monitor switches to each one as it starts.</li>
+  <li><b>Start queue</b> (<code>Ctrl+Shift+R</code>) trains queued experiments in order. <b>Run up to N at once</b> (beside it, remembered between sessions) sets how many train at the same time: the queue starts the next one whenever one finishes, and Launch now works while there is room. The Training Monitor switches to each one as it starts.</li>
   <li><b>Pause queue</b> stops the next job from starting; a job already training keeps running. The queue also pauses itself when it runs out of jobs.</li>
   <li>The list shows running, queued and recent jobs. Select a job to <b>Move up</b>, <b>Move down</b> or <b>Remove from queue</b>; double-click it (or <b>Open in Plot Viewer</b>) to plot its run in the Plot Viewer.</li>
   <li>The queue is kept by the backend, so it continues while Theta-IDE is closed, but it is lost if the backend restarts.</li>
