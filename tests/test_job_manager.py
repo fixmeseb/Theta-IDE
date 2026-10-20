@@ -357,6 +357,10 @@ def _has_real_training_plugins():
 
 
 @pytest.mark.slow
+@pytest.mark.skipif(
+    os.environ.get("THETA_RUN_REAL_TRAINING_TESTS") != "1",
+    reason="real training is an opt-in integration test; CI uses deterministic fake-pipeline coverage",
+)
 def test_real_training_streams_logs_and_metrics_until_completed(tmp_path, experiment_ids):
     if not _has_real_training_plugins():
         pytest.skip("Real training tests require cartpole and ppo component plugins installed")
@@ -386,6 +390,10 @@ def test_real_training_streams_logs_and_metrics_until_completed(tmp_path, experi
 
 
 @pytest.mark.slow
+@pytest.mark.skipif(
+    os.environ.get("THETA_RUN_REAL_TRAINING_TESTS") != "1",
+    reason="real training is an opt-in integration test; CI uses deterministic fake-pipeline coverage",
+)
 def test_real_cancel_stops_pipeline_and_training_subprocesses(tmp_path, experiment_ids):
     if not _has_real_training_plugins():
         pytest.skip("Real training tests require cartpole and ppo component plugins installed")
