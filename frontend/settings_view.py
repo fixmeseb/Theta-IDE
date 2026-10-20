@@ -769,6 +769,25 @@ class SettingsView(QWidget):
         theme_row.addWidget(btn_builder)
         theme_row.addStretch()
         tc_layout.addLayout(theme_row)
+
+        settings_icon_row = QHBoxLayout()
+        settings_icon_row.setSpacing(10)
+        self.window.settings_button_logo_toggle = ToggleSlider(
+            checked=self.window.settings_manager.settings_button_logo
+        )
+        self.window.settings_button_logo_toggle.setToolTip(
+            "Show the Theta logo on the Settings button instead of the gear"
+        )
+        self.window.settings_button_logo_toggle.toggled.connect(
+            lambda enabled: self.window.settings_manager.set(
+                "appearance", "settings_button_logo", bool(enabled)
+            )
+        )
+        settings_icon_row.addWidget(self.window.settings_button_logo_toggle)
+        settings_icon_label = label("Use Theta logo for the Settings button", "muted")
+        settings_icon_label.setWordWrap(True)
+        settings_icon_row.addWidget(settings_icon_label, 1)
+        tc_layout.addLayout(settings_icon_row)
         layout.addWidget(theme_card)
 
         # Card 2: Display & Text Scaling (Zoom)
@@ -1922,6 +1941,12 @@ class SettingsView(QWidget):
             self.window.zoom_slider.blockSignals(False)
         if hasattr(self.window, "zoom_percent_label") and self.window.zoom_percent_label:
             self.window.zoom_percent_label.setText(f"{zoom_pct}%")
+
+        # Settings sidebar icon
+        if hasattr(self.window, "settings_button_logo_toggle") and self.window.settings_button_logo_toggle:
+            self.window.settings_button_logo_toggle.blockSignals(True)
+            self.window.settings_button_logo_toggle.setChecked(sm.settings_button_logo)
+            self.window.settings_button_logo_toggle.blockSignals(False)
 
         # 7. Experiment panel resolved defaults toggle
         if hasattr(self, "defaults_toggle") and self.defaults_toggle:

@@ -52,6 +52,9 @@ _DEFAULT_TOML = """\
 #   "Apollo", "Athena", "Ares", "Dionysus", "Poseidon"
 theme = "Catppuccin"
 
+# Use the Theta logo instead of the gear on the Settings sidebar button.
+settings_button_logo = false
+
 # Display zoom factor (1.0 = 100%). Use Cmd++ / Cmd+- to resize.
 zoom = 1.0
 
@@ -401,6 +404,10 @@ class SettingsManager(QObject):
     @property
     def theme(self) -> str:
         return self.get("appearance", "theme", default="Catppuccin")
+
+    @property
+    def settings_button_logo(self) -> bool:
+        return bool(self.get("appearance", "settings_button_logo", default=False))
 
     @property
     def zoom(self) -> float:

@@ -631,6 +631,9 @@ class Window(QMainWindow):
         if not hasattr(self, "settings_manager"):
             return
 
+        if hasattr(self, "tabs"):
+            self.tabs.set_settings_button_logo(self.settings_manager.settings_button_logo)
+
         # --- Terminal: shell, folder and venv apply from the next new shell ---
         if hasattr(self, "terminal_panel"):
             command, cwd, env = self.terminal_config()
@@ -1405,6 +1408,7 @@ class Window(QMainWindow):
     def theme_changed(self):
         self.show_pipeline_state()
         self.highlighter.rehighlight()
+        self.tabs.set_settings_button_logo(self.settings_manager.settings_button_logo)
         self.tabs.refresh_icons()
         for tree in (getattr(self, "config_tree", None),
                      getattr(getattr(self, "components_panel", None), "components_tree", None)):

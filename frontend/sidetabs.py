@@ -22,6 +22,7 @@ ICON_DIR = Path(__file__).resolve().parent / "icons"
 ICON_SIZE = 20
 AUTO_HIDE_EDGE = 6  # px strip left visible while the bar is tucked away
 AUTO_HIDE_DELAY_MS = 350
+SETTINGS_LOGO_SIZE = 40
 TAB_MIME = "application/x-thetatab-id"
 BIN_MIME = "application/x-thetabin-id"
 MERGE_ZONE = 0.28  # dropping in the top or bottom 28% of an item reorders; the middle groups
@@ -430,7 +431,9 @@ class SideTabs(QWidget):
         self.settings_button.setAccessibleName("Settings")
         self.settings_button.setIconSize(QSize(ICON_SIZE, ICON_SIZE))
         self.settings_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.settings_button.setIcon(svg_icon("gear", TAB_ICON_COLORS))
+        self.settings_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.settings_button_logo = False
+        self._refresh_settings_button_icon()
         self.settings_button.clicked.connect(self._on_settings_clicked)
         self.bar_layout.addWidget(self.settings_button)
 
@@ -450,6 +453,7 @@ class SideTabs(QWidget):
         self.bar.installEventFilter(self)
 
         self.stack = QStackedWidget()
+        self.stack.currentChanged.connect(self._sync_settings_button_checked)
         layout.addWidget(self.edge)
         layout.addWidget(self.bar)
         layout.addWidget(self.stack, 1)
@@ -866,8 +870,40 @@ class SideTabs(QWidget):
         for b in self.bins.values():
             b["header"].setIcon(svg_icon("bin_expanded" if b["expanded"] else "bin_collapsed",
                                          TAB_ICON_COLORS, size=10))
-        self.settings_button.setIcon(svg_icon("gear", TAB_ICON_COLORS))
+        self._refresh_settings_button_icon()
         self.bar.update()
+
+    def set_settings_button_logo(self, enabled):
+        """Choose the Theta logo or gear for the Settings sidebar button."""
+        self.settings_button_logo = bool(enabled)
+        self.settings_button.setObjectName("sideTabLogo" if self.settings_button_logo else "sideTab")
+        self.settings_button.setToolButtonStyle(
+            Qt.ToolButtonStyle.ToolButtonIconOnly if self.settings_button_logo
+            else Qt.ToolButtonStyle.ToolButtonTextUnderIcon
+        )
+        self.settings_button.setText("" if self.settings_button_logo else "Settings")
+        self.settings_button.setIconSize(
+            QSize(SETTINGS_LOGO_SIZE, SETTINGS_LOGO_SIZE)
+            if self.settings_button_logo else QSize(ICON_SIZE, ICON_SIZE)
+        )
+        self.settings_button.style().unpolish(self.settings_button)
+        self.settings_button.style().polish(self.settings_button)
+        self._refresh_settings_button_icon()
+        self.settings_button.updateGeometry()
+        self.bar_layout.activate()
+        self.bar.update()
+
+    def _refresh_settings_button_icon(self):
+        if self.settings_button_logo:
+            accent = {
+                (mode, state): "accent"
+                for mode in (QIcon.Mode.Normal, QIcon.Mode.Active, QIcon.Mode.Selected, QIcon.Mode.Disabled)
+                for state in (QIcon.State.Off, QIcon.State.On)
+            }
+            icon = svg_icon("theta_bracket_mark", accent, size=SETTINGS_LOGO_SIZE)
+        else:
+            icon = svg_icon("gear", TAB_ICON_COLORS)
+        self.settings_button.setIcon(icon)
 
     # ── Auto-hide ────────────────────────────────────────────────────────────
 
@@ -952,9 +988,18 @@ class SideTabs(QWidget):
 
     def setCurrentWidget(self, widget):
         self.settings_button.setChecked(widget is not None and widget is self.settings_widget)
+        if widget is not None and widget is not self.settings_widget:
+            self.settings_button.clearFocus()
         for item in self.tabs.values():
             item["button"].setChecked(item["widget"] is widget)
         if widget is not None and widget != self.stack.currentWidget():
             self.stack.setCurrentWidget(widget)
             self.currentChanged.emit(self.stack.indexOf(widget))
         self._sync_bin_highlight()
+
+    def _sync_settings_button_checked(self, index):
+        """Keep the Settings button state correct even when the stack changes directly."""
+        active = index >= 0 and self.stack.widget(index) is self.settings_widget
+        self.settings_button.setChecked(active)
+        if not active:
+            self.settings_button.clearFocus()
