@@ -71,6 +71,33 @@ class TestHubClientAndInstaller(unittest.TestCase):
         self.assertEqual(roundtrip["id"], "test-method")
         self.assertEqual(roundtrip["releases"]["1.0.0"]["sha256"], "abc12345")
 
+    def test_package_metadata_survives_serialization_and_resolves_provided_ids(self):
+        suite = HubComponent.from_dict({
+            "id": "conformance-suite",
+            "name": "Conformance Suite",
+            "kind": "suite",
+            "version": "1.0.0",
+            "provides": ["conformance-probe"],
+            "aliases": ["legacy-conformance"],
+        })
+        self.client.components = [suite]
+
+        assert suite.to_dict()["provides"] == ["conformance-probe"]
+        assert self.client.get_component("conformance-probe") is suite
+        assert self.client.get_component("legacy_conformance") is suite
+
+    def test_installer_resolves_an_internal_dependency_to_its_provider(self):
+        suite = HubComponent.from_dict({
+            "id": "conformance-suite", "name": "Conformance Suite", "kind": "suite", "version": "1.0.0",
+        })
+        internal = HubComponent.from_dict({
+            "id": "conformance-probe", "name": "Conformance Probe", "kind": "model", "version": "1.0.0",
+            "suite": "conformance-suite", "hidden": True,
+        })
+        self.client.components = [suite, internal]
+
+        assert self.client.installer.lookup_component("conformance-probe") is suite
+
     def test_search_and_filtering(self):
         c1 = HubComponent.from_dict({
             "id": "cql-continuous", "name": "CQL Continuous", "kind": "method",
@@ -250,8 +277,8 @@ class TestHubClientAndInstaller(unittest.TestCase):
         self.assertEqual(card.btn_action.text(), "Install")
         self.assertIn(theme_color("primary"), card.btn_action.styleSheet())  # Install follows the theme
 
-    def test_thetalib_suite_filtering_and_dialog_display(self):
-        """Verify thetalib subcomponents are hidden from search and dialog, while thetalib shows as a plugin."""
+    def test_suite_filtering_and_dialog_display(self):
+        """Package metadata hides supplied components and exposes the installable suite."""
         thetalib = HubComponent.from_dict({
             "id": "thetalib",
             "name": "ThetaLib Core Foundation Suite",
@@ -315,8 +342,8 @@ class TestHubClientAndInstaller(unittest.TestCase):
         self.assertFalse(comp_dialog._matches_mode(img_data))
         comp_dialog.close()
 
-    def test_thetalib_unified_installation_and_clean_uninstall(self):
-        """Verify thetalib installs root-relative files and subcomponent detection works, and uninstalls cleanly."""
+    def test_suite_installation_and_clean_uninstall(self):
+        """Verify a suite installs root-relative files and supplied-component status is metadata-driven."""
         zip_path = self.temp_dir / "thetalib-1.0.0.zip"
         with ZipFile(zip_path, "w") as zf:
             zf.writestr(".theta_component.json", json.dumps({
@@ -387,7 +414,11 @@ class TestHubClientAndInstaller(unittest.TestCase):
         self.assertEqual(ver, "1.0.0")
 
         # Constituent component lookup and check_installed
-        std_fig_comp = HubComponent(id="standard-figures", name="Standard Figures", kind="plotter", version="1.0.0")
+        self.client.components = [thetalib_comp]
+        std_fig_comp = HubComponent.from_dict({
+            "id": "standard-figures", "name": "Standard Figures", "kind": "plotter",
+            "version": "1.0.0", "suite": "thetalib", "hidden": True,
+        })
         sub_installed, sub_ver = installer.check_installed(std_fig_comp)
         self.assertTrue(sub_installed)
         self.assertEqual(sub_ver, "1.0.0")

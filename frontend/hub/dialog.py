@@ -395,15 +395,13 @@ class HubView(QWidget):
 
     def _matches_mode(self, comp: HubComponent) -> bool:
         """Enforce strict separation between UI plugins and modular components."""
-        # Never display internal sub-components belonging to the thetalib foundation suite or experiment packages
-        if comp.is_thetalib_component or comp.is_grouped_component or comp.hidden:
+        # Package-internal components are available to dependency resolution but
+        # are installed through their containing package.
+        if comp.is_grouped_component or comp.hidden:
             return False
 
-        if comp.id == "thetalib":
-            return True
-
         if self.mode == "plugins":
-            return comp.kind == "plugin"
+            return comp.kind in ("plugin", "suite", "package")
         elif self.mode == "components":
             return comp.kind != "plugin"
         return True

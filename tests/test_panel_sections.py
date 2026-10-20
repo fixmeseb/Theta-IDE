@@ -211,6 +211,18 @@ class TestRoundTrip(unittest.TestCase):
         fields[0].setText("ep_dl_sweep, ep_agreement")
         self.assertEqual(self._save_and_reload()["plots"], ["ep_dl_sweep", "ep_agreement"])
 
+    def test_deeply_nested_experiment_setting_is_rendered_and_round_trips(self):
+        """A component may put parameters below more than one grouping level."""
+        self.viewer.raw_data.setdefault("early_prediction", {})["nested_probe"] = {
+            "encoder": {"width": 64}
+        }
+        self.viewer._render_boxes()
+        fields = [field for field in self.viewer.findChildren(QLineEdit) if field.text() == "64"]
+        self.assertTrue(fields, "expected a writable field for early_prediction.nested_probe.encoder.width")
+        fields[0].setText("128")
+        saved = self._save_and_reload()
+        self.assertEqual(saved["early_prediction"]["nested_probe"]["encoder"]["width"], 128)
+
 
 if __name__ == "__main__":
     unittest.main()

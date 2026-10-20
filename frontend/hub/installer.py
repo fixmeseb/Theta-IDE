@@ -73,25 +73,9 @@ class HubInstaller:
         if extra_cfg:
             return self.workspace_dir / extra_cfg
 
-        cid = component.id.lower()
-        clean_id = cid.replace("-", "_")
-
         folder_prefix = None
         if hasattr(component, "extra") and isinstance(component.extra, dict):
-            folder_prefix = component.extra.get("suite") or component.extra.get("namespace") or component.extra.get("group")
-        if not folder_prefix:
-            if "thetalib" in cid or clean_id in ("standard_figures", "replay_buffer", "tabular_data", "image_data"):
-                folder_prefix = "thetalib"
-            elif "mimic" in cid or clean_id in ("clinical_timeseries_data", "reward_shaping", "mimic_early_prediction", "clinical_timeseries"):
-                folder_prefix = "mimic"
-            elif "pyrenees" in cid or clean_id in ("pyrenees_benchmark_suite", "pyrenees_evaluator"):
-                folder_prefix = "pyrenees"
-            elif clean_id in ("dnn", "nature_cnn", "dueling_resnet", "autoencoder", "dense_autoencoder", "transformer", "mlp", "mlp_classifier", "lstm"):
-                folder_prefix = "basics"
-            elif clean_id in ("ppo", "a2c", "dqn", "sac") or cid.startswith("sb3"):
-                folder_prefix = "sb3"
-            elif clean_id in ("cql", "iql", "bc", "td3_bc") or cid.startswith("d3rlpy"):
-                folder_prefix = "d3rlpy"
+            folder_prefix = component.extra.get("namespace") or component.extra.get("group")
 
         filename = f"{component.id}.yaml"
 
@@ -116,7 +100,7 @@ class HubInstaller:
                 return self.workspace_dir / "in" / "config" / "plot" / folder_prefix / filename
             return self.workspace_dir / "in" / "config" / "plot" / filename
         elif component.kind == "env":
-            if folder_prefix and folder_prefix not in ("thetalib", "basics"):
+            if folder_prefix:
                 return self.workspace_dir / "in" / "config" / "env" / folder_prefix / filename
             return self.workspace_dir / "in" / "config" / "env" / filename
         elif component.kind == "experiment":
@@ -128,6 +112,14 @@ class HubInstaller:
         if self.lookup_component_fn is not None:
             comp = self.lookup_component_fn(component_id)
             if comp:
+                # Internal registry entries describe capabilities that are
+                # supplied by a parent package.  A dependency on one must
+                # install its provider, not attempt to fetch a standalone
+                # archive that does not exist.
+                if comp.suite:
+                    provider = self.lookup_component_fn(comp.suite)
+                    if provider:
+                        return provider
                 return comp
 
         hub_candidates = [
@@ -160,59 +152,24 @@ class HubInstaller:
             except Exception:
                 pass
 
-        # If not found directly, check if it belongs to a consolidated suite or experiment plugin
-        cid = component_id.lower().replace("_", "-")
-        if cid in ("standard-figures", "image-data", "replay-buffer", "tabular-data"):
-            comp = self.lookup_component("thetalib")
-            if comp:
-                return comp
-        if cid in ("mimic-env", "mimic-clinical-suite", "mimic-early-prediction", "reward-shaping", "clinical-timeseries-data"):
-            comp = self.lookup_component("mimic")
-            if comp:
-                return comp
-        if cid in ("pyrenees-env", "pyrenees-benchmark-suite", "pyrenees-evaluator"):
-            comp = self.lookup_component("pyrenees")
-            if comp:
-                return comp
-
         return None
 
     def check_installed(self, component: HubComponent) -> Tuple[bool, Optional[str]]:
         """Check if a component is installed and determine its version."""
         target_dir = self.resolve_target_dir(component)
         if not target_dir.exists() or not target_dir.is_dir():
-            if component.id in ("standard-figures", "image-data", "replay-buffer", "tabular-data"):
-                thetalib_dir = self.workspace_dir / ".thetaide" / "suites" / "thetalib"
-                thetalib_plugin_dir = self.data_dir / "plugins" / "thetalib"
-                for tdir in (thetalib_dir, thetalib_plugin_dir):
-                    if tdir.is_dir() and (tdir / ".theta_component.json").is_file():
-                        try:
-                            d = json.loads((tdir / ".theta_component.json").read_text(encoding="utf-8"))
-                            return True, d.get("version", "1.0.0")
-                        except Exception:
-                            return True, "1.0.0"
-                    if tdir.is_dir() and (tdir / "plugin.json").is_file():
-                        try:
-                            d = json.loads((tdir / "plugin.json").read_text(encoding="utf-8"))
-                            return True, d.get("version", "1.0.0")
-                        except Exception:
-                            return True, "1.0.0"
-            if component.id in ("mimic-env", "mimic-clinical-suite", "mimic-early-prediction", "reward-shaping", "clinical-timeseries-data"):
-                exp_dir = self.workspace_dir / ".thetaide" / "experiments" / "mimic"
-                if exp_dir.is_dir() and (exp_dir / ".theta_component.json").is_file():
-                    try:
-                        d = json.loads((exp_dir / ".theta_component.json").read_text(encoding="utf-8"))
-                        return True, d.get("version", "1.0.0")
-                    except Exception:
-                        return True, "1.0.0"
-            if component.id in ("pyrenees-env", "pyrenees-benchmark-suite", "pyrenees-evaluator"):
-                exp_dir = self.workspace_dir / ".thetaide" / "experiments" / "pyrenees"
-                if exp_dir.is_dir() and (exp_dir / ".theta_component.json").is_file():
-                    try:
-                        d = json.loads((exp_dir / ".theta_component.json").read_text(encoding="utf-8"))
-                        return True, d.get("version", "1.0.0")
-                    except Exception:
-                        return True, "1.0.0"
+            if component.suite:
+                provider = self.lookup_component(component.suite)
+                if provider and provider.id != component.id:
+                    provider_dir = self.resolve_target_dir(provider)
+                    for name in (".theta_component.json", "plugin.json"):
+                        manifest = provider_dir / name
+                        if manifest.is_file():
+                            try:
+                                data = json.loads(manifest.read_text(encoding="utf-8"))
+                                return True, data.get("version", provider.version)
+                            except Exception:
+                                return True, provider.version
             return False, None
 
         # 1. Check .theta_component.json manifest
@@ -689,7 +646,7 @@ class HubInstaller:
                     except Exception:
                         pass
 
-        # Remove installed files deployed by root-relative packages (e.g. thetalib)
+        # Remove installed files deployed by root-relative packages.
         recorded_installed_files = meta.get("installed_files") or []
         for file_rel in recorded_installed_files:
             fp = self.workspace_dir / file_rel
@@ -726,7 +683,7 @@ class HubInstaller:
 
         children_to_uninstall = meta.get("installed_components") or meta.get("dependencies", {}).get("components", [])
         for child_id in children_to_uninstall:
-            if child_id == "thetalib":
+            if child_id == meta.get("id"):
                 continue
             child_comp = self.lookup_component(child_id)
             if child_comp:
@@ -792,7 +749,7 @@ class HubInstaller:
 
         # If this was a suite with recorded child components, uninstall them as well
         for child_id in recorded_installed_children:
-            if child_id == "thetalib":
+            if child_id == component.id:
                 continue
             child_comp = self.lookup_component(child_id)
             if child_comp:

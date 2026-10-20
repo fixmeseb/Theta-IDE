@@ -1,0 +1,5 @@
+# @package _global_
+defaults:
+  - /experiment/theta_validation/_base@_global_
+
+# This case intentionally omits `methods`; online_rl must block it in pre-flight validation.

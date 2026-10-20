@@ -1,5 +1,11 @@
 type: base
 description: "Supervised learning on labeled static data (classifiers, regressors, sequence models)"
+environment_source: static_dataset
+method:
+  algorithm: forbidden
+  model: required
+training:
+  budget: epochs
 runner: SupervisedRunner
 default_data_module: SupervisedDataModule
 eval_protocol: ClassificationEvalProtocol

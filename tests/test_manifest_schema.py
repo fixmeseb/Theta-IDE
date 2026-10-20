@@ -81,3 +81,44 @@ def test_validate_nonexistent_manifest_file(tmp_path):
     is_valid, err = validate_manifest_file(tmp_path / "missing.json")
     assert is_valid is False
     assert "not found" in err.lower()
+
+
+def test_test_suite_manifest_requires_expectations_and_block_reasons():
+    valid = {
+        "id": "conformance_suite",
+        "name": "Conformance Suite",
+        "kind": "suite",
+        "version": "1.0.0",
+        "test_suite": {
+            "format": "theta.test-suite/v1",
+            "cases": [
+                {
+                    "id": "runnable", "title": "Runnable config", "description": "Must validate.",
+                    "experiment": "suite/runnable", "expectation": "runnable", "execution": "run",
+                },
+                {
+                    "id": "blocked", "title": "Missing method", "description": "Must be blocked.",
+                    "experiment": "suite/blocked", "expectation": "blocked", "execution": "preflight", "blocked_reason": "No method is configured.",
+                },
+            ],
+        },
+    }
+    assert validate_manifest_data(valid) == (True, None)
+
+    valid["test_suite"]["cases"][1].pop("blocked_reason")
+    is_valid, error = validate_manifest_data(valid)
+    assert is_valid is False
+    assert "blocked_reason" in error
+
+
+def test_test_suite_manifest_requires_real_execution_for_runnable_case():
+    suite = {
+        "id": "conformance_suite", "name": "Conformance Suite", "kind": "suite", "version": "1.0.0",
+        "test_suite": {"format": "theta.test-suite/v1", "cases": [{
+            "id": "runnable", "title": "Runnable", "description": "Must execute.",
+            "experiment": "suite/runnable", "expectation": "runnable",
+        }]},
+    }
+    valid, error = validate_manifest_data(suite)
+    assert valid is False
+    assert "execution" in error

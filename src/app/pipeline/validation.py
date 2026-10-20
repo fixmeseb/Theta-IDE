@@ -84,10 +84,8 @@ def paradigm_uses_agents(paradigm_name: str | None) -> bool:
         defn = load_paradigm(paradigm_name or "")
     except ConfigurationError:
         return True  # Unknown paradigm: leave the RL assumption in place.
-    allowed = defn.get("allowed_agents", None)
-    if allowed is None:
-        return True
-    return bool(allowed)
+    requirement = _algorithm_requirement(defn)
+    return requirement != "forbidden"
 
 
 def paradigm_uses_static_dataset(paradigm_name: str | None) -> bool:
@@ -96,8 +94,37 @@ def paradigm_uses_static_dataset(paradigm_name: str | None) -> bool:
         defn = load_paradigm(paradigm_name or "")
     except ConfigurationError:
         return False
+    declared = defn.get("environment_source")
+    if isinstance(declared, str) and declared:
+        return declared == "static_dataset"
     data_module = defn.get("data_module") or defn.get("default_data_module")
     return bool(data_module and data_module != "SimulatorDataModule")
+
+
+def paradigm_uses_live_environment(paradigm_name: str | None) -> bool:
+    """Whether a paradigm requires a live environment rather than static data."""
+    try:
+        defn = load_paradigm(paradigm_name or "")
+    except ConfigurationError:
+        return True
+    declared = defn.get("environment_source")
+    if isinstance(declared, str) and declared:
+        return declared == "live_environment"
+    return not paradigm_uses_static_dataset(paradigm_name)
+
+
+def _algorithm_requirement(paradigm_def: dict[str, Any]) -> str:
+    """Return the declarative method contract with legacy-manifest fallback."""
+    method = paradigm_def.get("method")
+    declared = method.get("algorithm") if isinstance(method, dict) else None
+    if declared in ("required", "optional", "forbidden"):
+        return declared
+    allowed = paradigm_def.get("allowed_agents", None)
+    if allowed is not None and not allowed:
+        return "forbidden"
+    if allowed or paradigm_def.get("constraints", {}).get("requires", {}).get("agent") == "required":
+        return "required"
+    return "optional"
 
 
 # ---------------------------------------------------------------------------
@@ -272,6 +299,7 @@ def _validate_methods_for_paradigm(cfg: Any, paradigm_name: str, paradigm_def: d
         return
 
     allowed_agents = paradigm_def.get("allowed_agents", None)
+    algorithm_requirement = _algorithm_requirement(paradigm_def)
     forbidden_agents = paradigm_def.get("forbidden_agents", [])
 
     for method_name, method_cfg in methods.items():
@@ -298,20 +326,13 @@ def _validate_methods_for_paradigm(cfg: Any, paradigm_name: str, paradigm_def: d
                 f"Every method must specify a model architecture (e.g. 'model: dnn', 'model: blendrl')."
             )
 
-        # Supervised paradigm validation
-        if paradigm_name == "supervised":
+        # The method contract, not the paradigm's name, decides whether a
+        # method may carry an algorithm harness.
+        if algorithm_requirement == "forbidden":
             if agent_algo:
                 raise ConfigurationError(
-                    f"[ConfigurationError] Paradigm 'supervised' does not use RL agent harnesses, "
-                    f"but method '{method_name}' declared 'agent: {agent_algo}'. "
-                    f"Remove 'agent:' and specify 'model: <architecture>' instead."
-                )
-
-        # Paradigms forbidding agents entirely (e.g. allowed_agents: [])
-        if allowed_agents is not None and len(allowed_agents) == 0:
-            if agent_algo:
-                raise ConfigurationError(
-                    f"[ConfigurationError] Paradigm '{paradigm_name}' does not allow RL agent harnesses, "
+                    f"[ConfigurationError] Paradigm '{paradigm_name}' does not use RL agent harnesses "
+                    f"(its method contract forbids an algorithm harness), "
                     f"but method '{method_name}' declared 'agent: {agent_algo}'."
                 )
 
@@ -330,12 +351,7 @@ def _validate_methods_for_paradigm(cfg: Any, paradigm_name: str, paradigm_def: d
                     f"which is forbidden in paradigm '{paradigm_name}'. Forbidden agents: {forbidden_agents}."
                 )
 
-        # Check if paradigm requires an agent harness (e.g. constraints.requires.agent: required or allowed_agents)
-        requires_agent = (allowed_agents is not None and len(allowed_agents) > 0) or (
-            paradigm_def.get("constraints", {}).get("requires", {}).get("agent") == "required"
-        )
-
-        if requires_agent and not agent_algo:
+        if algorithm_requirement == "required" and not agent_algo:
             allowed_str = f" (allowed: {allowed_agents})" if allowed_agents else ""
             raise ConfigurationError(
                 f"[ConfigurationError] Paradigm '{paradigm_name}' requires an agent harness{allowed_str}, "
@@ -646,7 +662,7 @@ def find_missing_components(cfg_or_dict: Any) -> list[str]:
 
     if env_val and env_val != "unknown" and not _env_exists(str(env_val)):
         missing.append(f"environment: {env_val}")
-    elif not env_val and paradigm == "online_rl":
+    elif not env_val and paradigm_uses_live_environment(str(paradigm) if paradigm else None):
         missing.append("environment: (none configured)")
 
     # Check static datasets for offline paradigms

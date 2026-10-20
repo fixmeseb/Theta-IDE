@@ -75,7 +75,7 @@ def _get_available_paradigms() -> list[str]:
         names = [p.stem for p in paradigms_dir.glob("*.yaml") if not p.name.startswith(("_", "."))]
         if names:
             return sorted(names)
-    return ["online_rl", "offline_rl", "supervised", "unsupervised"]
+    return []
 
 
 def _get_component_kind(rel_path: str) -> tuple[str, str]:
@@ -1565,7 +1565,10 @@ class ConfigViewer(QWidget):
         resolved = self._get_resolved_defaults()
 
         # Paradigm is inherited from group base by default.
-        paradigm = data.get("paradigm") or self._inherited_paradigm() or "online_rl"
+        # A missing paradigm is an incomplete experiment, not an invitation to
+        # silently format it as online RL.  The method form depends on this
+        # contract to know whether an algorithm belongs in every method.
+        paradigm = data.get("paradigm") or self._inherited_paradigm()
         self.paradigm_badge.hide()
 
         # Metadata / constraint helper widgets (not rendered into visual layout)
@@ -1698,9 +1701,12 @@ class ConfigViewer(QWidget):
         else:
             if tree and tree.paradigms:
                 self.combo_paradigm = ComboBox()
+                self.combo_paradigm.addItem("— Select Paradigm —", None)
                 self.combo_paradigm.addItems(sorted(tree.paradigms))
                 if paradigm in tree.paradigms:
                     self.combo_paradigm.setCurrentText(paradigm)
+                else:
+                    self.combo_paradigm.setCurrentIndex(0)
                 rules = tree.paradigms.get(self.combo_paradigm.currentText())
                 if rules and rules.description:
                     self.combo_paradigm.setToolTip(rules.description)
@@ -1711,7 +1717,8 @@ class ConfigViewer(QWidget):
                 inherited_env = tree.group(self._group_name() or "").env
                 inherit_label = f"(inherit from base — {inherited_env})" if inherited_env else self.INHERIT
                 self.combo_env.addItem(inherit_label, self.INHERIT)
-                allowed_envs = [e.name for e in tree.environments_for(self.combo_paradigm.currentText())]
+                selected_paradigm = self.combo_paradigm.currentText()
+                allowed_envs = [e.name for e in tree.environments_for(selected_paradigm)] if selected_paradigm in tree.paradigms else []
                 self.combo_env.addItems(allowed_envs)
                 explicit_env = self._get_explicit_env()
                 if explicit_env and explicit_env != inherited_env:
@@ -1729,37 +1736,38 @@ class ConfigViewer(QWidget):
                 )
                 self.field_widgets["env"] = self.combo_env
 
-        # --- BOX 1: TRAINING BUDGET & ROLLOUT SCHEDULE ---
-        budget_num = "2" if is_base else "1"
-        box_budget = ConfigBox(f"{budget_num}. Training Budget & Schedule", "Timesteps, evaluation frequency, and random seeds")
+            # An experiment starts with its research environment. For static
+            # paradigms that environment is realized by a dataset; the data
+            # module below remains an adapter, not a second kind of dataset.
+            box_inputs = ConfigBox(
+                "1. Experiment Inputs",
+                "Paradigm, research environment, and its live or static source",
+            )
+            inputs_grid = QGridLayout()
+            inputs_grid.setVerticalSpacing(10)
+            inputs_grid.setHorizontalSpacing(16)
+            if hasattr(self, "combo_paradigm"):
+                inputs_grid.addWidget(label("Paradigm"), 0, 0)
+                inputs_grid.addWidget(self.combo_paradigm, 0, 1)
+            if hasattr(self, "combo_env"):
+                inputs_grid.addWidget(label("Environment / Task"), 0, 2)
+                inputs_grid.addWidget(self.combo_env, 0, 3)
+            box_inputs.add_layout(inputs_grid)
 
-        # Prompt rows if experiment requires paradigm or env (not provided by group defaults)
-        needs_paradigm_prompt = not is_base and "paradigm" in data
-        needs_env_prompt = not is_base and (self._get_explicit_env() is not None or "env" in data)
-        if needs_paradigm_prompt or needs_env_prompt:
-            prompt_grid = QGridLayout()
-            prompt_grid.setVerticalSpacing(8)
-            prompt_grid.setHorizontalSpacing(16)
-            col = 0
-            if needs_paradigm_prompt:
-                if not data.get("paradigm") or data.get("paradigm") not in tree.paradigms:
-                    if self.combo_paradigm.findText("— Select Paradigm —") == -1:
-                        self.combo_paradigm.insertItem(0, "— Select Paradigm —", None)
-                        self.combo_paradigm.setCurrentIndex(0)
-                prompt_grid.addWidget(label("Paradigm", "accent"), 0, col)
-                prompt_grid.addWidget(self.combo_paradigm, 0, col + 1)
-                col += 2
-            if needs_env_prompt:
-                if "env" in data:
-                    exp_env = self._get_explicit_env()
-                    if not exp_env:
-                        if self.combo_env.findText("— Select Environment —") == -1:
-                            self.combo_env.insertItem(1, "— Select Environment —", None)
-                            self.combo_env.setCurrentIndex(1)
-                prompt_grid.addWidget(label("Environment", "accent"), 0, col)
-                prompt_grid.addWidget(self.combo_env, 0, col + 1)
-                col += 2
-            box_budget.add_layout(prompt_grid)
+            rules = tree.paradigms.get(paradigm) if tree else None
+            if rules and (rules.uses_static_dataset or "dataset_path" in data):
+                self._add_dataset_source_fields(
+                    box_inputs,
+                    data,
+                    resolved,
+                    required=rules.uses_static_dataset,
+                    paradigm=paradigm,
+                )
+            self.boxes_layout.addWidget(box_inputs)
+
+        # --- BOX 1: TRAINING BUDGET & ROLLOUT SCHEDULE ---
+        budget_num = "2"
+        box_budget = ConfigBox(f"{budget_num}. Training Budget & Schedule", "Timesteps, evaluation frequency, and random seeds")
 
         # Experiment Description / Commit Note
         desc_row = QHBoxLayout()
@@ -1809,9 +1817,10 @@ class ConfigViewer(QWidget):
         self.field_widgets["eval_episodes"] = self.spin_eval_ep
 
         eval_ep_enabled = True
-        is_online = (paradigm == "online_rl")
+        is_timestep_budget = False
         if tree and paradigm in tree.paradigms:
             rules = tree.paradigms[paradigm]
+            is_timestep_budget = rules.budget_unit == "timesteps"
             base = _read_group_base(tree, self._group_name())
             if not rules.field_enabled("eval_episodes"):
                 eval_ep_enabled = False
@@ -1823,12 +1832,12 @@ class ConfigViewer(QWidget):
                     self.spin_eval_ep.setSuffix(f"   (not used by {paradigm})")
                 self.spin_eval_ep.setToolTip(rules.disabled_reason("eval_episodes"))
 
-        show_timesteps = is_online and ("total_timesteps" in data or self.view_mode == "resolved")
+        show_timesteps = is_timestep_budget and ("total_timesteps" in data or self.view_mode == "resolved")
         show_seed = ("seed" in data or self.view_mode == "resolved")
-        show_eval_ep = is_online and ("eval_episodes" in data or not eval_ep_enabled or self.view_mode == "resolved")
-        show_eval_freq = is_online and ("eval_freq_steps" in data or "eval_freq" in data or (self.view_mode == "resolved" and ("eval_freq_steps" in resolved or "eval_freq" in resolved)))
-        show_epochs = not is_online and ("epochs" in data or self.view_mode == "resolved" or "epochs" in resolved)
-        show_eval_every = not is_online and ("eval_every_n_epochs" in data or self.view_mode == "resolved" or "eval_every_n_epochs" in resolved)
+        show_eval_ep = is_timestep_budget and ("eval_episodes" in data or not eval_ep_enabled or self.view_mode == "resolved")
+        show_eval_freq = is_timestep_budget and ("eval_freq_steps" in data or "eval_freq" in data or (self.view_mode == "resolved" and ("eval_freq_steps" in resolved or "eval_freq" in resolved)))
+        show_epochs = not is_timestep_budget and ("epochs" in data or self.view_mode == "resolved" or "epochs" in resolved)
+        show_eval_every = not is_timestep_budget and ("eval_every_n_epochs" in data or self.view_mode == "resolved" or "eval_every_n_epochs" in resolved)
 
         # Row layout for epochs
         self.spin_epochs = SpinBox()
@@ -1970,7 +1979,7 @@ class ConfigViewer(QWidget):
                 extra_experiment_items.append((label(str(extra_k)), row_extra))
 
         grid_items = []
-        if is_online:
+        if is_timestep_budget:
             if show_timesteps:
                 grid_items.append((label("Total Timesteps"), row_timesteps))
             if show_seed:
@@ -2074,7 +2083,7 @@ class ConfigViewer(QWidget):
 
             # 1. Budget & Timing Candidates
             budget_cands = []
-            if is_online:
+            if is_timestep_budget:
                 if "total_timesteps" not in data:
                     budget_cands.append(("total_timesteps", "Total Timesteps", int(resolved.get("total_timesteps") or 10000)))
                 if "seed" not in data:
@@ -2355,7 +2364,10 @@ class ConfigViewer(QWidget):
                     agent_val = (agent_raw.get("algorithm") or agent_raw.get("name") or next((k for k in agent_raw if k != "name"), ""))
                 else:
                     agent_val = str(agent_raw or "")
-                paradigm_has_agents = bool(tree and paradigm in tree.paradigms and tree.agents_for(paradigm))
+                rules = tree.paradigms.get(paradigm) if tree else None
+                # This is a contract of the paradigm, not a proxy for whether
+                # a compatible plugin happens to be installed today.
+                paradigm_has_agents = bool(rules and rules.allows_algorithm)
                 txt_agent = None
                 if not paradigm_has_agents and not agent_val:
                     pass
@@ -3095,8 +3107,8 @@ class ConfigViewer(QWidget):
 
                 # Agent Algorithm row
                 if tree and tree.paradigms.get(paradigm):
-                    from src.app.pipeline.validation import paradigm_uses_agents
                     p_permitted = [a.name for a in tree.agents_for(paradigm)]
+                    p_rules = tree.paradigms[paradigm]
                     if p_permitted:
                         p_txt_agent = ComboBox()
                         p_txt_agent.setEditable(True)
@@ -3112,7 +3124,7 @@ class ConfigViewer(QWidget):
                             lambda v: self._pending_new_method_spec.__setitem__("agent", v.strip()) if v.strip() else self._pending_new_method_spec.pop("agent", None)
                         )
                         pc_layout.addRow("Algorithm", p_txt_agent)
-                    elif paradigm_uses_agents(paradigm):
+                    elif p_rules.allows_algorithm:
                         p_txt_agent = QLineEdit()
                         p_txt_agent.setMaximumWidth(TEXT_FIELD_WIDTH)
                         p_txt_agent.setPlaceholderText("Algorithm (e.g. ppo, cql)...")
@@ -3346,106 +3358,6 @@ class ConfigViewer(QWidget):
             box_ckpt.add_layout(grid_c)
             self.boxes_layout.addWidget(box_ckpt)
 
-        # --- MODULAR BOX: DATASET SPECIFICATION ---
-        has_dataset = "dataset_path" in data
-        is_offline_req = paradigm in ("offline_rl", "supervised")
-        show_dataset = has_dataset or is_offline_req or (self.view_mode == "resolved" and "dataset_path" in resolved)
-
-        if show_dataset:
-            box_ds = ConfigBox("Dataset Specification", "Offline transition datasets and replay buffer paths")
-            ds_header = QHBoxLayout()
-            ds_header.addStretch()
-            if has_dataset and not is_offline_req:
-                btn_rm_ds = _make_subtle_tool_button("trash", "Remove dataset configuration", size=24, icon_size=14)
-                btn_rm_ds.clicked.connect(lambda: self.remove_block("dataset"))
-                ds_header.addWidget(btn_rm_ds)
-            elif is_offline_req:
-                ds_header.addWidget(label(f"(required by {paradigm})", "badge"))
-            box_ds.add_layout(ds_header)
-
-            ds_form = QFormLayout()
-            ds_form.setVerticalSpacing(10)
-
-            # dataset_path with dropdown, browse button, and existence indicator
-            ds_path_row = QHBoxLayout()
-            ds_path_row.setSpacing(6)
-            self.combo_dataset_path = ComboBox()
-            self.combo_dataset_path.setMaximumWidth(320)
-            self.combo_dataset_path.setEditable(True)
-            for dp in discover_datasets():
-                self.combo_dataset_path.addItem(dp)
-            current_dp = str(data.get("dataset_path") or resolved.get("dataset_path") or "")
-            self.combo_dataset_path.setEditText(current_dp)
-
-            lbl_status = QLabel("")
-            def _update_ds_status(p_str):
-                p_obj = Path(p_str.strip())
-                if p_str.strip() and p_obj.exists():
-                    try:
-                        sz_mb = p_obj.stat().st_size / (1024 * 1024)
-                        lbl_status.setText(f"✓ Exists ({sz_mb:.1f} MB)")
-                        lbl_status.setStyleSheet("color: #b8bb26; font-size: 11px; font-weight: bold;")
-                    except Exception:
-                        lbl_status.setText("✓ Exists")
-                        lbl_status.setStyleSheet("color: #b8bb26; font-size: 11px;")
-                elif p_str.strip():
-                    lbl_status.setText("⚠ Not Found")
-                    lbl_status.setStyleSheet("color: #fabd2f; font-size: 11px;")
-                else:
-                    lbl_status.setText("")
-
-            _update_ds_status(current_dp)
-            self.combo_dataset_path.currentTextChanged.connect(
-                lambda v: (self._on_field_edited("dataset_path", v.strip()), _update_ds_status(v))
-            )
-            ds_path_row.addWidget(self.combo_dataset_path)
-
-            btn_browse_ds = QToolButton()
-            btn_browse_ds.setText("Browse…")
-            btn_browse_ds.clicked.connect(lambda: self._browse_dataset_path())
-            ds_path_row.addWidget(btn_browse_ds)
-            ds_path_row.addWidget(lbl_status)
-            ds_path_row.addStretch()
-            ds_form.addRow("Dataset Path", ds_path_row)
-
-            # Data Module selector
-            ds_dm_row = QHBoxLayout()
-            ds_dm_row.setSpacing(6)
-            self.combo_ds_datamodule = ComboBox()
-            self.combo_ds_datamodule.setMaximumWidth(320)
-            self.combo_ds_datamodule.addItem("— Default (inherit from Group / Paradigm) —", None)
-            try:
-                from src.app.core.datamodule_registry import list_registered_datamodules
-                dm_names = sorted(set(name for name in list_registered_datamodules() if any(c.isupper() for c in name)))
-                self.combo_ds_datamodule.addItems(dm_names)
-            except Exception:
-                pass
-            cur_dm = data.get("data_module")
-            if isinstance(cur_dm, dict):
-                cur_dm_name = cur_dm.get("name") or cur_dm.get("class")
-            else:
-                cur_dm_name = cur_dm
-            if cur_dm_name:
-                self.combo_ds_datamodule.setCurrentText(str(cur_dm_name))
-            else:
-                self.combo_ds_datamodule.setCurrentIndex(0)
-
-            def _on_ds_dm_changed(dm_text):
-                val = None if dm_text in ("", "— Default (inherit from Group / Paradigm) —") else dm_text
-                if val is None:
-                    self.raw_data.pop("data_module", None)
-                else:
-                    self.raw_data["data_module"] = val
-                self._mark_dirty()
-
-            self.combo_ds_datamodule.currentTextChanged.connect(_on_ds_dm_changed)
-            ds_dm_row.addWidget(self.combo_ds_datamodule)
-            ds_dm_row.addStretch()
-            ds_form.addRow("Data Module", ds_dm_row)
-
-            box_ds.add_layout(ds_form)
-            self.boxes_layout.addWidget(box_ds)
-
         # --- MODULAR BOX: COMPUTE & SLURM RESOURCES ---
         has_res = "resources" in data and isinstance(data["resources"], dict)
         show_res = has_res or (self.view_mode == "resolved" and "resources" in resolved)
@@ -3628,6 +3540,96 @@ class ConfigViewer(QWidget):
 
         self._render_remaining_sections()
 
+    def _add_dataset_source_fields(self, box, data, resolved, *, required: bool, paradigm: str) -> None:
+        """Add a static environment source and its representation adapter."""
+        ds_header = QHBoxLayout()
+        ds_header.addWidget(label("Static Environment Source", "cardTitle"))
+        ds_header.addStretch()
+        if required:
+            ds_header.addWidget(label(f"(required by {paradigm})", "badge"))
+        elif "dataset_path" in data:
+            btn_rm_ds = _make_subtle_tool_button("trash", "Remove dataset source override", size=24, icon_size=14)
+            btn_rm_ds.clicked.connect(lambda: self.remove_block("dataset"))
+            ds_header.addWidget(btn_rm_ds)
+        box.add_layout(ds_header)
+
+        ds_form = QFormLayout()
+        ds_form.setVerticalSpacing(10)
+        source_row = QHBoxLayout()
+        source_row.setSpacing(6)
+        self.combo_dataset_path = ComboBox()
+        self.combo_dataset_path.setMaximumWidth(320)
+        self.combo_dataset_path.setEditable(True)
+        for dataset_path in discover_datasets():
+            self.combo_dataset_path.addItem(dataset_path)
+        current_path = str(data.get("dataset_path") or resolved.get("dataset_path") or "")
+        self.combo_dataset_path.setEditText(current_path)
+
+        status = QLabel("")
+
+        def _update_source_status(path_text):
+            path = Path(path_text.strip())
+            if path_text.strip() and path.exists():
+                try:
+                    size_mb = path.stat().st_size / (1024 * 1024)
+                    status.setText(f"✓ Exists ({size_mb:.1f} MB)")
+                    status.setStyleSheet("color: #b8bb26; font-size: 11px; font-weight: bold;")
+                except OSError:
+                    status.setText("✓ Exists")
+                    status.setStyleSheet("color: #b8bb26; font-size: 11px;")
+            elif path_text.strip():
+                status.setText("⚠ Not Found")
+                status.setStyleSheet("color: #fabd2f; font-size: 11px;")
+            else:
+                status.setText("")
+
+        _update_source_status(current_path)
+        self.combo_dataset_path.currentTextChanged.connect(
+            lambda value: (self._on_field_edited("dataset_path", value.strip()), _update_source_status(value))
+        )
+        source_row.addWidget(self.combo_dataset_path)
+        browse = QToolButton()
+        browse.setText("Browse…")
+        browse.clicked.connect(self._browse_dataset_path)
+        source_row.addWidget(browse)
+        source_row.addWidget(status)
+        source_row.addStretch()
+        ds_form.addRow("Dataset / Static Environment", source_row)
+
+        adapter_row = QHBoxLayout()
+        adapter_row.setSpacing(6)
+        self.combo_ds_datamodule = ComboBox()
+        self.combo_ds_datamodule.setMaximumWidth(320)
+        self.combo_ds_datamodule.addItem("— Default adapter (inherit from Group / Paradigm) —", None)
+        try:
+            from src.app.core.datamodule_registry import list_registered_datamodules
+
+            names = sorted(set(name for name in list_registered_datamodules() if any(char.isupper() for char in name)))
+            self.combo_ds_datamodule.addItems(names)
+        except Exception:
+            pass
+        adapter = data.get("data_module")
+        if isinstance(adapter, dict):
+            adapter = adapter.get("name") or adapter.get("class")
+        if adapter:
+            self.combo_ds_datamodule.setCurrentText(str(adapter))
+        else:
+            self.combo_ds_datamodule.setCurrentIndex(0)
+
+        def _on_adapter_changed(adapter_name):
+            value = None if adapter_name in ("", "— Default adapter (inherit from Group / Paradigm) —") else adapter_name
+            if value is None:
+                self.raw_data.pop("data_module", None)
+            else:
+                self.raw_data["data_module"] = value
+            self._mark_dirty()
+
+        self.combo_ds_datamodule.currentTextChanged.connect(_on_adapter_changed)
+        adapter_row.addWidget(self.combo_ds_datamodule)
+        adapter_row.addStretch()
+        ds_form.addRow("Data Module / Adapter", adapter_row)
+        box.add_layout(ds_form)
+
     def _scalar_widget(self, value, write):
         """A widget matching the YAML type, so an int survives a round trip.
 
@@ -3657,9 +3659,9 @@ class ConfigViewer(QWidget):
 
         Without this an experiment's paradigm-specific configuration is simply
         absent from the panel - 20 settings for supervised, which keeps all of
-        it under `early_prediction:` - even though saving preserves it. Values
-        nested more than one level stay read-only rather than being flattened
-        into something that would not round trip.
+        it under `early_prediction:` - even though saving preserves it. Nested
+        dictionaries are rendered recursively so every value round-trips from
+        the panel, regardless of how a component structures its parameters.
         """
         leftovers = {k: v for k, v in self.raw_data.items() if k not in FIXED_BOX_KEYS}
         if not leftovers:
@@ -3689,24 +3691,32 @@ class ConfigViewer(QWidget):
             if isinstance(value, list):
                 form.addRow("items", self._list_field(value, lambda v, k=name: self._on_field_edited(k, v)))
             else:
-                for key, sub in value.items():
-                    if isinstance(sub, list):
-                        form.addRow(
-                            key,
-                            self._list_field(sub, lambda v, s=name, k=key: self._on_nested_edited(s, k, v)),
-                        )
-                    elif isinstance(sub, dict):
-                        nested = label(yaml.safe_dump(sub, default_flow_style=True).strip(), "muted")
-                        nested.setWordWrap(True)
-                        nested.setToolTip(f"Nested under {name}.{key}; edit this one in the YAML tab")
-                        form.addRow(key, nested)
-                    else:
-                        form.addRow(
-                            key,
-                            self._scalar_widget(sub, lambda v, s=name, k=key: self._on_nested_edited(s, k, v)),
-                        )
+                self._render_experiment_dict_contents(form, value, (name,))
             box.add_layout(form)
             self.boxes_layout.addWidget(box)
+
+    def _render_experiment_dict_contents(self, parent_layout, values: Mapping[str, Any], path: tuple[str, ...], level: int = 1):
+        """Render an experiment override dictionary at arbitrary depth."""
+        for key, value in values.items():
+            value_path = path + (key,)
+            if isinstance(value, dict):
+                sub_block = IndentedHierarchyBlock(level=level)
+                sub_header = QHBoxLayout()
+                sub_header.addWidget(label(f"[{key}]", "muted"))
+                sub_header.addStretch()
+                sub_block.addRow("", sub_header)
+                self._render_experiment_dict_contents(sub_block, value, value_path, level + 1)
+                parent_layout.addRow("", sub_block)
+            elif isinstance(value, list):
+                parent_layout.addRow(
+                    key,
+                    self._list_field(value, lambda updated, p=value_path: self._on_generic_path_edited(p, updated)),
+                )
+            else:
+                parent_layout.addRow(
+                    key,
+                    self._scalar_widget(value, lambda updated, p=value_path: self._on_generic_path_edited(p, updated)),
+                )
 
     def _use_visual_layer_editor(self) -> bool:
         if self.settings_manager:
@@ -4072,6 +4082,15 @@ class ConfigViewer(QWidget):
 
     def _start_add_new_method(self):
         """Initiate adding a new method card with focus on the name editor."""
+        tree = config_tree()
+        paradigm = self.raw_data.get("paradigm") or self._inherited_paradigm()
+        if not tree or paradigm not in tree.paradigms:
+            QMessageBox.warning(
+                self,
+                "Select a Paradigm First",
+                "Theta needs the experiment's paradigm before it can determine whether a method requires an algorithm or is model-only.",
+            )
+            return
         if self._is_base_config():
             methods = self.raw_data.get("methods", {})
             if any(k != "params" and isinstance(v, dict) for k, v in methods.items()):
@@ -4110,8 +4129,10 @@ class ConfigViewer(QWidget):
             return meth_name
 
         def_name, def_spec = self._get_group_default_method()
-        paradigm = self.raw_data.get("paradigm") or self._inherited_paradigm() or "online_rl"
+        paradigm = self.raw_data.get("paradigm") or self._inherited_paradigm()
         tree = config_tree()
+        if not tree or paradigm not in tree.paradigms:
+            return None
         p_obj = tree.paradigms.get(paradigm) if tree and paradigm in tree.paradigms else None
         default_model = (
             (def_spec.get("model") if def_spec else None)

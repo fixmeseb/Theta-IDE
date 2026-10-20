@@ -28,6 +28,13 @@ def test_known_paradigms_load(tree):
     assert {"online_rl", "offline_rl", "supervised"} <= set(tree.paradigms)
 
 
+def test_paradigm_capabilities_drive_environment_and_budget_forms(tree):
+    assert tree.paradigms["online_rl"].environment_source == "live_environment"
+    assert tree.paradigms["online_rl"].budget_unit == "timesteps"
+    assert tree.paradigms["offline_rl"].environment_source == "static_dataset"
+    assert tree.paradigms["offline_rl"].budget_unit == "epochs"
+
+
 def test_known_agents_load(tree):
     if not tree.agents:
         pytest.skip("No agent plugins currently installed")
@@ -192,6 +199,19 @@ def test_enabled_field_has_no_reason(tree):
 
 def test_unknown_field_defaults_to_enabled(tree):
     assert tree.field_enabled("online_rl", "some_future_field")
+
+
+def test_paradigms_declare_environment_source_and_method_shape(tree):
+    """The blank-method form must be driven by a paradigm contract, not IDs."""
+    assert tree.paradigms["online_rl"].environment_source == "live_environment"
+    assert tree.paradigms["offline_rl"].uses_static_dataset
+    assert tree.paradigms["supervised"].uses_static_dataset
+    assert tree.paradigms["online_rl"].algorithm_requirement == "required"
+    assert tree.paradigms["offline_rl"].algorithm_requirement == "required"
+    assert tree.paradigms["supervised"].algorithm_requirement == "forbidden"
+    assert tree.paradigms["unsupervised"].algorithm_requirement == "forbidden"
+    assert tree.paradigms["online_rl"].budget_unit == "timesteps"
+    assert tree.paradigms["offline_rl"].budget_unit == "epochs"
 
 
 # --------------------------------------------------------------- overrides

@@ -137,13 +137,10 @@ class Agent:
         elif isinstance(paradigms, str):
             cp = (paradigms,)
         else:
-            engine = str(raw.get("engine", "")).lower()
-            if engine == "sb3" or name.startswith("sb3/"):
-                cp = ("online_rl",)
-            elif engine == "d3rlpy" or name.startswith("d3rlpy/"):
-                cp = ("offline_rl",)
-            else:
-                cp = ()
+            # Compatibility is component metadata, not an inference from an
+            # implementation package name.  An omitted declaration means the
+            # component is unconstrained for legacy third-party packages.
+            cp = ()
 
         return cls(
             name=name,
@@ -294,6 +291,67 @@ class Paradigm:
         if not environment.compatible_paradigms:
             return True
         return self.name in environment.compatible_paradigms
+
+    @property
+    def environment_source(self) -> str:
+        """The kind of research environment an experiment supplies.
+
+        A static dataset is the offline form of an environment or task.  It is
+        deliberately distinct from ``data_module``: the latter only adapts
+        the environment's observations into batches a model can consume.
+
+        Older component packages did not declare this capability, so retain a
+        conservative compatibility inference while all paradigm manifests are
+        migrated.
+        """
+        declared = self.raw.get("environment_source")
+        if isinstance(declared, str) and declared:
+            return declared
+        data_module = self.raw.get("data_module") or self.raw.get("default_data_module")
+        return "live_environment" if data_module == "SimulatorDataModule" else "static_dataset"
+
+    @property
+    def uses_static_dataset(self) -> bool:
+        """Whether this paradigm's environment is realized by static data."""
+        return self.environment_source == "static_dataset"
+
+    @property
+    def budget_unit(self) -> str:
+        """The primary training budget displayed when authoring this paradigm."""
+        training = self.raw.get("training")
+        declared = training.get("budget") if isinstance(training, Mapping) else None
+        if declared in {"timesteps", "epochs"}:
+            return declared
+        # Migration behavior for third-party paradigms authored before this
+        # capability was made explicit.
+        return "epochs" if self.uses_static_dataset else "timesteps"
+
+    @property
+    def algorithm_requirement(self) -> str:
+        """Return ``required``, ``optional``, or ``forbidden`` for methods.
+
+        This is a form contract, not a statement about installed components.
+        In particular, a required algorithm field must remain visible when no
+        compatible algorithm is installed, so the UI can explain the missing
+        dependency instead of quietly authoring an invalid model-only method.
+        """
+        method = self.raw.get("method")
+        declared = method.get("algorithm") if isinstance(method, Mapping) else None
+        if declared in ("required", "optional", "forbidden"):
+            return declared
+        if "allowed_agents" in self.raw and not self.allowed_agents:
+            return "forbidden"
+        if self.requires.get("agent") == "required" or self.allowed_agents:
+            return "required"
+        return "optional"
+
+    @property
+    def allows_algorithm(self) -> bool:
+        return self.algorithm_requirement != "forbidden"
+
+    @property
+    def requires_algorithm(self) -> bool:
+        return self.algorithm_requirement == "required"
 
     def field_enabled(self, name: str) -> bool:
         if name in self.forbids:
@@ -616,7 +674,11 @@ def default_method_model(
             return spec["model"]
     names = set(known or ())
     declared = paradigm.raw.get("default_model") if paradigm is not None else None
-    if isinstance(declared, str) and (not names or declared in names):
+    if isinstance(declared, str):
+        # Keep the paradigm contract visible even if the corresponding Hub
+        # component has not been installed yet. The UI can then name the
+        # missing dependency instead of silently substituting an incompatible
+        # architecture.
         return declared
     if not names or fallback in names:
         return fallback
