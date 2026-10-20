@@ -10,4 +10,5 @@ constraints:
   requires:
     methods: non_empty
     agent: required
+    env: non_empty
 

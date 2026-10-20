@@ -242,7 +242,9 @@ def build_trainer(cfg, model=None):
         enable_checkpoint = False
 
     if enable_checkpoint:
-        default_monitor = "eval/reward" if is_online else cfg.env.get("monitor_metric", "val/loss")
+        env_cfg = cfg.get("env") if hasattr(cfg, "get") else getattr(cfg, "env", None)
+        env_monitor = env_cfg.get("monitor_metric", "val/loss") if (env_cfg and hasattr(env_cfg, "get")) else "val/loss"
+        default_monitor = "eval/reward" if is_online else env_monitor
         default_mode = (
             "max"
             if is_online
@@ -315,8 +317,9 @@ def build_trainer(cfg, model=None):
             callbacks.append(PeriodicCheckpointCallback(ckpt_dir, interval, int(cfg.get("total_timesteps") or 0)))
 
     if cfg.get("paradigm") == "online_rl":
-        num_envs = getattr(model, "num_envs", cfg.env.num_envs) if model else cfg.env.num_envs
-        num_steps = getattr(model, "num_steps", cfg.env.num_steps) if model else getattr(cfg.env, "num_steps", 256)
+        env_cfg = cfg.get("env") if hasattr(cfg, "get") else getattr(cfg, "env", None)
+        num_envs = getattr(model, "num_envs", getattr(env_cfg, "num_envs", 1) if env_cfg else 1) if model else (getattr(env_cfg, "num_envs", 1) if env_cfg else 1)
+        num_steps = getattr(model, "num_steps", getattr(env_cfg, "num_steps", 256) if env_cfg else 256) if model else (getattr(env_cfg, "num_steps", 256) if env_cfg else 256)
         batch_size = num_envs * num_steps
 
         import math
@@ -531,7 +534,9 @@ def finalize_training(trainer, cfg, ckpt_dir, training_time, start_time, end_tim
         except Exception as e:
             logger.debug("Could not copy single-trial checkpoint to agent root: %s", e)
 
-    metric_name = cfg.env.get("monitor_metric", "eval/reward")
+    is_online = cfg.get("paradigm") == "online_rl" if hasattr(cfg, "get") else False
+    env_cfg = cfg.get("env") if hasattr(cfg, "get") else getattr(cfg, "env", None)
+    metric_name = env_cfg.get("monitor_metric", "eval/reward" if is_online else "val/loss") if (env_cfg and hasattr(env_cfg, "get")) else ("eval/reward" if is_online else "val/loss")
     if metric_name in trainer.callback_metrics:
         return trainer.callback_metrics[metric_name].item()
     return 0.0

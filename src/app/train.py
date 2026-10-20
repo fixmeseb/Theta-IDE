@@ -142,7 +142,11 @@ def main(cfg: DictConfig):
             except KeyError:
                 SupervisedModelCls = None
         if SupervisedModelCls is None:
-            if "classif" in arch_name or "mlp" in arch_name:
+            if paradigm_name == "unsupervised" or "autoencoder" in arch_name:
+                from src.app.core.paradigm_impls.base.unsupervised import AutoencoderLightningModule
+
+                SupervisedModelCls = AutoencoderLightningModule
+            elif "classif" in arch_name or "mlp" in arch_name:
                 from src.app.core.paradigm_impls.base.tabular import TabularClassifierLightningModule
 
                 SupervisedModelCls = TabularClassifierLightningModule

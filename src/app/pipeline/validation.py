@@ -618,28 +618,57 @@ def find_missing_components(cfg_or_dict: Any) -> list[str]:
         methods = {}
 
     # Extract environment
+    env_obj = None
     if hasattr(cfg_or_dict, "env"):
         env_obj = cfg_or_dict.env
-        env_val = getattr(env_obj, "name", None) or getattr(env_obj, "env_id", None) if not isinstance(env_obj, str) else env_obj
     elif isinstance(cfg_or_dict, dict):
         env_obj = cfg_or_dict.get("env")
-        if isinstance(env_obj, dict):
-            env_val = env_obj.get("name") or env_obj.get("env_id")
-        elif isinstance(env_obj, str):
-            env_val = env_obj
-        else:
-            env_val = None
-            if "defaults" in cfg_or_dict and isinstance(cfg_or_dict["defaults"], list):
-                for d in cfg_or_dict["defaults"]:
-                    if isinstance(d, dict) and "override /env" in d:
-                        env_val = d["override /env"]
-                    elif isinstance(d, str) and d.startswith("override /env:"):
-                        env_val = d.split(":", 1)[1].strip()
-    else:
-        env_val = None
+
+    env_val = None
+    if isinstance(env_obj, str):
+        env_val = env_obj
+    elif hasattr(env_obj, "get"):
+        env_val = env_obj.get("name") or env_obj.get("env_id")
+    elif env_obj is not None:
+        env_val = getattr(env_obj, "name", None) or getattr(env_obj, "env_id", None)
+
+    # If env was not resolved from object, check defaults overrides
+    if not env_val:
+        defaults = getattr(cfg_or_dict, "defaults", None) if hasattr(cfg_or_dict, "defaults") else (cfg_or_dict.get("defaults") if isinstance(cfg_or_dict, dict) else None)
+        if defaults and isinstance(defaults, (list, tuple)):
+            for d in defaults:
+                if isinstance(d, dict) and "override /env" in d:
+                    env_val = d["override /env"]
+                elif isinstance(d, str) and d.startswith("override /env:"):
+                    env_val = d.split(":", 1)[1].strip()
+
+    paradigm = getattr(cfg_or_dict, "paradigm", None) if hasattr(cfg_or_dict, "paradigm") else (cfg_or_dict.get("paradigm") if isinstance(cfg_or_dict, dict) else None)
 
     if env_val and env_val != "unknown" and not _env_exists(str(env_val)):
         missing.append(f"environment: {env_val}")
+    elif not env_val and paradigm == "online_rl":
+        missing.append("environment: (none configured)")
+
+    # Check static datasets for offline paradigms
+    if paradigm and paradigm_uses_static_dataset(str(paradigm)):
+        is_wf = getattr(cfg_or_dict, "workflow", None) if hasattr(cfg_or_dict, "workflow") else (cfg_or_dict.get("workflow") if isinstance(cfg_or_dict, dict) else None)
+        if not is_wf and hasattr(methods, "items"):
+            try:
+                from src.app.pipeline.datasets import resolve_dataset_for_method
+                for m_name, m_spec in methods.items():
+                    if not m_spec or not hasattr(m_spec, "get"):
+                        continue
+                    try:
+                        ds = resolve_dataset_for_method(m_name, m_spec, cfg_or_dict)
+                        if not ds.exists():
+                            missing.append(f"dataset: {ds}")
+                    except Exception:
+                        ds_name = None
+                        if env_obj and hasattr(env_obj, "get"):
+                            ds_name = env_obj.get("dataset_name") or env_obj.get("name")
+                        missing.append(f"dataset: {ds_name or m_name}")
+            except Exception:
+                pass
 
     if hasattr(methods, "items"):
         for m_name, m_spec in methods.items():
@@ -699,5 +728,29 @@ def find_missing_components(cfg_or_dict: Any) -> list[str]:
 
 
 def _validate_offline_dataset_paths(cfg: Any, notices: list[str]) -> None:
-    pass
+    """Ensure static dataset paradigms have resolvable dataset files before launching."""
+    paradigm_name = cfg.get("paradigm") if hasattr(cfg, "get") else getattr(cfg, "paradigm", None)
+    if not paradigm_uses_static_dataset(paradigm_name):
+        return
+    is_wf = cfg.get("workflow") if hasattr(cfg, "get") else getattr(cfg, "workflow", None)
+    if is_wf:
+        return
+
+    from src.app.pipeline.datasets import resolve_dataset_for_method
+    methods = parse_methods_dict(cfg)
+    for method_name, method_cfg in methods.items():
+        try:
+            ds_path = resolve_dataset_for_method(method_name, method_cfg, cfg)
+            if not ds_path.exists():
+                raise ConfigurationError(
+                    f"[ConfigurationError] Method '{method_name}' in paradigm '{paradigm_name}' "
+                    f"resolved to dataset '{ds_path}', but the path does not exist on disk."
+                )
+        except ConfigurationError:
+            raise
+        except Exception as e:
+            raise ConfigurationError(
+                f"[ConfigurationError] Method '{method_name}' in paradigm '{paradigm_name}' "
+                f"requires a valid dataset on disk: {e}"
+            )
 

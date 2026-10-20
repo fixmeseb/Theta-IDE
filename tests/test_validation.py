@@ -46,7 +46,8 @@ def mock_cfg_supervised():
         methods={"ep_mlp": {"model": "mlp_classifier"}},
         eval_episodes=0,
         group="early_prediction",
-        experiment_id="quick_test"
+        experiment_id="quick_test",
+        dataset_path="in/datasets/breast_cancer/breast_cancer.npz"
     )
     cfg.env.name = "cartpole"
     return cfg
@@ -291,7 +292,7 @@ def test_find_missing_components_detects_uninstalled():
             "test_m": {
                 "agent": "nonexistent_agent_abc",
                 "model": {
-                    "blendrl": {
+                    "nonexistent_composite_model": {
                         "symbolic": "nsfr",
                         "neural": "dueling_resnet",
                     }
@@ -302,7 +303,7 @@ def test_find_missing_components_detects_uninstalled():
     missing = find_missing_components(spec)
     assert any("environment: nonexistent_env_xyz" in m for m in missing)
     assert any("agent: nonexistent_agent_abc" in m for m in missing)
-    assert any("model: blendrl" in m for m in missing)
+    assert any("model: nonexistent_composite_model" in m for m in missing)
     assert any("symbolic: nsfr" in m for m in missing)
 
 
