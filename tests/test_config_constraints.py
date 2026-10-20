@@ -213,7 +213,8 @@ class TestParadigmSelector(ConfigViewerConstraintTest):
     def test_paradigm_combo_lists_every_paradigm(self):
         viewer = self.load(ONLINE_EXPERIMENT)
         listed = {viewer.combo_paradigm.itemText(i) for i in range(viewer.combo_paradigm.count())}
-        self.assertEqual(listed, set(config_tree().paradigms))
+        self.assertEqual(listed - {"— Select Paradigm —"}, set(config_tree().paradigms))
+        self.assertIn("— Select Paradigm —", listed)
 
     def test_changing_paradigm_updates_raw_data(self):
         viewer = self.load(ONLINE_EXPERIMENT)
@@ -478,6 +479,8 @@ class TestScrollDoesNotEditFields(unittest.TestCase):
         box = self.viewer.spin_timesteps
         box.setFocus(self.Qt.FocusReason.MouseFocusReason)
         QApplication.processEvents()
+        if not box.hasFocus():
+            self.skipTest("The headless macOS window server did not grant widget focus.")
         before = box.value()
         self.wheel(box)
         self.assertNotEqual(box.value(), before)

@@ -1,31 +1,40 @@
-# Installation & Setup Guide
+# Installing ThetaIDE
 
-This guide walks through setting up the environment to run the training pipeline, testing suites, and backend API service.
-
----
-
-## 1. Prerequisites
-
-- Python 3.10, 3.11, 3.12, or 3.13
-- Git
-- Virtual environment manager (`venv` or `conda`)
+This guide sets up the training pipeline and the desktop IDE in one virtual environment, then checks that
+both work. For a tour of the IDE once it is running, press **F1** inside it.
 
 ---
 
-## 2. Installation Steps
+## 1. Requirements
 
-### Step 1: Clone the Repository
+- **Python 3.10, 3.11, 3.12 or 3.13.** Python 3.14 is not supported yet: Hydra 1.3 fails on it with
+  `ValueError: badly formed help string` as soon as training starts. If your system Python is 3.14 (current
+  Arch and Fedora), install an older one with your package manager, `pyenv` or `uv` (see below).
+- **Git.**
+- **Disk space for the environment:** about 7 GB with the default CUDA build of PyTorch on Linux, or about 2 GB
+  with the [CPU-only build](#cpu-only-pytorch).
+- **On a minimal or headless Linux system**, the Qt libraries PyQt6 needs at import time. On Ubuntu 24.04:
+
+  ```bash
+  sudo apt-get install libegl1 libgl1 libxkbcommon0 libfontconfig1 libdbus-1-3 libnss3 libxcomposite1 \
+      libxdamage1 libxrandr2 libxtst6 libxkbfile1 libgbm1 libasound2t64
+  ```
+
+  Desktop Linux installs usually have these already.
+
+---
+
+## 2. Install
+
+### With venv and pip
 
 ```bash
 git clone https://github.com/CameronEgb/Offline-BlendRL.git
 cd Offline-BlendRL
-```
-
-### Step 2: Create and Activate Virtual Environment
-
-```bash
 python3 -m venv venv
 source venv/bin/activate
+pip install --upgrade pip
+pip install -e ".[dev,gui]"
 ```
 
 On Windows (PowerShell):
@@ -33,62 +42,111 @@ On Windows (PowerShell):
 ```powershell
 py -3.12 -m venv venv
 .\venv\Scripts\Activate.ps1
-```
-
-### Step 3: Install Dependencies
-
-Install the core framework, development tools and the desktop app into the same venv:
-
-```bash
 pip install --upgrade pip
 pip install -e ".[dev,gui]"
 ```
 
-The `gui` extra adds PyQt6, PyQt6-WebEngine, psutil and (on Windows) pywinpty. The desktop app imports the
-training pipeline directly, so it must run from this venv; there is no separate frontend venv any more.
+### With uv
 
-*(Optional) Install Atari benchmarks:*
+[uv](https://docs.astral.sh/uv/) can also download a supported Python for you, which helps when your system
+Python is 3.14:
+
 ```bash
-pip install -e ".[atari]"
+git clone https://github.com/CameronEgb/Offline-BlendRL.git
+cd Offline-BlendRL
+uv venv --python 3.12 venv
+source venv/bin/activate
+uv pip install -e ".[dev,gui]"
 ```
+
+### Extras
+
+| Extra | Adds |
+|---|---|
+| `gui` | The desktop IDE: PyQt6, PyQt6-WebEngine, psutil, pywinpty (Windows), and `arxiv` and `truststore` for the arXiv panel |
+| `dev` | pytest (with coverage and timeouts), ruff, mypy and pre-commit |
+| `atari` | OCAtari and HackAtari, for object-centric Atari environments |
+| `video` | pygame, vidmaker and OpenCV, for rendering and recording NUDGE environments |
+| `all` | All of the above |
+
+The IDE runs the training pipeline in-process, so the pipeline and the `gui` extra must be installed in the
+same environment. There is no separate frontend environment or server.
+
+### CPU-only PyTorch
+
+On Linux, pip installs the CUDA build of PyTorch by default. Without an NVIDIA GPU,
+install the CPU build instead:
+
+```bash
+pip install -e ".[dev,gui]" --extra-index-url https://download.pytorch.org/whl/cpu
+```
+
+With uv, also pass `--index-strategy unsafe-best-match`.
 
 ---
 
-## 3. Verifying Installation
+## 3. Launch the IDE
 
-Run the automated test suite to confirm all modules and registries function properly:
-
-```bash
-pytest tests/ -v
-```
-
-The GUI tests need a display; on a headless machine set `QT_QPA_PLATFORM=offscreen`. Tests marked `slow` train for real and take a few minutes; skip them with `-m "not slow"`.
-
----
-
-## 4. Launching ThetaIDE
-
-From the repository root, with the venv active:
+From the repository root, with the environment active:
 
 ```bash
 python -m frontend
 ```
 
-That is the only command. There is no server to start first: the app composes and validates configs
-in-process with the same code as `run_pipeline.py`, and runs training as a child process (`QProcess`),
-streaming its output and metrics into the app through Qt signals.
+That is the only command: there is no server to start first. The status bar shows **Pipeline ready** once the
+training pipeline has loaded.
 
-The experiment builder validates each config as you edit it. The resolved config appears in the
-`config.yaml` tab, and the status bar shows `PIPELINE ● local` once the pipeline has loaded. If it shows
-`PIPELINE ○ unavailable`, the app is not running from the project venv; reinstall with
-`pip install -e ".[gui]"` and start it again with `python -m frontend`.
+ThetaIDE keeps its workspace (run history, the job queue, workspace settings and the Hub cache) in `.thetaide/`
+in the repository. To keep it somewhere else, start the IDE with `python -m frontend --data-dir <path>`.
+Settings that apply to every workspace live in `~/.config/thetaide/settings.toml`.
 
-**Export recipe YAML…** writes a standalone experiment recipe. Save it in `in/config/experiment/thetaide/` and run it with `python run_pipeline.py thetaide/<name>`.
+---
 
-**Launch training** (F5) trains the builder's config on this machine. The Training monitor shows live reward, loss and progress, and the console streams the pipeline's output. **Stop** (Shift+F5) terminates the pipeline and its training processes. Each launch gets a unique experiment ID (`<name>_<YYYYmmdd-HHMMSS>`), so earlier results are never overwritten. Closing the window while a run is training (or the queue is running) hides ThetaIDE to the system tray, and training keeps going; the tray icon gets a green dot while a run is training (blue while the queue waits to start the next job), shows what is training, notifies you when runs finish, and reopens the window when clicked. **File → Quit** (Ctrl+Q) or **Quit ThetaIDE** in the tray menu ends the app; if a run is still training it asks first, then stops it. The metrics written so far stay in `results/logs/`. Without a system tray, closing the window asks before stopping training instead. **Run → Start simulated demo** works without the training environment.
+## 4. Install components
 
-**Job queue.** **Add to queue** (Ctrl+Shift+Q) adds the builder's config to the queue without starting it. When your list is ready, press **Start queue** in the Queue tab (or Ctrl+Shift+R). Queued experiments then train one at a time, in order, and the Training monitor switches to each one as it starts. **Pause queue** stops the next job from starting; one already training keeps running. The queue pauses itself when it runs out of jobs. The **Queue** tab lists the running, queued and recent jobs, with buttons to move a queued job up or down, remove it, or open it in the monitor. Queued jobs are saved with the workspace and are still waiting the next time you open ThetaIDE.
+A fresh clone has no algorithms, models or environments. Install them from the Theta Hub:
 
-**TensorBoard tab.** Runs launched with **Log to TensorBoard**, which is on by default, also write TensorBoard logs to `results/tensorboard/`. **Start server** in the TensorBoard tab runs a local TensorBoard server (bound to 127.0.0.1) over that folder; **Open in browser** opens it once it is serving, and **Stop server** ends it. ThetaIDE stops it when it closes.
+1. Open the **Components** tab and click the globe button at the top to open the Hub.
+2. Install **ThetaIDE Basics**. It brings Stable-Baselines3, d3rlpy, Gymnasium classic control, Atari and the
+   basic network models.
 
-Run records are stored in `.thetaide/runs/` by default; override this with `--data-dir <path>`.
+Components are written into the repository (`in/config/` and `src/usr/`) and are not tracked by git. The
+README's [Run your first experiment](README.md#run-your-first-experiment) section continues from here.
+
+---
+
+## 5. Verify the install
+
+Install **ThetaIDE Basics** first (step 4): many tests build the default experiment, which needs its models.
+Then run:
+
+```bash
+pytest tests/ -m "not slow"
+```
+
+The GUI tests need a display. On a headless machine, run them with `QT_QPA_PLATFORM=offscreen`. Tests marked
+`slow` train for real and take a few minutes; leave out `-m "not slow"` to include them. The whole suite takes
+about five minutes.
+
+On a clean install, 12 tests currently fail. They expect experiment groups and fixtures that are no longer in
+the repository (for example `mimic` and `pyrenees`), so they are problems in the tests, not in your install.
+Any other failure points to a problem with your install.
+
+---
+
+## 6. Troubleshooting
+
+**The status bar shows "Pipeline unavailable".** The IDE is not running from the environment the pipeline
+is installed in. Activate it, reinstall with `pip install -e ".[dev,gui]"`, and start the IDE again.
+
+**Training fails with `ValueError: badly formed help string`.** You are on Python 3.14. Recreate the
+environment with Python 3.10–3.13.
+
+**A run fails because an agent, model or environment is missing.** Install it from the Hub (step 4). The
+experiment's recipe names what it needs under `methods:`.
+
+**F1 does not open the documentation.** Your desktop or window manager has claimed F1 (tiling window managers
+and some laptops' media keys do). Rebind it in **Settings → Hotkeys**, or use **Help → Documentation**.
+
+**`pip` warns that gymnasium has no extra `accept-rom-license`.** This is harmless: Gymnasium 1.x ships the
+Atari ROMs without it.

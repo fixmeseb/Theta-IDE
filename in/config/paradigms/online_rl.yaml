@@ -1,5 +1,12 @@
 type: base
 description: "Online RL with a live simulator (PPO, BlendRL online, etc.)."
+environment_source: live_environment
+method:
+  algorithm: required
+  model: required
+training:
+  budget: timesteps
+default_model: dnn
 runner: OnlineRLRunner
 default_data_module: SimulatorDataModule
 eval_protocol: EpisodicRewardEvalProtocol

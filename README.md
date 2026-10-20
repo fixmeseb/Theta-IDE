@@ -1,149 +1,139 @@
-# Theta-IDE: Modular Reinforcement Learning & Architecture Benchmark Framework
+# ThetaIDE
 
 [![CI](https://github.com/CameronEgb/Offline-BlendRL/actions/workflows/ci.yml/badge.svg)](https://github.com/CameronEgb/Offline-BlendRL/actions/workflows/ci.yml)
-[![Tests](https://github.com/CameronEgb/Offline-BlendRL/actions/workflows/ci.yml/badge.svg?event=push&branch=main)](https://github.com/CameronEgb/Offline-BlendRL/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/CameronEgb/Offline-BlendRL/branch/main/graph/badge.svg)](https://codecov.io/gh/CameronEgb/Offline-BlendRL)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
-[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.10–3.13](https://img.shields.io/badge/python-3.10--3.13-blue.svg)](https://www.python.org/downloads/)
 
-A PyTorch Lightning & Hydra-powered framework and IDE for training, tuning, and evaluating modular RL policies across standard neural (MLP, NatureCNN, ResNet, Transformer) and hybrid neural-symbolic architectures (with BlendRL as an installed reference component plugin), comparing Online vs. Offline learning efficiency across benchmark environments.
 
-For information on authoring custom model architecture plugins, see the [Component Plugin Authoring Guide](docs/COMPONENT_PLUGIN_GUIDE.md).
+https://github.com/user-attachments/assets/7f299be7-f488-401f-ae5a-c6d82364d114
+
+ThetaIDE is a desktop IDE and experiment pipeline for reinforcement learning and deep learning research. You
+compose experiments from Hydra configs, launch training on your machine, watch metrics stream in live, and
+compare runs side by side. The pipeline is built on PyTorch Lightning and Hydra.
+
+Algorithms, models and environments are components. A fresh clone ships the framework without them; you
+install the ones you need from the **Theta Hub**, a registry that includes Stable-Baselines3 and d3rlpy suites,
+MLP, CNN, ResNet, LSTM and Transformer models, Gymnasium and Atari environments, and neuro-symbolic models
+such as BlendRL, NSFR and NEUMANN. You can also write your own: see the
+[Component Plugin Authoring Guide](docs/COMPONENT_PLUGIN_GUIDE.md).
 
 ---
 
-## Installation & Setup
+## Install
+
+Python 3.10–3.13 is required. Python 3.14 is not supported yet: Hydra 1.3 fails on it at startup.
 
 ```bash
-# Clone the repository
 git clone https://github.com/CameronEgb/Offline-BlendRL.git
 cd Offline-BlendRL
-
-# Create and activate virtual environment
-python -m venv venv
-source venv/bin/activate
-
-# Install in development mode
-pip install -e ".[dev]"
-
-# (Optional) Install Atari environments
-pip install -e ".[atari]"
-
-# Run test suite to verify setup
-pytest tests/ -v
+python3 -m venv venv
+source venv/bin/activate          # Windows: .\venv\Scripts\Activate.ps1
+pip install -e ".[dev,gui]"
 ```
 
----
+[INSTALL.md](INSTALL.md) covers Windows, optional extras such as Atari, and how to verify the install.
 
-## 1. Directory Structure
+## Run your first experiment
 
-```
-├── run_pipeline.py                 # Primary entry point (orchestrates online/offline phases & sweeps)
-├── src/                            # Core package source code
-│   ├── app/                        # Application framework & engine
-│   │   ├── pipeline/               # Orchestrator, tasks, slurm runner, sweeps, validation
-│   │   ├── core/                   # Base interfaces, paradigm loaders, vectorizers, factories
-│   │   ├── data/                   # Offline replay data modules
-│   │   ├── services/               # Config composition, run catalog, metrics & job store (used by the GUI)
-│   │   ├── dataset_utils.py        # Transition serialization & replay readers
-│   │   └── train.py                # PyTorch Lightning driver script
-│   └── usr/                        # User domain & research components
-│       ├── methods/                # RL agents (PPO, IQL, CQL, CEW) & registry
-│       ├── models/                 # Model architectures (BlendRL, NSFR, Neumann, CEW, FYD, Neural)
-│       ├── environments/           # Environment engines & wrappers (Nudge)
-│       └── eval/                   # Domain tasks & evaluators (Early prediction, Pyrenees, Reward shaping)
-├── in/                             # All input specifications & datasets
-│   ├── config/                     # Hydra configuration system (agent, env, experiment, mode)
-│   ├── datasets/                   # Static offline datasets (MIMIC, Pyrenees, generated replay buffers)
-│   ├── envs/                       # Custom environment reward functions & model definitions
-│   └── rules/                      # Symbolic logic rulesets (.prolog / .nudge)
-├── plot/                           # Modular plotting framework
-│   ├── manager.py                  # Auto-dispatcher called by run_pipeline.py
-│   ├── convergence.py              # Convergence reward & episode length curves
-│   ├── losses.py                   # Loss metric curves with per-metric filtering
-│   └── reports.py                  # Markdown hyperparameter & comparison report generator
-├── tests/                          # Automated test suite
-│   ├── conftest.py                 # Pytest fixtures and discovery configuration
-│   ├── test_method_registry.py     # Registry and style lookup unit tests
-│   └── test_pipeline_config.py     # Pipeline naming and config unit tests
-├── scripts/                        # Maintenance & pre-processing tools
-│   ├── reorganize_results.py       # Reorganizes results/ folder to match experiment group specs
-│   └── preprocess_pyrenees.py      # Pyrenees dataset conversion utility
-└── results/                        # Central output storage (organized by group/experiment_id/agent)
-    ├── logs/                       # CSV metrics & event logs
-    ├── plots/                      # Generated visualization PNGs & Markdown reports
-    ├── checkpoints/                # Model checkpoints saved at evaluation intervals
-    ├── datasets/                   # Transitions saved during Phase 1 online runs
-    ├── optuna/                     # SQLite Optuna databases for hyperparameter sweeps
-    └── hydra/                      # Hydra stdout run logs (dir output redirects)
-```
+1. Start the IDE from the repository root:
 
----
+   ```bash
+   python -m frontend
+   ```
 
-## 2. Quick Start
+2. In the **Components** tab, open the Hub (the globe button at the top) and install **ThetaIDE Basics**. It
+   brings Stable-Baselines3, Gymnasium classic control and the basic network models.
+3. In the **Experiment** tab, open `thetaide/cartpole_ppo_reference` and press **F5** to launch it.
+4. Watch it train in the **Monitor** tab, then compare runs in **Results**.
 
-### Running an Experiment Pipeline Locally
-Run an end-to-end experiment cycle (online generation $\rightarrow$ dataset saving $\rightarrow$ offline comparison $\rightarrow$ auto-plotting):
+Press **F1** for the built-in documentation, or **Ctrl+Space** to jump to any panel, plugin or command.
+
+## Command line
+
+The IDE and the command line run the same pipeline. Experiments are named `<group>/<experiment>`, after their
+YAML file under `in/config/experiment/`:
 
 ```bash
-# Run CartPole benchmark experiment
-python3 run_pipeline.py cp_final
+# Train an experiment (install its components from the Hub first)
+python run_pipeline.py thetaide/cartpole_ppo_reference
 
-# Run MIMIC offline comparison benchmark
-python3 run_pipeline.py mimic_comparison
+# Hydra overrides go after the name
+python run_pipeline.py thetaide/cartpole_ppo_reference total_timesteps=2000 seed=1
 
-# Quick local sanity check with restricted timesteps
-python3 run_pipeline.py cp_final total_timesteps=1000 intervals_count=2 eval_episodes=5 local=true
+# Validate the config without training
+python run_pipeline.py thetaide/cartpole_ppo_reference dry_run=true
 ```
 
-### Direct Model Training
-To train a single agent using `src/train.py`:
+Each command-line run writes its results under the recipe's `experiment_id`, replacing the previous run with
+that ID. Pass `experiment_id=<new name>` to keep both. (Runs launched from the IDE get a unique, timestamped ID.)
+
+`python run_pipeline.py --help` lists the orchestration overrides (`plot_only`, `no_plot`,
+`no_online`, `no_offline` and more).
+
+### Component overrides in experiments
+
+Open a group default or individual experiment in the **Experiment** panel and use the **Data Loaders**, **Evaluators**, and **Figures** boxes to choose components. Selecting a component fills its first level of parameters from the installed profile; you can edit those defaults or add custom parameters. Inherited selectors show the resolved component name. Individual recipes inherit group values until they add an override. The same fields can be written directly in an experiment YAML:
+
+```yaml
+data_module:
+  name: tabular_data
+  params:
+    batch_size: 32
+evaluator:
+  name: my_evaluator
+  params:
+    threshold: 0.8
+plot_overrides:
+  losses:
+    smoothing_window: 7
+```
+
+`data_module` and `evaluator` also accept a registered name as a string. `plots` selects figures as a list or mapping; `plot_overrides` adjusts a figure's parameters without changing that selection. Existing `plots.<figure>` options still work. Evaluators can implement Lightning's `Callback`, the `evaluate(model, data_source, cfg)` protocol, or the evaluation hook methods `on_eval_start`, `evaluate_step`, and `on_eval_end`. Evaluator parameters can include `enabled: false`; `frequency: 2` runs evaluation hooks every second validation epoch.
+
+Plots and reports are generated automatically at the end of a run. To regenerate them, pass the run's ID,
+which is its folder name under `results/logs/<group>/`:
 
 ```bash
-# Train PPO on CartPole
-python3 src/train.py +experiment=test_cp_fast mode=online agent=ppo/cp_tuned
-
-# Train Offline IQL on CartPole replay buffer
-python3 src/train.py +experiment=test_cp_fast mode=offline agent=iql/cp_tuned mode.dataset_path=in/datasets/cartpole/cp_final/ppo_cp_tuned
+python plot/manager.py thetaide/cartpole_ppo_baseline --wipe
 ```
 
----
+## Project layout
 
-## 3. Modular Plotting (`plot/`)
-
-Generate specific visualizations standalone for any experiment ID:
-
-```bash
-# Run auto-plotter manager (dispatches all plotters listed in experiment config)
-python3 plot/manager.py cp_final
-
-# Plot convergence curves standalone
-python3 plot/convergence.py cp_final --window 15 --dpi 300
-
-# Plot specific loss metrics standalone
-python3 plot/losses.py cp_final --metrics losses/q_loss losses/actor_loss --window 20
+```
+├── run_pipeline.py            # Command-line entry point: compose, validate, train, plot
+├── frontend/                  # The desktop IDE (PyQt6); run it with python -m frontend
+│   ├── plugins/core/          # Built-in plugins: documentation, TensorBoard, arXiv papers
+│   └── hub/                   # Theta Hub client and installer
+├── src/
+│   ├── app/                   # Framework
+│   │   ├── pipeline/          # Config composition, validation and orchestration
+│   │   ├── core/              # Interfaces, registries, factories, callbacks
+│   │   ├── services/          # Run catalog, metrics and job store used by the IDE
+│   │   ├── data/              # Offline replay data modules
+│   │   └── train.py           # PyTorch Lightning training driver
+│   └── usr/                   # Components: algorithms, methods, models, environments, evaluators
+│                              # (most are installed from the Theta Hub, not tracked in git)
+├── in/
+│   ├── config/                # Hydra configs: experiment/, agent/, model/, env/, paradigms/, site/, plot/
+│   ├── envs/  rules/          # Environment definitions and symbolic rule sets
+│   └── datasets/              # Local datasets (not tracked)
+├── plot/                      # Plotting framework; built-in plotters in plot/standard_figures/
+├── tests/                     # pytest suite
+├── docs/                      # Guides and the README media
+└── results/                   # Run output (not tracked): logs/, plots/, checkpoints/, tensorboard/
 ```
 
----
+## Documentation
 
-## 4. Hyperparameter Sweeps (Optuna)
+- **In the IDE:** press **F1**.
+- [INSTALL.md](INSTALL.md): setup, extras and verifying the install.
+- [CONTRIBUTING.md](CONTRIBUTING.md): development workflow, tests and code style.
+- [Component Plugin Authoring Guide](docs/COMPONENT_PLUGIN_GUIDE.md): writing algorithms, models,
+  environments and IDE plugins.
+- [Workflow Guide](docs/WORKFLOW_GUIDE.md): plot styles and plot configuration.
 
-Run multi-trial sweeps locally or submit Slurm batch jobs to the cluster:
+## License
 
-```bash
-# Run hyperparameter sweep for all 4 MIMIC architectures (Neural, NeSy x2, Symbolic)
-python3 run_pipeline.py tune_mimic_all -m
-
-# Optuna SQLite databases are saved automatically in results/optuna/
-```
-
----
-
-## 5. Maintenance & Syncing
-
-Reorganize your local or remote cluster results directory tree to match canonical experiment configurations:
-
-```bash
-python3 scripts/reorganize_results.py
-```
+MIT. See [LICENSE](LICENSE).

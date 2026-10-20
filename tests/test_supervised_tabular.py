@@ -57,12 +57,13 @@ def _write_npz(path: Path, n=120, dim=8, separable=True):
 
 @needs_neural
 def test_the_rl_dnn_is_not_a_classifier():
-    """`dnn` is MLPQNetwork, built around n_actions and a duelling head, which is
-    why supervised needed an architecture of its own rather than reusing it."""
+    """`dnn` is an action/value model, so supervised uses a classifier instead."""
     from src.app.core.model_registry import MODEL_REGISTRY, auto_discover_models
 
     auto_discover_models()
-    assert MODEL_REGISTRY["dnn"].__name__ == "MLPQNetwork"
+    dnn = MODEL_REGISTRY["dnn"]
+    assert hasattr(dnn, "get_action_and_value")
+    assert hasattr(dnn, "get_q_values")
 
 
 @needs_neural

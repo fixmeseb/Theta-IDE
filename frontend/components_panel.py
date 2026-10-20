@@ -333,6 +333,10 @@ class ComponentsPanel(QWidget):
 
         from .config_viewer import invalidate_config_tree
         invalidate_config_tree()
+        main_window = self.window()
+        config_tabs = getattr(main_window, "config_tab_manager", None)
+        if config_tabs is not None:
+            config_tabs.refresh_component_choices()
 
         # Reload components tree and auto-select fallback
         self.reload_components()

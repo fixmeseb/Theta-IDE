@@ -101,7 +101,20 @@ class HubComponent:
 
     @property
     def suite(self) -> Optional[str]:
-        return self.extra.get("suite")
+        value = self.extra.get("suite")
+        return value if isinstance(value, str) and value else None
+
+    @property
+    def provides(self) -> List[str]:
+        """Identifiers supplied by this package in addition to its own ID."""
+        values = self.extra.get("provides", [])
+        return [value for value in values if isinstance(value, str)] if isinstance(values, list) else []
+
+    @property
+    def aliases(self) -> List[str]:
+        """Legacy or alternate identifiers accepted by the package."""
+        values = self.extra.get("aliases", [])
+        return [value for value in values if isinstance(value, str)] if isinstance(values, list) else []
 
     @property
     def hidden(self) -> bool:
@@ -109,20 +122,8 @@ class HubComponent:
 
     @property
     def is_grouped_component(self) -> bool:
-        """Internal subcomponents that belong to an experiment plugin or foundation suite."""
-        if self.id in ("thetalib", "mimic", "pyrenees"):
-            return False
-        if self.suite in ("thetalib", "mimic", "pyrenees"):
-            return True
-        return self.id in (
-            "standard-figures", "image-data", "replay-buffer", "tabular-data",
-            "mimic-env", "mimic-clinical-suite", "mimic-early-prediction", "reward-shaping", "clinical-timeseries-data",
-            "pyrenees-env", "pyrenees-benchmark-suite", "pyrenees-evaluator",
-        )
-
-    @property
-    def is_thetalib_component(self) -> bool:
-        return self.is_grouped_component
+        """Whether this component is supplied by another Hub package."""
+        return self.suite is not None
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> HubComponent:
@@ -152,7 +153,10 @@ class HubComponent:
         )
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        # Preserve Hub-specific package metadata (suite, provides, aliases, etc.)
+        # through a fetch/cache/serialize cycle.
+        data = dict(self.extra)
+        data.update({
             "id": self.id,
             "name": self.name,
             "kind": self.kind,
@@ -166,4 +170,5 @@ class HubComponent:
             "target_path": self.target_path,
             "compatibility": self.compatibility,
             "icon": self.icon,
-        }
+        })
+        return data

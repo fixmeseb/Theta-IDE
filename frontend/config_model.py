@@ -74,6 +74,18 @@ class Environment:
     compatible_paradigms: tuple[str, ...] = ()
     raw: Mapping[str, Any] = field(default_factory=dict, repr=False)
 
+    @property
+    def environment_source(self) -> str | None:
+        """Return whether this config describes static data or a live simulator."""
+        declared = self.raw.get("environment_source")
+        if declared in ("static_dataset", "live_environment"):
+            return declared
+        if any(key in self.raw for key in ("dataset_name", "dataset_path", "data_path")):
+            return "static_dataset"
+        if self.raw.get("env_id"):
+            return "live_environment"
+        return None
+
     @classmethod
     def from_file(cls, path: Path, root: Path | None = None) -> Environment:
         raw = _read_yaml(path)
@@ -137,13 +149,10 @@ class Agent:
         elif isinstance(paradigms, str):
             cp = (paradigms,)
         else:
-            engine = str(raw.get("engine", "")).lower()
-            if engine == "sb3" or name.startswith("sb3/"):
-                cp = ("online_rl",)
-            elif engine == "d3rlpy" or name.startswith("d3rlpy/"):
-                cp = ("offline_rl",)
-            else:
-                cp = ()
+            # Compatibility is component metadata, not an inference from an
+            # implementation package name.  An omitted declaration means the
+            # component is unconstrained for legacy third-party packages.
+            cp = ()
 
         return cls(
             name=name,
@@ -291,9 +300,81 @@ class Paradigm:
         return True
 
     def permits_environment(self, environment: Environment) -> bool:
+        # A paradigm and environment must agree on whether data comes from a
+        # live simulator or a static dataset, even when older component
+        # metadata omits or misstates compatible_paradigms.
+        paradigm_source = self.environment_source
+        environment_source = environment.environment_source
+        if (
+            paradigm_source in {"live_environment", "static_dataset"}
+            and environment_source in {"live_environment", "static_dataset"}
+            and paradigm_source != environment_source
+        ):
+            return False
         if not environment.compatible_paradigms:
             return True
         return self.name in environment.compatible_paradigms
+
+    @property
+    def environment_source(self) -> str:
+        """The kind of research environment an experiment supplies.
+
+        A static dataset is the offline form of an environment or task.  It is
+        deliberately distinct from ``data_module``: the latter only adapts
+        the environment's observations into batches a model can consume.
+
+        Older component packages did not declare this capability, so retain a
+        conservative compatibility inference while all paradigm manifests are
+        migrated.
+        """
+        declared = self.raw.get("environment_source")
+        if isinstance(declared, str) and declared:
+            return declared
+        data_module = self.raw.get("data_module") or self.raw.get("default_data_module")
+        return "live_environment" if data_module == "SimulatorDataModule" else "static_dataset"
+
+    @property
+    def uses_static_dataset(self) -> bool:
+        """Whether this paradigm's environment is realized by static data."""
+        return self.environment_source == "static_dataset"
+
+    @property
+    def budget_unit(self) -> str:
+        """The primary training budget displayed when authoring this paradigm."""
+        training = self.raw.get("training")
+        declared = training.get("budget") if isinstance(training, Mapping) else None
+        if declared in {"timesteps", "epochs"}:
+            return declared
+        # Migration behavior for third-party paradigms authored before this
+        # capability was made explicit.
+        return "epochs" if self.uses_static_dataset else "timesteps"
+
+    @property
+    def algorithm_requirement(self) -> str:
+        """Return ``required``, ``optional``, or ``forbidden`` for methods.
+
+        This is a form contract, not a statement about installed components.
+        In particular, a required algorithm field must remain visible when no
+        compatible algorithm is installed, so the UI can explain the missing
+        dependency instead of quietly authoring an invalid model-only method.
+        """
+        method = self.raw.get("method")
+        declared = method.get("algorithm") if isinstance(method, Mapping) else None
+        if declared in ("required", "optional", "forbidden"):
+            return declared
+        if "allowed_agents" in self.raw and not self.allowed_agents:
+            return "forbidden"
+        if self.requires.get("agent") == "required" or self.allowed_agents:
+            return "required"
+        return "optional"
+
+    @property
+    def allows_algorithm(self) -> bool:
+        return self.algorithm_requirement != "forbidden"
+
+    @property
+    def requires_algorithm(self) -> bool:
+        return self.algorithm_requirement == "required"
 
     def field_enabled(self, name: str) -> bool:
         if name in self.forbids:
@@ -411,12 +492,9 @@ class ConfigTree:
                             parameters=dict(meta.get("parameters", {})),
                             raw=meta,
                         )
-                    elif kind == "env" and comp_id not in self.environments:
-                        self.environments[comp_id] = Environment(
-                            name=comp_id,
-                            compatible_paradigms=paradigms_tuple,
-                            raw=meta,
-                        )
+                    # Environment manifests describe installable packages, not
+                    # selectable environments. The actual choices come from
+                    # each package's YAML configs under in/config/env/.
                 except Exception:
                     continue
 
@@ -616,7 +694,11 @@ def default_method_model(
             return spec["model"]
     names = set(known or ())
     declared = paradigm.raw.get("default_model") if paradigm is not None else None
-    if isinstance(declared, str) and (not names or declared in names):
+    if isinstance(declared, str):
+        # Keep the paradigm contract visible even if the corresponding Hub
+        # component has not been installed yet. The UI can then name the
+        # missing dependency instead of silently substituting an incompatible
+        # architecture.
         return declared
     if not names or fallback in names:
         return fallback

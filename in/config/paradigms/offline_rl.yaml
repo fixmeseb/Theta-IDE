@@ -1,5 +1,12 @@
 type: base
 description: "Offline RL on a static transition dataset (CQL, IQL, etc.)"
+environment_source: static_dataset
+method:
+  algorithm: required
+  model: required
+training:
+  budget: epochs
+default_model: dnn
 runner: OfflineRLRunner
 default_data_module: RLReplayBufferDataModule
 eval_protocol: OfflineRLEvalProtocol

@@ -21,6 +21,11 @@ from src.app.core.plotter_registry import (
 )
 
 FALLBACK_PLOTS = ["convergence", "losses", "reports"]
+GENERAL_PLOT_OPTIONS = {
+    "output_dir", "title", "xlabel", "ylabel", "figsize", "dpi", "style",
+    "smoothing_window", "x_axis", "metrics", "filename_prefix", "output_subdir",
+    "use_cache",
+}
 
 
 def discover_plotters() -> dict:
@@ -42,7 +47,10 @@ def get_requested_plots(exp_cfg: dict, exp_id: str) -> dict:
         if isinstance(plots_val, list):
             return {name: {} for name in plots_val}
         elif isinstance(plots_val, dict):
-            return plots_val
+            requested = {name: options for name, options in plots_val.items()
+                         if name not in GENERAL_PLOT_OPTIONS and options is not None}
+            if requested or not plots_val:
+                return requested
 
     # Fall back to env-based defaults
     env_val = exp_cfg.get("env", {})

@@ -24,6 +24,30 @@ from src.app import telemetry
 from src.app.core.checkpoints import CheckpointSchedule, checkpoint_interval, checkpoint_name
 
 
+class EpisodeRewards:
+    """Returns of the episodes that finished since the last log.
+
+    SB3 reports an episode's return only on the step it ends (``info["episode"]``), so it has to be
+    collected on every step. Sampling just the logging step misses almost every episode.
+    """
+
+    def __init__(self):
+        self.returns: list[float] = []
+
+    def add(self, infos) -> None:
+        for info in infos or []:
+            if "episode" in info:
+                self.returns.append(float(info["episode"]["r"]))
+
+    def mean_and_reset(self) -> float | None:
+        """Mean return since the last call, or None if no episode finished in between."""
+        if not self.returns:
+            return None
+        mean = sum(self.returns) / len(self.returns)
+        self.returns.clear()
+        return mean
+
+
 @hydra.main(version_base=None, config_path="../../../in/config", config_name="config")
 def main(cfg: DictConfig):
     try:
@@ -93,6 +117,7 @@ def main(cfg: DictConfig):
             self.eval_freq = eval_freq
             self.last_eval_step = 0
             self.schedule = schedule
+            self.episodes = EpisodeRewards()
 
         def _on_step(self) -> bool:
             if self.schedule is not None and self.schedule.due(self.num_timesteps):
@@ -105,17 +130,11 @@ def main(cfg: DictConfig):
                     path=str(path),
                     transitions=self.num_timesteps,
                 )
-            # Check episodic rewards from monitor or locals
+            self.episodes.add(self.locals.get("infos"))
             if self.n_calls % self.eval_freq == 0:
-                infos = self.locals.get("infos", [])
-                ep_rewards = []
-                for info in infos:
-                    if "episode" in info:
-                        ep_rewards.append(info["episode"]["r"])
-
                 metrics = {}
-                if ep_rewards:
-                    mean_r = float(sum(ep_rewards) / len(ep_rewards))
+                mean_r = self.episodes.mean_and_reset()
+                if mean_r is not None:
                     metrics["eval/reward"] = mean_r
                     metrics["train/reward"] = mean_r
 

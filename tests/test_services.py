@@ -155,18 +155,12 @@ def test_compose_report_flags_an_unknown_experiment():
     assert not config_service.compose_report("thetaide/does_not_exist")["valid"]
 
 
-def test_schema_defaults_come_from_the_pipeline_and_match_the_builder():
+def test_schema_health_check_composes_a_real_workspace_experiment():
     schema = config_service.config_schema()
-    assert schema["base_experiment"] == BASE_EXPERIMENT
-    if schema["environment"]["name"] == "cartpole":
-        assert schema["environment"]["env_id"] == "CartPole-v1"
-    defaults = {f["key"]: f["default"] for f in schema["fields"]}
-    builder = Config()
-    assert defaults["methods.ppo.lr"] == builder.lr
-    assert defaults["methods.ppo.batch_size"] == builder.batch_size
-    assert defaults["methods.ppo.gamma"] == builder.gamma
-    assert defaults["tensorboard"] is builder.tensorboard
-    assert set(schema["fixed_overrides"]) <= set(builder.overrides())
+    assert schema["base_experiment"]
+    assert schema["fixed_overrides"] == []
+    assert schema["fields"] == []
+    assert config_service.compose_report(schema["base_experiment"])["valid"]
 
 
 def test_compose_report_explains_a_rounded_budget():

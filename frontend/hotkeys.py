@@ -46,7 +46,6 @@ PANE_ALIASES: dict[str, str] = {
     "settings": "settings",
     "settings_about": "settings",  # the combined pane's old name, still accepted in settings.toml
     "preferences": "settings",
-    "about": "about",
     "components": "components",
     "config": "config",
     "experiment": "config",
@@ -530,17 +529,14 @@ class HotkeyManager(QObject):
         pane_id = PANE_ALIASES.get(pane_id.lower(), pane_id)
         key_label = f"Action + {index}" if index is not None else "Hotkey"
 
-        # Special cases: Settings and About live outside the normal tab stack
-        if pane_id in ("settings", "about"):
-            panel = getattr(self.window, f"{pane_id}_panel", None)
+        # Special case: Settings lives outside the normal tab stack
+        if pane_id == "settings":
+            panel = getattr(self.window, "settings_panel", None)
             if panel is not None and hasattr(self.window, "tabs"):
                 self.window.tabs.setCurrentWidget(panel)
                 sb = self.window.statusBar() if hasattr(self.window, "statusBar") else None
                 if sb:
                     sb.showMessage(f"Switched to {pane_id.title()} ({key_label})", 3000)
-                return True
-            if pane_id == "about" and hasattr(self.window, "show_about"):
-                self.window.show_about()
                 return True
             return False
 

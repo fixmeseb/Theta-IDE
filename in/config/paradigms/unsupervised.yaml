@@ -1,5 +1,11 @@
 type: base
 description: "Unsupervised representation learning on unlabeled static data (autoencoders, anomaly detection)"
+environment_source: static_dataset
+method:
+  algorithm: forbidden
+  model: required
+training:
+  budget: epochs
 runner: UnsupervisedRunner
 default_data_module: UnsupervisedDataModule
 eval_protocol: ReconstructionEvalProtocol

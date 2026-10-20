@@ -5,7 +5,10 @@ import logging
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-import lightning as L
+try:
+    import lightning as L
+except ModuleNotFoundError:
+    import pytorch_lightning as L
 import numpy as np
 import torch
 from torch.utils.data import DataLoader, Dataset

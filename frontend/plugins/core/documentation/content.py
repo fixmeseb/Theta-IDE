@@ -39,6 +39,8 @@ ARTICLES: List[DocArticle] = [
   <li><b>Extensible Component Hub &amp; Plugin System:</b> Core plugins shipping natively with zero overhead when toggled off, plus community plugins (UI tabs, RL methods, models, environments, and experiment recipes) installable directly from the Community Hub.</li>
 </ul>
 
+<p>Diagrams of how these pieces talk to each other are in <a href="architecture">System Architecture</a>.</p>
+
 <h3>Key Workflows</h3>
 <ol>
   <li><b>Configure:</b> Select or compose an experiment in the <i>Experiment Config</i> pane.</li>
@@ -46,6 +48,49 @@ ARTICLES: List[DocArticle] = [
   <li><b>Monitor:</b> Observe real-time reward curves, minibatch losses, and metric tables with moving-average curve smoothing.</li>
   <li><b>Analyze:</b> Generate publication-ready convergence plots, loss breakdowns, and markdown comparative reports.</li>
 </ol>
+""",
+    ),
+    DocArticle(
+        id="architecture",
+        title="System Architecture",
+        category="Getting Started",
+        summary="How the IDE, the training pipeline and the files between them fit together.",
+        keywords=["architecture", "system", "diagram", "frontend", "backend", "pipeline", "process", "telemetry",
+                  "qprocess", "codebase", "structure", "how it works"],
+        html_content="""
+<h2>System Architecture</h2>
+<p>ThetaIDE has no server. The IDE imports the pipeline's services and calls them directly, and it runs training as child processes. Click a diagram to open it full size.</p>
+
+<h3>Processes and the files between them</h3>
+<p><a href="diagram:architecture_overview"><img src="diagram:architecture_overview" width="860"></a></p>
+<p><i>Training never talks to the IDE except through its stdout. Everything else crosses through files. The highlighted path is the live one: the engine appends telemetry to <code>results/logs</code>, the IDE's file watcher picks it up, and the Monitor redraws. Runs started from the command line land in the same folders, so Results lists them too. The Theta Hub is the only network dependency.</i></p>
+
+<h3>What happens when you launch training</h3>
+<p><a href="diagram:launch_sequence"><img src="diagram:launch_sequence" width="860"></a></p>
+<p><i>The config is composed twice through the same code (<code>src/app/pipeline/compose.py</code>): once in the IDE for the form and the pre-flight check (1&ndash;2), and again inside <code>run_pipeline.py</code> (5). That is why a recipe built in the IDE runs identically from the command line. Steps 7&ndash;9 repeat for as long as the engine trains.</i></p>
+
+<h3>Codebase map</h3>
+<table width="100%" cellspacing="0" cellpadding="8">
+  <tr><th>Where</th><th>What it holds</th></tr>
+  <tr><td><code>frontend/</code></td><td>The PyQt6 IDE: <code>app.py</code> (the window), the panels, <code>hub/</code> and <code>plugins/</code>. <code>local_backend.py</code>, <code>job_manager.py</code> and <code>live_run.py</code> are the bridge to the pipeline.</td></tr>
+  <tr><td><code>run_pipeline.py</code></td><td>The command-line entry point, and what the IDE launches: <code>python run_pipeline.py &lt;group&gt;/&lt;experiment&gt; [overrides]</code>.</td></tr>
+  <tr><td><code>src/app/pipeline/</code></td><td>Composition, pre-flight validation, engine dispatch (<code>engine.py</code>), the local runner, and which Python runs each engine (<code>runtime.py</code>).</td></tr>
+  <tr><td><code>src/app/services/</code></td><td>What the IDE calls in-process: <code>config_service</code>, <code>catalog</code>, <code>metrics</code>, <code>job_store</code>, <code>processes</code>, the exporters and the scaffolder.</td></tr>
+  <tr><td><code>src/app/telemetry/</code></td><td>One logging API for every engine: <code>run.log()</code> writes <code>metrics.csv</code> and the <code>events.jsonl</code> live feed.</td></tr>
+  <tr><td><code>src/app/core/</code></td><td>Registries (models, algorithms, plotters, data modules), the paradigm loader, the Lightning builder, callbacks and checkpoints.</td></tr>
+  <tr><td><code>src/app/train.py</code>, <code>src/usr/algorithms/</code></td><td>Engine scripts: the Lightning driver and the Stable-Baselines3 runner. Other runners arrive with their Hub packages.</td></tr>
+  <tr><td><code>src/usr/</code>, <code>in/config/</code></td><td>Components and their Hydra configs. Mostly installed from the Theta Hub and not tracked in git.</td></tr>
+  <tr><td><code>plot/</code></td><td><code>manager.py</code> runs the plotters an experiment asks for; built-ins live in <code>standard_figures/</code>.</td></tr>
+  <tr><td><code>results/</code>, <code>.thetaide/</code></td><td>Run output (logs, plots, checkpoints, TensorBoard) and the IDE's workspace (settings, <code>runs/jobs/jobs.db</code>, Hub cache). Neither is tracked.</td></tr>
+</table>
+
+<h3>Things that are easy to miss</h3>
+<ul>
+  <li><b>One worker thread.</b> Composition and the run catalog run on <code>LocalBackend</code>'s single background thread, because Hydra's global state is not thread-safe. Results come back to the window as callbacks.</li>
+  <li><b>Files are the interface.</b> Apart from stdout, the IDE learns about a run only from <code>results/logs</code>.</li>
+  <li><b>Two interpreters can be involved.</b> The IDE starts <code>run_pipeline.py</code> with its own Python, but <code>run_pipeline.py</code> starts each engine with <code>venv/bin/python3</code> when that exists. A project venv on an unsupported Python breaks training even when the IDE itself runs on a good one.</li>
+  <li><b>Settings have two layers:</b> the workspace's <code>.thetaide/settings.toml</code> over <code>~/.config/thetaide/settings.toml</code>.</li>
+</ul>
 """,
     ),
     DocArticle(
@@ -74,7 +119,7 @@ pip install -e ".[gui]"</code></pre>
 <h3>2. Start Theta-IDE</h3>
 <pre><code>source venv/bin/activate          # Windows: .\venv\Scripts\Activate.ps1
 python -m frontend</code></pre>
-<p>That is the only command. The app composes configs in-process and runs training itself; there is no server to start first. The status bar shows <code>PIPELINE ● local</code> once the pipeline has loaded.</p>
+<p>That is the only command. The app composes configs in-process and runs training itself; there is no server to start first. The status bar shows <b>Pipeline ready</b> once the pipeline has loaded.</p>
 
 <h3>Launch Options</h3>
 <table border="1" cellpadding="8" cellspacing="0" style="border-collapse: collapse; width: 100%; border-color: rgba(255,255,255,0.15);">
@@ -95,7 +140,7 @@ python -m frontend</code></pre>
 </ul>
 
 <h3>If the Pipeline Is Unavailable</h3>
-<p>The status bar shows <code>PIPELINE ○ unavailable</code> when the app isn't running from the project venv. You can still browse and edit configs (the preview shows an unvalidated local draft) and run <i>Run &rarr; Start simulated demo</i>. Reinstall with <code>pip install -e ".[gui]"</code> and start the app again with <code>python -m frontend</code>.</p>
+<p>The status bar shows <b>Pipeline unavailable</b> when the app isn't running from the project venv. You can still browse and edit configs (the preview shows an unvalidated local draft) and run <i>Queue &rarr; Start simulated demo</i>. Reinstall with <code>pip install -e ".[gui]"</code> and start the app again with <code>python -m frontend</code>.</p>
 
 <h3>Stopping</h3>
 <p>Closing the window while a run is training (or the queue is running) hides ThetaIDE to the <b>system tray</b> and training keeps going. The tray icon gets a green dot while a run is training (blue while the queue waits to start the next job), shows what is training, notifies you when runs finish or fail, and reopens the window when clicked; its menu also has <i>Stop all training</i>. To exit, use <i>File &rarr; Quit</i> (<code>Ctrl+Q</code>) or <i>Quit ThetaIDE</i> in the tray menu: if a run is still training ThetaIDE asks first, then stops it. Metrics written so far stay in <code>results/logs/</code>. Queued jobs are kept and wait for <i>Start queue</i> next time. TensorBoard stops with the app.</p>
@@ -219,16 +264,13 @@ python -m frontend</code></pre>
   <li><b>Community Hub Dialog:</b> Marketplace modal to discover, install, update, and uninstall community plugins, RL methods, models, and environments directly into your workspace.</li>
 </ul>
 
-<h3>7. Workflows (<code>workflows</code>)</h3>
-<p>Compose multi-stage experiments as string diagrams, wiring the outputs of one stage into the inputs of the next. See <a href="workflows_pane">Workflows Pane</a>.</p>
-
-<h3>8. Results Browser (<code>results</code>)</h3>
+<h3>7. Results Browser (<code>results</code>)</h3>
 <p>Every metric, value and file your runs produced: tick runs to chart every metric they logged, compare them, and open their tables, figures, reports and configs. See <a href="results_browser">Results Browser</a>.</p>
 
-<h3>9. TensorBoard (<code>tensorboard</code>)</h3>
+<h3>8. TensorBoard (<code>tensorboard</code>)</h3>
 <p>An embedded TensorBoard dashboard for runs logged with <i>Log to TensorBoard</i>. See <a href="tensorboard_tab">TensorBoard Tab</a>.</p>
 
-<h3>10. Console (<code>console</code>)</h3>
+<h3>9. Console (<code>console</code>)</h3>
 <p>Streams the pipeline's output and accepts a few quick commands. See <a href="console_pane">Console</a>.</p>
 """,
     ),
@@ -417,7 +459,6 @@ python -m frontend</code></pre>
   </tr>
 </table>
 
-<p>The Workflows pane has no digit by default. Reach it from <i>View &rarr; Workflows</i>, or remap a digit in <i>Settings &rarr; Hotkeys &rarr; Pane Navigation Hotkey Menu</i>.</p>
 
 <h3>Menu Shortcuts</h3>
 <table border="1" cellpadding="8" cellspacing="0" style="border-collapse: collapse; width: 100%; border-color: rgba(255,255,255,0.15);">
@@ -425,12 +466,14 @@ python -m frontend</code></pre>
     <td>Shortcut</td>
     <td>Action</td>
   </tr>
+  <tr><td><code>F1</code></td><td>Help &rarr; Documentation: open these docs</td></tr>
   <tr><td><code>F5</code></td><td>Queue &rarr; Launch now: train the open experiment</td></tr>
   <tr><td><code>Shift+F5</code></td><td>Queue &rarr; Stop the active run</td></tr>
   <tr><td><code>Ctrl+F5</code></td><td>Queue &rarr; Start simulated demo (no backend needed)</td></tr>
   <tr><td><code>Ctrl+Shift+Q</code></td><td>Queue &rarr; Add to queue</td></tr>
   <tr><td><code>Ctrl+Shift+R</code></td><td>Queue &rarr; Start or pause queue</td></tr>
   <tr><td><code>Ctrl+N</code></td><td>File &rarr; New experiment</td></tr>
+  <tr><td><code>Ctrl+Alt+R</code></td><td>File &rarr; Reload component code</td></tr>
   <tr><td><code>Ctrl+S</code></td><td>File &rarr; Save configuration</td></tr>
   <tr><td><code>Ctrl+Shift+S</code></td><td>File &rarr; Export draft YAML</td></tr>
   <tr><td><code>Ctrl+Q</code></td><td>File &rarr; Quit</td></tr>
@@ -977,62 +1020,6 @@ python run_pipeline.py mimic/tune_mimic_all sweep=true dash=true</code></pre>
 """,
     ),
     DocArticle(
-        id="workflows_pane",
-        title="Workflows Pane: String Diagrams",
-        category="Workflow & Tools",
-        summary="Compose multi-stage experiments as typed string diagrams, validate the wiring, and run them through the pipeline.",
-        keywords=["workflow", "workflows", "string diagram", "dag", "nodes", "wires", "ports", "preset", "pipeline", "distillation", "transfer"],
-        html_content=r"""
-<h2>Workflows Pane: String Diagrams</h2>
-<p>A <b>workflow</b> chains several training stages together. Each stage is a <b>node</b>, and typed <b>wires</b> (strings) carry artifacts such as datasets and checkpoints from one node's outputs to another's inputs. Open it from <a href="ide://workflows">View &rarr; Workflows</a>.</p>
-
-<h3>Building a Diagram</h3>
-<table border="1" cellpadding="8" cellspacing="0" style="border-collapse: collapse; width: 100%; border-color: rgba(255,255,255,0.15);">
-  <tr style="background-color: rgba(255,255,255,0.05); font-weight: bold;">
-    <td>Control</td>
-    <td>What it does</td>
-  </tr>
-  <tr><td><b>+ Add Node</b></td><td>Add a stage to the canvas</td></tr>
-  <tr><td>Drag between ports</td><td>Connect an output port to an input port with a wire</td></tr>
-  <tr><td><b>Validate Strings</b></td><td>Check every wire and required input (see below)</td></tr>
-  <tr><td><b>Zoom Fit</b></td><td>Fit the whole diagram in view</td></tr>
-  <tr><td><b>Load YAML&hellip; / Save YAML&hellip;</b></td><td>Open or save a diagram file</td></tr>
-  <tr><td><b>Delete Node / Disconnect Wire</b></td><td>Remove the selected node or wire</td></tr>
-  <tr><td><b>Clear</b></td><td>Empty the canvas</td></tr>
-</table>
-
-<h3>Node Types</h3>
-<ul>
-  <li><b>Training stages:</b> Online RL, Offline RL, and Supervised nodes. Each points at an existing experiment config.</li>
-  <li><b>Data:</b> Dataset Source supplies a stored transition dataset.</li>
-  <li><b>Transforms:</b> Feature Augmenter, Reward Shaper, and Distillation reshape data or models between stages.</li>
-  <li><b>Evaluation:</b> Plot Evaluator turns metrics into plots.</li>
-</ul>
-
-<h3>Port Types</h3>
-<p>Every port carries one artifact type, and wires only connect matching types: <code>dataset</code>, <code>checkpoint</code>, <code>value_estimator</code>, <code>metrics</code>, <code>logic_rules</code>, and <code>generic</code>. <b>Validate Strings</b> reports wires between mismatched types, wires to ports that don't exist, and required inputs that aren't connected.</p>
-
-<h3>Built-In Presets</h3>
-<table border="1" cellpadding="8" cellspacing="0" style="border-collapse: collapse; width: 100%; border-color: rgba(255,255,255,0.15);">
-  <tr style="background-color: rgba(255,255,255,0.05); font-weight: bold;">
-    <td>Preset</td>
-    <td>Pattern</td>
-  </tr>
-  <tr><td><code>transfer_learning</code></td><td>Train on one environment, then warm-start fine-tuning on another</td></tr>
-  <tr><td><code>online_vs_offline</code></td><td>Collect data online, then train offline methods on it for comparison</td></tr>
-  <tr><td><code>model_distillation</code></td><td>Distill a trained teacher into a smaller student model</td></tr>
-  <tr><td><code>sepsis_reciprocal</code></td><td>Alternate offline RL and early prediction, feeding each back into the other</td></tr>
-</table>
-<p>Their definitions live in <code>in/config/workflow/</code>.</p>
-
-<h3>Running a Workflow</h3>
-<p>Workflows aren't launched from this pane. Save the diagram to <code>in/config/workflow/&lt;id&gt;.yaml</code>, then reference it from an experiment:</p>
-<pre><code># in/config/experiment/mimic/reciprocal_refinement.yaml
-workflow: sepsis_reciprocal</code></pre>
-<p>Launching that experiment (<code>F5</code>, or <code>python run_pipeline.py mimic/reciprocal_refinement</code>) runs the nodes in dependency order. Nodes with no dependencies on each other run in the same stage.</p>
-""",
-    ),
-    DocArticle(
         id="results_browser",
         title="Results Browser",
         category="Interface",
@@ -1150,7 +1137,7 @@ workflow: sepsis_reciprocal</code></pre>
         keywords=["settings", "preferences", "settings.toml", "toml", "backend", "storage", "plugins", "hotkeys", "config"],
         html_content=r"""
 <h2>Settings & settings.toml</h2>
-<p>Open Settings with <code>Action + 0</code> or <i>View &rarr; Settings &amp; About</i>.</p>
+<p>Open Settings with <code>Action + 0</code> or <i>View &rarr; Settings</i>.</p>
 
 <h3>Settings Pages</h3>
 <table border="1" cellpadding="8" cellspacing="0" style="border-collapse: collapse; width: 100%; border-color: rgba(255,255,255,0.15);">
@@ -1158,7 +1145,7 @@ workflow: sepsis_reciprocal</code></pre>
     <td>Page</td>
     <td>What you can change</td>
   </tr>
-  <tr><td><b>Appearance</b></td><td>Color theme, which sidebar panels are shown, auto-hide sidebar, the sculpture animation, and the Results panel layout</td></tr>
+  <tr><td><b>Appearance</b></td><td>Color theme, which sidebar panels are shown, auto-hide sidebar, and the Results panel layout</td></tr>
   <tr><td><b>Core Plugins</b></td><td>Turn built-in plugins (such as this Documentation plugin) on or off</td></tr>
   <tr><td><b>Community Plugins</b></td><td>Install, configure, or remove plugins from the Community Hub</td></tr>
   <tr><td><b>Hotkeys</b></td><td>Action key, terminal precedence, the <code>Action + digit</code> pane mapping, and menu shortcuts</td></tr>
@@ -1180,7 +1167,7 @@ workflow: sepsis_reciprocal</code></pre>
     <td>Section</td>
     <td>Keys</td>
   </tr>
-  <tr><td><code>[appearance]</code></td><td><code>theme</code>, plus <code>ascii_*</code> animation settings</td></tr>
+  <tr><td><code>[appearance]</code></td><td><code>theme</code>, <code>zoom</code></td></tr>
   <tr><td><code>[backend]</code></td><td><code>url</code>, <code>timeout</code> (seconds)</td></tr>
   <tr><td><code>[sidebar]</code></td><td><code>order</code> and <code>visible</code> pane lists</td></tr>
   <tr><td><code>[plugins]</code></td><td><code>enabled</code> plugin IDs</td></tr>
@@ -1265,7 +1252,7 @@ workflow: sepsis_reciprocal</code></pre>
         html_content="""
 <h2>Troubleshooting & FAQ</h2>
 
-<h3>1. Status bar says "PIPELINE ○ unavailable"</h3>
+<h3>1. Status bar says "Pipeline unavailable"</h3>
 <p>Theta-IDE imports the training pipeline directly, so it must run from the project venv:</p>
 <ul>
   <li>Activate <code>venv/</code> and run <code>pip install -e ".[gui]"</code>, then start the app with <code>python -m frontend</code> from the repository root.</li>
