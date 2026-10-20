@@ -181,8 +181,12 @@ class Window(QMainWindow):
         self.current_experiment = None
         # Created before anything that talks to the backend: its replies arrive on the event loop, which
         # the splash progress steps below spin, so a reply can land before the rest of the window exists.
-        self.state_label = label("TRAINING   •   idle  ", "muted")
-        self.backend_label = label("PIPELINE   ○   loading…  ", "muted")
+        self.state_label = label("Idle", "muted")
+        self.backend_label = label("", "muted")
+        for status in (self.state_label, self.backend_label):
+            status.setContentsMargins(12, 0, 12, 0)
+        self.pipeline_state = "loading"  # "loading", "ready" or "unavailable"
+        self.show_pipeline_state()
         self.fixed_fields = {}
         self.fields = {}
         step("Building the workspace…", 0.08)
@@ -198,8 +202,7 @@ class Window(QMainWindow):
             self.tabs.set_auto_hide(bool(self.settings_manager.get("sidebar", "auto_hide", default=False)))
         self.tabs.autoHideChanged.connect(self.on_sidebar_auto_hide_changed)
         self.make_menus()
-        self.theme_status = label("", "muted")
-        self.statusBar().addWidget(self.theme_status)
+        self.statusBar().setSizeGripEnabled(False)
         self.theme_manager.changed.connect(self.theme_changed)
         self.theme_manager.committed.connect(self.persist_theme_choice)
         step("Applying theme…", 0.68)
@@ -1392,7 +1395,7 @@ class Window(QMainWindow):
             self.statusBar().showMessage("The Documentation plugin isn't installed.", 4000)
 
     def theme_changed(self):
-        self.theme_status.setText(f"  ●  Local workspace    /    {self.theme_manager.active['name']}")
+        self.show_pipeline_state()
         self.highlighter.rehighlight()
         self.tabs.refresh_icons()
         for tree in (getattr(self, "config_tree", None),
@@ -1545,13 +1548,19 @@ class Window(QMainWindow):
             self.request_disk_runs()  # list runs on disk, including ones started outside the app
         if not connected and hasattr(self, "results_view"):
             self.results_view.set_offline()
+        self.pipeline_state = "ready" if connected else "unavailable"
+        self.show_pipeline_state()
         if connected:
-            self.backend_label.setText("PIPELINE   ●   local  ")
             self.backend_label.setToolTip(f"Configs compose in-process and training runs with {sys.executable}.")
         else:
-            self.backend_label.setText("PIPELINE   ○   unavailable  ")
             self.backend_label.setToolTip(f"{error}\nRun ThetaIDE from the project venv: "
                                           'pip install -e ".[gui]" then python -m frontend')
+
+    def show_pipeline_state(self):
+        """The status bar's pipeline indicator: a dot in the theme's colour for the state, then its name."""
+        text, color = {"ready": ("Pipeline ready", "primary"), "unavailable": ("Pipeline unavailable", "number"),
+                       "loading": ("Loading pipeline…", "muted")}[self.pipeline_state]
+        self.backend_label.setText(f'<span style="color: {theme_color(color)}">●</span>&nbsp; {text}')
 
     def request_schema(self, apply_defaults):
         self.schema_pending = True
@@ -1716,11 +1725,13 @@ class Window(QMainWindow):
         if getattr(self, "state_label", None) is not None:
             run = self.active
             if run is None:
-                self.state_label.setText("TRAINING   •   idle  ")
+                self.state_label.setText("Idle")
             elif run.get("simulated"):
-                self.state_label.setText(f"DEMO   •   {run['status']}  ")
+                self.state_label.setText(f"Demo · {run['status']}")
             else:
-                self.state_label.setText(f"TRAINING   •   {run['status']}   •   {run.get('backend', {}).get('experiment_id', '')}  ")
+                experiment_id = run.get("backend", {}).get("experiment_id", "")
+                self.state_label.setText(f"{run['status'].capitalize()} · {experiment_id}" if experiment_id
+                                         else run["status"].capitalize())
 
     def activate(self, run):
         self.active = run

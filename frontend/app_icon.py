@@ -41,7 +41,7 @@ def desktop_entry(python, repo_root):
         "[Desktop Entry]\n"
         "Type=Application\n"
         "Name=ThetaIDE\n"
-        "Comment=Research workspace for NeSyRL experiments\n"
+        "Comment=IDE for reinforcement learning and deep learning experiments\n"
         f'Exec="{python}" -m frontend\n'
         f"Path={repo_root}\n"
         f"Icon={ICON_NAME}\n"

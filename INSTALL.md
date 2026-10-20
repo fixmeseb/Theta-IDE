@@ -93,7 +93,7 @@ From the repository root, with the environment active:
 python -m frontend
 ```
 
-That is the only command: there is no server to start first. The status bar shows `PIPELINE ● local` once the
+That is the only command: there is no server to start first. The status bar shows **Pipeline ready** once the
 training pipeline has loaded.
 
 ThetaIDE keeps its workspace (run history, the job queue, workspace settings and the Hub cache) in `.thetaide/`
@@ -136,7 +136,7 @@ Any other failure points to a problem with your install.
 
 ## 6. Troubleshooting
 
-**The status bar shows `PIPELINE ○ unavailable`.** The IDE is not running from the environment the pipeline
+**The status bar shows "Pipeline unavailable".** The IDE is not running from the environment the pipeline
 is installed in. Activate it, reinstall with `pip install -e ".[dev,gui]"`, and start the IDE again.
 
 **Training fails with `ValueError: badly formed help string`.** You are on Python 3.14. Recreate the

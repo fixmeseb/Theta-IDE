@@ -74,7 +74,7 @@ pip install -e ".[gui]"</code></pre>
 <h3>2. Start Theta-IDE</h3>
 <pre><code>source venv/bin/activate          # Windows: .\venv\Scripts\Activate.ps1
 python -m frontend</code></pre>
-<p>That is the only command. The app composes configs in-process and runs training itself; there is no server to start first. The status bar shows <code>PIPELINE ● local</code> once the pipeline has loaded.</p>
+<p>That is the only command. The app composes configs in-process and runs training itself; there is no server to start first. The status bar shows <b>Pipeline ready</b> once the pipeline has loaded.</p>
 
 <h3>Launch Options</h3>
 <table border="1" cellpadding="8" cellspacing="0" style="border-collapse: collapse; width: 100%; border-color: rgba(255,255,255,0.15);">
@@ -95,7 +95,7 @@ python -m frontend</code></pre>
 </ul>
 
 <h3>If the Pipeline Is Unavailable</h3>
-<p>The status bar shows <code>PIPELINE ○ unavailable</code> when the app isn't running from the project venv. You can still browse and edit configs (the preview shows an unvalidated local draft) and run <i>Run &rarr; Start simulated demo</i>. Reinstall with <code>pip install -e ".[gui]"</code> and start the app again with <code>python -m frontend</code>.</p>
+<p>The status bar shows <b>Pipeline unavailable</b> when the app isn't running from the project venv. You can still browse and edit configs (the preview shows an unvalidated local draft) and run <i>Queue &rarr; Start simulated demo</i>. Reinstall with <code>pip install -e ".[gui]"</code> and start the app again with <code>python -m frontend</code>.</p>
 
 <h3>Stopping</h3>
 <p>Closing the window while a run is training (or the queue is running) hides ThetaIDE to the <b>system tray</b> and training keeps going. The tray icon gets a green dot while a run is training (blue while the queue waits to start the next job), shows what is training, notifies you when runs finish or fail, and reopens the window when clicked; its menu also has <i>Stop all training</i>. To exit, use <i>File &rarr; Quit</i> (<code>Ctrl+Q</code>) or <i>Quit ThetaIDE</i> in the tray menu: if a run is still training ThetaIDE asks first, then stops it. Metrics written so far stay in <code>results/logs/</code>. Queued jobs are kept and wait for <i>Start queue</i> next time. TensorBoard stops with the app.</p>
@@ -1267,7 +1267,7 @@ workflow: sepsis_reciprocal</code></pre>
         html_content="""
 <h2>Troubleshooting & FAQ</h2>
 
-<h3>1. Status bar says "PIPELINE ○ unavailable"</h3>
+<h3>1. Status bar says "Pipeline unavailable"</h3>
 <p>Theta-IDE imports the training pipeline directly, so it must run from the project venv:</p>
 <ul>
   <li>Activate <code>venv/</code> and run <code>pip install -e ".[gui]"</code>, then start the app with <code>python -m frontend</code> from the repository root.</li>
