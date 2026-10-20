@@ -1,5 +1,6 @@
 """Full-screen, simplified, boxed configuration viewer for Theta-IDE."""
 import copy
+import inspect
 import math
 import random
 import re
@@ -401,9 +402,10 @@ class IndentedHierarchyBlock(QFrame):
         super().__init__(parent)
         self.setObjectName(f"hierarchyBlock_lvl{level}")
         left_margin = 12 if level == 1 else 14
+        border_color = theme_color("border")
         self.setStyleSheet(f"""
             QFrame#hierarchyBlock_lvl{level} {{
-                border-left: 2px solid #504945;
+                border-left: 2px solid {border_color};
                 margin-left: {left_margin}px;
                 padding-left: 10px;
                 background: transparent;
@@ -1450,6 +1452,45 @@ class ConfigViewer(QWidget):
         val = self.raw_data.get("env")
         return str(val) if isinstance(val, str) else None
 
+    @staticmethod
+    def _is_environment_choice(name: Any) -> bool:
+        """Reject directory-like values; selectors should name environment configs."""
+        return isinstance(name, str) and bool(name.strip()) and not name.strip().endswith(("/", "\\"))
+
+    @staticmethod
+    def _environment_for_name(tree: ConfigTree | None, name: str | None):
+        if not tree or not name:
+            return None
+        if name in tree.environments:
+            return tree.environments[name]
+        return next((env for env in tree.environments.values() if env.name == name), None)
+
+    def _environment_is_compatible(self, tree: ConfigTree | None, name: str | None, paradigm: str | None) -> bool:
+        if not self._is_environment_choice(name):
+            return False
+        environment = self._environment_for_name(tree, name)
+        rules = tree.paradigms.get(paradigm) if tree and paradigm else None
+        if not environment:
+            return False
+        if not paradigm:
+            return True
+        return rules.permits_environment(environment) if rules else False
+
+    def _add_unavailable_environment_option(
+        self, combo: ComboBox, name: str, paradigm: str | None, tree: ConfigTree | None = None
+    ) -> int | None:
+        """Keep an existing incompatible or missing choice visible but impossible to select."""
+        if not self._is_environment_choice(name):
+            return None
+        exists = self._environment_for_name(tree or config_tree(), name) is not None
+        reason = f"incompatible with {paradigm}" if exists and paradigm else "missing"
+        combo.addItem(f"{name} ({reason})", name)
+        index = combo.count() - 1
+        item = combo.model().item(index)
+        if item is not None:
+            item.setEnabled(False)
+        return index
+
     def _set_experiment_env(self, env_name: str | None):
         """Update or insert override /env in defaults, removing legacy scalar env."""
         if not self.raw_data or not isinstance(self.raw_data, dict):
@@ -1635,45 +1676,41 @@ class ConfigViewer(QWidget):
             self.combo_env.addItem("— Select Environment —", None)
 
             def _refresh_base_env_choices(selected_p):
-                curr_text = self.combo_env.currentText()
+                curr_data = self.combo_env.currentData()
                 self.combo_env.blockSignals(True)
                 self.combo_env.clear()
                 self.combo_env.addItem("— Select Environment —", None)
                 if selected_p and tree and selected_p in tree.paradigms:
-                    allowed = [e.name for e in tree.environments_for(selected_p)]
+                    allowed = [e.name for e in tree.environments_for(selected_p) if self._is_environment_choice(e.name)]
                 elif tree:
-                    allowed = sorted(list(set(e.name for e in tree.environments.values())))
+                    allowed = sorted(set(e.name for e in tree.environments.values() if self._is_environment_choice(e.name)))
                 else:
                     allowed = []
                 self.combo_env.addItems(allowed)
-                if curr_text and curr_text in allowed:
-                    self.combo_env.setCurrentText(curr_text)
+                candidate = self._get_base_env() or (curr_data if isinstance(curr_data, str) else None)
+                if candidate in allowed:
+                    self.combo_env.setCurrentText(candidate)
+                elif self._is_environment_choice(candidate):
+                    unavailable_index = self._add_unavailable_environment_option(self.combo_env, candidate, selected_p, tree)
+                    self.combo_env.setCurrentIndex(unavailable_index if unavailable_index is not None else 0)
                 else:
-                    base_e = self._get_base_env()
-                    if base_e:
-                        if base_e not in allowed:
-                            self.combo_env.addItem(base_e, base_e)
-                        self.combo_env.setCurrentText(base_e)
-                    elif curr_text and curr_text not in ("", "— Select Environment —"):
-                        self.combo_env.addItem(curr_text, curr_text)
-                        self.combo_env.setCurrentText(curr_text)
-                    else:
-                        self.combo_env.setCurrentIndex(0)
+                    self.combo_env.setCurrentIndex(0)
                 self.combo_env.blockSignals(False)
 
             base_env = self._get_base_env()
             if base_p and tree and base_p in tree.paradigms:
-                allowed_init = [e.name for e in tree.environments_for(base_p)]
+                allowed_init = [e.name for e in tree.environments_for(base_p) if self._is_environment_choice(e.name)]
             elif tree:
-                allowed_init = sorted(list(set(e.name for e in tree.environments.values())))
+                allowed_init = sorted(set(e.name for e in tree.environments.values() if self._is_environment_choice(e.name)))
             else:
                 allowed_init = []
             self.combo_env.addItems(allowed_init)
-            if base_env:
-                if base_env not in allowed_init:
-                    self.combo_env.addItem(base_env, base_env)
-                    self.combo_env.setToolTip(f"Missing component: Environment '{base_env}' is not installed in in/config/env/. Install it via Component Hub.")
-                self.combo_env.setCurrentText(base_env)
+            if self._is_environment_choice(base_env):
+                if base_env in allowed_init:
+                    self.combo_env.setCurrentText(base_env)
+                else:
+                    unavailable_index = self._add_unavailable_environment_option(self.combo_env, base_env, base_p, tree)
+                    self.combo_env.setCurrentIndex(unavailable_index if unavailable_index is not None else 0)
             else:
                 self.combo_env.setCurrentIndex(0)
             form_base.addWidget(self.combo_env, 0, 3)
@@ -1718,17 +1755,40 @@ class ConfigViewer(QWidget):
                 self.combo_env.setMinimumWidth(280)
                 self.combo_env.setMaximumWidth(360)
                 inherited_env = tree.group(self._group_name() or "").env
-                inherit_label = inherited_env or self._inherited_env() or "Default"
-                self.combo_env.addItem(inherit_label, self.INHERIT)
-                selected_paradigm = self.combo_paradigm.currentText()
-                allowed_envs = [e.name for e in tree.environments_for(selected_paradigm)] if selected_paradigm in tree.paradigms else []
-                self.combo_env.addItems(allowed_envs)
+                inherited_env = inherited_env or self._inherited_env()
                 explicit_env = self._get_explicit_env()
+                has_explicit_override = bool(explicit_env and explicit_env != inherited_env)
+                inherited_is_compatible = self._environment_is_compatible(tree, inherited_env, paradigm)
+                inherit_label = inherited_env or "Default"
+                if inherited_env and not inherited_is_compatible:
+                    if has_explicit_override:
+                        # Keep the reset-to-default slot, but don't surface the
+                        # stale inherited component as a menu choice when an
+                        # explicit environment is already selected.
+                        inherit_label = "Default"
+                    else:
+                        exists = self._environment_for_name(tree, inherited_env) is not None
+                        inherit_label = f"{inherited_env} ({'incompatible' if exists else 'missing'})"
+                self.combo_env.addItem(inherit_label, self.INHERIT)
+                if inherited_env and not inherited_is_compatible:
+                    item = self.combo_env.model().item(0)
+                    if item is not None:
+                        item.setEnabled(False)
+                selected_paradigm = self.combo_paradigm.currentText()
+                if selected_paradigm in tree.paradigms:
+                    allowed_envs = [e.name for e in tree.environments_for(selected_paradigm) if self._is_environment_choice(e.name)]
+                else:
+                    allowed_envs = sorted(set(e.name for e in tree.environments.values() if self._is_environment_choice(e.name)))
+                self.combo_env.addItems(allowed_envs)
                 if explicit_env and explicit_env != inherited_env:
-                    if explicit_env not in allowed_envs:
-                        self.combo_env.addItem(explicit_env, explicit_env)
-                        self.combo_env.setToolTip(f"Missing component: Environment '{explicit_env}' is not installed in in/config/env/. Install it via Component Hub.")
-                    self.combo_env.setCurrentText(explicit_env)
+                    if self._is_environment_choice(explicit_env) and explicit_env in allowed_envs:
+                        self.combo_env.setCurrentText(explicit_env)
+                    elif self._is_environment_choice(explicit_env):
+                        unavailable_index = self._add_unavailable_environment_option(
+                            self.combo_env, explicit_env, selected_paradigm, tree
+                        )
+                        if unavailable_index is not None:
+                            self.combo_env.setCurrentIndex(unavailable_index)
                 else:
                     self.combo_env.setCurrentIndex(0)
                 self.combo_env.setToolTip(
@@ -2134,61 +2194,64 @@ class ConfigViewer(QWidget):
 
             rendered_u_rows = []
 
-            def _render_param_item(k_path: str, val: Any, indent: int = 0):
-                if isinstance(val, dict):
-                    grp_hdr = QHBoxLayout()
-                    grp_hdr.setSpacing(6)
-                    if indent > 0:
-                        grp_hdr.addSpacing(indent * 14)
-                    grp_lbl = label(f"[{k_path}]", "muted")
-                    grp_hdr.addWidget(grp_lbl)
-                    grp_hdr.addStretch()
-                    if has_params:
-                        btn_del_grp = _make_subtle_tool_button("close", f"Remove parameter group '{k_path}'", size=20, icon_size=12)
-                        btn_del_grp.clicked.connect(lambda _, kp=k_path: self._remove_universal_param(kp))
-                        grp_hdr.addWidget(btn_del_grp)
-                    p_layout.addLayout(grp_hdr)
-                    for sub_k, sub_v in list(val.items()):
-                        sub_path = f"{k_path}.{sub_k}" if k_path else sub_k
-                        _render_param_item(sub_path, sub_v, indent + 1)
-                else:
-                    p_row = QHBoxLayout()
-                    p_row.setSpacing(8)
-                    if indent > 0:
-                        p_row.addSpacing(indent * 14)
-                    lbl_k = label(str(k_path))
-                    lbl_k.setMinimumWidth(160)
-                    p_row.addWidget(lbl_k)
+            def _render_param_group(parent_layout, values: dict, parent_path: tuple[str, ...] = (), level: int = 0):
+                for key, val in list(values.items()):
+                    key_path = parent_path + (str(key),)
+                    dotted_path = ".".join(key_path)
+                    if isinstance(val, dict):
+                        group = IndentedHierarchyBlock(level=max(1, level + 1))
+                        group_header = QHBoxLayout()
+                        group_header.setSpacing(6)
+                        group_header.addWidget(label(f"[{key}]", "muted"))
+                        group_header.addStretch()
+                        if has_params:
+                            btn_del_group = _make_subtle_tool_button(
+                                "close", f"Remove parameter group '{dotted_path}'", size=20, icon_size=12
+                            )
+                            btn_del_group.clicked.connect(lambda _, kp=dotted_path: self._remove_universal_param(kp))
+                            group_header.addWidget(btn_del_group)
+                        group.addRow("", group_header)
+                        _render_param_group(group.form_layout, val, key_path, level + 1)
+                        if isinstance(parent_layout, QFormLayout):
+                            parent_layout.addRow("", group)
+                        else:
+                            parent_layout.addWidget(group)
+                        continue
 
+                    row = QHBoxLayout()
+                    row.setSpacing(8)
+                    field_label = label(str(key))
+                    field_label.setMinimumWidth(160)
+                    row.addWidget(field_label)
                     if isinstance(val, bool):
-                        slider_v = ToggleSlider(checked=val)
-                        slider_v.toggled.connect(lambda v, kp=k_path: self._on_universal_param_edited(kp, v))
-                        p_row.addWidget(slider_v)
+                        widget = ToggleSlider(checked=val)
+                        widget.toggled.connect(lambda value, kp=dotted_path: self._on_universal_param_edited(kp, value))
                     elif isinstance(val, (int, float)):
-                        spin_v = number_field(val)
-                        spin_v.setMaximumWidth(NUMBER_FIELD_WIDTH)
-                        spin_v.valueChanged.connect(lambda v, kp=k_path: self._on_universal_param_edited(kp, v))
-                        p_row.addWidget(spin_v)
+                        widget = number_field(val)
+                        widget.setMaximumWidth(NUMBER_FIELD_WIDTH)
+                        widget.valueChanged.connect(lambda value, kp=dotted_path: self._on_universal_param_edited(kp, value))
                     else:
-                        line_v = QLineEdit(str(val if val is not None else ""))
-                        line_v.setMaximumWidth(TEXT_FIELD_WIDTH)
-                        line_v.textChanged.connect(lambda v, kp=k_path: self._on_universal_param_edited(kp, v))
-                        p_row.addWidget(line_v)
-
+                        widget = QLineEdit(str(val if val is not None else ""))
+                        widget.setMaximumWidth(TEXT_FIELD_WIDTH)
+                        widget.textChanged.connect(lambda value, kp=dotted_path: self._on_universal_param_edited(kp, value))
+                    row.addWidget(widget)
                     if has_params:
-                        btn_del_p = _make_subtle_tool_button("close", f"Remove parameter '{k_path}'", size=20, icon_size=12)
-                        btn_del_p.clicked.connect(lambda _, kp=k_path: self._remove_universal_param(kp))
-                        p_row.addWidget(btn_del_p)
-                    rendered_u_rows.append(p_row)
+                        btn_del_param = _make_subtle_tool_button(
+                            "close", f"Remove parameter '{dotted_path}'", size=20, icon_size=12
+                        )
+                        btn_del_param.clicked.connect(lambda _, kp=dotted_path: self._remove_universal_param(kp))
+                        row.addWidget(btn_del_param)
+                    row.addStretch()
+                    rendered_u_rows.append(row)
+                    if isinstance(parent_layout, QFormLayout):
+                        parent_layout.addRow("", row)
+                    else:
+                        parent_layout.addLayout(row)
 
-            for pk, pv in list(curr_params.items()):
-                _render_param_item(pk, pv, indent=0)
+            _render_param_group(p_layout, curr_params)
 
             if rendered_u_rows:
-                rendered_u_rows[-1].addWidget(btn_add_u)
-                for r in rendered_u_rows:
-                    r.addStretch()
-                    p_layout.addLayout(r)
+                rendered_u_rows[-1].insertWidget(rendered_u_rows[-1].count() - 1, btn_add_u)
             else:
                 row_empty_p = QHBoxLayout()
                 row_empty_p.addWidget(label("No shared parameters configured.", "muted"))
@@ -3294,6 +3357,13 @@ class ConfigViewer(QWidget):
                 names = list_registered_plotters()
                 resolve = get_plotter_class
             for name in names:
+                try:
+                    component_class = resolve(str(name))
+                    source = Path(inspect.getfile(component_class)) if component_class else None
+                    if source is not None and not source.exists():
+                        continue
+                except (OSError, TypeError):
+                    pass
                 profiles.setdefault(str(name), {})
             paradigm = self.raw_data.get("paradigm") or self._inherited_paradigm()
             if paradigm:
@@ -3508,9 +3578,26 @@ class ConfigViewer(QWidget):
         plot_choices = self._component_choices("plots")
         explicit_plots = data.get("plots")
         per_plot_overrides = data.get("plot_overrides") if isinstance(data.get("plot_overrides"), dict) else {}
+        if isinstance(explicit_plots, list):
+            selected = [str(item) for item in explicit_plots]
+        else:
+            selected = self._inherited_plot_names(resolved)
+            if isinstance(explicit_plots, dict):
+                for key, value in explicit_plots.items():
+                    if value is None:
+                        selected = [item for item in selected if item != key]
+                    elif key in plot_choices or isinstance(value, dict) and key != "style":
+                        if key not in selected:
+                            selected.append(key)
         box = ConfigBox()
         heading = QHBoxLayout()
         heading.addWidget(label("Figures", "cardTitle"))
+        available = [name for name in plot_choices if name not in selected]
+        heading.addWidget(_make_param_adder_button(
+            "Add compatible figure", available,
+            lambda name: self._set_plot_override(name, True, resolved), parent_widget=self,
+            allow_custom=False,
+        ))
         heading.addStretch()
         trash = _make_subtle_tool_button("trash", "Remove figures override", size=24, icon_size=14)
         trash.clicked.connect(lambda: self.remove_block("plots"))
@@ -3524,30 +3611,10 @@ class ConfigViewer(QWidget):
                 explicit_plots, lambda value: self._on_field_edited("plots", value)
             ))
             box.add_layout(list_form)
-        if isinstance(explicit_plots, list):
-            selected = [str(item) for item in explicit_plots]
-        else:
-            selected = self._inherited_plot_names(resolved)
-            if isinstance(explicit_plots, dict):
-                for key, value in explicit_plots.items():
-                    if value is None:
-                        selected = [item for item in selected if item != key]
-                    elif key in plot_choices or isinstance(value, dict) and key != "style":
-                        if key not in selected:
-                            selected.append(key)
-        header = QHBoxLayout()
-        header.addWidget(label("Figures"))
-        available = [name for name in plot_choices if name not in selected]
-        header.addWidget(_make_param_adder_button(
-            "Add figure", available,
-            lambda name: self._set_plot_override(name, True, resolved), parent_widget=self,
-        ))
         if explicit_plots is not None:
             reset = _make_subtle_tool_button("close", "Inherit figures from group or environment", size=20, icon_size=12)
             reset.clicked.connect(lambda: self._remove_generic_field("plots"))
-            header.addWidget(reset)
-        header.addStretch()
-        box.add_layout(header)
+            heading.insertWidget(heading.count() - 2, reset)
         for name in selected:
             row = QHBoxLayout()
             row.addWidget(label(name))
@@ -3659,7 +3726,7 @@ class ConfigViewer(QWidget):
     def _add_experiment_separator(self, box: ConfigBox) -> None:
         divider = QFrame()
         divider.setFixedHeight(1)
-        divider.setStyleSheet("background-color: #504945; border: none;")
+        divider.setStyleSheet(f"background-color: {theme_color('border')}; border: none;")
         box.add_widget(divider)
 
     def _has_experiment_lower_params(self, data: dict, resolved: dict) -> bool:
@@ -4521,9 +4588,9 @@ class ConfigViewer(QWidget):
         if tree and value in tree.paradigms:
             rules = tree.paradigms[value]
             env_name = self._get_explicit_env()
-            if isinstance(env_name, str) and env_name in tree.environments:
-                if not rules.permits_environment(tree.environments[env_name]):
-                    self._set_experiment_env(None)
+            environment = self._environment_for_name(tree, env_name)
+            if environment and not rules.permits_environment(environment):
+                self._set_experiment_env(None)
             self._pin_fields_the_paradigm_forbids(rules)
         self._mark_dirty()
         self._render_boxes()

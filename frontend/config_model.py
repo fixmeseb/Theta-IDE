@@ -74,6 +74,18 @@ class Environment:
     compatible_paradigms: tuple[str, ...] = ()
     raw: Mapping[str, Any] = field(default_factory=dict, repr=False)
 
+    @property
+    def environment_source(self) -> str | None:
+        """Return whether this config describes static data or a live simulator."""
+        declared = self.raw.get("environment_source")
+        if declared in ("static_dataset", "live_environment"):
+            return declared
+        if any(key in self.raw for key in ("dataset_name", "dataset_path", "data_path")):
+            return "static_dataset"
+        if self.raw.get("env_id"):
+            return "live_environment"
+        return None
+
     @classmethod
     def from_file(cls, path: Path, root: Path | None = None) -> Environment:
         raw = _read_yaml(path)
@@ -288,6 +300,17 @@ class Paradigm:
         return True
 
     def permits_environment(self, environment: Environment) -> bool:
+        # A paradigm and environment must agree on whether data comes from a
+        # live simulator or a static dataset, even when older component
+        # metadata omits or misstates compatible_paradigms.
+        paradigm_source = self.environment_source
+        environment_source = environment.environment_source
+        if (
+            paradigm_source in {"live_environment", "static_dataset"}
+            and environment_source in {"live_environment", "static_dataset"}
+            and paradigm_source != environment_source
+        ):
+            return False
         if not environment.compatible_paradigms:
             return True
         return self.name in environment.compatible_paradigms
@@ -469,12 +492,9 @@ class ConfigTree:
                             parameters=dict(meta.get("parameters", {})),
                             raw=meta,
                         )
-                    elif kind == "env" and comp_id not in self.environments:
-                        self.environments[comp_id] = Environment(
-                            name=comp_id,
-                            compatible_paradigms=paradigms_tuple,
-                            raw=meta,
-                        )
+                    # Environment manifests describe installable packages, not
+                    # selectable environments. The actual choices come from
+                    # each package's YAML configs under in/config/env/.
                 except Exception:
                     continue
 

@@ -979,6 +979,8 @@ class Window(QMainWindow):
             )
         if hasattr(self, "config_tree") and self.config_tree is not None:
             self.config_tree.populate(ensure_expanded=target_folder)
+        if hasattr(self, "config_tab_manager") and self.config_tab_manager is not None:
+            self.config_tab_manager.refresh_component_choices()
 
         # Non-plugin components (methods, models, envs) are filesystem assets only — no plugin UI to update.
         if comp and comp.kind != "plugin":
