@@ -59,8 +59,11 @@ def capture_figures() -> Iterator[list[Figure]]:
 def figures_from(plotter, exp_id: str, cli_overrides: dict | None = None, quiet: bool = True) -> list[Figure]:
     """Run *plotter* and hand back the figures it would have saved.
 
-    Nothing is written to disk. An empty list means the plotter produced no
-    figure, which is normal for the ones that emit tables or reports.
+    No *figure* is written to disk: savefig is intercepted. A plotter that
+    writes other files itself, as `reports` does with its .md and .csv, still
+    writes them, so this is not side-effect free. An empty list means the
+    plotter produced no figure, which is normal for the ones that emit tables
+    or reports rather than plots.
 
     Plotters announce each file they "saved"; with savefig intercepted those
     lines are untrue and would be alarming in the Plots pane, so stdout is

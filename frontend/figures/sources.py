@@ -16,6 +16,28 @@ from typing import Any
 
 from .model import PanelRef
 
+# Marks a panel that is a whole captured figure rather than a drawn metric.
+CAPTURED = "captured:"
+
+
+class _CapturedPanel:
+    """A captured figure, drawn into someone else's Axes as an image."""
+
+    def __init__(self, figure):
+        self.figure = figure
+
+    def draw(self, ax) -> bool:
+        import io
+
+        from matplotlib.image import imread
+
+        buffer = io.BytesIO()
+        self.figure.savefig(buffer, format="png", dpi=300, bbox_inches="tight")
+        buffer.seek(0)
+        ax.imshow(imread(buffer))
+        ax.set_axis_off()
+        return True
+
 
 class PanelSource:
     """The catalogue of panels available for an experiment."""
@@ -23,6 +45,7 @@ class PanelSource:
     def __init__(self) -> None:
         self._registry: dict[str, Any] | None = None
         self._panels: dict[tuple[str, str], list] = {}
+        self._figures: dict[tuple[str, str], list] = {}
         self._errors: dict[tuple[str, str], str] = {}
 
     # ── Plotters ─────────────────────────────────────────────────────────
@@ -58,21 +81,81 @@ class PanelSource:
         return found
 
     def catalog(self, exp_id: str) -> list[PanelRef]:
-        """Every panel that can be composed for *exp_id*."""
+        """Every panel available for *exp_id*, from both tiers.
+
+        Plotters that draw into a supplied Axes contribute one entry per
+        metric. The rest contribute their whole figures, placed as images;
+        without this they would be absent from the pane entirely, which is
+        what happened to `reports`.
+        """
         refs: list[PanelRef] = []
         for plotter_name in self.plotter_names():
-            for spec in self._panels_for(plotter_name, exp_id):
-                refs.append(
-                    PanelRef(key=spec.key, exp_id=exp_id, plotter=plotter_name, label=f"{plotter_name}: {spec.label}")
+            specs = self._panels_for(plotter_name, exp_id)
+            if specs:
+                for spec in specs:
+                    refs.append(
+                        PanelRef(
+                            key=spec.key,
+                            exp_id=exp_id,
+                            plotter=plotter_name,
+                            label=f"{plotter_name}: {spec.label}",
+                        )
+                    )
+                continue
+
+            # Listed without running it. Capturing means executing the
+            # plotter, which is slow and not side-effect free: `reports`
+            # writes .md and .csv files of its own that savefig interception
+            # does not catch. That happens only if the panel is actually
+            # placed on a figure.
+            refs.append(
+                PanelRef(
+                    key=f"{CAPTURED}{plotter_name}/0",
+                    exp_id=exp_id,
+                    plotter=plotter_name,
+                    label=f"{plotter_name}: whole figure",
                 )
+            )
         return refs
 
+    def _captured(self, plotter_name: str, exp_id: str) -> list:
+        """Figures a non-composable plotter makes, run once and cached.
+
+        Running a plotter is expensive and can write files of its own, and
+        the styling controls redraw on every keystroke, so this runs at most
+        once per plotter and run.
+        """
+        key = (plotter_name, exp_id)
+        if key not in self._figures:
+            self._figures[key] = self.capture(plotter_name, exp_id)
+        return self._figures[key]
+
     def resolve(self, ref: PanelRef):
-        """The PanelSpec a PanelRef names, or None when it is gone."""
+        """Something with .draw(ax) for this ref, or None when it is gone."""
+        if ref.key.startswith(CAPTURED):
+            return self._image_panel(ref)
         for spec in self._panels_for(ref.plotter, ref.exp_id):
             if spec.key == ref.key:
                 return spec
         return None
+
+    def _image_panel(self, ref: PanelRef):
+        """Place a captured figure into an Axes as an image.
+
+        matplotlib refuses to move an Axes between figures, so a plotter that
+        builds its own cannot be merged into a composed one as vector art.
+        Rasterising it keeps it usable on the figure; the trade-off is that
+        this panel does not scale like the drawn ones, so it is rendered at
+        300 dpi to stay sharp in print.
+        """
+        try:
+            index = int(ref.key.rsplit("/", 1)[1])
+        except (IndexError, ValueError):
+            return None
+        figures = self._captured(ref.plotter, ref.exp_id)
+        if index >= len(figures):
+            return None
+        return _CapturedPanel(figures[index])
 
     # ── Whole-figure fallback ────────────────────────────────────────────
 
@@ -102,4 +185,5 @@ class PanelSource:
     def invalidate(self) -> None:
         """Drop the cache so a finished run shows its new metrics."""
         self._panels.clear()
+        self._figures.clear()
         self._errors.clear()

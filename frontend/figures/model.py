@@ -39,7 +39,10 @@ class PanelRef:
     plotter: str
     label: str
     title: str | None = None
-    color: str | None = None
+    # Keyed by the series' legend label, because a panel comparing PPO against
+    # DQN needs them to stay different colours. One colour for the whole panel
+    # would merge them, which is the opposite of what the panel is for.
+    colors: dict[str, str] = field(default_factory=dict)
     line_width: float | None = None
     legend: bool = True
     grid: bool = True
@@ -148,26 +151,48 @@ class FigureSpec:
 # ── Rendering ─────────────────────────────────────────────────────────────
 
 
+def _same_color(rgba, spec) -> bool:
+    """Whether a drawn artist's colour is the one a line started with."""
+    from matplotlib.colors import to_rgba
+
+    try:
+        a, b = to_rgba(rgba), to_rgba(spec)
+    except (ValueError, TypeError):
+        return False
+    return all(abs(x - y) < 1e-3 for x, y in zip(a[:3], b[:3]))
+
+
+def series_labels(ax) -> list[str]:
+    """Legend labels of the drawn series, in order, skipping matplotlib's own."""
+    return [line.get_label() for line in ax.lines if not str(line.get_label()).startswith("_")]
+
+
 def apply_overrides(ax, ref: PanelRef) -> None:
     """Restyle an Axes after its plotter has drawn into it.
 
-    Recolouring sets every line on the Axes: a panel showing several methods
-    is a comparison, and tinting only the first line would misrepresent it,
-    so the control is deliberately all-or-nothing.
+    Colours are per series. A shaded mean+-SEM band is recoloured with its
+    line by matching the colour the plotter gave both, since the band carries
+    no label of its own to match on.
     """
-    if ref.title is not None:
-        ax.set_title(ref.title)
-    elif "{" in ax.get_title() and "}" in ax.get_title():
-        # A config title template whose placeholder the plotter never fills
-        # (plot/base.py supplies exp_id, metric and clean_metric but not
-        # display_name) reaches us as literal braces. Showing the panel's own
-        # name beats printing "{display_name}" onto a paper figure.
-        ax.set_title(ref.label)
-    if ref.color:
-        for line in ax.lines:
-            line.set_color(ref.color)
+    # One rule for every panel, rather than whatever each plotter's config
+    # happened to produce: convergence titles itself "FIG_DEMO: Reward" from
+    # the experiment name while losses titles itself "losses: Actor Loss", and
+    # a figure mixing both looks unfinished. A composed figure carries its
+    # subject in the suptitle, so a short panel name is what is wanted here.
+    ax.set_title(ref.title if ref.title is not None else ref.label)
+    for line in ax.lines:
+        chosen = ref.colors.get(str(line.get_label()))
+        if not chosen:
+            continue
+        was = line.get_color()
+        line.set_color(chosen)
         for collection in ax.collections:  # the mean+-SEM band
-            collection.set_color(ref.color)
+            try:
+                current = collection.get_facecolor()
+            except Exception:
+                continue
+            if len(current) and _same_color(current[0], was):
+                collection.set_color(chosen)
     if ref.line_width is not None:
         for line in ax.lines:
             line.set_linewidth(ref.line_width)

@@ -12,6 +12,10 @@ from plot.base import BasePlotter, clean_label, get_style_info, moving_average
 
 
 class LossesPlotter(BasePlotter):
+    # Composable: its output goes through draw_metric(), so the Figures
+    # pane can arrange it alongside other panels on one figure.
+    draws_metric_series = True
+
     def __init__(self):
         super().__init__("losses")
 

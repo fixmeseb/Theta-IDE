@@ -38,14 +38,17 @@ from PyQt6.QtWidgets import (
 )
 
 from ..theme import theme_color
-from .model import FigureSpec, PanelRef, available_experiments, render
+from .model import FigureSpec, PanelRef, available_experiments, render, series_labels
 from .sources import PanelSource
 
 EXPORT_FILTER = "PNG image (*.png);;PDF document (*.pdf);;SVG image (*.svg)"
 
 # The preview draws at screen resolution regardless of the export DPI, so a
-# figure bound for 300 dpi print still reads correctly in the pane.
+# figure bound for 300 dpi print still reads correctly in the pane. The
+# effective value is lowered further when the figure is wider than the panel,
+# so the whole figure stays visible instead of being cropped.
 PREVIEW_DPI = 100
+MIN_PREVIEW_DPI = 24
 
 
 class FigureWorkspace(QWidget):
@@ -380,10 +383,14 @@ class FigureWorkspace(QWidget):
         txt_title.textChanged.connect(lambda text, s=slot: self._update(s, title=text or None))
         self.panel_form.addRow("Title", txt_title)
 
-        btn_color = QPushButton(ref.color or "Plotter default")
-        btn_color.setToolTip("Recolours every line on this panel")
-        btn_color.clicked.connect(lambda _checked=False, s=slot: self._pick_color(s))
-        self.panel_form.addRow("Colour", btn_color)
+        # One swatch per series, so a panel comparing two methods can keep
+        # them apart. The labels come from the drawn Axes, so they are only
+        # known once the panel has been rendered at least once.
+        for series in self._series_for(slot):
+            btn = QPushButton(ref.colors.get(series) or "default")
+            btn.setToolTip(f"Colour for {series}")
+            btn.clicked.connect(lambda _checked=False, s=slot, name=series: self._pick_color(s, name))
+            self.panel_form.addRow(series, btn)
 
         spn_width = QDoubleSpinBox()
         spn_width.setRange(0.5, 8.0)
@@ -403,13 +410,28 @@ class FigureWorkspace(QWidget):
         chk_grid.toggled.connect(lambda v, s=slot: self._update(s, grid=v))
         self.panel_form.addRow(chk_grid)
 
-    def _pick_color(self, slot: int) -> None:
+    def _axes_for(self, slot: int):
+        """The Axes a slot was drawn into, or None when it has not been."""
+        drawn = [i for i, p in enumerate(self.spec.panels) if p is not None]
+        if slot not in drawn:
+            return None
+        index = drawn.index(slot)
+        return self.figure.axes[index] if index < len(self.figure.axes) else None
+
+    def _series_for(self, slot: int) -> list:
+        ax = self._axes_for(slot)
+        return series_labels(ax) if ax is not None else []
+
+    def _pick_color(self, slot: int, series: str) -> None:
         ref = self.spec.panels[slot]
-        initial = QColor(ref.color) if ref and ref.color else QColor("#1f77b4")
-        chosen = QColorDialog.getColor(initial, self, "Panel colour")
-        if chosen.isValid():
-            self._update(slot, color=chosen.name())
-            self._show_panel_form()
+        current = (ref.colors.get(series) if ref else None) or "#1f77b4"
+        chosen = QColorDialog.getColor(QColor(current), self, f"Colour for {series}")
+        if not chosen.isValid():
+            return
+        colors = dict(ref.colors)
+        colors[series] = chosen.name()
+        self._update(slot, colors=colors)
+        self._show_panel_form()
 
     def _update(self, slot: int, **changes) -> None:
         self.spec.update(slot, **changes)
@@ -427,8 +449,30 @@ class FigureWorkspace(QWidget):
 
     # ── Drawing and export ───────────────────────────────────────────────
 
+    def _preview_dpi(self) -> int:
+        """Dots per inch that fit the whole figure inside the canvas widget.
+
+        The figure is a fixed size in inches, so at a fixed DPI a wide figure
+        is simply larger than the widget and gets cropped: the right-hand
+        column disappears and axis labels are cut mid-number. Lowering DPI
+        shrinks the rendered pixels while leaving the layout in inches
+        untouched, so the preview stays a faithful, smaller copy of what will
+        be exported.
+        """
+        available = self.canvas.size()
+        width, height = available.width(), available.height()
+        if width <= 0 or height <= 0 or self.spec.width <= 0 or self.spec.height <= 0:
+            return PREVIEW_DPI
+        fit = min(width / self.spec.width, height / self.spec.height)
+        return max(MIN_PREVIEW_DPI, min(PREVIEW_DPI, int(fit)))
+
+    def resizeEvent(self, event):
+        """Re-fit the preview when the pane changes size."""
+        super().resizeEvent(event)
+        self._redraw()
+
     def _redraw(self) -> None:
-        render(self.spec, self.source.resolve, figure=self.figure)
+        render(self.spec, self.source.resolve, figure=self.figure, dpi=self._preview_dpi())
         self.canvas.draw_idle()
         used = len(self.spec.used())
         if used:

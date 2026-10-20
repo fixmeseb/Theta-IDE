@@ -138,9 +138,9 @@ def test_out_of_range_edits_are_ignored():
 def test_update_restyles_in_place():
     spec = FigureSpec(rows=1, cols=1)
     spec.add(ref())
-    spec.update(0, title="New", color="#b8bb26")
+    spec.update(0, title="New", colors={"a": "#b8bb26"})
     assert spec.panels[0].title == "New"
-    assert spec.panels[0].color == "#b8bb26"
+    assert spec.panels[0].colors == {"a": "#b8bb26"}
 
 
 # ── Rendering ─────────────────────────────────────────────────────────────
@@ -157,24 +157,51 @@ def test_render_makes_one_axes_per_filled_slot():
 def test_render_applies_the_overrides():
     spec = FigureSpec(rows=1, cols=1)
     spec.add(ref())
-    spec.update(0, title="Chosen", color="#ff0000", line_width=3.5)
+    spec.update(0, title="Chosen", colors={"series": "#ff0000"}, line_width=3.5)
     ax = render(spec, resolver(), figure=Figure()).axes[0]
     assert ax.get_title() == "Chosen"
     assert ax.lines[0].get_linewidth() == 3.5
 
 
-def test_an_unfilled_title_template_falls_back_to_the_label():
-    # plot/base.py never supplies {display_name}, so the raw template arrives.
-    class Templated(FakePanel):
+def test_the_default_title_is_the_panel_label_whatever_the_plotter_set():
+    # Plotters title themselves inconsistently: convergence uses the
+    # experiment name, losses uses its own. A composed figure needs one rule.
+    class Titled(FakePanel):
         def draw(self, ax):
             ax.plot([1, 2], [1, 2])
-            ax.set_title("{display_name}: {clean_metric}")
+            ax.set_title("FIG_DEMO: Reward")
             return True
 
     spec = FigureSpec(rows=1, cols=1)
-    spec.add(ref(label="losses: Total Loss"))
-    ax = render(spec, resolver(Templated()), figure=Figure()).axes[0]
-    assert ax.get_title() == "losses: Total Loss"
+    spec.add(ref(label="Eval Reward"))
+    ax = render(spec, resolver(Titled()), figure=Figure()).axes[0]
+    assert ax.get_title() == "Eval Reward"
+
+
+def test_only_the_named_series_is_recoloured():
+    class TwoSeries(FakePanel):
+        def draw(self, ax):
+            ax.plot([1, 2], [1, 2], label="ppo", color="#111111")
+            ax.plot([1, 2], [2, 1], label="dqn", color="#222222")
+            return True
+
+    spec = FigureSpec(rows=1, cols=1)
+    spec.add(ref())
+    spec.update(0, colors={"ppo": "#ff0000"})
+    ax = render(spec, resolver(TwoSeries()), figure=Figure()).axes[0]
+    colors = {line.get_label(): line.get_color() for line in ax.lines}
+    assert colors["ppo"] == "#ff0000"
+    assert colors["dqn"] == "#222222", "recolouring one series must not touch the other"
+
+
+def test_series_labels_skips_matplotlib_internals():
+    from frontend.figures.model import series_labels
+
+    fig = Figure()
+    ax = fig.add_subplot(111)
+    ax.plot([1, 2], [1, 2], label="real")
+    ax.plot([1, 2], [2, 1])  # unlabelled -> matplotlib names it _child1
+    assert series_labels(ax) == ["real"]
 
 
 def test_an_explicit_title_still_wins_over_a_template():

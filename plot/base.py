@@ -713,6 +713,20 @@ class BasePlotter:
             except Exception:
                 pass
 
+    def panel_label(self, metric: str) -> str:
+        """A short, unambiguous name for one metric's panel.
+
+        The whole path rather than its last segment, because eval/reward and
+        train/reward are different plots that would otherwise both be offered
+        as "Reward". A leading segment that only repeats the plotter's own
+        name is dropped, so losses/total_loss reads "Total Loss" and not
+        "Losses Total Loss".
+        """
+        parts = [p for p in metric.split("/") if p]
+        if len(parts) > 1 and parts[0].lower() == self.name.lower():
+            parts = parts[1:]
+        return " ".join(parts).replace("_", " ").title()
+
     def panels(self, exp_id: str, cli_overrides: dict | None = None) -> list:
         """The panels this plotter can draw into Axes supplied by a caller.
 
@@ -739,9 +753,7 @@ class BasePlotter:
             def draw(ax, _metric=metric):
                 return self.draw_metric(ax, exp_id, group, _metric, cfg, runs_data=runs_data)
 
-            specs.append(
-                PanelSpec(key=f"{self.name}/{metric}", label=metric.split("/")[-1].replace("_", " ").title(), draw=draw)
-            )
+            specs.append(PanelSpec(key=f"{self.name}/{metric}", label=self.panel_label(metric), draw=draw))
         return specs
 
     def run(self, exp_id: str, cli_overrides: dict | None = None):
