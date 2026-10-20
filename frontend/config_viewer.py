@@ -462,6 +462,7 @@ FIXED_BOX_KEYS = frozenset(
         "eval_freq",
         "checkpoint_every_steps",
         "num_checkpoints",
+        "checkpoint",  # the Checkpoint Settings box
         "experiment_id",
     }
 )
@@ -3159,6 +3160,10 @@ class ConfigViewer(QWidget):
         if show_checkpoint:
             box_ckpt = ConfigBox("Checkpoint Settings", "Model checkpointing and validation metric monitoring")
             ckpt_header = QHBoxLayout()
+            ckpt_header.setSpacing(8)
+            lbl_ckpt_title = label("Checkpoint Settings", "heading")  # ConfigBox drops its title argument
+            lbl_ckpt_title.setStyleSheet("font-size: 23px; font-weight: 600;")
+            ckpt_header.addWidget(lbl_ckpt_title)
             ckpt_header.addStretch()
             if has_checkpoint:
                 btn_rm_ckpt = _make_subtle_tool_button("trash", "Remove checkpoint overrides", size=24, icon_size=14)
