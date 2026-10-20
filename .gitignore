@@ -105,6 +105,9 @@ temp/
 /src/usr/models/*
 !/src/usr/models/__init__.py
 !/src/usr/models/.gitkeep
+# The interpreter the visual model builder targets: infrastructure for a
+# built-in feature, not a research model, so it ships rather than installs.
+!/src/usr/models/sequential_spec/
 
 /docs
 in/config/experiment/csc510/cartpole_demo.yaml
