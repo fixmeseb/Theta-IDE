@@ -66,6 +66,9 @@ PERSIST_SECONDS = 5.0  # how often a training run's growing record is saved to t
 # Metrics the monitor's second chart can show: key -> (card title, chart title, subtitle, value format)
 
 
+# Panes the default and restored sidebar leave hidden. Workflows can draw a pipeline but not run it yet.
+HIDDEN_BY_DEFAULT = {"workflows"}
+
 def normalize_menu_shortcut(shortcut_str: str) -> str:
     """Normalize user-entered shortcut string for Qt QKeySequence.
 
@@ -1049,10 +1052,10 @@ class Window(QMainWindow):
         self.tabs.apply_tab_order(default_order)
         # Every tab, not only those with a switch: a plugin's tab must come back too.
         for pid in list(self.tabs.tabs):
-            self.tabs.set_tab_visible(pid, True)
-        for slider in self.pane_sliders.values():
+            self.tabs.set_tab_visible(pid, pid not in HIDDEN_BY_DEFAULT)
+        for pid, slider in self.pane_sliders.items():
             slider.blockSignals(True)
-            slider.setChecked(True)
+            slider.setChecked(pid not in HIDDEN_BY_DEFAULT)
             slider.setEnabled(True)
             slider.blockSignals(False)
         self.save_layout()

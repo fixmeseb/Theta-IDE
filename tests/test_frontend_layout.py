@@ -218,8 +218,14 @@ class TestWindowLayoutAndSliders(unittest.TestCase):
         self.window.reset_sidebar_layout()
         self.assertEqual(self.window.tabs.tab_order[:len(DEFAULT_TAB_ORDER)], DEFAULT_TAB_ORDER)
         for p in BUILTIN_PANES:
-            self.assertTrue(self.window.tabs.is_tab_visible(p))
-            self.assertTrue(self.window.pane_sliders[p].isChecked())
+            shown = p != "workflows"  # Workflows can't run pipelines yet, so it stays hidden
+            self.assertEqual(self.window.tabs.is_tab_visible(p), shown)
+            self.assertEqual(self.window.pane_sliders[p].isChecked(), shown)
+
+    def test_workflows_is_hidden_by_default_but_can_be_shown(self):
+        self.assertFalse(self.window.tabs.is_tab_visible("workflows"))
+        self.window.pane_sliders["workflows"].setChecked(True)
+        self.assertTrue(self.window.tabs.is_tab_visible("workflows"))
 
     def test_save_and_load_layout(self):
         # Reorder and hide a pane

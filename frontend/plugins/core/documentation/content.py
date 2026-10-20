@@ -264,16 +264,13 @@ python -m frontend</code></pre>
   <li><b>Community Hub Dialog:</b> Marketplace modal to discover, install, update, and uninstall community plugins, RL methods, models, and environments directly into your workspace.</li>
 </ul>
 
-<h3>7. Workflows (<code>workflows</code>)</h3>
-<p>Compose multi-stage experiments as string diagrams, wiring the outputs of one stage into the inputs of the next. See <a href="workflows_pane">Workflows Pane</a>.</p>
-
-<h3>8. Results Browser (<code>results</code>)</h3>
+<h3>7. Results Browser (<code>results</code>)</h3>
 <p>Every metric, value and file your runs produced: tick runs to chart every metric they logged, compare them, and open their tables, figures, reports and configs. See <a href="results_browser">Results Browser</a>.</p>
 
-<h3>9. TensorBoard (<code>tensorboard</code>)</h3>
+<h3>8. TensorBoard (<code>tensorboard</code>)</h3>
 <p>An embedded TensorBoard dashboard for runs logged with <i>Log to TensorBoard</i>. See <a href="tensorboard_tab">TensorBoard Tab</a>.</p>
 
-<h3>10. Console (<code>console</code>)</h3>
+<h3>9. Console (<code>console</code>)</h3>
 <p>Streams the pipeline's output and accepts a few quick commands. See <a href="console_pane">Console</a>.</p>
 """,
     ),
@@ -462,7 +459,6 @@ python -m frontend</code></pre>
   </tr>
 </table>
 
-<p>The Workflows pane has no digit by default. Reach it from <i>View &rarr; Workflows</i>, or remap a digit in <i>Settings &rarr; Hotkeys &rarr; Pane Navigation Hotkey Menu</i>.</p>
 
 <h3>Menu Shortcuts</h3>
 <table border="1" cellpadding="8" cellspacing="0" style="border-collapse: collapse; width: 100%; border-color: rgba(255,255,255,0.15);">
@@ -1021,62 +1017,6 @@ python plot/manager.py cartpole/final_cartpole --wipe</code></pre>
 
 # Watch the sweep in the Optuna dashboard
 python run_pipeline.py mimic/tune_mimic_all sweep=true dash=true</code></pre>
-""",
-    ),
-    DocArticle(
-        id="workflows_pane",
-        title="Workflows Pane: String Diagrams",
-        category="Workflow & Tools",
-        summary="Compose multi-stage experiments as typed string diagrams, validate the wiring, and run them through the pipeline.",
-        keywords=["workflow", "workflows", "string diagram", "dag", "nodes", "wires", "ports", "preset", "pipeline", "distillation", "transfer"],
-        html_content=r"""
-<h2>Workflows Pane: String Diagrams</h2>
-<p>A <b>workflow</b> chains several training stages together. Each stage is a <b>node</b>, and typed <b>wires</b> (strings) carry artifacts such as datasets and checkpoints from one node's outputs to another's inputs. Open it from <a href="ide://workflows">View &rarr; Workflows</a>.</p>
-
-<h3>Building a Diagram</h3>
-<table border="1" cellpadding="8" cellspacing="0" style="border-collapse: collapse; width: 100%; border-color: rgba(255,255,255,0.15);">
-  <tr style="background-color: rgba(255,255,255,0.05); font-weight: bold;">
-    <td>Control</td>
-    <td>What it does</td>
-  </tr>
-  <tr><td><b>Add Node</b></td><td>Add a stage to the canvas</td></tr>
-  <tr><td>Drag between ports</td><td>Connect an output port to an input port with a wire</td></tr>
-  <tr><td><b>Validate Strings</b></td><td>Check every wire and required input (see below)</td></tr>
-  <tr><td><b>Zoom Fit</b></td><td>Fit the whole diagram in view</td></tr>
-  <tr><td><b>Load YAML&hellip; / Save YAML&hellip;</b></td><td>Open or save a diagram file</td></tr>
-  <tr><td><b>Delete Node / Disconnect Wire</b></td><td>Remove the selected node or wire</td></tr>
-  <tr><td><b>Clear</b></td><td>Empty the canvas</td></tr>
-</table>
-
-<h3>Node Types</h3>
-<ul>
-  <li><b>Training stages:</b> Online RL, Offline RL, and Supervised nodes. Each points at an existing experiment config.</li>
-  <li><b>Data:</b> Dataset Source supplies a stored transition dataset.</li>
-  <li><b>Transforms:</b> Feature Augmenter, Reward Shaper, and Distillation reshape data or models between stages.</li>
-  <li><b>Evaluation:</b> Plot Evaluator turns metrics into plots.</li>
-</ul>
-
-<h3>Port Types</h3>
-<p>Every port carries one artifact type, and wires only connect matching types: <code>dataset</code>, <code>checkpoint</code>, <code>value_estimator</code>, <code>metrics</code>, <code>logic_rules</code>, and <code>generic</code>. <b>Validate Strings</b> reports wires between mismatched types, wires to ports that don't exist, and required inputs that aren't connected.</p>
-
-<h3>Built-In Presets</h3>
-<table border="1" cellpadding="8" cellspacing="0" style="border-collapse: collapse; width: 100%; border-color: rgba(255,255,255,0.15);">
-  <tr style="background-color: rgba(255,255,255,0.05); font-weight: bold;">
-    <td>Preset</td>
-    <td>Pattern</td>
-  </tr>
-  <tr><td><code>transfer_learning</code></td><td>Train on one environment, then warm-start fine-tuning on another</td></tr>
-  <tr><td><code>online_vs_offline</code></td><td>Collect data online, then train offline methods on it for comparison</td></tr>
-  <tr><td><code>model_distillation</code></td><td>Distill a trained teacher into a smaller student model</td></tr>
-  <tr><td><code>sepsis_reciprocal</code></td><td>Alternate offline RL and early prediction, feeding each back into the other</td></tr>
-</table>
-<p>Their definitions live in <code>in/config/workflow/</code>.</p>
-
-<h3>Running a Workflow</h3>
-<p>Workflows aren't launched from this pane. Save the diagram to <code>in/config/workflow/&lt;id&gt;.yaml</code>, then reference it from an experiment:</p>
-<pre><code># in/config/experiment/mimic/reciprocal_refinement.yaml
-workflow: sepsis_reciprocal</code></pre>
-<p>Launching that experiment (<code>F5</code>, or <code>python run_pipeline.py mimic/reciprocal_refinement</code>) runs the nodes in dependency order. Nodes with no dependencies on each other run in the same stage.</p>
 """,
     ),
     DocArticle(
