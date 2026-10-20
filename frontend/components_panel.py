@@ -296,8 +296,13 @@ class ComponentsPanel(QWidget):
             try:
                 installer.uninstall_by_metadata(assets["meta"], remove_configs=True)
                 deleted_count = len(files_to_delete)
+                # The installer removes pristine YAMLs, restores any pre-install
+                # versions, and retains edits. Do not delete those paths again here.
+                files_to_delete = []
             except Exception as exc:
                 self.log_fn(f"Installer uninstall notice: {exc}")
+                QMessageBox.warning(self, "Uninstall Incomplete", f"Component cleanup stopped before deleting YAML files:\n{exc}")
+                return
 
         # Delete any remaining files or directories in files_to_delete
         for item in files_to_delete:
@@ -305,15 +310,13 @@ class ComponentsPanel(QWidget):
                 if item.is_dir():
                     shutil.rmtree(str(item), ignore_errors=True)
                     deleted_count += 1
+                    if installer:
+                        installer._prune_empty_component_dirs(item)
                 elif item.is_file():
                     item.unlink(missing_ok=True)
                     deleted_count += 1
-                    # Clean up empty parent folder if inside in/config/<category>/<subdir>
-                    p = item.parent
-                    if p.is_dir() and not any(p.iterdir()):
-                        in_cfg = (self.components_tree.root_dir).resolve()
-                        if p != in_cfg and p.parent != in_cfg and in_cfg in p.parents:
-                            p.rmdir()
+                    if installer:
+                        installer._prune_empty_config_dirs(item)
             except Exception as exc:
                 self.log_fn(f"Error removing {item}: {exc}")
 
@@ -467,8 +470,12 @@ class ComponentsPanel(QWidget):
         self.components_tree.prompt_new_component()
 
     def duplicate_component(self):
-        """Delegate to tree's duplicate dialog."""
-        self.components_tree.prompt_duplicate()
+        """Copy only the selected YAML configuration, sharing its implementation."""
+        self.components_tree.prompt_duplicate_component_yaml()
+
+    def deep_copy_component(self):
+        """Copy the selected YAML configuration and its implementation."""
+        self.components_tree.prompt_deep_copy_component()
 
     def reload_components(self, target_rel_path: str | None = None, ensure_expanded: str | None = None):
         """Reload the tree and active file from disk without collapsing folders."""

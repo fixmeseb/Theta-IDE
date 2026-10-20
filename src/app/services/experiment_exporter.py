@@ -39,8 +39,11 @@ def _plot_names(value: Any) -> Set[str]:
     if isinstance(value, list):
         return {str(item) for item in value}
     if isinstance(value, dict):
-        return {str(name) for name, options in value.items()
-                if isinstance(options, dict) and name not in ("style", "figsize")}
+        return {
+            str(name)
+            for name, options in value.items()
+            if isinstance(options, dict) and name not in ("style", "figsize")
+        }
     return set()
 
 
@@ -400,8 +403,9 @@ class ExperimentExporter:
                 for p in sorted(cfg_dir.rglob("*.yaml")):
                     files_to_pack[p.relative_to(self.workspace_root).as_posix()] = p
 
-    def _trace_plotters(self, group: str, env_name: str | None, files_to_pack: Dict[str, Path],
-                        raw_cfg: Dict[str, Any] | None = None) -> None:
+    def _trace_plotters(
+        self, group: str, env_name: str | None, files_to_pack: Dict[str, Path], raw_cfg: Dict[str, Any] | None = None
+    ) -> None:
         """Trace plotters and visualization configs."""
         candidates = {group}
         if env_name:
@@ -446,7 +450,7 @@ class ExperimentExporter:
             for k in ("data_module", "datamodule", "data"):
                 for name in _component_names(raw_cfg.get(k)):
                     candidates.add(name)
-                    candidates.add(re.sub(r'(?<!^)(?=[A-Z])', '_', name).lower())
+                    candidates.add(re.sub(r"(?<!^)(?=[A-Z])", "_", name).lower())
 
         for name in candidates:
             data_dir = self.workspace_root / "src" / "usr" / "data" / name
@@ -484,7 +488,6 @@ class ExperimentExporter:
         for p in sorted(wf_dir.glob("*.yaml")):
             if group in p.stem or p.stem in workflow_names:
                 files_to_pack[p.relative_to(self.workspace_root).as_posix()] = p
-
 
     def _trace_all_group_experiments(self, group: str, files_to_pack: Dict[str, Path]) -> None:
         """Trace all experiment recipe YAML files in the group directory."""
@@ -554,9 +557,7 @@ class ExperimentExporter:
             self._trace_rules(env_name, files_to_pack)
 
         if opts.include_evaluators:
-            self._trace_evaluators(
-                group, env_name, files_to_pack, raw_cfg={"evaluators": list(evaluators_found)}
-            )
+            self._trace_evaluators(group, env_name, files_to_pack, raw_cfg={"evaluators": list(evaluators_found)})
 
         if opts.include_plotters:
             self._trace_plotters(
@@ -564,9 +565,7 @@ class ExperimentExporter:
             )
 
         if opts.include_data_modules:
-            self._trace_data_modules(
-                group, env_name, files_to_pack, raw_cfg={"data": list(data_modules_found)}
-            )
+            self._trace_data_modules(group, env_name, files_to_pack, raw_cfg={"data": list(data_modules_found)})
 
         self._trace_workflows(
             group,
@@ -657,8 +656,18 @@ class ExperimentExporter:
                 if isinstance(val, str):
                     clean = val.strip()
                     if clean and clean.lower() not in (
-                        "default", "none", "true", "false", "identity", "neural", "symbolic",
-                        "blender", "learned", "heuristic", "linear", "softmax"
+                        "default",
+                        "none",
+                        "true",
+                        "false",
+                        "identity",
+                        "neural",
+                        "symbolic",
+                        "blender",
+                        "learned",
+                        "heuristic",
+                        "linear",
+                        "softmax",
                     ):
                         extracted_models.append(clean)
                 elif isinstance(val, dict):
@@ -669,7 +678,9 @@ class ExperimentExporter:
                         if k in ("architecture", "name", "type", "base", "slots", "rules", "mode", "lr"):
                             continue
                         if isinstance(sub, dict):
-                            if len(sub) == 1 and not any(ik in sub for ik in ("lr", "hidden_sizes", "activation", "dim")):
+                            if len(sub) == 1 and not any(
+                                ik in sub for ik in ("lr", "hidden_sizes", "activation", "dim")
+                            ):
                                 first_k = next(iter(sub))
                                 if isinstance(sub[first_k], dict):
                                     extracted_models.append(first_k)

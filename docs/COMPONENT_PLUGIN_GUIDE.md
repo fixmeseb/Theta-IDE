@@ -34,6 +34,41 @@ In Theta-IDE, all components are cleanly decoupled through declarative runtime p
 
 ## 2. Component Plugin Archetypes & Protocols Reference
 
+### Declaring parameter domains for the GUI
+
+Components declare an optional `parameter_schema` JSON Schema object in their
+`.theta_component.json` manifest. Runtime YAML profiles remain the source for
+default values; the manifest schema declares the UI domain: `properties` names keys that can be added at each level,
+`enum` supplies dropdown choices, and `x-theta-domain: model` supplies installed
+model component choices for module-valued parameters.
+
+```json
+{
+  "parameter_schema": {
+    "type": "object",
+    "properties": {
+      "blend_mode": {"type": "string", "enum": ["gate", "threshold", "fixed"]},
+      "neural": {"type": "string", "x-theta-domain": "model"},
+      "optimizer": {
+        "type": "object",
+        "properties": {
+          "name": {"type": "string", "enum": ["adam", "adamw", "sgd"]},
+          "kwargs": {"type": "object", "properties": {"weight_decay": {"type": "number"}}}
+        }
+      }
+    }
+  }
+}
+```
+
+The GUI uses declared properties in its add-parameter menus at the matching
+nested level. Existing YAML defaults remain valid and continue to seed the editor.
+For a component with several profiles, list each one in `config_paths` and use
+`x-theta-config-schemas` to map each config path to its own JSON Schema. This
+keeps profile-specific keys and choices attached to the profile the editor opens.
+The editor reads this metadata from the installed component manifest; plugin
+code is not imported to build the form.
+
 All plugin contracts are defined in [`src/app/core/protocols.py`](file:///Users/cameronegbert/Research/Theta-IDE/src/app/core/protocols.py).
 
 ### 2.1 Model Architectures & Composite Models

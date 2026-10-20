@@ -92,10 +92,14 @@ temp/
 !/in/rules/.gitkeep
 /in/config/agent/*
 !/in/config/agent/.gitkeep
+/in/config/experiment/*
+!/in/config/experiment/.gitkeep
 /in/config/model/*
 !/in/config/model/.gitkeep
 /in/config/env/*
 !/in/config/env/.gitkeep
+/in/config/data/thetalib/
+/in/config/plot/thetalib/
 /src/usr/methods/*
 !/src/usr/methods/__init__.py
 !/src/usr/methods/agent_registry.py

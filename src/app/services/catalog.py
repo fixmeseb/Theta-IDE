@@ -368,7 +368,7 @@ class _MetricsTail:
 
 # metrics.csv path -> where its last read stopped. A run being followed is polled with since=N every few
 # seconds; re-reading the whole file each time cost ~0.5 s per poll at 100k rows, and grew with the run.
-_METRICS_TAILS: "OrderedDict[Path, _MetricsTail]" = OrderedDict()
+_METRICS_TAILS: OrderedDict[Path, _MetricsTail] = OrderedDict()
 _METRICS_TAILS_LIMIT = 64
 _METRICS_TAILS_LOCK = threading.Lock()
 
@@ -407,7 +407,9 @@ def _metrics_rows(path: Path, since: int) -> tuple[list[dict[str, str]], list[st
                 and since >= tail.rows - 1
             )
             if resumable:
-                start, first_row = (tail.last_row_start, tail.rows - 1) if since == tail.rows - 1 else (tail.end, tail.rows)
+                start, first_row = (
+                    (tail.last_row_start, tail.rows - 1) if since == tail.rows - 1 else (tail.end, tail.rows)
+                )
             else:
                 start, first_row = len(header_line), 0
             f.seek(start)
@@ -429,7 +431,7 @@ def _metrics_rows(path: Path, since: int) -> tuple[list[dict[str, str]], list[st
         _METRICS_TAILS.move_to_end(key)
         while len(_METRICS_TAILS) > _METRICS_TAILS_LIMIT:
             _METRICS_TAILS.popitem(last=False)
-    return rows[max(since - first_row, 0):], header, total
+    return rows[max(since - first_row, 0) :], header, total
 
 
 # ── Run manifest: every artifact a run produced ───────────────────────────────

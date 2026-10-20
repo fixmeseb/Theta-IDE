@@ -274,6 +274,29 @@ hidden_sizes: [64, 64]
             "compatibility": {"theta": ">=2.0.0"},
             "paradigms": paradigms,
         }
+        if opts.is_composite:
+            meta["parameter_schema"] = {
+                "type": "object",
+                "properties": {
+                    "encoder": {
+                        "type": "string",
+                        "x-theta-domain": "model",
+                        "description": "Feature encoder model component.",
+                    },
+                    "head": {
+                        "type": "string",
+                        "x-theta-domain": "model",
+                        "description": "Prediction head model component.",
+                    },
+                },
+            }
+        else:
+            meta["parameter_schema"] = {
+                "type": "object",
+                "properties": {
+                    "hidden_sizes": {"type": "array", "items": {"type": "integer"}, "default": [64, 64]},
+                },
+            }
         meta_file = target_dir / ".theta_component.json"
         meta_file.write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
         created.append(meta_file)

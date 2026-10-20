@@ -119,8 +119,7 @@ def configured_evaluator_callbacks(cfg) -> list[Callback]:
     elif isinstance(spec, (dict, DictConfig)):
         name = spec.get("name") or spec.get("class") or spec.get("type")
         params = dict(spec.get("params") or {})
-        params.update({key: value for key, value in spec.items()
-                       if key not in ("name", "class", "type", "params")})
+        params.update({key: value for key, value in spec.items() if key not in ("name", "class", "type", "params")})
     else:
         raise ValueError("evaluator must be a registered name or a name/params mapping")
     if not name:
@@ -398,8 +397,16 @@ def build_trainer(cfg, model=None):
 
     if cfg.get("paradigm") == "online_rl":
         env_cfg = cfg.get("env") if hasattr(cfg, "get") else getattr(cfg, "env", None)
-        num_envs = getattr(model, "num_envs", getattr(env_cfg, "num_envs", 1) if env_cfg else 1) if model else (getattr(env_cfg, "num_envs", 1) if env_cfg else 1)
-        num_steps = getattr(model, "num_steps", getattr(env_cfg, "num_steps", 256) if env_cfg else 256) if model else (getattr(env_cfg, "num_steps", 256) if env_cfg else 256)
+        num_envs = (
+            getattr(model, "num_envs", getattr(env_cfg, "num_envs", 1) if env_cfg else 1)
+            if model
+            else (getattr(env_cfg, "num_envs", 1) if env_cfg else 1)
+        )
+        num_steps = (
+            getattr(model, "num_steps", getattr(env_cfg, "num_steps", 256) if env_cfg else 256)
+            if model
+            else (getattr(env_cfg, "num_steps", 256) if env_cfg else 256)
+        )
         batch_size = num_envs * num_steps
 
         import math
@@ -616,7 +623,11 @@ def finalize_training(trainer, cfg, ckpt_dir, training_time, start_time, end_tim
 
     is_online = cfg.get("paradigm") == "online_rl" if hasattr(cfg, "get") else False
     env_cfg = cfg.get("env") if hasattr(cfg, "get") else getattr(cfg, "env", None)
-    metric_name = env_cfg.get("monitor_metric", "eval/reward" if is_online else "val/loss") if (env_cfg and hasattr(env_cfg, "get")) else ("eval/reward" if is_online else "val/loss")
+    metric_name = (
+        env_cfg.get("monitor_metric", "eval/reward" if is_online else "val/loss")
+        if (env_cfg and hasattr(env_cfg, "get"))
+        else ("eval/reward" if is_online else "val/loss")
+    )
     if metric_name in trainer.callback_metrics:
         return trainer.callback_metrics[metric_name].item()
     return 0.0

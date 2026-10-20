@@ -192,10 +192,17 @@ class HubClient(QObject):
         """Find a component by its unique ID, target path, or alias."""
         cid = component_id.lower()
         cid_norm = cid.replace("-", "_")
+
+        # Resolve an exact identifier across the full registry before allowing
+        # prefix matches. Otherwise `robotics` can incorrectly resolve to the
+        # earlier `robotics-mujoco` entry and its experiment configs never install.
         for comp in self.components:
             comp_id = comp.id.lower()
             if comp_id == cid or comp_id.replace("-", "_") == cid_norm:
                 return comp
+
+        for comp in self.components:
+            comp_id = comp.id.lower()
             if comp.target_path:
                 tname = Path(comp.target_path).name.lower()
                 if tname == cid or tname.replace("-", "_") == cid_norm:

@@ -1,3 +1,4 @@
+import importlib
 import logging
 import os
 import sys
@@ -47,7 +48,9 @@ def run_shape_rewards(cfg, context=None):
             compute_sev = mimic_env_mod.compute_tqn_stage_severity
             compute_cost = mimic_env_mod.compute_tqn_action_cost
         except (ImportError, AttributeError) as exc:
-            log.error(f"TQN reward shaping requires the 'mimic' environment plugin ('in.envs.mimic.env_vectorized'): {exc}")
+            log.error(
+                f"TQN reward shaping requires the 'mimic' environment plugin ('in.envs.mimic.env_vectorized'): {exc}"
+            )
             sys.exit(1)
 
         new_rewards = reader.rewards.clone().float()
@@ -84,8 +87,6 @@ def run_shape_rewards(cfg, context=None):
         reader.rewards = new_rewards
 
     elif reward_type == "ep_shaped":
-        import importlib
-
         if "src" not in sys.path:
             sys.path.append("src")
         mimic_env_mod = importlib.import_module("in.envs.mimic.env_vectorized")

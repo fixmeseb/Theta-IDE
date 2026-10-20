@@ -8,6 +8,7 @@ from PyQt6.QtCore import QByteArray, QMimeData, QPoint, QRect, QSettings, QSize,
 from PyQt6.QtGui import QColor, QDrag, QIcon, QPainter, QPen, QPixmap
 from PyQt6.QtWidgets import (
     QApplication,
+    QAbstractItemView,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -96,6 +97,56 @@ class InlineGroupEditor(QLineEdit):
         super().focusOutEvent(event)
         if not self.text().strip():
             self.lost_focus_empty.emit()
+
+
+class ComponentConfigTree(QTreeWidget):
+    """Tree that moves component YAMLs on disk when users drag them to folders."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.move_handler = None
+
+    def _dragged_yaml(self):
+        item = self.currentItem()
+        data = item.data(0, Qt.ItemDataRole.UserRole) if item else None
+        return data if data and data.get("type") == "file" and Path(data.get("rel_path", "")).suffix.lower() in (".yaml", ".yml") else None
+
+    def _valid_drop_target(self, event):
+        source = self._dragged_yaml()
+        target_item = self.itemAt(event.position().toPoint())
+        target = target_item.data(0, Qt.ItemDataRole.UserRole) if target_item else None
+        if not source or not target or target.get("type") != "dir":
+            return None
+        src_category = Path(source["rel_path"]).parts[0]
+        dst_category = Path(target.get("rel_path", "")).parts[0] if target.get("rel_path") else ""
+        return target if src_category == dst_category else None
+
+    def dragEnterEvent(self, event):
+        if event.source() is self and self._dragged_yaml():
+            event.setDropAction(Qt.DropAction.MoveAction)
+            event.accept()
+            return
+        event.ignore()
+
+    def dragMoveEvent(self, event):
+        if event.source() is self and self._valid_drop_target(event):
+            event.setDropAction(Qt.DropAction.MoveAction)
+            event.accept()
+            return
+        event.ignore()
+
+    def dropEvent(self, event):
+        target = self._valid_drop_target(event) if event.source() is self else None
+        source = self._dragged_yaml()
+        if not target or not source or not self.move_handler:
+            event.ignore()
+            return
+        new_rel, error = self.move_handler(source["rel_path"], target["rel_path"])
+        if error:
+            event.ignore()
+            return
+        event.setDropAction(Qt.DropAction.MoveAction)
+        event.accept()
 
 
 class NewExperimentDialog(QDialog):
@@ -202,8 +253,8 @@ class ComponentDeleteDialog(QDialog):
 
         desc = QLabel(
             f"<b>'{rel_path}'</b> is managed by Theta Hub (<b>{comp_name}</b>).<br><br>"
-            f"Would you like to completely uninstall this component from your workspace, "
-            f"or only delete this folder?"
+            f"Uninstalling removes its source code and unchanged bundled YAMLs, keeps edited YAMLs, "
+            f"and restores files that existed before installation. You can also delete only this folder."
         )
         desc.setWordWrap(True)
         desc.setStyleSheet("color: #a89984; font-size: 12px; line-height: 1.4;")
@@ -567,7 +618,7 @@ class ConfigTreeWidget(TreeHeaderActions, QWidget):
             return {
                 "row1_left": [self.btn_refresh, self.btn_collapse, self.btn_expand, self.btn_search],
                 "row1_right": [self.btn_plus, self.btn_hub, self.btn_toggle_raw],
-                "row2_left": [self.btn_duplicate],
+                "row2_left": [self.btn_duplicate, self.btn_deep_copy],
                 "row2_right": [],
             }
         elif self.mode in ("experiments", "experiment"):
@@ -684,8 +735,12 @@ class ConfigTreeWidget(TreeHeaderActions, QWidget):
             self.btn_new_experiment = self.btn_new
 
             self.btn_duplicate = self._tool_button("copy", "Copy", button_id="copy")
-            self.btn_duplicate.setToolTip("Duplicate currently selected component")
-            self.btn_duplicate.clicked.connect(self.prompt_duplicate)
+            self.btn_duplicate.setText("Copy YAML")
+            self.btn_duplicate.setToolTip("Copy the selected YAML configuration; it will keep using the same component code")
+            self.btn_duplicate.clicked.connect(lambda: self.prompt_duplicate_component_yaml())
+            self.btn_deep_copy = self._tool_button("copy", "Deep Copy", button_id="deep_copy")
+            self.btn_deep_copy.setToolTip("Copy the YAML configuration and its associated component source code")
+            self.btn_deep_copy.clicked.connect(lambda: self.prompt_deep_copy_component())
 
             self.btn_hub = self._tool_button("hub", "Component Hub", button_id="hub")
             self.btn_hub.setCheckable(True)
@@ -728,6 +783,7 @@ class ConfigTreeWidget(TreeHeaderActions, QWidget):
 
             self.btn_hub = None
             self.btn_toggle_raw = None
+            self.btn_deep_copy = None
 
             if self.mode in ("experiments", "experiment"):
                 self.btn_launch = self._tool_button("launch", "Launch training", button_id="launch")
@@ -775,7 +831,7 @@ class ConfigTreeWidget(TreeHeaderActions, QWidget):
         layout.addWidget(self.search)
 
         # Tree widget
-        self.tree = QTreeWidget()
+        self.tree = ComponentConfigTree()
         self.tree.setItemDelegate(GroupItemDelegate(self.tree))
         self.tree.setHeaderHidden(True)
         self.tree.setIndentation(14)
@@ -784,6 +840,14 @@ class ConfigTreeWidget(TreeHeaderActions, QWidget):
         self.tree.currentItemChanged.connect(self._on_tree_current_changed)
         self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.tree.customContextMenuRequested.connect(self._show_context_menu)
+        if self.mode == "components":
+            self.tree.move_handler = self._handle_component_tree_drop
+            self.tree.setDragEnabled(True)
+            self.tree.setAcceptDrops(True)
+            self.tree.setDropIndicatorShown(True)
+            self.tree.setDragDropMode(QAbstractItemView.DragDropMode.DragDrop)
+            self.tree.setDefaultDropAction(Qt.DropAction.MoveAction)
+            self.tree.setToolTip("Drag a YAML file onto a folder in the same category to move it.")
         layout.addWidget(self.tree, 1)
 
         self.footer = None
@@ -1614,6 +1678,116 @@ class ConfigTreeWidget(TreeHeaderActions, QWidget):
         except OSError as exc:
             QMessageBox.critical(self, "Duplicate Error", f"Could not duplicate file:\n{exc}")
 
+    def prompt_duplicate_component_yaml(self, rel_path: str | None = None):
+        """Copy a component YAML file while preserving its references to shared code."""
+        source_rel = rel_path or self.current_rel_path
+        if not source_rel:
+            QMessageBox.information(self, "No File Selected", "Please select a component YAML file first.")
+            return
+        source_file = self.root_dir / source_rel
+        if not source_file.is_file():
+            QMessageBox.warning(self, "Invalid Selection", "Selected item is not a valid component YAML file.")
+            return
+        stem = source_file.stem
+        new_name, ok = QInputDialog.getText(
+            self, "Copy YAML", f"Copy '{stem}' as:", QLineEdit.EchoMode.Normal, f"{stem}_copy"
+        )
+        if not ok or not new_name.strip():
+            return
+        new_name = new_name.strip()
+        if Path(new_name).name != new_name:
+            QMessageBox.warning(self, "Invalid Name", "Enter a file name without a folder path.")
+            return
+        if new_name.endswith((".yaml", ".yml")):
+            new_name = Path(new_name).stem
+        target_file = source_file.with_name(f"{new_name}.yaml")
+        if target_file.exists():
+            QMessageBox.warning(self, "File Exists", f"Target file already exists:\n{target_file}")
+            return
+        try:
+            shutil.copy2(source_file, target_file)
+            self._select_created_component_file(target_file)
+        except OSError as exc:
+            QMessageBox.critical(self, "Copy Error", f"Could not copy YAML file:\n{exc}")
+
+    def prompt_deep_copy_component(self, rel_path: str | None = None):
+        """Copy a component YAML file and its associated source directory."""
+        source_rel = rel_path or self.current_rel_path
+        if not source_rel:
+            QMessageBox.information(self, "No File Selected", "Please select a component YAML file first.")
+            return
+        source_file = self.root_dir / source_rel
+        if not source_file.is_file():
+            QMessageBox.warning(self, "Invalid Selection", "Selected item is not a valid component YAML file.")
+            return
+        stem = source_file.stem
+        new_name, ok = QInputDialog.getText(
+            self, "Deep Copy Component", f"Copy '{stem}' and its code as:",
+            QLineEdit.EchoMode.Normal, f"{stem}_copy"
+        )
+        if not ok or not new_name.strip():
+            return
+        new_name = new_name.strip()
+        if Path(new_name).name != new_name or new_name.endswith((".yaml", ".yml")):
+            QMessageBox.warning(self, "Invalid Name", "Enter a component name without a folder path or YAML extension.")
+            return
+        target_yaml = source_file.with_name(f"{new_name}.yaml")
+        if target_yaml.exists():
+            QMessageBox.warning(self, "File Exists", f"Target YAML already exists:\n{target_yaml}")
+            return
+
+        target_code = None
+        workspace = None
+        try:
+            from .component_actions import find_component_assets, find_workspace_root
+            workspace = find_workspace_root(source_file)
+            assets = find_component_assets(source_file, source_rel, workspace_dir=workspace)
+            source_code = assets.get("code_dir")
+            if source_code and Path(source_code).is_dir():
+                source_code = Path(source_code)
+                target_code = source_code.with_name(new_name)
+                if target_code.exists():
+                    QMessageBox.warning(self, "Folder Exists", f"Target source folder already exists:\n{target_code}")
+                    return
+
+            shutil.copy2(source_file, target_yaml)
+            if target_code:
+                shutil.copytree(source_code, target_code)
+                manifest_path = next(
+                    (target_code / filename for filename in (".theta_component.json", "plugin.json")
+                     if (target_code / filename).is_file()),
+                    None,
+                )
+                if manifest_path:
+                    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+                    manifest["id"] = new_name
+                    if manifest.get("name") == assets.get("comp_name"):
+                        manifest["name"] = f"{assets.get('comp_name', stem)} Copy"
+                    try:
+                        manifest["target_path"] = target_code.resolve().relative_to(workspace.resolve()).as_posix()
+                    except ValueError:
+                        pass
+                    config_rel = target_yaml.resolve().relative_to(workspace.resolve()).as_posix()
+                    manifest["config_path"] = config_rel
+                    manifest["config_paths"] = [config_rel]
+                    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+        except Exception as exc:
+            # Remove partially created artifacts so a retry can use the same name.
+            for path in (target_yaml, target_code):
+                if path and Path(path).exists():
+                    try:
+                        shutil.rmtree(path) if Path(path).is_dir() else Path(path).unlink()
+                    except OSError:
+                        pass
+            QMessageBox.critical(self, "Deep Copy Error", f"Could not deep copy component:\n{exc}")
+            return
+
+        self._select_created_component_file(target_yaml)
+
+    def _select_created_component_file(self, target_file: Path):
+        self.populate()
+        self.select_file(target_file.relative_to(self.root_dir).as_posix())
+
     def delete_config(self, rel_path):
         """Delete a config file. Returns (removed, error).
 
@@ -1655,6 +1829,7 @@ class ConfigTreeWidget(TreeHeaderActions, QWidget):
             target.write_text(rename_experiment_text(text, target.stem), encoding="utf-8")
         except OSError as exc:
             return None, str(exc)
+        self._remap_component_tracking(rel_path, str(Path(rel_path).parent / new_name).replace("\\", "/"))
         from .config_viewer import invalidate_config_tree
         invalidate_config_tree()
         new_rel = str(Path(rel_path).parent / new_name)
@@ -1701,9 +1876,64 @@ class ConfigTreeWidget(TreeHeaderActions, QWidget):
         except OSError as exc:
             return None, str(exc)
         new_rel = str(new_dir.relative_to(self.root_dir)).replace("\\", "/")
+        self._remap_component_tracking(rel_path, new_rel)
         self.dir_renamed.emit(rel_path, new_rel)
         self.populate(ensure_expanded=new_rel)
         return new_rel, None
+
+    def move_component_yaml(self, rel_path: str, target_dir_rel: str) -> tuple[str | None, str | None]:
+        """Move a YAML within its component category and update install tracking."""
+        source = self.root_dir / rel_path
+        target_dir = self.root_dir / target_dir_rel
+        if self.mode != "components":
+            return None, "YAML moves are only available in the Components tree."
+        if not source.is_file() or source.suffix.lower() not in (".yaml", ".yml"):
+            return None, "Select a component YAML file to move."
+        category = Path(rel_path).parts[0] if Path(rel_path).parts else ""
+        try:
+            target_dir.resolve().relative_to((self.root_dir / category).resolve())
+        except (ValueError, OSError):
+            return None, "Move the YAML into a folder under the same component category."
+        if not target_dir.is_dir():
+            return None, "The destination folder does not exist."
+        target = target_dir / source.name
+        if target == source:
+            return rel_path, None
+        if target.exists():
+            return None, f"A file named '{source.name}' already exists in that folder."
+        try:
+            source.rename(target)
+        except OSError as exc:
+            return None, str(exc)
+
+        new_rel = target.relative_to(self.root_dir).as_posix()
+        self._remap_component_tracking(rel_path, new_rel)
+        from .config_viewer import invalidate_config_tree
+        invalidate_config_tree()
+        self.populate(ensure_expanded=target_dir_rel)
+        self.select_file(new_rel)
+        return new_rel, None
+
+    def _remap_component_tracking(self, old_rel: str, new_rel: str) -> None:
+        """Keep Hub manifests aligned with config tree rename/move operations."""
+        if self.mode != "components":
+            return
+        try:
+            workspace = self.root_dir.parent.parent
+            old_workspace_rel = (self.root_dir / old_rel).resolve().relative_to(workspace.resolve()).as_posix()
+            new_workspace_rel = (self.root_dir / new_rel).resolve().relative_to(workspace.resolve()).as_posix()
+            installer = self._get_installer()
+            if installer:
+                installer.remap_tracked_paths(old_workspace_rel, new_workspace_rel)
+        except (OSError, ValueError):
+            return
+
+    def _handle_component_tree_drop(self, source_rel: str, destination_rel: str):
+        """Apply a drag-and-drop move and report any filesystem conflict."""
+        result = self.move_component_yaml(source_rel, destination_rel)
+        if result[1]:
+            QMessageBox.warning(self, "Move Failed", result[1])
+        return result
 
     def delete_dir(self, rel_path: str) -> tuple[bool, str | None]:
         """Delete a directory and all contents. Returns (removed, error)."""
@@ -1843,9 +2073,18 @@ class ConfigTreeWidget(TreeHeaderActions, QWidget):
             action_select.triggered.connect(lambda: self._on_item_clicked(item, 0))
             action_new_tab = menu.addAction("Open in New Tab")
             action_new_tab.triggered.connect(lambda: self._on_item_double_clicked(item, 0))
-            label_dup = "Duplicate Experiment…" if self.mode in ("experiments", "experiment") else "Duplicate Config…"
+            label_dup = (
+                "Copy YAML…" if self.mode == "components"
+                else "Duplicate Experiment…" if self.mode in ("experiments", "experiment")
+                else "Duplicate Config…"
+            )
             action_dup = menu.addAction(label_dup)
-            action_dup.triggered.connect(self.prompt_duplicate)
+            action_dup.triggered.connect(
+                (lambda: self.prompt_duplicate_component_yaml(data["rel_path"])) if self.mode == "components" else self.prompt_duplicate
+            )
+            if self.mode == "components":
+                action_deep = menu.addAction("Deep Copy Component…")
+                action_deep.triggered.connect(lambda: self.prompt_deep_copy_component(data["rel_path"]))
             rel = data["rel_path"]
             action_rename = menu.addAction("Rename…")
             action_rename.triggered.connect(lambda: self.prompt_rename(rel))

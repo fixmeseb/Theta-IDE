@@ -77,7 +77,6 @@ class VectorizedBaseEnv(ABC):
             if os.path.exists(candidate):
                 env_path = candidate
 
-
         if os.path.exists(env_path):
             env_module = load_module(env_path)
             cls = getattr(env_module, "VectorizedEnv", None) or getattr(env_module, "VectorizedNudgeEnv", None)

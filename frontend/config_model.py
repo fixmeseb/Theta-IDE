@@ -131,6 +131,7 @@ class Agent:
     algorithm: str
     compatible_paradigms: tuple[str, ...] = ()
     hyperparameters: Mapping[str, Any] = field(default_factory=dict, repr=False)
+    parameter_schema: Mapping[str, Any] = field(default_factory=dict, repr=False)
     raw: Mapping[str, Any] = field(default_factory=dict, repr=False)
 
     @classmethod
@@ -158,7 +159,7 @@ class Agent:
             name=name,
             algorithm=raw.get("algorithm") or path.stem,
             compatible_paradigms=cp,
-            hyperparameters={k: v for k, v in raw.items() if k not in ("algorithm", "paradigms", "compatible_paradigms")},
+            hyperparameters={k: v for k, v in raw.items() if k not in ("algorithm", "paradigms", "compatible_paradigms", "parameter_schema")},
             raw=raw,
         )
 
@@ -169,6 +170,7 @@ class Model:
     architecture: str
     compatible_paradigms: tuple[str, ...] = ()
     parameters: Mapping[str, Any] = field(default_factory=dict, repr=False)
+    parameter_schema: Mapping[str, Any] = field(default_factory=dict, repr=False)
     raw: Mapping[str, Any] = field(default_factory=dict, repr=False)
 
     @classmethod
@@ -193,13 +195,17 @@ class Model:
             name=name,
             architecture=raw.get("architecture") or path.stem,
             compatible_paradigms=cp,
-            parameters={k: v for k, v in raw.items() if k not in ("architecture", "paradigms", "compatible_paradigms")},
+            parameters={k: v for k, v in raw.items() if k not in ("architecture", "paradigms", "compatible_paradigms", "parameter_schema")},
             raw=raw,
         )
 
     @property
     def is_composite(self) -> bool:
-        return bool(self.subcomponents) or "slots" in self.parameters
+        model_domains = any(
+            isinstance(value, dict) and value.get("x-theta-domain") == "model"
+            for value in self.parameter_schema.get("properties", {}).values()
+        )
+        return bool(self.subcomponents) or "slots" in self.parameters or model_domains
 
     @property
     def subcomponents(self) -> dict[str, dict[str, Any]]:
@@ -207,9 +213,16 @@ class Model:
 
     @property
     def slots(self) -> list[str]:
+        model_slots = [
+            key for key, value in self.parameter_schema.get("properties", {}).items()
+            if isinstance(value, dict) and value.get("x-theta-domain") == "model"
+        ]
+        if model_slots:
+            return model_slots
         if "slots" in self.parameters and isinstance(self.parameters["slots"], (list, tuple)):
             return list(self.parameters["slots"])
-        return list(self.subcomponents.keys())
+        slots = list(self.subcomponents.keys())
+        return slots
 
 
 @dataclass(frozen=True)
@@ -429,6 +442,7 @@ class ConfigTree:
                 self.environments[e.stem] = env_obj
 
         self.sites = tuple(s.stem for s in _yaml_files(self.config_root / "site"))
+        self.component_parameter_schemas: dict[str, dict[str, Any]] = {}
 
         self._discover_plugin_manifests()
 
@@ -457,7 +471,10 @@ class ConfigTree:
             (ws_root / "src" / "usr" / "algorithms", "agent"),
             (ws_root / "src" / "usr" / "methods", "agent"),
             (ws_root / "src" / "usr" / "models", "model"),
+            (ws_root / "src" / "usr" / "data", "datamodule"),
+            (ws_root / "src" / "usr" / "eval", "evaluator"),
             (ws_root / "in" / "envs", "env"),
+            (ws_root / "plot", "plotter"),
         ]
 
         for sdir, default_kind in scan_dirs:
@@ -468,6 +485,20 @@ class ConfigTree:
                     meta = json.loads(meta_file.read_text(encoding="utf-8"))
                     kind = str(meta.get("kind", default_kind)).lower()
                     comp_id = str(meta.get("id") or meta_file.parent.name)
+                    parameter_schema = meta.get("parameter_schema")
+                    if isinstance(parameter_schema, dict):
+                        profile_schemas = parameter_schema.get("x-theta-config-schemas", {})
+                        declared_paths = list(meta.get("config_paths") or [])
+                        if meta.get("config_path") and meta["config_path"] not in declared_paths:
+                            declared_paths.insert(0, meta["config_path"])
+                        for config_path in declared_paths:
+                            if not isinstance(config_path, str) or not config_path:
+                                continue
+                            normalized = Path(config_path).as_posix()
+                            profile_schema = profile_schemas.get(normalized, parameter_schema) if isinstance(profile_schemas, dict) else parameter_schema
+                            self.component_parameter_schemas[normalized] = profile_schema
+                            if normalized.startswith("in/config/"):
+                                self.component_parameter_schemas[normalized[len("in/config/"):]] = profile_schema
                     paradigms = meta.get("paradigms") or meta.get("compatible_paradigms") or ()
                     if isinstance(paradigms, list):
                         paradigms_tuple = tuple(str(p) for p in paradigms)
@@ -476,27 +507,83 @@ class ConfigTree:
                     else:
                         paradigms_tuple = ()
 
-                    if kind in ("agent", "algorithm") and comp_id not in self.agents:
-                        self.agents[comp_id] = Agent(
-                            name=comp_id,
-                            algorithm=str(meta.get("algorithm") or comp_id),
-                            compatible_paradigms=paradigms_tuple,
-                            hyperparameters=dict(meta.get("hyperparameters", {})),
-                            raw=meta,
-                        )
-                    elif kind == "model" and comp_id not in self.models:
-                        self.models[comp_id] = Model(
-                            name=comp_id,
-                            architecture=str(meta.get("architecture") or comp_id),
-                            compatible_paradigms=paradigms_tuple,
-                            parameters=dict(meta.get("parameters", {})),
-                            raw=meta,
-                        )
+                    if kind in ("agent", "algorithm"):
+                        existing = self.agents.get(comp_id)
+                        if existing is not None:
+                            self.agents[comp_id] = Agent(
+                                name=existing.name,
+                                algorithm=existing.algorithm,
+                                compatible_paradigms=existing.compatible_paradigms or paradigms_tuple,
+                                hyperparameters=existing.hyperparameters,
+                                parameter_schema=existing.parameter_schema or dict(parameter_schema or {}),
+                                raw=existing.raw,
+                            )
+                        else:
+                            self.agents[comp_id] = Agent(
+                                name=comp_id,
+                                algorithm=str(meta.get("algorithm") or comp_id),
+                                compatible_paradigms=paradigms_tuple,
+                                hyperparameters=dict(meta.get("hyperparameters", {})),
+                                parameter_schema=dict(parameter_schema or {}),
+                                raw=meta,
+                            )
+                    elif kind == "model":
+                        existing = self.models.get(comp_id)
+                        if existing is not None:
+                            self.models[comp_id] = Model(
+                                name=existing.name,
+                                architecture=existing.architecture,
+                                compatible_paradigms=existing.compatible_paradigms or paradigms_tuple,
+                                parameters=existing.parameters,
+                                parameter_schema=existing.parameter_schema or dict(parameter_schema or {}),
+                                raw=existing.raw,
+                            )
+                        else:
+                            self.models[comp_id] = Model(
+                                name=comp_id,
+                                architecture=str(meta.get("architecture") or comp_id),
+                                compatible_paradigms=paradigms_tuple,
+                                parameters=dict(meta.get("parameters", {})),
+                                parameter_schema=dict(parameter_schema or {}),
+                                raw=meta,
+                            )
                     # Environment manifests describe installable packages, not
                     # selectable environments. The actual choices come from
                     # each package's YAML configs under in/config/env/.
                 except Exception:
                     continue
+
+        # Associate manifest schemas with the matching profile-backed components.
+        # The component ID for an algorithm/model can be its config path (e.g.
+        # ``sb3/ppo``), while a package manifest may describe several profiles.
+        for config_path, schema in self.component_parameter_schemas.items():
+            rel_path = config_path[len("in/config/"):] if config_path.startswith("in/config/") else config_path
+            parts = Path(rel_path).parts
+            if len(parts) < 2 or not parts[-1].endswith(".yaml"):
+                continue
+            component_name = Path(*parts[1:]).with_suffix("").as_posix()
+            aliases = {component_name, Path(parts[-1]).stem}
+            for name in aliases:
+                if parts[0] == "agent" and name in self.agents:
+                    existing = self.agents[name]
+                    self.agents[name] = Agent(
+                        name=existing.name,
+                        algorithm=existing.algorithm,
+                        compatible_paradigms=existing.compatible_paradigms,
+                        hyperparameters=existing.hyperparameters,
+                        parameter_schema=schema,
+                        raw=existing.raw,
+                    )
+                elif parts[0] == "model" and name in self.models:
+                    existing = self.models[name]
+                    self.models[name] = Model(
+                        name=existing.name,
+                        architecture=existing.architecture,
+                        compatible_paradigms=existing.compatible_paradigms,
+                        parameters=existing.parameters,
+                        parameter_schema=schema,
+                        raw=existing.raw,
+                    )
 
     def create_folder(self, group: str, subpath: str) -> Path:
         """Create a new organizational folder under an experiment group."""
@@ -621,6 +708,52 @@ class ConfigTree:
         if not model_name or model_name not in self.models:
             return {}
         return dict(self.models[model_name].parameters)
+
+    def model_parameter_schema(self, model_name: str | None, path: tuple[str, ...] = ()) -> dict[str, Any]:
+        """Return the JSON Schema node describing a model parameter or nested object."""
+        if not model_name or model_name not in self.models:
+            return {}
+        schema: Any = self.models[model_name].parameter_schema
+        for key in path:
+            schema = schema.get("properties", {}).get(key, {}) if isinstance(schema, dict) else {}
+        return dict(schema) if isinstance(schema, dict) else {}
+
+    def parameter_schema_for_config(self, config_path: str | Path) -> dict[str, Any]:
+        """Find a component-manifest schema for a config profile path."""
+        normalized = Path(config_path).as_posix()
+        candidates = [normalized]
+        if normalized.startswith("in/config/"):
+            candidates.append(normalized[len("in/config/"):])
+        else:
+            candidates.append(f"in/config/{normalized}")
+        for candidate in candidates:
+            schema = self.component_parameter_schemas.get(candidate)
+            if schema:
+                return dict(schema)
+        return {}
+
+    def agent_parameter_schema(self, agent_name: str | None, path: tuple[str, ...] = ()) -> dict[str, Any]:
+        """Return the JSON Schema node describing an agent parameter."""
+        if not agent_name or agent_name not in self.agents:
+            return {}
+        schema: Any = self.agents[agent_name].parameter_schema
+        for key in path:
+            schema = schema.get("properties", {}).get(key, {}) if isinstance(schema, dict) else {}
+        return dict(schema) if isinstance(schema, dict) else {}
+
+    def model_parameter_keys(self, model_name: str | None, path: tuple[str, ...] = ()) -> list[str]:
+        """Return declared/default parameter keys at a model nesting level."""
+        if not model_name or model_name not in self.models:
+            return []
+        defaults: Any = self.models[model_name].parameters
+        for key in path:
+            defaults = defaults.get(key, {}) if isinstance(defaults, dict) else {}
+        keys = list(defaults.keys()) if isinstance(defaults, dict) else []
+        schema = self.model_parameter_schema(model_name, path)
+        for key in schema.get("properties", {}):
+            if key not in keys:
+                keys.append(key)
+        return keys
 
     def model_subcomponents(self, model_name: str | None) -> dict[str, dict[str, Any]]:
         if not model_name or model_name not in self.models:

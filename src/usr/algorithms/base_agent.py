@@ -232,9 +232,8 @@ class BaseAgent(L.LightningModule, ABC):
             n_envs = self.get_cfg("num_envs", 4)
 
         env_cfg = getattr(self.cfg, "env", None)
-        env_name = (
-            self.get_cfg("env.name", None)
-            or (env_cfg if isinstance(env_cfg, str) else getattr(env_cfg, "name", None))
+        env_name = self.get_cfg("env.name", None) or (
+            env_cfg if isinstance(env_cfg, str) else getattr(env_cfg, "name", None)
         )
         if not env_name:
             raise ValueError("No environment specified in configuration ('env.name' or 'env').")

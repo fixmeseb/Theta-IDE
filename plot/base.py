@@ -345,7 +345,12 @@ class BasePlotter:
         if isinstance(plots_sec, dict):
             # General plot parameters (e.g. title, xlabel, ylabel, smoothing_window, figsize, dpi)
             for k, v in plots_sec.items():
-                if v is not None and k != self.name and k != "output_dir" and not (isinstance(v, dict) and k not in ("style", "figsize")):
+                if (
+                    v is not None
+                    and k != self.name
+                    and k != "output_dir"
+                    and not (isinstance(v, dict) and k not in ("style", "figsize"))
+                ):
                     general_plot_opts[k] = v
             if self.name in plots_sec and isinstance(plots_sec[self.name], dict):
                 exp_plot_opts = plots_sec[self.name]

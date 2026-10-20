@@ -257,8 +257,9 @@ def load_model_base_config(model_name: str, config_dir=None) -> dict:
     """
     if not model_name:
         return {}
-    from pathlib import Path
     import json
+    from pathlib import Path
+
     import yaml
 
     if config_dir is None:
