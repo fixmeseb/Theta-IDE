@@ -54,6 +54,7 @@ dev = [
     "ruff>=0.5",
     "mypy>=1.0",
     "pre-commit>=3.0",
+    "types-PyYAML>=6.0",
 ]
 # The desktop app. It composes configs in-process and runs training as a QProcess,
 # so it installs into the same venv as the pipeline: pip install -e ".[gui]"

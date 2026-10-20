@@ -1,5 +1,7 @@
 """UI Extension Slots for loose coupling between IDE panels and plugins."""
+
 from __future__ import annotations
+import inspect
 from typing import Callable, Dict, List, Optional, Tuple, Union
 from PyQt6.QtCore import QObject, pyqtSignal
 from PyQt6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
@@ -7,6 +9,7 @@ from PyQt6.QtWidgets import QHBoxLayout, QVBoxLayout, QWidget
 
 class ExtensionSlot(QObject):
     """A named insertion point where plugins can contribute actions, buttons, or widgets."""
+
     changed = pyqtSignal()
 
     def __init__(self, slot_id: str, parent: Optional[QObject] = None):
@@ -65,9 +68,18 @@ class ExtensionSlotWidget(QWidget):
         spacing: int = 8,
         margins: Tuple[int, int, int, int] = (0, 0, 0, 0),
         parent: Optional[QWidget] = None,
+        context: Optional[dict] = None,
     ):
+        """*context* describes the row this instance of the slot belongs to.
+
+        A slot inside a repeated row (one Model row per method) renders once
+        per row, and a contribution needs to know which row it is serving.
+        Factories that take no argument are called as before, so existing
+        plugins are unaffected.
+        """
         super().__init__(parent)
         self.slot = slot
+        self.context = context
         self.layout_kind = orientation
         if orientation == "horizontal":
             self._layout = QHBoxLayout(self)
@@ -91,9 +103,21 @@ class ExtensionSlotWidget(QWidget):
 
         items = self.slot.get_items()
         for action_id, factory_or_w in items:
-            widget = factory_or_w() if callable(factory_or_w) else factory_or_w
+            widget = self._build(factory_or_w)
             if widget:
                 self._rendered_widgets[action_id] = widget
                 self._layout.addWidget(widget)
 
         self.setVisible(bool(items))
+
+    def _build(self, factory_or_w):
+        """Instantiate one contribution, passing the row context if it wants it."""
+        if not callable(factory_or_w):
+            return factory_or_w
+        if self.context is None:
+            return factory_or_w()
+        try:
+            takes_context = bool(inspect.signature(factory_or_w).parameters)
+        except (TypeError, ValueError):
+            takes_context = False
+        return factory_or_w(self.context) if takes_context else factory_or_w()

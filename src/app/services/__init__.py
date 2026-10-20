@@ -13,8 +13,6 @@ JOBS_DIR = PROJECT_ROOT / "results" / "jobs"
 TENSORBOARD_DIR = PROJECT_ROOT / "results" / "tensorboard"
 EXPORTS_DIR = PROJECT_ROOT / "results" / "exports"
 
-from .experiment_exporter import ExperimentExporter, ExportOptions, ExportResult  # noqa: E402
-from .plugin_scaffolder import PluginScaffolder, ScaffoldOptions, ScaffoldResult  # noqa: E402
 from .component_exporter import (  # noqa: E402
     ComponentExporter,
     ComponentExportOptions,
@@ -22,6 +20,8 @@ from .component_exporter import (  # noqa: E402
     find_component_assets,
     find_workspace_root,
 )
+from .experiment_exporter import ExperimentExporter, ExportOptions, ExportResult  # noqa: E402
+from .plugin_scaffolder import PluginScaffolder, ScaffoldOptions, ScaffoldResult  # noqa: E402
 from .test_suite import (  # noqa: E402
     TEST_SUITE_FORMAT,
     ComponentContract,
@@ -36,4 +36,3 @@ from .test_suite import (  # noqa: E402
     parse_test_suite_manifest,
     run_pipeline_case,
 )
-

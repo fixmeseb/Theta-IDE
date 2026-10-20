@@ -16,7 +16,6 @@ from typing import Any, Callable, Mapping
 
 import yaml
 
-
 TEST_SUITE_FORMAT = "theta.test-suite/v1"
 
 
@@ -114,17 +113,19 @@ def parse_test_suite_manifest(manifest: Mapping[str, Any]) -> TestSuite:
         overrides = raw.get("overrides", [])
         if not isinstance(overrides, list) or not all(isinstance(item, str) and item for item in overrides):
             raise TestSuiteManifestError(f"Case '{case_id}' has invalid overrides.")
-        cases.append(TestCase(
-            id=case_id,
-            title=raw["title"],
-            description=raw["description"],
-            experiment=raw["experiment"],
-            expectation=expectation,
-            execution=execution,
-            blocked_reason=blocked_reason if isinstance(blocked_reason, str) else None,
-            expected_error=raw.get("expected_error") if isinstance(raw.get("expected_error"), str) else None,
-            overrides=tuple(overrides),
-        ))
+        cases.append(
+            TestCase(
+                id=case_id,
+                title=raw["title"],
+                description=raw["description"],
+                experiment=raw["experiment"],
+                expectation=expectation,
+                execution=execution,
+                blocked_reason=blocked_reason if isinstance(blocked_reason, str) else None,
+                expected_error=raw.get("expected_error") if isinstance(raw.get("expected_error"), str) else None,
+                overrides=tuple(overrides),
+            )
+        )
 
     contracts: list[ComponentContract] = []
     raw_contracts = declaration.get("components", [])
@@ -143,10 +144,15 @@ def parse_test_suite_manifest(manifest: Mapping[str, Any]) -> TestSuite:
         if raw["id"] in component_ids:
             raise TestSuiteManifestError(f"Duplicate component contract id: '{raw['id']}'.")
         component_ids.add(raw["id"])
-        contracts.append(ComponentContract(
-            id=raw["id"], title=raw["title"], description=raw["description"],
-            config_path=raw["config_path"], required=dict(raw["required"]),
-        ))
+        contracts.append(
+            ComponentContract(
+                id=raw["id"],
+                title=raw["title"],
+                description=raw["description"],
+                config_path=raw["config_path"],
+                required=dict(raw["required"]),
+            )
+        )
 
     suite_id = manifest.get("id")
     if not isinstance(suite_id, str) or not suite_id:
@@ -185,8 +191,7 @@ def evaluate_test_suite(
         actual = "runnable" if valid else "blocked"
         errors = report.get("errors", []) if isinstance(report, Mapping) else []
         error_text = "\n".join(
-            str(error.get("message", error)) if isinstance(error, Mapping) else str(error)
-            for error in errors
+            str(error.get("message", error)) if isinstance(error, Mapping) else str(error) for error in errors
         )
         matches_error = not case.expected_error or case.expected_error.lower() in error_text.lower()
         passed = actual == case.expectation and matches_error
@@ -196,10 +201,18 @@ def evaluate_test_suite(
                 message = "Runnable case needs an execution callback."
             else:
                 execution_result = execute(case)
-                ran = bool(execution_result.get("success")) if isinstance(execution_result, Mapping) else bool(execution_result)
+                ran = (
+                    bool(execution_result.get("success"))
+                    if isinstance(execution_result, Mapping)
+                    else bool(execution_result)
+                )
                 if not ran:
                     passed = False
-                    detail = execution_result.get("message", "runner returned failure") if isinstance(execution_result, Mapping) else "runner returned failure"
+                    detail = (
+                        execution_result.get("message", "runner returned failure")
+                        if isinstance(execution_result, Mapping)
+                        else "runner returned failure"
+                    )
                     message = f"Pre-flight passed but execution failed: {detail}"
                 else:
                     message = "Pre-flight passed and the recipe executed successfully."
@@ -213,9 +226,7 @@ def evaluate_test_suite(
     return tuple(results)
 
 
-def evaluate_component_contracts(
-    suite: TestSuite, workspace_dir: str | Path
-) -> tuple[ComponentContractResult, ...]:
+def evaluate_component_contracts(suite: TestSuite, workspace_dir: str | Path) -> tuple[ComponentContractResult, ...]:
     """Verify that installed components retain the configuration capabilities a suite needs."""
     root = Path(workspace_dir)
     results: list[ComponentContractResult] = []
@@ -231,7 +242,9 @@ def evaluate_component_contracts(
             continue
         missing = _missing_required_values(config, contract.required)
         if missing:
-            results.append(ComponentContractResult(contract, False, f"Missing or incompatible values: {', '.join(missing)}"))
+            results.append(
+                ComponentContractResult(contract, False, f"Missing or incompatible values: {', '.join(missing)}")
+            )
         else:
             results.append(ComponentContractResult(contract, True, "Configuration capability contract is satisfied."))
     return tuple(results)

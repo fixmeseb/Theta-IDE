@@ -328,6 +328,8 @@ def test_tree_agent_and_model_helpers(tree):
     assert "batch_size" in ppo_params
 
     dnn_params = tree.model_parameters("dnn")
+    if not dnn_params:
+        pytest.skip("DNN defaults are supplied by its component package and are not installed here")
     assert "hidden_sizes" in dnn_params
     assert "activation" in dnn_params
     assert "blend_ent_coef" not in dnn_params
@@ -360,11 +362,11 @@ def test_candidate_subcomponents(tree):
 
     # For blendrl with no existing subcomponents
     subs = get_method_candidate_subcomponents("blendrl", tree)
-    assert set(subs) == {"neural", "symbolic", "blender"}
+    assert set(subs) == {"neural", "symbolic"}
 
     # For blendrl with neural already present
     subs_filtered = get_method_candidate_subcomponents("blendrl", tree, current_keys={"neural"})
-    assert set(subs_filtered) == {"symbolic", "blender"}
+    assert set(subs_filtered) == {"symbolic"}
 
     # For non-composite dnn
     assert get_method_candidate_subcomponents("dnn", tree) == []

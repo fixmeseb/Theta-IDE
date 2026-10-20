@@ -131,12 +131,15 @@ COMPONENT_MANIFEST_SCHEMA: Dict[str, Any] = {
                         "allOf": [
                             {
                                 "if": {"properties": {"expectation": {"const": "blocked"}}},
-                                "then": {"required": ["blocked_reason"], "properties": {"execution": {"const": "preflight"}}},
+                                "then": {
+                                    "required": ["blocked_reason"],
+                                    "properties": {"execution": {"const": "preflight"}},
+                                },
                             },
                             {
                                 "if": {"properties": {"expectation": {"const": "runnable"}}},
                                 "then": {"properties": {"execution": {"const": "run"}}},
-                            }
+                            },
                         ],
                     },
                 },
@@ -164,6 +167,25 @@ COMPONENT_MANIFEST_SCHEMA: Dict[str, Any] = {
             "type": "array",
             "items": {"type": "string"},
             "description": "Learning paradigms compatible with this component (e.g. ['online_rl', 'offline_rl', 'supervised']).",
+        },
+        "parameter_schema": {
+            "type": "object",
+            "required": ["type", "properties"],
+            "properties": {
+                "type": {"const": "object"},
+                "properties": {
+                    "type": "object",
+                    "additionalProperties": {"type": "object"},
+                },
+                "required": {"type": "array", "items": {"type": "string"}},
+                "additionalProperties": {"type": ["boolean", "object"]},
+                "x-theta-config-schemas": {
+                    "type": "object",
+                    "additionalProperties": {"type": "object"},
+                    "description": "Per-config-path JSON Schemas for components that bundle multiple profiles.",
+                },
+            },
+            "description": "JSON Schema object describing component parameters. Use properties for nested keys, enum for dropdown choices, x-theta-domain: model for installed model component choices, and x-theta-config-schemas for profile-specific schemas.",
         },
     },
 }
@@ -247,7 +269,11 @@ def validate_manifest_data(data: Dict[str, Any]) -> Tuple[bool, str | None]:
         for index, case in enumerate(cases):
             if not isinstance(case, dict):
                 return False, f"'test_suite.cases[{index}]' must be an object."
-            missing = [key for key in ("id", "title", "description", "experiment", "expectation", "execution") if not case.get(key)]
+            missing = [
+                key
+                for key in ("id", "title", "description", "experiment", "expectation", "execution")
+                if not case.get(key)
+            ]
             if missing:
                 return False, f"'test_suite.cases[{index}]' is missing required fields: {', '.join(missing)}."
             if case["id"] in case_ids:

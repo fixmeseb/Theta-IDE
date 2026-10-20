@@ -48,7 +48,7 @@ class ComponentExportResult:
     error: str | None = None
 
 
-def find_workspace_root(start_path: Optional[Path] = None) -> Path:
+def find_workspace_root(start_path: Path | None = None) -> Path:
     """Find the workspace root by looking for 'in' and 'src' directories upwards."""
     curr = (start_path or Path.cwd()).resolve()
     if curr.is_file():
@@ -62,8 +62,8 @@ def find_workspace_root(start_path: Optional[Path] = None) -> Path:
 
 def find_component_assets(
     config_path: Path,
-    rel_path: Optional[str] = None,
-    workspace_dir: Optional[Path] = None,
+    rel_path: str | None = None,
+    workspace_dir: Path | None = None,
 ) -> Dict[str, Any]:
     """Resolve all associated assets for a component given its configuration YAML path.
 
@@ -85,9 +85,10 @@ def find_component_assets(
     comp_id = cfg.stem
 
     # 1. Attempt lookup via HubInstaller / .theta_component.json
-    meta: Optional[Dict[str, Any]] = None
+    meta: Dict[str, Any] | None = None
     try:
         from frontend.hub.installer import HubInstaller
+
         inst = HubInstaller(workspace_dir=ws, data_dir=ws / ".thetaide")
         meta = inst.find_component_for_path(cfg)
     except Exception:
@@ -128,8 +129,8 @@ def find_component_assets(
             if meta:
                 break
 
-    code_dir: Optional[Path] = None
-    primary_code_file: Optional[Path] = None
+    code_dir: Path | None = None
+    primary_code_file: Path | None = None
     files_to_delete: List[Path] = [cfg]
     kind = "component"
     comp_name = comp_id
@@ -159,11 +160,11 @@ def find_component_assets(
     rel = rel_path or str(cfg.relative_to(ws / "in" / "config") if (ws / "in" / "config") in cfg.parents else cfg.name)
     rel = rel.replace("\\", "/").lstrip("/")
     if rel.startswith("in/config/"):
-        rel = rel[len("in/config/"):]
+        rel = rel[len("in/config/") :]
 
     if not code_dir:
-        candidate_dir: Optional[Path] = None
-        candidate_file: Optional[Path] = None
+        candidate_dir: Path | None = None
+        candidate_file: Path | None = None
 
         prefix_map = {
             "model/": ("model", ws / "src" / "usr" / "models"),
@@ -180,7 +181,7 @@ def find_component_assets(
         for pfx, (k, base_dir) in prefix_map.items():
             if rel.startswith(pfx):
                 kind = k
-                sub = rel[len(pfx):]
+                sub = rel[len(pfx) :]
                 sub_parent = Path(sub).parent
                 # 1. Namespaced candidate (if in subfolder)
                 if str(sub_parent) != ".":

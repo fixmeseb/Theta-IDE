@@ -315,6 +315,7 @@ class HubInstaller:
             # Check for packaged configuration YAML(s) and deploy to in/config/
             installed_config_paths = []
             installed_files = []
+            config_backups = {}
             is_root_relative = (
                 (source_dir / "in").is_dir()
                 or (source_dir / "src").is_dir()
@@ -331,6 +332,8 @@ class HubInstaller:
                     if rel.parts and rel.parts[0] in ("in", "src", "results", "plot"):
                         dest_file = self.workspace_dir / rel
                         dest_file.parent.mkdir(parents=True, exist_ok=True)
+                        if len(rel.parts) >= 2 and rel.parts[:2] == ("in", "config") and dest_file.suffix.lower() in (".yaml", ".yml"):
+                            self._backup_existing_config(component.id, dest_file, config_backups)
                         shutil.copy2(str(item), str(dest_file))
                         installed_files.append(str(dest_file.relative_to(self.workspace_dir)))
                         if len(rel.parts) >= 2 and rel.parts[0] == "in" and rel.parts[1] == "config":
@@ -350,6 +353,7 @@ class HubInstaller:
                     else:
                         dest_file = target_in_config / rel
                     dest_file.parent.mkdir(parents=True, exist_ok=True)
+                    self._backup_existing_config(component.id, dest_file, config_backups)
                     shutil.copy2(str(yaml_file), str(dest_file))
                     installed_config_paths.append(str(dest_file.relative_to(self.workspace_dir)))
 
@@ -372,6 +376,7 @@ class HubInstaller:
                 for cand in config_candidates:
                     if cand.is_file():
                         config_dest.parent.mkdir(parents=True, exist_ok=True)
+                        self._backup_existing_config(component.id, config_dest, config_backups)
                         shutil.copy2(str(cand), str(config_dest))
                         installed_config_rel = str(config_dest.relative_to(self.workspace_dir))
                         installed_config_paths.append(installed_config_rel)
@@ -400,6 +405,12 @@ class HubInstaller:
                 "sha256": release.sha256,
                 "config_path": installed_config_rel,
                 "config_paths": installed_config_paths,
+                "config_backups": config_backups,
+                "config_hashes": {
+                    rel: digest
+                    for rel in installed_config_paths
+                    if (digest := self._sha256_file(self.workspace_dir / rel)) is not None
+                },
             })
             if is_root_relative and installed_files:
                 meta["installed_files"] = installed_files
@@ -624,6 +635,216 @@ class HubInstaller:
                     continue
         return None
 
+    def remap_tracked_paths(self, old_rel: str, new_rel: str) -> None:
+        """Update installed-component manifests after a tracked workspace path moves.
+
+        Paths in manifests are workspace-relative. Remapping both exact files and
+        directory prefixes keeps uninstall and component lookup working after a
+        user reorganizes YAMLs in the config tree.
+        """
+        old_rel = Path(old_rel).as_posix().strip("/")
+        new_rel = Path(new_rel).as_posix().strip("/")
+        if not old_rel or not new_rel or old_rel == new_rel:
+            return
+
+        roots = [
+            self.workspace_dir / "in" / "envs",
+            self.workspace_dir / "src" / "usr",
+            self.workspace_dir / "plot",
+            self.workspace_dir / "plugins",
+            self.workspace_dir / ".thetaide" / "suites",
+            self.workspace_dir / ".thetaide" / "experiments",
+            self.data_dir / "plugins",
+        ]
+        seen = set()
+        for root in roots:
+            if not root.is_dir():
+                continue
+            for manifest_path in root.rglob(".theta_component.json"):
+                if manifest_path in seen:
+                    continue
+                seen.add(manifest_path)
+                try:
+                    meta = json.loads(manifest_path.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    continue
+
+                changed = False
+
+                def remap(value):
+                    nonlocal changed
+                    if not isinstance(value, str):
+                        return value
+                    normalized = Path(value).as_posix().strip("/")
+                    if normalized == old_rel or normalized.startswith(old_rel + "/"):
+                        changed = True
+                        return new_rel + normalized[len(old_rel):]
+                    return value
+
+                if isinstance(meta.get("config_paths"), list):
+                    meta["config_paths"] = [remap(value) for value in meta["config_paths"]]
+                if "config_path" in meta:
+                    meta["config_path"] = remap(meta["config_path"])
+                if isinstance(meta.get("installed_files"), list):
+                    meta["installed_files"] = [remap(value) for value in meta["installed_files"]]
+                if isinstance(meta.get("config_hashes"), dict):
+                    meta["config_hashes"] = {remap(key): value for key, value in meta["config_hashes"].items()}
+                if isinstance(meta.get("config_backups"), dict):
+                    meta["config_backups"] = {remap(key): value for key, value in meta["config_backups"].items()}
+                if changed:
+                    try:
+                        temp_path = manifest_path.with_suffix(manifest_path.suffix + ".tmp")
+                        temp_path.write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
+                        temp_path.replace(manifest_path)
+                    except OSError:
+                        try:
+                            temp_path.unlink(missing_ok=True)
+                        except OSError:
+                            pass
+
+    def _sha256_file(self, path: Path) -> str | None:
+        try:
+            digest = hashlib.sha256()
+            with Path(path).open("rb") as stream:
+                for block in iter(lambda: stream.read(1024 * 1024), b""):
+                    digest.update(block)
+            return digest.hexdigest()
+        except OSError:
+            return None
+
+    def _backup_existing_config(self, component_id: str, dest_file: Path, backups: dict) -> None:
+        """Preserve a pre-existing YAML before an install overwrites it."""
+        dest_file = Path(dest_file)
+        if not dest_file.is_file():
+            return
+        try:
+            rel = dest_file.resolve().relative_to(self.workspace_dir.resolve()).as_posix()
+            if rel in backups:
+                return
+            backup_rel = (Path(".thetaide") / "config_backups" / component_id / rel).as_posix()
+            backup_path = self.workspace_dir / backup_rel
+            backup_path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(dest_file, backup_path)
+            backups[rel] = {"backup": backup_rel, "restore_to": rel}
+        except (OSError, ValueError):
+            return
+
+    def _uninstall_configs(self, meta: dict) -> None:
+        """Remove pristine installed YAMLs, preserve edits, and restore overwritten files."""
+        recorded = meta.get("config_paths") or ([meta["config_path"]] if meta.get("config_path") else [])
+        hashes = meta.get("config_hashes") or {}
+        backups = meta.get("config_backups") or {}
+        component_id = str(meta.get("id") or "component")
+        for cfg_rel in recorded:
+            current = self.workspace_dir / cfg_rel
+            expected = hashes.get(cfg_rel)
+            actual = self._sha256_file(current) if current.is_file() else None
+            backup_info = backups.get(cfg_rel)
+            if isinstance(backup_info, str):
+                backup_info = {"backup": backup_info, "restore_to": cfg_rel}
+            backup_path = None
+            restore_to = cfg_rel
+            if isinstance(backup_info, dict):
+                backup_path = self.workspace_dir / backup_info.get("backup", "")
+                restore_to = backup_info.get("restore_to") or cfg_rel
+
+            modified = current.is_file() and expected is not None and actual != expected
+            if modified and backup_path and backup_path.is_file() and (restore_to == cfg_rel):
+                retained = self.data_dir / "retained_configs" / component_id / cfg_rel
+                try:
+                    retained.parent.mkdir(parents=True, exist_ok=True)
+                    if not retained.exists():
+                        shutil.move(str(current), str(retained))
+                    else:
+                        # Keep both versions when repeated installs have already retained one.
+                        retained = retained.with_name(f"{retained.stem}_{actual[:8]}{retained.suffix}")
+                        shutil.move(str(current), str(retained))
+                    self._prune_empty_config_dirs(current)
+                except OSError:
+                    # If preserving the edited YAML fails, leave it in place and do not overwrite it.
+                    continue
+            elif not modified and current.is_file():
+                try:
+                    current.unlink()
+                    self._prune_empty_config_dirs(current)
+                except OSError:
+                    continue
+
+            if backup_path and backup_path.is_file():
+                restore_path = self.workspace_dir / restore_to
+                if restore_path.exists():
+                    # The moved/edited config still occupies the original destination.
+                    retained = self.data_dir / "retained_configs" / component_id / restore_to
+                    try:
+                        retained.parent.mkdir(parents=True, exist_ok=True)
+                        if not retained.exists():
+                            shutil.move(str(restore_path), str(retained))
+                        else:
+                            retained = retained.with_name(f"{retained.stem}_current{retained.suffix}")
+                            shutil.move(str(restore_path), str(retained))
+                        self._prune_empty_config_dirs(restore_path)
+                    except OSError:
+                        continue
+                try:
+                    restore_path.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(backup_path, restore_path)
+                    backup_path.unlink()
+                    self._prune_empty_dirs(backup_path.parent, self.workspace_dir / ".thetaide")
+                except OSError:
+                    pass
+
+    def _prune_empty_dirs(self, directory: Path, boundary: Path) -> None:
+        """Remove empty parents up to, but never including, a standard workspace root."""
+        current = Path(directory).resolve()
+        boundary = Path(boundary).resolve()
+        if current == boundary or boundary not in current.parents:
+            return
+        while current != boundary and boundary in current.parents and current.is_dir():
+            try:
+                next(current.iterdir())
+            except StopIteration:
+                try:
+                    current.rmdir()
+                except OSError:
+                    break
+                current = current.parent
+            except OSError:
+                break
+            else:
+                break
+
+    def _prune_empty_config_dirs(self, config_file: Path) -> None:
+        config_root = (self.workspace_dir / "in" / "config").resolve()
+        path = Path(config_file).resolve()
+        try:
+            rel = path.relative_to(config_root)
+        except ValueError:
+            return
+        boundary = config_root / rel.parts[0] if len(rel.parts) > 1 else config_root
+        self._prune_empty_dirs(path.parent, boundary)
+
+    def _prune_empty_component_dirs(self, component_dir: Path) -> None:
+        component_dir = Path(component_dir).resolve()
+        roots = [
+            self.workspace_dir / "in" / "envs",
+            self.workspace_dir / "src" / "usr" / "algorithms",
+            self.workspace_dir / "src" / "usr" / "methods",
+            self.workspace_dir / "src" / "usr" / "models",
+            self.workspace_dir / "src" / "usr" / "data",
+            self.workspace_dir / "src" / "usr" / "eval",
+            self.workspace_dir / "plot",
+            self.workspace_dir / "plugins",
+            self.workspace_dir / ".thetaide" / "plugins",
+            self.workspace_dir / ".thetaide" / "suites",
+            self.workspace_dir / ".thetaide" / "experiments",
+            self.workspace_dir / "components",
+        ]
+        for root in roots:
+            root = root.resolve()
+            if component_dir == root or root in component_dir.parents:
+                self._prune_empty_dirs(component_dir.parent, root)
+                return
+
     def uninstall_by_metadata(self, meta: Dict[str, Any], remove_configs: bool = True) -> bool:
         """Uninstall an installed component given its metadata dict."""
         target_dir = Path(meta["target_dir"])
@@ -631,23 +852,14 @@ class HubInstaller:
 
         if target_dir.exists():
             shutil.rmtree(target_dir, ignore_errors=True)
+        self._prune_empty_component_dirs(target_dir)
 
         if remove_configs and recorded_configs:
-            for cfg_rel in recorded_configs:
-                p = self.workspace_dir / cfg_rel
-                if p.is_file():
-                    try:
-                        p.unlink()
-                        parent = p.parent.resolve()
-                        in_cfg = (self.workspace_dir / "in" / "config").resolve()
-                        while parent != in_cfg and parent.parent != in_cfg and in_cfg in parent.parents and parent.is_dir() and not any(parent.iterdir()):
-                            parent.rmdir()
-                            parent = parent.parent
-                    except Exception:
-                        pass
+            self._uninstall_configs(meta)
 
         # Remove installed files deployed by root-relative packages.
-        recorded_installed_files = meta.get("installed_files") or []
+        config_rel_set = set(recorded_configs)
+        recorded_installed_files = [p for p in (meta.get("installed_files") or []) if p not in config_rel_set]
         for file_rel in recorded_installed_files:
             fp = self.workspace_dir / file_rel
             if fp.is_file():
@@ -703,6 +915,7 @@ class HubInstaller:
         recorded_configs = []
         recorded_installed_files = []
         recorded_installed_children = []
+        mdata = {}
         meta_file = target_dir / ".theta_component.json"
         if meta_file.exists():
             try:
@@ -723,8 +936,12 @@ class HubInstaller:
         if not recorded_installed_children and hasattr(component, "extra") and isinstance(component.extra, dict):
             recorded_installed_children.extend(component.extra.get("dependencies", {}).get("components", []))
 
+        config_rel_set = set(recorded_configs)
+        recorded_installed_files = [p for p in recorded_installed_files if p not in config_rel_set]
+
         if target_dir.exists():
             shutil.rmtree(target_dir, ignore_errors=True)
+        self._prune_empty_component_dirs(target_dir)
 
         for file_rel in recorded_installed_files:
             fp = self.workspace_dir / file_rel
@@ -758,35 +975,20 @@ class HubInstaller:
                 except Exception:
                     pass
 
-        # Remove deployed config YAML(s) in in/config/ if remove_configs is True
+        # Remove only pristine installed YAMLs; edited configs are retained and
+        # pre-install files are restored from their tracked backups.
         if remove_configs:
             if recorded_configs:
-                for cfg_rel in recorded_configs:
-                    p = self.workspace_dir / cfg_rel
-                    if p.is_file():
-                        try:
-                            p.unlink()
-                            parent = p.parent.resolve()
-                            in_cfg = (self.workspace_dir / "in" / "config").resolve()
-                            while parent != in_cfg and parent.parent != in_cfg and in_cfg in parent.parents and parent.is_dir() and not any(parent.iterdir()):
-                                parent.rmdir()
-                                parent = parent.parent
-                        except Exception:
-                            pass
+                self._uninstall_configs({
+                    "id": component.id,
+                    "config_paths": recorded_configs,
+                    "config_hashes": mdata.get("config_hashes", {}),
+                    "config_backups": mdata.get("config_backups", {}),
+                })
             elif config_path and config_path.is_file():
                 try:
                     config_path.unlink()
-                    parent = config_path.parent.resolve()
-                    in_cfg = (self.workspace_dir / "in" / "config").resolve()
-                    while parent != in_cfg and parent.parent != in_cfg and in_cfg in parent.parents and parent.is_dir() and not any(parent.iterdir()):
-                        parent.rmdir()
-                        parent = parent.parent
-                except Exception:
-                    pass
-            elif config_path and config_path.is_file():
-                try:
-                    config_path.unlink()
-                except Exception:
+                except OSError:
                     pass
 
         component.is_installed = False
