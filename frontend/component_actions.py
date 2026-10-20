@@ -123,12 +123,14 @@ class DeleteComponentDialog(QDialog):
                 desc_text = (
                     f"This file is part of the Hub-installed component suite <b>{comp_name}</b>, which provides "
                     f"<b>{configs_count} configurations</b>.<br><br>"
-                    f"Uninstalling will remove the entire component suite, including its source code and all configurations:"
+                    f"Uninstalling removes the source code and unchanged bundled YAMLs. Edited YAMLs are preserved, "
+                    f"and any files that existed before installation are restored:"
                 )
             else:
                 desc_text = (
                     f"Are you sure you want to uninstall Hub component <b>{comp_name}</b>?<br>"
-                    "This action cannot be undone. Its source code directory and configuration will be permanently removed:"
+                    "The source code and unchanged bundled YAML will be removed. Edited YAML is preserved, and any "
+                    "file that existed before installation is restored:"
                 )
         elif is_component:
             if configs_count > 1:

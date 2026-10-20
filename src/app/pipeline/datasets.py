@@ -145,8 +145,8 @@ def resolve_dataset_for_method(method_name: str, method_cfg: dict, cfg: Any) -> 
                 pass
 
     # Fallback: look in standard dataset directories
-    group = cfg.get("group", "") if hasattr(cfg, "get") else getattr(cfg, "group", "")
-    exp_id = cfg.get("experiment_id", "") if hasattr(cfg, "get") else getattr(cfg, "experiment_id", "")
+    group = str(cfg.get("group", "") if hasattr(cfg, "get") else getattr(cfg, "group", ""))
+    exp_id = str(cfg.get("experiment_id", "") if hasattr(cfg, "get") else getattr(cfg, "experiment_id", ""))
     ds_root = Path("in/datasets") / group / exp_id
     if ds_root.exists():
         return ds_root

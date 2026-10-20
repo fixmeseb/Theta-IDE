@@ -11,7 +11,6 @@ from collections import OrderedDict
 from typing import Any
 
 import yaml
-
 from hydra import compose, initialize_config_dir
 from hydra.core.global_hydra import GlobalHydra
 
@@ -124,10 +123,12 @@ def config_schema() -> dict[str, Any]:
     exp_dir = CONFIG_DIR / "experiment"
     candidates = (
         sorted(
-            path for path in exp_dir.rglob("*.yaml")
+            path
+            for path in exp_dir.rglob("*.yaml")
             if path.is_file() and not path.name.startswith("_") and "/methods/" not in path.as_posix()
         )
-        if exp_dir.is_dir() else []
+        if exp_dir.is_dir()
+        else []
     )
     for candidate in candidates:
         try:

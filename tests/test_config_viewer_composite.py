@@ -390,7 +390,7 @@ def test_blendrl_model_block_and_logic_module_rendering(qapp, tmp_path):
     bp_items = get_method_candidate_subcomponents("blendrl", config_tree(), set())
     assert "symbolic" in bp_items
     assert "neural" in bp_items
-    assert "blender" in bp_items
+    assert "blender" not in bp_items
 
     # 1. Add symbolic subcomponent via adder
     viewer._add_method_param("ppo_blendrl_final_cp", "symbolic")
@@ -479,11 +479,12 @@ def test_blendrl_model_block_and_logic_module_rendering(qapp, tmp_path):
     labels = [l.text() for l in viewer.findChildren(QLabel)]
     assert "Neural Module" not in labels
 
-    # 5. Add blender subcomponent
+    # 5. Add the nested blender configuration group
     viewer._add_method_param("ppo_blendrl_final_cp", "blender")
     qapp.processEvents()
     labels = [l.text() for l in viewer.findChildren(QLabel)]
-    assert "Blender Module" in labels
+    assert "Blender Module" not in labels
+    assert any("blender" in text.lower() for text in labels)
 
     # Remove blender
     viewer._remove_method_subcomponent("ppo_blendrl_final_cp", "blender")
@@ -691,9 +692,9 @@ def test_generic_composite_model_slots_and_discovery(tmp_path):
     tree = config_tree()
     assert "blendrl" in tree.models
     assert tree.models["blendrl"].is_composite is True
-    assert set(tree.models["blendrl"].slots) == {"neural", "symbolic", "blender"}
+    assert set(tree.models["blendrl"].slots) == {"neural", "symbolic"}
     assert tree.models["dnn"].is_composite is False
-    assert set(tree.model_slots("blendrl")) == {"neural", "symbolic", "blender"}
+    assert set(tree.model_slots("blendrl")) == {"neural", "symbolic"}
     assert tree.model_slots("dnn") == []
 
     # Test generic composite model with slots declared in YAML

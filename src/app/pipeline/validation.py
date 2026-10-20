@@ -117,7 +117,7 @@ def _algorithm_requirement(paradigm_def: dict[str, Any]) -> str:
     """Return the declarative method contract with legacy-manifest fallback."""
     method = paradigm_def.get("method")
     declared = method.get("algorithm") if isinstance(method, dict) else None
-    if declared in ("required", "optional", "forbidden"):
+    if isinstance(declared, str) and declared in ("required", "optional", "forbidden"):
         return declared
     allowed = paradigm_def.get("allowed_agents", None)
     if allowed is not None and not allowed:
@@ -549,11 +549,14 @@ def _model_exists(name: str) -> bool:
     # Model registry
     try:
         from src.app.core.model_registry import MODEL_REGISTRY, auto_discover_models
+
         if not MODEL_REGISTRY:
             auto_discover_models()
         if clean in MODEL_REGISTRY or stem in MODEL_REGISTRY:
             return True
-        if any(clean == p or clean.startswith(p + "_") or stem == p or stem.startswith(p + "_") for p in MODEL_REGISTRY):
+        if any(
+            clean == p or clean.startswith(p + "_") or stem == p or stem.startswith(p + "_") for p in MODEL_REGISTRY
+        ):
             return True
     except Exception:
         pass
@@ -602,6 +605,7 @@ def _env_exists(env_name: str) -> bool:
 
     try:
         import gymnasium as gym
+
         for spec_id in gym.envs.registry.keys():
             spec_clean = spec_id.lower()
             if clean == spec_clean or stem == spec_clean:
@@ -643,14 +647,20 @@ def find_missing_components(cfg_or_dict: Any) -> list[str]:
     env_val = None
     if isinstance(env_obj, str):
         env_val = env_obj
-    elif hasattr(env_obj, "get"):
-        env_val = env_obj.get("name") or env_obj.get("env_id")
+    elif isinstance(env_obj, dict):
+        candidate_env = env_obj.get("name") or env_obj.get("env_id")
+        env_val = candidate_env if isinstance(candidate_env, str) else None
     elif env_obj is not None:
-        env_val = getattr(env_obj, "name", None) or getattr(env_obj, "env_id", None)
+        candidate_env = getattr(env_obj, "name", None) or getattr(env_obj, "env_id", None)
+        env_val = candidate_env if isinstance(candidate_env, str) else None
 
     # If env was not resolved from object, check defaults overrides
     if not env_val:
-        defaults = getattr(cfg_or_dict, "defaults", None) if hasattr(cfg_or_dict, "defaults") else (cfg_or_dict.get("defaults") if isinstance(cfg_or_dict, dict) else None)
+        defaults = (
+            getattr(cfg_or_dict, "defaults", None)
+            if hasattr(cfg_or_dict, "defaults")
+            else (cfg_or_dict.get("defaults") if isinstance(cfg_or_dict, dict) else None)
+        )
         if defaults and isinstance(defaults, (list, tuple)):
             for d in defaults:
                 if isinstance(d, dict) and "override /env" in d:
@@ -658,7 +668,11 @@ def find_missing_components(cfg_or_dict: Any) -> list[str]:
                 elif isinstance(d, str) and d.startswith("override /env:"):
                     env_val = d.split(":", 1)[1].strip()
 
-    paradigm = getattr(cfg_or_dict, "paradigm", None) if hasattr(cfg_or_dict, "paradigm") else (cfg_or_dict.get("paradigm") if isinstance(cfg_or_dict, dict) else None)
+    paradigm = (
+        getattr(cfg_or_dict, "paradigm", None)
+        if hasattr(cfg_or_dict, "paradigm")
+        else (cfg_or_dict.get("paradigm") if isinstance(cfg_or_dict, dict) else None)
+    )
 
     if env_val and env_val != "unknown" and not _env_exists(str(env_val)):
         missing.append(f"environment: {env_val}")
@@ -667,10 +681,15 @@ def find_missing_components(cfg_or_dict: Any) -> list[str]:
 
     # Check static datasets for offline paradigms
     if paradigm and paradigm_uses_static_dataset(str(paradigm)):
-        is_wf = getattr(cfg_or_dict, "workflow", None) if hasattr(cfg_or_dict, "workflow") else (cfg_or_dict.get("workflow") if isinstance(cfg_or_dict, dict) else None)
+        is_wf = (
+            getattr(cfg_or_dict, "workflow", None)
+            if hasattr(cfg_or_dict, "workflow")
+            else (cfg_or_dict.get("workflow") if isinstance(cfg_or_dict, dict) else None)
+        )
         if not is_wf and hasattr(methods, "items"):
             try:
                 from src.app.pipeline.datasets import resolve_dataset_for_method
+
                 for m_name, m_spec in methods.items():
                     if not m_spec or not hasattr(m_spec, "get"):
                         continue
@@ -726,17 +745,38 @@ def find_missing_components(cfg_or_dict: Any) -> list[str]:
                 for slot in ("symbolic", "neural", "blender", "encoder", "decoder"):
                     slot_val = container.get(slot) if hasattr(container, "get") else None
                     if isinstance(slot_val, dict) or hasattr(slot_val, "get"):
-                        st = slot_val.get("type") or slot_val.get("architecture") or slot_val.get("model") or slot_val.get("name")
+                        st = (
+                            slot_val.get("type")
+                            or slot_val.get("architecture")
+                            or slot_val.get("model")
+                            or slot_val.get("name")
+                        )
                         if not st and len(slot_val) == 1:
                             cand = next(iter(slot_val))
                             if cand not in (
-                                "mode", "blend_function", "ecm_dthr", "rules", "lr",
-                                "hidden_sizes", "activation", "dim", "layers", "depth", "width"
+                                "mode",
+                                "blend_function",
+                                "ecm_dthr",
+                                "rules",
+                                "lr",
+                                "hidden_sizes",
+                                "activation",
+                                "dim",
+                                "layers",
+                                "depth",
+                                "width",
                             ) and (isinstance(slot_val[cand], dict) or hasattr(slot_val[cand], "get")):
                                 st = cand
                         if st and not _model_exists(str(st)):
                             missing.append(f"{slot}: {st}")
-                    elif isinstance(slot_val, str) and slot_val.lower() not in ("neural", "learned", "heuristic", "default", "none", "identity"):
+                    elif isinstance(slot_val, str) and slot_val.lower() not in (
+                        "neural",
+                        "learned",
+                        "heuristic",
+                        "default",
+                        "none",
+                        "identity",
+                    ):
                         if not _model_exists(slot_val):
                             missing.append(f"{slot}: {slot_val}")
 
@@ -753,6 +793,7 @@ def _validate_offline_dataset_paths(cfg: Any, notices: list[str]) -> None:
         return
 
     from src.app.pipeline.datasets import resolve_dataset_for_method
+
     methods = parse_methods_dict(cfg)
     for method_name, method_cfg in methods.items():
         try:
@@ -769,4 +810,3 @@ def _validate_offline_dataset_paths(cfg: Any, notices: list[str]) -> None:
                 f"[ConfigurationError] Method '{method_name}' in paradigm '{paradigm_name}' "
                 f"requires a valid dataset on disk: {e}"
             )
-

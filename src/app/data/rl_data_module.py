@@ -62,9 +62,7 @@ class RLDataModule(L.LightningDataModule, BaseDataModule):
                             preprocess_script = str(candidate2)
 
                 if preprocess_script and Path(preprocess_script).exists():
-                    print(
-                        f"[RLDataModule] Dataset missing at '{dataset_path}'. Auto-running {preprocess_script}..."
-                    )
+                    print(f"[RLDataModule] Dataset missing at '{dataset_path}'. Auto-running {preprocess_script}...")
                     import subprocess
                     import sys
 
