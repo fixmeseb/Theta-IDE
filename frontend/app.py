@@ -165,6 +165,7 @@ class Window(QMainWindow):
         self.jobs.queue_changed.connect(self.on_queue_changed)
         self.tray = None  # TrayController, set up by main(): closing while training hides to the tray
         self._quitting = False  # an explicit Quit (menu, tray, reload) closes for real
+        self._shutting_down = False  # set once closeEvent commits to closing
         self.schema = None
         self.schema_pending = False
         self.compose_serial = 0
@@ -1053,7 +1054,9 @@ class Window(QMainWindow):
         self.statusBar().showMessage("Restored default sidebar panels and order.", 4000)
 
     def save_layout(self):
-        if not hasattr(self, "settings_manager"):
+        if not hasattr(self, "settings_manager") or self._shutting_down:
+            # Shutdown removes each plugin's tab. That isn't the user's layout, and each save
+            # rebuilt the open experiment three times, flashing its boxes as windows.
             return
         try:
             order = list(self.tabs.tab_order)
@@ -2516,6 +2519,7 @@ class Window(QMainWindow):
             if answer != QMessageBox.StandardButton.Yes:
                 event.ignore()
                 return
+        self._shutting_down = True
         for viewer in self.findChildren(ConfigViewer):
             viewer.flush_pending_save()  # edits typed in the last moment before closing
         if self.active and self.active["simulated"]:
