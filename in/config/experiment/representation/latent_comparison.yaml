@@ -1,0 +1,23 @@
+# @package _global_
+defaults:
+  - representation/_base
+
+seed: 42
+total_timesteps: 10000
+
+no_plot: true
+tensorboard: true
+
+# Two latent widths on the same encoder. Worth running because reconstruction
+# error and latent cluster quality disagree: the wider latent reconstructs
+# better and clusters worse, so picking on val/loss alone picks the wrong one.
+#
+# ae_dense is the base's method (8 dims), re-used as one arm so the base default
+# does not also run as a third, one-epoch method.
+methods:
+  ae_dense:
+    epochs: 20
+  ae_wide:
+    model: dense_autoencoder
+    latent_dim: 48
+    epochs: 20

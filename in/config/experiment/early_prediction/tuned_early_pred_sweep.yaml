@@ -1,0 +1,27 @@
+# @package _global_
+defaults:
+  - early_prediction/_base
+
+
+eval_protocol:
+  horizons: [1, 5, 9, 13, 17, 21, 25, 29, 33]
+
+
+early_prediction:
+  checkpoint: "results/checkpoints/mimic/cql_literature"
+  dataset_path: "in/datasets/mimic/mimic_lazy_12_clean_with_interventions.npz"
+  output_dir: "results/plots/early_prediction"
+  tune_dir: "results/plots/early_prediction/tune_early_pred"
+  use_tuned_params: true
+  save_checkpoints: true
+  tau_min: 1
+  tau_max: 33
+  tau_step: 4
+  window_hours: 12
+  n_splits: 20
+
+plots:
+  - ep_dl_sweep
+  - ep_agreement
+  - ep_trajectories
+  - ep_counterfactual_table

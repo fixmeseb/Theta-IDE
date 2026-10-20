@@ -1,0 +1,22 @@
+# @package _global_
+defaults:
+- override /env: gym_classic_control/mountaincar
+paradigm: online_rl
+eval_episodes: 100
+save_dataset: true
+seed: 42
+recover: false
+plots:
+  convergence:
+    smoothing_window: 3
+    metrics:
+    - eval/reward
+  losses:
+    smoothing_window: 3
+    metrics:
+    - losses/total_loss
+    - losses/policy_loss
+    - losses/value_loss
+    - losses/entropy
+  reports:
+    include_hyperparameters: true

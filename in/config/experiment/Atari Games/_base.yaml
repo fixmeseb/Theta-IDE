@@ -1,0 +1,9 @@
+# @package _global_
+defaults:
+- override /env: null
+paradigm: online_rl
+eval_episodes: 100
+seed: 1
+save_dataset: false
+recover: false
+description: Experiment to test ppo in atari environmetns

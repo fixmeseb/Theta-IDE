@@ -398,7 +398,7 @@ class HubView(QWidget):
             return False
 
         if self.mode == "plugins":
-            return comp.kind in ("plugin", "suite", "package")
+            return comp.kind == "plugin"
         elif self.mode == "components":
             return comp.kind != "plugin"
         return True

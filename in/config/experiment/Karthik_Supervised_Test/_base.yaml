@@ -1,0 +1,17 @@
+# @package _global_
+defaults:
+  - override /env: breast_cancer
+
+paradigm: supervised
+seed: 1
+save_dataset: false
+recover: false
+
+# supervised has no simulator to roll out in, and in/config/config.yaml defaults
+# eval_episodes to 100 for the online case, so the group pins it to the only
+# value this paradigm permits. Experiments inherit it.
+eval_episodes: 0
+
+# Resolved from the env's dataset_name if absent. Generate it first with:
+#   python in/datasets/prepare_tabular.py breast_cancer
+dataset_path: in/datasets/breast_cancer

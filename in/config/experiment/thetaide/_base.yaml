@@ -1,0 +1,12 @@
+# @package _global_
+# Base for experiments built in the ThetaIDE experiment builder.
+# The GUI composes this recipe plus Hydra overrides; exported recipes list it under defaults.
+defaults:
+  - override /env: gym_classic_control/cartpole
+
+paradigm: online_rl
+eval_episodes: 100
+seed: 42
+recover: false
+# Also write TensorBoard logs to results/tensorboard/ (viewable in the GUI's TensorBoard tab)
+tensorboard: false

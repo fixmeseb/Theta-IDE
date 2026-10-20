@@ -1,0 +1,20 @@
+# @package _global_
+defaults:
+  - tabular_classification/_base
+
+experiment_id: depth_comparison
+seed: 42
+total_timesteps: 10000
+
+no_plot: true
+tensorboard: true
+
+# Two network depths on the same labelled data.
+methods:
+  clf:
+    hidden_sizes: [64]
+    epochs: 25
+  clf_deep:
+    model: mlp_classifier
+    hidden_sizes: [128, 64, 32]
+    epochs: 25

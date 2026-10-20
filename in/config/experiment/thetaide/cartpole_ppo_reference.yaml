@@ -1,0 +1,17 @@
+# @package _global_
+# Hand-written CartPole/PPO recipe. tests/test_config_compose.py asserts that the
+# ThetaIDE experiment builder's default form composes to exactly this config.
+defaults:
+- thetaide/_base
+
+experiment_id: cartpole_ppo_baseline
+seed: 42
+total_timesteps: 10000
+
+methods:
+  ppo:
+    agent: ppo
+    model: dnn
+    lr: 0.0003
+    batch_size: 64
+    gamma: 0.99
