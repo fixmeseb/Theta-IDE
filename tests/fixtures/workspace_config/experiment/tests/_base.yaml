@@ -1,0 +1,14 @@
+# @package _global_
+defaults:
+  - /paradigms: online_rl
+  - /env: cartpole
+  - _self_
+
+paradigm: online_rl
+env: cartpole
+eval_episodes: 10
+total_timesteps: 10000
+methods:
+  ppo:
+    agent: ppo
+    model: dnn

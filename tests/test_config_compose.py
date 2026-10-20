@@ -5,6 +5,7 @@ The ThetaIDE experiment builder expresses a config as Hydra overrides on a base 
 config as hand-written recipes, and that the builder's exported recipe round-trips.
 """
 
+import os
 import subprocess
 import sys
 
@@ -41,6 +42,16 @@ def export_recipe(project_root):
         path.unlink(missing_ok=True)
 
 
+def test_builder_command_passes_pipeline_dry_run(project_root):
+    command = ["run_pipeline.py", BASE_EXPERIMENT, *Config().overrides(), "dry_run=true"]
+    env = {**os.environ, "OMP_NUM_THREADS": "1", "KMP_USE_SHM": "0"}
+    result = subprocess.run(
+        [sys.executable, *command], cwd=project_root, capture_output=True, text=True, timeout=300, env=env
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Validation Success" in result.stdout
+
+
 def test_default_builder_matches_hand_written_reference():
     gui = gui_compose(Config())
     reference = compose_experiment(REFERENCE)
@@ -65,13 +76,6 @@ def test_builder_values_reach_the_method_config(config):
     assert (method.lr, method.batch_size, method.gamma) == (config.lr, config.batch_size, config.gamma)
     assert isinstance(method.lr, float) and isinstance(method.gamma, float)
     assert cfg.tensorboard is config.tensorboard
-
-
-def test_builder_command_passes_pipeline_dry_run(project_root):
-    command = ["run_pipeline.py", BASE_EXPERIMENT, *Config().overrides(), "dry_run=true"]
-    result = subprocess.run([sys.executable, *command], cwd=project_root, capture_output=True, text=True, timeout=300)
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "Validation Success" in result.stdout
 
 
 @pytest.mark.parametrize("total, extra, expected", [

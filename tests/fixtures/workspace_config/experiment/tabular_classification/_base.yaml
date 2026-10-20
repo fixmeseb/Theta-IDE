@@ -1,0 +1,11 @@
+# @package _global_
+defaults:
+  - /paradigms: supervised
+  - _self_
+
+paradigm: supervised
+env: null
+total_timesteps: 100
+methods:
+  classifier:
+    model: mlp_classifier

@@ -1,0 +1,6 @@
+# @package _global_
+defaults:
+  - /experiment/tests/_base
+  - _self_
+
+experiment_id: cartpole

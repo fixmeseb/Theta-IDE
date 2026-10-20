@@ -3,6 +3,8 @@ import json
 from pathlib import Path
 import shutil
 import tempfile
+from zipfile import ZipFile
+
 import pytest
 from omegaconf import OmegaConf
 
@@ -77,6 +79,10 @@ def test_suite_installation_and_modular_uninstallation(tmp_path):
     suite_zip = hub_packages / "basic_suite-1.0.0.zip"
     if not _is_accessible_file(suite_zip):
         pytest.skip(f"Packaged suite zip not accessible at {suite_zip}")
+    with ZipFile(suite_zip) as archive:
+        payload = [name for name in archive.namelist() if name != ".theta_component.json"]
+    if not payload:
+        pytest.skip("Packaged basic_suite contains metadata only; build its component payload to test installation")
 
     suite_comp = HubComponent(
         id="basic_suite",

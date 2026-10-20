@@ -1,0 +1,14 @@
+# @package _global_
+defaults:
+  - /paradigms: offline_rl
+  - /env: mimic
+  - _self_
+
+paradigm: offline_rl
+env: mimic
+eval_episodes: 0
+total_timesteps: 10000
+methods:
+  cql:
+    agent: cql
+    model: dnn

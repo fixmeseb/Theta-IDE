@@ -3,7 +3,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QMessageBox
 from frontend.export_dialog import ExportExperimentDialog
 
 
@@ -49,7 +49,7 @@ def test_export_dialog_format_toggle(qapp, tmp_path):
     dialog.deleteLater()
 
 
-def test_export_dialog_export_zip(qapp, tmp_path):
+def test_export_dialog_export_zip(qapp, tmp_path, monkeypatch):
     workspace = Path(__file__).resolve().parents[1]
     out_zip = tmp_path / "exported_cartpole.zip"
 
@@ -60,9 +60,12 @@ def test_export_dialog_export_zip(qapp, tmp_path):
     dialog.edit_dest.setText(str(out_zip))
     dialog.edit_version.setText("1.0.5")
     dialog.chk_checkpoints.setChecked(False)
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args[2:]))
 
     dialog._on_export_clicked()
 
+    assert not warnings, warnings
     assert dialog.export_result is not None
     assert dialog.export_result.success is True
     assert out_zip.is_file()

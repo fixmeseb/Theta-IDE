@@ -1,4 +1,5 @@
 import os
+import shutil
 import sys
 from pathlib import Path
 
@@ -6,6 +7,7 @@ import pytest
 
 try:
     import resource
+
     soft, hard = resource.getrlimit(resource.RLIMIT_NOFILE)
     if soft < 4096:
         resource.setrlimit(resource.RLIMIT_NOFILE, (min(4096, hard), hard))
@@ -14,6 +16,7 @@ except Exception:
 
 PROJECT_ROOT = Path(__file__).parent.parent
 SRC_DIR = PROJECT_ROOT / "src"
+TEST_WORKSPACE_CONFIG = Path(__file__).parent / "fixtures" / "workspace_config"
 
 for p in [
     str(PROJECT_ROOT),
@@ -28,6 +31,43 @@ for p in [
         sys.path.insert(0, p)
 
 collect_ignore_glob = ["in/envs/*"]
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _install_test_workspace_configs():
+    """Install explicit test fixtures while tests exercise an installed workspace.
+
+    The IDE intentionally ships without user experiments or component configs. A number of
+    integration tests need those inputs, so they use this small test-only config tree. Existing
+    local configs are left alone; fixture files never become product defaults.
+    """
+    target_root = PROJECT_ROOT / "in" / "config"
+    installed: list[Path] = []
+
+    for source in sorted(TEST_WORKSPACE_CONFIG.rglob("*.yaml")):
+        relative = source.relative_to(TEST_WORKSPACE_CONFIG)
+        target = target_root / relative
+        if target.exists():
+            continue
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+        installed.append(target)
+
+    try:
+        yield
+    finally:
+        for target in reversed(installed):
+            target.unlink(missing_ok=True)
+        for directory in sorted(
+            (p for p in target_root.rglob("*") if p.is_dir()),
+            key=lambda p: len(p.parts),
+            reverse=True,
+        ):
+            try:
+                directory.rmdir()
+            except OSError:
+                pass
+
 
 # Qt requires QtWebEngineWidgets to be imported before any QApplication exists.
 # Test modules build one at import time, so whichever module pytest collects
@@ -78,8 +118,9 @@ def _no_hub_network(monkeypatch):
             import frontend.hub.client  # noqa: F401
         except ImportError:  # no GUI stack installed
             return
-    monkeypatch.setattr(sys.modules["frontend.hub.client"].HubClient, "fetch_index_async",
-                        lambda self, force=False: None)
+    monkeypatch.setattr(
+        sys.modules["frontend.hub.client"].HubClient, "fetch_index_async", lambda self, force=False: None
+    )
 
 
 @pytest.fixture

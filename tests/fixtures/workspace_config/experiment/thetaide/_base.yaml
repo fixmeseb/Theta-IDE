@@ -1,0 +1,19 @@
+# @package _global_
+defaults:
+  - /paradigms: online_rl
+  - /env/gym_classic_control: cartpole
+  - _self_
+
+paradigm: online_rl
+env: gym_classic_control/cartpole
+seed: 42
+total_timesteps: 10000
+eval_episodes: 10
+tensorboard: false
+methods:
+  ppo:
+    agent: ppo
+    model: dnn
+    lr: 0.0003
+    batch_size: 64
+    gamma: 0.99

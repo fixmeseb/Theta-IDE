@@ -1,0 +1,10 @@
+# @package _global_
+defaults:
+  - /experiment/tabular_classification/_base
+  - _self_
+
+experiment_id: quick_test
+seed: 42
+methods:
+  classifier:
+    epochs: 5

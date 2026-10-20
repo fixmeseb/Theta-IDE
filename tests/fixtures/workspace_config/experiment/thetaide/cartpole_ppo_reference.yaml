@@ -1,0 +1,6 @@
+# @package _global_
+defaults:
+  - /experiment/thetaide/_base
+  - _self_
+
+experiment_id: cartpole_ppo_baseline
