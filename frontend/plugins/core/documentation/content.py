@@ -994,7 +994,7 @@ python run_pipeline.py mimic/tune_mimic_all sweep=true dash=true</code></pre>
     <td>Control</td>
     <td>What it does</td>
   </tr>
-  <tr><td><b>+ Add Node</b></td><td>Add a stage to the canvas</td></tr>
+  <tr><td><b>Add Node</b></td><td>Add a stage to the canvas</td></tr>
   <tr><td>Drag between ports</td><td>Connect an output port to an input port with a wire</td></tr>
   <tr><td><b>Validate Strings</b></td><td>Check every wire and required input (see below)</td></tr>
   <tr><td><b>Zoom Fit</b></td><td>Fit the whole diagram in view</td></tr>
