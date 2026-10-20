@@ -10,6 +10,7 @@ requires only a new YAML file — no changes to this module.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -744,7 +745,7 @@ def find_missing_components(cfg_or_dict: Any) -> list[str]:
                     continue
                 for slot in ("symbolic", "neural", "blender", "encoder", "decoder"):
                     slot_val = container.get(slot) if hasattr(container, "get") else None
-                    if isinstance(slot_val, dict) or hasattr(slot_val, "get"):
+                    if isinstance(slot_val, Mapping):
                         st = (
                             slot_val.get("type")
                             or slot_val.get("architecture")
@@ -765,7 +766,7 @@ def find_missing_components(cfg_or_dict: Any) -> list[str]:
                                 "layers",
                                 "depth",
                                 "width",
-                            ) and (isinstance(slot_val[cand], dict) or hasattr(slot_val[cand], "get")):
+                            ) and isinstance(slot_val[cand], Mapping):
                                 st = cand
                         if st and not _model_exists(str(st)):
                             missing.append(f"{slot}: {st}")
