@@ -2905,6 +2905,9 @@ class ConfigViewer(QWidget):
                     row_mo.addWidget(txt_model)
                     if btn_add_mp:
                         row_mo.addWidget(btn_add_mp)
+                    slot_widget = self._model_row_slot(m_name, model_name)
+                    if slot_widget is not None:
+                        row_mo.addWidget(slot_widget)
                     row_mo.addStretch()
                     sc_layout.addRow("Model", row_mo)
 
@@ -5199,6 +5202,52 @@ class ConfigViewer(QWidget):
         """True while the user is typing into one of this viewer's text boxes."""
         focus = QApplication.focusWidget()
         return isinstance(focus, (QLineEdit, QPlainTextEdit, QTextEdit)) and self.isAncestorOf(focus)
+
+    def _model_row_slot(self, method_name: str, current_model: str):
+        """The extension point beside a method's model picker.
+
+        Anything that edits a model architecture is a GUI concern and belongs
+        in a plugin, not in this panel. The panel offers the row and the
+        context describing it; a plugin decides whether to put anything there.
+
+        The context carries `apply` rather than letting a contribution write
+        to raw_data itself, so the panel stays the only thing that mutates
+        its own document.
+        """
+        host = self.window()
+        slots = getattr(host, "extension_slots", None)
+        if slots is None:
+            return None
+        slot = slots.get_slot("experiment.method.model_row")
+        if slot is None:
+            return None
+
+        from .plugins.slots import ExtensionSlotWidget
+
+        return ExtensionSlotWidget(
+            slot,
+            parent=self,
+            context={
+                "method": method_name,
+                "model": current_model,
+                "paradigm": str(self.raw_data.get("paradigm", "") or ""),
+                "apply": lambda name, mn=method_name: self._set_method_model(mn, name),
+            },
+        )
+
+    def _set_method_model(self, method_name: str, model_name: str) -> None:
+        """Point a method at a model, and re-read the configs from disk.
+
+        The model combo is filled from in/config/model/, so a model written
+        while the app is open is invisible until the cached tree re-scans.
+        """
+        if not model_name:
+            return
+        methods = self.raw_data.setdefault("methods", {})
+        methods.setdefault(method_name, {})["model"] = model_name
+        self._mark_dirty()
+        config_tree(force_reload=True)
+        self._render_boxes()
 
     def _mark_dirty(self):
         self.is_dirty = True
