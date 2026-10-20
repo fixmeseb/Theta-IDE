@@ -7,4 +7,3 @@ seed: 1
 save_dataset: false
 recover: false
 description: Experiment to test ppo in atari environmetns
-dataset_path: "in/datasets/\u2014 Select Environment \u2014"

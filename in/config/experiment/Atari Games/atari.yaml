@@ -21,8 +21,3 @@ methods:
     actor_mode: hybrid
     blender:
       mode: neural
-  blendrltest:
-    agent: sb3/ppo
-    model: blendrl
-    neural:
-      type: basics/nature_cnn
