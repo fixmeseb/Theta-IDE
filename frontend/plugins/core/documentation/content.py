@@ -65,7 +65,7 @@ ARTICLES: List[DocArticle] = [
 <p><a href="diagram:architecture_overview"><img src="diagram:architecture_overview" width="860"></a></p>
 <p><i>Training never talks to the IDE except through its stdout. Everything else crosses through files. The highlighted path is the live one: the engine appends telemetry to <code>results/logs</code>, the IDE's file watcher picks it up, and the Monitor redraws. Runs started from the command line land in the same folders, so Results lists them too. The Theta Hub is the only network dependency.</i></p>
 
-<h3>What happens when you press F5</h3>
+<h3>What happens when you launch training</h3>
 <p><a href="diagram:launch_sequence"><img src="diagram:launch_sequence" width="860"></a></p>
 <p><i>The config is composed twice through the same code (<code>src/app/pipeline/compose.py</code>): once in the IDE for the form and the pre-flight check (1&ndash;2), and again inside <code>run_pipeline.py</code> (5). That is why a recipe built in the IDE runs identically from the command line. Steps 7&ndash;9 repeat for as long as the engine trains.</i></p>
 

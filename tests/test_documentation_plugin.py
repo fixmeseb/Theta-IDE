@@ -268,7 +268,7 @@ class TestDocumentationPlugin(unittest.TestCase):
         app.processEvents()
         dialogs = [d for d in panel.findChildren(DiagramDialog) if d.isVisible()]
         self.assertEqual(len(dialogs), 1)
-        self.assertEqual(dialogs[0].windowTitle(), "What happens when you press F5")
+        self.assertEqual(dialogs[0].windowTitle(), "What happens when you launch training")
         self.assertFalse(dialogs[0].image.pixmap().isNull())
         dialogs[0].close()
 
