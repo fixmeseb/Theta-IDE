@@ -8,16 +8,21 @@ from __future__ import annotations
 
 import html
 import re
+from pathlib import Path
 from typing import TYPE_CHECKING
 
-from PyQt6.QtCore import QEvent, Qt, QUrl
-from PyQt6.QtGui import QColor, QFont, QIcon
+from PyQt6.QtCore import QByteArray, QEvent, QRectF, Qt, QUrl
+from PyQt6.QtGui import QColor, QFont, QIcon, QImage, QPainter, QPixmap, QTextDocument
+from PyQt6.QtSvg import QSvgRenderer
 from PyQt6.QtWidgets import (
     QComboBox,
+    QDialog,
     QFrame,
     QHBoxLayout,
+    QLabel,
     QLineEdit,
     QPushButton,
+    QScrollArea,
     QSplitter,
     QTextBrowser,
     QTextEdit,
@@ -45,6 +50,12 @@ _LEADING_H2 = re.compile(r"^\s*<h2>.*?</h2>", re.DOTALL)
 _TAG = re.compile(r"<[^>]+>")
 
 TEXT_WIDTH = 860  # px the article text wraps at: long lines across a wide window are hard to read
+
+# Articles embed diagrams/NAME.svg as <img src="diagram:NAME">; their colours are {{role}} placeholders
+DIAGRAM_DIR = Path(__file__).resolve().parent / "diagrams"
+DIAGRAM_SCHEME = "diagram"
+_PLACEHOLDER = re.compile(r"\{\{(\w+)\}\}")
+_SVG_TITLE = re.compile(r"<title>(.*?)</title>", re.DOTALL)
 
 # Outline item kinds, stored in Qt.ItemDataRole.UserRole as (kind, article_id, anchor)
 CATEGORY, ARTICLE, SECTION = "category", "article", "section"
@@ -97,6 +108,79 @@ def article_body(article: DocArticle) -> str:
     """The article's HTML as the page shows it: without its opening <h2> (the page header already
     titles it), with anchored sections and boxed code blocks."""
     return _boxed_code_blocks(_anchored_sections(_LEADING_H2.sub("", article.html_content, count=1)))
+
+
+def diagram_svg(name: str) -> str | None:
+    """diagrams/NAME.svg with its {{role}} placeholders filled in from the current theme."""
+    path = DIAGRAM_DIR / f"{name}.svg"
+    if not name.isidentifier() or not path.is_file():
+        return None
+    colors = dict(current_theme()["colors"])
+    accent, base = QColor(colors["accent"]).getRgbF()[:3], QColor(colors["base"]).getRgbF()[:3]
+    colors["accent_soft"] = QColor.fromRgbF(*(a * 0.18 + b * 0.82 for a, b in zip(accent, base))).name()  # pale accent
+    return _PLACEHOLDER.sub(lambda m: colors.get(m.group(1), m.group(0)), path.read_text(encoding="utf-8"))
+
+
+def diagram_title(name: str) -> str:
+    match = _SVG_TITLE.search(diagram_svg(name) or "")
+    return html.unescape(match.group(1).strip()) if match else name
+
+
+def render_diagram(name: str, width: int, ratio: float = 1.0) -> QImage:
+    """The diagram drawn `width` px wide in the current theme, for a screen at `ratio`."""
+    svg = diagram_svg(name)
+    renderer = QSvgRenderer(QByteArray(svg.encode("utf-8"))) if svg else None
+    if renderer is None or not renderer.isValid():
+        return QImage()
+    box = renderer.viewBoxF()
+    image = QImage(round(width * ratio), round(width * box.height() / box.width() * ratio),
+                   QImage.Format.Format_ARGB32_Premultiplied)
+    image.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(image)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    renderer.render(painter, QRectF(0, 0, image.width(), image.height()))
+    painter.end()
+    image.setDevicePixelRatio(ratio)
+    return image
+
+
+class DocBrowser(QTextBrowser):
+    """The article view. Supplies diagram:NAME images, drawn in the current theme at the text width."""
+
+    def loadResource(self, kind, url):
+        if url.scheme() == DIAGRAM_SCHEME and kind == QTextDocument.ResourceType.ImageResource.value:
+            return render_diagram(url.path(), TEXT_WIDTH, self.devicePixelRatioF())
+        return super().loadResource(kind, url)
+
+
+class DiagramDialog(QDialog):
+    """A diagram at full size, for reading the labels the text column shrinks."""
+
+    def __init__(self, name: str, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(diagram_title(name))
+        box = QSvgRenderer(QByteArray(diagram_svg(name).encode("utf-8"))).viewBoxF()
+        natural_width, natural_height = box.width(), box.height()
+        screen = (parent.screen() if parent is not None else None) or self.screen()
+        room = screen.availableGeometry() if screen is not None else None
+        width = round(natural_width * 1.4)
+        if room is not None:
+            width = min(width, round(room.width() * 0.92))
+        image = render_diagram(name, width, self.devicePixelRatioF())
+        self.image = QLabel()
+        self.image.setPixmap(QPixmap.fromImage(image))
+        self.image.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        scroll = QScrollArea()
+        scroll.setWidget(self.image)
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.addWidget(scroll)
+        height = round(width * natural_height / natural_width) + 40
+        if room is not None:
+            height = min(height, round(room.height() * 0.9))
+        self.resize(width + 40, height)
 
 
 class DocumentationPanel(QWidget):
@@ -234,7 +318,7 @@ class DocumentationPanel(QWidget):
         page_layout.addWidget(self.divider)
         page_layout.addSpacing(6)
 
-        self.browser = QTextBrowser()
+        self.browser = DocBrowser()
         self.browser.setObjectName("docText")
         self.browser.setFrameShape(QFrame.Shape.NoFrame)
         self.browser.setOpenExternalLinks(False)
@@ -569,10 +653,20 @@ class DocumentationPanel(QWidget):
         url_str = url.toString()
         if url_str.startswith("ide://"):
             self._navigate_ide(url_str.replace("ide://", ""))
+        elif url.scheme() == DIAGRAM_SCHEME:
+            self.open_diagram(url.path())
         elif url_str.startswith("#"):
             self.browser.scrollToAnchor(url_str.lstrip("#"))  # internal anchor in the article
         elif any(art.id == url_str for art in ARTICLES):
             self.select_article(url_str)  # a link to another article
+
+    def open_diagram(self, name: str) -> DiagramDialog | None:
+        if diagram_svg(name) is None:
+            return None
+        dialog = DiagramDialog(name, self)
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose)
+        dialog.show()
+        return dialog
 
     # ── IDE navigation ──────────────────────────────────────────────────────────
 
