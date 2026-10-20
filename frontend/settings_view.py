@@ -170,6 +170,7 @@ DEFAULT_MENU_SHORTCUTS = [
     ("launch_training", "Launch training", "F5"),
     ("stop_run", "Stop training", "Shift+F5"),
     ("new_experiment", "New experiment", "Ctrl+N"),
+    ("reload_components", "Reload component code", "Ctrl+Alt+R"),
     ("export_config", "Export draft YAML…", "Ctrl+Shift+S"),
     ("save_config", "Save configuration", "Ctrl+S"),
     ("add_to_queue", "Add to queue", "Ctrl+Shift+Q"),

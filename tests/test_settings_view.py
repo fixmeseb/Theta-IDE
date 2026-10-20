@@ -180,6 +180,14 @@ class TestLogoAndF1OpenTheDocs(unittest.TestCase):
         layout = self.tabs.bar_layout
         self.assertIs(layout.itemAt(layout.count() - 1).widget(), self.tabs.settings_button)
 
+    def test_default_menu_shortcuts_are_unique(self):
+        """Qt fires neither action when two share a shortcut, so no two defaults may collide."""
+        owners = {}
+        for aid, action in self.window.menu_actions.items():
+            for seq in action.shortcuts():
+                self.assertNotIn(seq.toString(), owners, f"{aid} and {owners.get(seq.toString())} share it")
+                owners[seq.toString()] = aid
+
     def test_menus_and_hotkeys_reach_settings(self):
         self.window.show_settings("hotkeys")
         self.assertIs(self.tabs.currentWidget(), self.window.settings_panel)

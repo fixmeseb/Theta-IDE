@@ -1122,7 +1122,7 @@ class Window(QMainWindow):
         for aid, title, default_sc, callback in (
             ("new_experiment", "New experiment", "Ctrl+N", self.new_experiment),
             ("scaffold_plugin", "Scaffold New Component Plugin…", "Ctrl+Shift+P", self.scaffold_plugin),
-            ("reload_components", "Reload Component Code", "Ctrl+Shift+R", self.reload_components),
+            ("reload_components", "Reload Component Code", "Ctrl+Alt+R", self.reload_components),  # Ctrl+Shift+R is the queue's
             ("export_config", "Export draft YAML…", "Ctrl+Shift+S", self.export_config),
             ("save_config", "Save configuration", "Ctrl+S", self.save_current_config),
             ("close_tab", "Close tab", "Ctrl+W", self.close_active_tab),

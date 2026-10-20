@@ -432,6 +432,7 @@ python -m frontend</code></pre>
   <tr><td><code>Ctrl+Shift+Q</code></td><td>Queue &rarr; Add to queue</td></tr>
   <tr><td><code>Ctrl+Shift+R</code></td><td>Queue &rarr; Start or pause queue</td></tr>
   <tr><td><code>Ctrl+N</code></td><td>File &rarr; New experiment</td></tr>
+  <tr><td><code>Ctrl+Alt+R</code></td><td>File &rarr; Reload component code</td></tr>
   <tr><td><code>Ctrl+S</code></td><td>File &rarr; Save configuration</td></tr>
   <tr><td><code>Ctrl+Shift+S</code></td><td>File &rarr; Export draft YAML</td></tr>
   <tr><td><code>Ctrl+Q</code></td><td>File &rarr; Quit</td></tr>
