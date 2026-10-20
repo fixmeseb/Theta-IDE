@@ -35,8 +35,8 @@ ARTICLES: List[DocArticle] = [
   <li><b>Hydra Configuration Layer (<code>in/config/</code>):</b> Declarative, three-tier hierarchical configuration defining environments, agents, models, cluster resources, and experiment recipes.</li>
   <li><b>In-process pipeline services (<code>src/app/services/</code>) &amp; job manager (<code>frontend/job_manager.py</code>):</b> The app composes and validates configs with the pipeline's own code and runs <code>run_pipeline.py</code> as a child process, streaming its output and metrics through Qt signals. There is no server to start.</li>
   <li><b>PyTorch Lightning Runtime (<code>src/app/train.py</code>):</b> Standardized training driver providing automated checkpointing, device acceleration (CUDA/MPS/CPU), and structured logging. Stable-Baselines3 algorithms run through their own runner (<code>src/usr/algorithms/sb3_runner.py</code>) and log the same way.</li>
-  <li><b>Components from the Theta Hub:</b> A fresh clone ships the framework without algorithms, models or environments. Install them from the <b>Theta Hub</b> (<a href="ide://components">Components</a> tab, globe button). <b>ThetaIDE Basics</b> brings Stable-Baselines3 (A2C, DQN, PPO, SAC), d3rlpy offline baselines (BC, CQL, IQL, TD3+BC), Gymnasium classic control, Atari, and the basic DNN, Dueling ResNet and Nature CNN models; the <b>Deep Learning Basics</b> suite adds MLP, Transformer and LSTM models. You can also write your own (see <a href="authoring_plugins">Authoring Guide</a>).</li>
-  <li><b>Plugin System:</b> Core plugins (Documentation, TensorBoard, arXiv Papers) ship with the IDE and have no effect when switched off; community plugins install from the Theta Hub.</li>
+  <li><b>Components from the Theta Hub:</b> A fresh clone ships the framework without algorithms or environments, and with one model, <code>sequential_spec</code> (the one the Visual Model Builder writes). Install them from the <b>Theta Hub</b> (<a href="ide://components">Components</a> tab, globe button). <b>ThetaIDE Basics</b> brings Stable-Baselines3 (A2C, DQN, PPO, SAC), d3rlpy offline baselines (BC, CQL, IQL, TD3+BC), Gymnasium classic control, Atari, and the basic DNN, Dueling ResNet and Nature CNN models; the <b>Deep Learning Basics</b> suite adds MLP, Transformer and LSTM models. You can also write your own (see <a href="authoring_plugins">Authoring Guide</a>).</li>
+  <li><b>Plugin System:</b> Core plugins (Documentation, TensorBoard, arXiv Papers, Visual Model Builder) ship with the IDE and have no effect when switched off; community plugins install from the Theta Hub.</li>
 </ul>
 
 <p>Diagrams of how these pieces talk to each other are in <a href="architecture">System Architecture</a>.</p>
@@ -123,7 +123,7 @@ python -m frontend</code></pre>
 <p>That is the only command. The app composes configs in-process and runs training itself; there is no server to start first. The status bar shows <b>Pipeline ready</b> once the pipeline has loaded.</p>
 
 <h3>3. Install Components</h3>
-<p>A fresh clone has no algorithms, models or environments. In the <a href="ide://components">Components</a> tab, click the globe button to open the <b>Theta Hub</b> and install <b>ThetaIDE Basics</b>. Components are written into <code>in/config/</code> and <code>src/usr/</code> and are not tracked by git. Their configs are named after their package: an experiment uses <code>agent: sb3/ppo</code>, <code>model: basics/dnn</code> and the environment <code>gym_classic_control/cartpole</code>.</p>
+<p>A fresh clone has no algorithms or environments, and only the <code>sequential_spec</code> model. In the <a href="ide://components">Components</a> tab, click the globe button to open the <b>Theta Hub</b> and install <b>ThetaIDE Basics</b>. Components are written into <code>in/config/</code> and <code>src/usr/</code> and are not tracked by git. Their configs are named after their package: an experiment uses <code>agent: sb3/ppo</code>, <code>model: basics/dnn</code> and the environment <code>gym_classic_control/cartpole</code>.</p>
 
 <h3>Launch Options</h3>
 <table border="1" cellpadding="8" cellspacing="0" style="border-collapse: collapse; width: 100%; border-color: rgba(255,255,255,0.15);">
@@ -223,7 +223,7 @@ python -m frontend</code></pre>
   <li><b>Experiment editor:</b> a form over the YAML, in tabs.
     <ul>
       <li><b>Experiment</b>: description, paradigm, environment and the run budget (timesteps or epochs, seed, evaluation, checkpoints). The <b>+</b> beside the heading adds any other setting.</li>
-      <li><b>Methods</b>: one card per method, each with its algorithm, model and their parameters, plus optional <b>Shared Parameters</b> for every method.</li>
+      <li><b>Methods</b>: one card per method, each with its algorithm, model and their parameters, plus optional <b>Shared Parameters</b> for every method. <b>Design...</b> beside the model opens the <b>Visual Model Builder</b>: drag layer blocks onto a canvas and wire them together, and it saves the network as a model config (a <code>sequential_spec</code> architecture) that you can pick like any other model.</li>
       <li><b>Add Overrides</b> adds a <b>Data Loaders</b>, <b>Evaluators</b> or <b>Figures</b> box to choose those components and their parameters, or <b>Checkpoint Settings</b> (the metric the best checkpoint is chosen by, <code>save_top_k</code> and how often to check).</li>
       <li>Opening a group's <code>_base.yaml</code> edits the <b>Group Defaults</b> its experiments inherit; inherited values are marked <i>(inherited)</i>. <i>Settings &rarr; Appearance &rarr; Experiment Panel Configuration</i> can show every resolved default too.</li>
     </ul>
@@ -295,7 +295,7 @@ python -m frontend</code></pre>
 <p>Streams the pipeline's output and accepts a few quick commands. See <a href="console_pane">Console</a>.</p>
 
 <h3>Plugin Tabs</h3>
-<p>Core plugins add their own tabs: <b>arXiv Papers</b> (on by default; see <a href="arxiv_papers">arXiv Papers</a>), <b>TensorBoard</b> (above) and <b>Documentation</b> (this tab, opened with <code>F1</code>). Switch them on or off in <i>Settings &rarr; Core Plugins</i>.</p>
+<p>Core plugins add their own tabs: <b>arXiv Papers</b> (on by default; see <a href="arxiv_papers">arXiv Papers</a>), <b>TensorBoard</b> (above) and <b>Documentation</b> (this tab, opened with <code>F1</code>). The <b>Visual Model Builder</b> core plugin adds no tab: it adds the <b>Design...</b> button to each method's model in the Experiment tab. Switch any of them on or off in <i>Settings &rarr; Core Plugins</i>.</p>
 """,
     ),
     DocArticle(
@@ -1268,7 +1268,7 @@ python run_pipeline.py &lt;group&gt;/&lt;tuning_experiment&gt; dash_only=true</c
     <td>What you can change</td>
   </tr>
   <tr><td><b>Appearance</b></td><td>Color theme, display zoom, which sidebar panels are shown, auto-hide sidebar, <b>Experiment Panel Configuration</b> (show resolved defaults, algorithm and model defaults in methods, the visual layer editor), and the Results panel layout</td></tr>
-  <tr><td><b>Core Plugins</b></td><td>Turn built-in plugins (Documentation, TensorBoard, arXiv Papers) on or off</td></tr>
+  <tr><td><b>Core Plugins</b></td><td>Turn built-in plugins (Documentation, TensorBoard, arXiv Papers, Visual Model Builder) on or off</td></tr>
   <tr><td><b>Community Plugins</b></td><td>Install, configure, or remove plugins from the Theta Hub, and <b>Theta Hub Preferences</b> (what to do with a component's configs when uninstalling it)</td></tr>
   <tr><td><b>Hotkeys</b></td><td>Action key, terminal precedence, the <code>Action + digit</code> pane mapping, and menu shortcuts</td></tr>
   <tr><td><b>Training Pipeline</b></td><td>The Python environment that composes configs and runs training, with a <b>Check pipeline</b> button</td></tr>
