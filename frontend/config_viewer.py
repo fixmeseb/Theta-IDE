@@ -451,9 +451,9 @@ FIXED_BOX_KEYS = frozenset(
         "no_plot",
         "save_dataset",
         "recover",
-        # Claimed by the panel overhaul: the sweep box edits hydra.sweeper, and
-        # the dataset row edits dataset_path, so repeating them here would show
-        # the same setting twice.
+        # Dataset values are rendered in the inputs card.  Unsupported legacy
+        # resource/sweeper blocks stay hidden rather than being surfaced as
+        # generic editable settings.
         "hydra",
         "dataset_path",
         "offline_datasets",
@@ -1584,6 +1584,7 @@ class ConfigViewer(QWidget):
 
         # Paradigm + Environment, driven by in/config/paradigms constraints.
         tree = config_tree()
+        top_box = None
         if is_base:
             box_base = ConfigBox("1. Group Paradigm & Environment", "Default paradigm and environment applied to all experiments in this group")
             form_base = QGridLayout()
@@ -1697,7 +1698,8 @@ class ConfigViewer(QWidget):
             self.field_widgets["data_module"] = self.combo_datamodule
 
             box_base.add_layout(form_base)
-            self.boxes_layout.addWidget(box_base)
+            self._add_experiment_context_fields(box_base, data, resolved)
+            top_box = box_base
         else:
             if tree and tree.paradigms:
                 self.combo_paradigm = ComboBox()
@@ -1755,7 +1757,7 @@ class ConfigViewer(QWidget):
             box_inputs.add_layout(inputs_grid)
 
             rules = tree.paradigms.get(paradigm) if tree else None
-            if rules and (rules.uses_static_dataset or "dataset_path" in data):
+            if rules and rules.uses_static_dataset:
                 self._add_dataset_source_fields(
                     box_inputs,
                     data,
@@ -1763,31 +1765,15 @@ class ConfigViewer(QWidget):
                     required=rules.uses_static_dataset,
                     paradigm=paradigm,
                 )
-            self.boxes_layout.addWidget(box_inputs)
 
-        # --- BOX 1: TRAINING BUDGET & ROLLOUT SCHEDULE ---
-        budget_num = "2"
-        box_budget = ConfigBox(f"{budget_num}. Training Budget & Schedule", "Timesteps, evaluation frequency, and random seeds")
+            # Keep experiment metadata and its environment/trainer overrides
+            # together with the inputs they qualify.
+            self._add_experiment_context_fields(box_inputs, data, resolved)
+            top_box = box_inputs
 
-        # Experiment Description / Commit Note
-        desc_row = QHBoxLayout()
-        desc_row.setSpacing(10)
-        desc_row.addWidget(label("Description"))
-        self.txt_description = QLineEdit()
-        self.txt_description.setMaximumWidth(520)
-        self.txt_description.setPlaceholderText("Optional commit-style notes or hypothesis for this experiment...")
-        self.txt_description.setText(str(data.get("description") or ""))
-        self.txt_description.textChanged.connect(
-            lambda v: self._on_field_edited("description", v.strip()) if v.strip() else self.raw_data.pop("description", None)
-        )
-        desc_row.addWidget(self.txt_description)
-        if "description" in data and data["description"]:
-            btn_del_desc = _make_subtle_tool_button("close", "Clear description override", size=20, icon_size=12)
-            btn_del_desc.clicked.connect(lambda: (self.txt_description.setText(""), self.raw_data.pop("description", None), self._mark_dirty(), self._render_boxes()))
-            desc_row.addWidget(btn_del_desc)
-        desc_row.addStretch()
-        self.field_widgets["description"] = self.txt_description
-        box_budget.add_layout(desc_row)
+        # The experiment context and its schedule are deliberately one card:
+        # paradigm, source, runtime defaults, and budget describe one run.
+        box_budget = top_box or ConfigBox()
 
         form_budget = QGridLayout()
         form_budget.setVerticalSpacing(10)
@@ -2104,7 +2090,7 @@ class ConfigViewer(QWidget):
 
             for bk, blbl, bdef in budget_cands:
                 act = opt_menu.addAction(blbl)
-                act.triggered.connect(lambda _, k=bk, d=bdef: self._add_experiment_param(k, d))
+                act.triggered.connect(lambda _, k=bk, d=bdef: self._add_experiment_param_from_menu(k, d))
 
             # 2. Runtime Flags
             unadded_flags = [(k, lbl) for k, lbl in OPTIONAL_RUNTIME_FLAGS if k not in data]
@@ -2113,7 +2099,7 @@ class ConfigViewer(QWidget):
                     opt_menu.addSeparator()
                 for fk, flbl in unadded_flags:
                     act = opt_menu.addAction(flbl)
-                    act.triggered.connect(lambda _, k=fk: self._add_experiment_param(k, True))
+                    act.triggered.connect(lambda _, k=fk: self._add_experiment_param_from_menu(k, True))
 
             # 3. Custom Parameter
             opt_menu.addSeparator()
@@ -2141,19 +2127,23 @@ class ConfigViewer(QWidget):
         resolved_params = resolved.get("methods", {}).get("params", {}) if isinstance(resolved.get("methods"), dict) else {}
         show_params = has_params or (self.view_mode == "resolved" and bool(resolved_params))
 
-        # Top-left Methods header with title and subtle plus button to add shared parameters
+        # The method-plus creates a blank method; shared parameters have their
+        # own explicit action at the opposite edge of this header.
         methods_header = QHBoxLayout()
         methods_header.setSpacing(8)
         lbl_methods_title = label("Methods", "heading")
         lbl_methods_title.setStyleSheet("font-size: 23px; font-weight: 600;")
         methods_header.addWidget(lbl_methods_title)
 
+        btn_add_method = _make_subtle_tool_button("plus", "Add new empty method", size=24, icon_size=14)
+        btn_add_method.clicked.connect(lambda: self._start_add_new_method(empty=True))
+        methods_header.addWidget(btn_add_method)
+
+        methods_header.addStretch()
         if not show_params:
             btn_create_params = _make_subtle_tool_button("plus", "Add Shared Parameters (params)", size=24, icon_size=14)
             btn_create_params.clicked.connect(lambda: self.add_block("params"))
             methods_header.addWidget(btn_create_params)
-
-        methods_header.addStretch()
         m_layout.addLayout(methods_header)
 
         if show_params:
@@ -2353,6 +2343,10 @@ class ConfigViewer(QWidget):
 
                 title_row.addStretch()
 
+                if not is_base:
+                    btn_dup = _make_subtle_tool_button("copy", f"Duplicate method '{m_name}'", size=24, icon_size=14)
+                    btn_dup.clicked.connect(lambda _, mn=m_name: self.duplicate_method(mn))
+                    title_row.addWidget(btn_dup)
                 btn_remove = _make_subtle_tool_button("trash", f"Remove method '{m_name}' from this experiment", size=24, icon_size=14)
                 btn_remove.clicked.connect(lambda _, mn=m_name: self.remove_method(mn))
                 title_row.addWidget(btn_remove)
@@ -3056,22 +3050,8 @@ class ConfigViewer(QWidget):
                     row_tr.addStretch()
                     sc_layout.addRow("Training", row_tr)
 
-                # Bottom actions row: duplicate and plus icons in the bottom right
-                if not is_base:
-                    bottom_row = QHBoxLayout()
-                    bottom_row.addStretch()
-                    btn_dup = _make_subtle_tool_button("copy", f"Duplicate method '{m_name}'", size=24, icon_size=14)
-                    btn_dup.clicked.connect(lambda _, mn=m_name: self.duplicate_method(mn))
-                    bottom_row.addWidget(btn_dup)
-
-                    btn_plus = _make_subtle_tool_button("plus", "Add new method", size=24, icon_size=14)
-                    btn_plus.clicked.connect(lambda _: self._start_add_new_method())
-                    bottom_row.addWidget(btn_plus)
-
                 card_vbox.addLayout(sc_layout)
                 card_vbox.addStretch()
-                if not is_base:
-                    card_vbox.addLayout(bottom_row)
 
                 method_container.add_method_card(m_name, sub_card)
 
@@ -3219,87 +3199,6 @@ class ConfigViewer(QWidget):
         box_methods.add_layout(m_layout)
         self.boxes_layout.addWidget(box_methods)
 
-        # --- MODULAR BOX: ENVIRONMENT OVERRIDES ---
-        has_env_dict = isinstance(data.get("env"), dict)
-        resolved_env = resolved.get("env")
-        show_env = has_env_dict or (self.view_mode == "resolved" and isinstance(resolved_env, dict))
-
-        if show_env:
-            box_env = ConfigBox("Environment Settings", "Simulation rollouts and vectorized environment settings")
-            box_env_header = QHBoxLayout()
-            box_env_header.addStretch()
-            if has_env_dict:
-                btn_rm_env = _make_subtle_tool_button("trash", "Remove environment overrides", size=24, icon_size=14)
-                btn_rm_env.clicked.connect(lambda: self.remove_block("env"))
-                box_env_header.addWidget(btn_rm_env)
-            else:
-                box_env_header.addWidget(label("(inherited defaults)", "muted"))
-            box_env.add_layout(box_env_header)
-
-            grid_e = QGridLayout()
-            grid_e.setVerticalSpacing(10)
-            grid_e.setHorizontalSpacing(16)
-            env_source = data.get("env") if has_env_dict else (resolved_env if isinstance(resolved_env, dict) else {})
-
-            grid_e.addWidget(label("Parallel Envs (num_envs)"), 0, 0)
-            spin_num_envs = SpinBox()
-            spin_num_envs.setMaximumWidth(NUMBER_FIELD_WIDTH)
-            spin_num_envs.setRange(1, 1024)
-            spin_num_envs.setValue(int(env_source.get("num_envs") or 4))
-            spin_num_envs.valueChanged.connect(lambda v: self._on_nested_edited("env", "num_envs", v))
-            grid_e.addWidget(spin_num_envs, 0, 1)
-
-            grid_e.addWidget(label("Steps per Env (num_steps)"), 0, 2)
-            spin_num_steps = SpinBox()
-            spin_num_steps.setMaximumWidth(NUMBER_FIELD_WIDTH)
-            spin_num_steps.setRange(1, 100000)
-            spin_num_steps.setValue(int(env_source.get("num_steps") or 128))
-            spin_num_steps.valueChanged.connect(lambda v: self._on_nested_edited("env", "num_steps", v))
-            grid_e.addWidget(spin_num_steps, 0, 3)
-
-            box_env.add_layout(grid_e)
-            self.boxes_layout.addWidget(box_env)
-
-        # --- MODULAR BOX: TRAINER SETTINGS ---
-        has_trainer = "trainer" in data and isinstance(data["trainer"], dict)
-        show_trainer = has_trainer or (self.view_mode == "resolved" and "trainer" in resolved)
-
-        if show_trainer:
-            box_tr = ConfigBox("Trainer Settings", "Training accelerator and epoch constraints")
-            tr_header = QHBoxLayout()
-            tr_header.addStretch()
-            if has_trainer:
-                btn_rm_tr = _make_subtle_tool_button("trash", "Remove trainer overrides", size=24, icon_size=14)
-                btn_rm_tr.clicked.connect(lambda: self.remove_block("trainer"))
-                tr_header.addWidget(btn_rm_tr)
-            else:
-                tr_header.addWidget(label("(inherited defaults)", "muted"))
-            box_tr.add_layout(tr_header)
-
-            grid_t = QGridLayout()
-            grid_t.setVerticalSpacing(10)
-            grid_t.setHorizontalSpacing(16)
-            tr_source = data.get("trainer", {}) if has_trainer else resolved.get("trainer", {})
-
-            grid_t.addWidget(label("Accelerator"), 0, 0)
-            combo_accel = ComboBox()
-            combo_accel.setMaximumWidth(NUMBER_FIELD_WIDTH)
-            combo_accel.addItems(["cpu", "gpu", "mps", "auto"])
-            combo_accel.setCurrentText(str(tr_source.get("accelerator") or "cpu"))
-            combo_accel.currentTextChanged.connect(lambda v: self._on_nested_edited("trainer", "accelerator", v))
-            grid_t.addWidget(combo_accel, 0, 1)
-
-            grid_t.addWidget(label("Max Epochs"), 0, 2)
-            spin_epochs = SpinBox()
-            spin_epochs.setMaximumWidth(NUMBER_FIELD_WIDTH)
-            spin_epochs.setRange(1, 1000)
-            spin_epochs.setValue(int(tr_source.get("max_epochs") or 1))
-            spin_epochs.valueChanged.connect(lambda v: self._on_nested_edited("trainer", "max_epochs", v))
-            grid_t.addWidget(spin_epochs, 0, 3)
-
-            box_tr.add_layout(grid_t)
-            self.boxes_layout.addWidget(box_tr)
-
         # --- MODULAR BOX: CHECKPOINT SETTINGS ---
         has_checkpoint = "checkpoint" in data and isinstance(data["checkpoint"], dict)
         show_checkpoint = has_checkpoint or (self.view_mode == "resolved" and "checkpoint" in resolved and isinstance(resolved["checkpoint"], dict))
@@ -3358,138 +3257,13 @@ class ConfigViewer(QWidget):
             box_ckpt.add_layout(grid_c)
             self.boxes_layout.addWidget(box_ckpt)
 
-        # --- MODULAR BOX: COMPUTE & SLURM RESOURCES ---
-        has_res = "resources" in data and isinstance(data["resources"], dict)
-        show_res = has_res or (self.view_mode == "resolved" and "resources" in resolved)
-
-        if show_res:
-            box_res = ConfigBox("Compute & Slurm Resources", "Resource allocation for cluster runs (time, gpus, cores, memory)")
-            res_header = QHBoxLayout()
-            res_header.addStretch()
-            if has_res:
-                btn_rm_res = _make_subtle_tool_button("trash", "Remove compute resources overrides", size=24, icon_size=14)
-                btn_rm_res.clicked.connect(lambda: self.remove_block("resources"))
-                res_header.addWidget(btn_rm_res)
-            else:
-                res_header.addWidget(label("(inherited defaults)", "muted"))
-            box_res.add_layout(res_header)
-
-            grid_res = QGridLayout()
-            grid_res.setHorizontalSpacing(16)
-            grid_res.setVerticalSpacing(8)
-            res_dict = data.get("resources", {}) if has_res else resolved.get("resources", {})
-
-            # Site Profile Dropdown
-            grid_res.addWidget(label("Site Profile"), 0, 0)
-            combo_site = ComboBox()
-            combo_site.setMaximumWidth(NUMBER_FIELD_WIDTH)
-            sites = list(tree.sites) if tree and hasattr(tree, "sites") else ["local", "ncshare", "arc"]
-            if "local" not in sites:
-                sites.insert(0, "local")
-            current_site = str(data.get("site") or resolved.get("site") or "local")
-            for s in sites:
-                combo_site.addItem(s)
-            s_idx = combo_site.findText(current_site)
-            if s_idx != -1:
-                combo_site.setCurrentIndex(s_idx)
-            combo_site.currentTextChanged.connect(
-                lambda v: self._on_field_edited("site", v)
-            )
-            grid_res.addWidget(combo_site, 0, 1)
-
-            grid_res.addWidget(label("Time Limit"), 0, 2)
-            txt_time = QLineEdit(str(res_dict.get("time") or "02:00:00"))
-            txt_time.setMaximumWidth(NUMBER_FIELD_WIDTH)
-            txt_time.textChanged.connect(lambda v: self._on_nested_edited("resources", "time", v))
-            grid_res.addWidget(txt_time, 0, 3)
-
-            grid_res.addWidget(label("GPUs"), 1, 0)
-            txt_gpus = QLineEdit(str(res_dict.get("gpus") if res_dict.get("gpus") is not None else 0))
-            txt_gpus.setMaximumWidth(NUMBER_FIELD_WIDTH)
-            txt_gpus.textChanged.connect(lambda v: self._on_nested_edited("resources", "gpus", v))
-            grid_res.addWidget(txt_gpus, 1, 1)
-
-            grid_res.addWidget(label("CPU Cores"), 1, 2)
-            txt_cores = QLineEdit(str(res_dict.get("cores") if res_dict.get("cores") is not None else 4))
-            txt_cores.setMaximumWidth(NUMBER_FIELD_WIDTH)
-            txt_cores.textChanged.connect(lambda v: self._on_nested_edited("resources", "cores", v))
-            grid_res.addWidget(txt_cores, 1, 3)
-
-            grid_res.addWidget(label("Memory"), 2, 0)
-            txt_mem = QLineEdit(str(res_dict.get("memory") or "16G"))
-            txt_mem.setMaximumWidth(NUMBER_FIELD_WIDTH)
-            txt_mem.textChanged.connect(lambda v: self._on_nested_edited("resources", "memory", v))
-            grid_res.addWidget(txt_mem, 2, 1)
-
-            box_res.add_layout(grid_res)
-            self.boxes_layout.addWidget(box_res)
-
-        # --- MODULAR BOX: HYPERPARAMETER SWEEPER (OPTUNA) ---
-        has_sweeper = (
-            ("hydra" in data and isinstance(data["hydra"], dict) and "sweeper" in data["hydra"])
-            or "sweeper" in data
-        )
-        resolved_hydra = resolved.get("hydra", {}) if isinstance(resolved.get("hydra"), dict) else {}
-        show_sweeper = has_sweeper or (self.view_mode == "resolved" and "sweeper" in resolved_hydra)
-
-        if show_sweeper:
-            box_sw = ConfigBox("Hyperparameter Sweeper (Optuna)", "Automated parameter sweeps via Hydra & Optuna")
-            sw_header = QHBoxLayout()
-            sw_header.addStretch()
-            if has_sweeper:
-                btn_rm_sw = _make_subtle_tool_button("trash", "Remove hyperparameter sweeper overrides", size=24, icon_size=14)
-                btn_rm_sw.clicked.connect(lambda: self.remove_block("sweeper"))
-                sw_header.addWidget(btn_rm_sw)
-            else:
-                sw_header.addWidget(label("(inherited defaults)", "muted"))
-            box_sw.add_layout(sw_header)
-
-            sw_dict = (
-                data.get("hydra", {}).get("sweeper", {})
-                if "hydra" in data and isinstance(data["hydra"], dict) and "sweeper" in data["hydra"]
-                else data.get("sweeper", {})
-            )
-            sw_form = QGridLayout()
-            sw_form.setVerticalSpacing(8)
-            sw_form.setHorizontalSpacing(16)
-
-            sw_form.addWidget(label("Study Name"), 0, 0)
-            txt_sw_name = QLineEdit(str(sw_dict.get("study_name") or self.current_path.stem if self.current_path else "sweep"))
-            txt_sw_name.setMaximumWidth(200)
-            txt_sw_name.textChanged.connect(lambda v: self._on_sweeper_edited("study_name", v))
-            sw_form.addWidget(txt_sw_name, 0, 1)
-
-            sw_form.addWidget(label("Trials"), 0, 2)
-            spin_trials = SpinBox()
-            spin_trials.setMaximumWidth(NUMBER_FIELD_WIDTH)
-            spin_trials.setRange(1, 10000)
-            spin_trials.setValue(int(sw_dict.get("n_trials") or 50))
-            spin_trials.valueChanged.connect(lambda v: self._on_sweeper_edited("n_trials", v))
-            sw_form.addWidget(spin_trials, 0, 3)
-
-            sw_form.addWidget(label("Direction"), 1, 0)
-            combo_dir = ComboBox()
-            combo_dir.setMaximumWidth(NUMBER_FIELD_WIDTH)
-            combo_dir.addItems(["maximize", "minimize"])
-            combo_dir.setCurrentText(str(sw_dict.get("direction") or "maximize"))
-            combo_dir.currentTextChanged.connect(lambda v: self._on_sweeper_edited("direction", v))
-            sw_form.addWidget(combo_dir, 1, 1)
-
-            sw_form.addWidget(label("Parallel Jobs"), 1, 2)
-            spin_jobs = SpinBox()
-            spin_jobs.setMaximumWidth(NUMBER_FIELD_WIDTH)
-            spin_jobs.setRange(1, 64)
-            spin_jobs.setValue(int(sw_dict.get("n_jobs") or 1))
-            spin_jobs.valueChanged.connect(lambda v: self._on_sweeper_edited("n_jobs", v))
-            sw_form.addWidget(spin_jobs, 1, 3)
-
-            box_sw.add_layout(sw_form)
-            self.boxes_layout.addWidget(box_sw)
-
         # --- ADD CONFIGURATION BLOCK DROPDOWN BUTTON ---
         btn_add_block_row = QHBoxLayout()
-        self.btn_add_block = _make_subtle_tool_button("plus", "Add override", size=26, icon_size=14)
+        self.btn_add_block = _make_subtle_tool_button("plus", "Add overrides", size=26, icon_size=14)
         self.btn_add_block.setObjectName("addBlockButton")
+        self.btn_add_block.setText("Add Overrides")
+        self.btn_add_block.setToolButtonStyle(Qt.ToolButtonStyle.ToolButtonTextBesideIcon)
+        self.btn_add_block.setFixedSize(132, 28)
         self.btn_add_block.setStyleSheet("""
             QToolButton#addBlockButton {
                 background: transparent;
@@ -3508,29 +3282,9 @@ class ConfigViewer(QWidget):
         """)
         self.btn_add_block.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         add_menu = QMenu(self.btn_add_block)
-        act_res = add_menu.addAction("Compute & Slurm Resources")
-        act_res.triggered.connect(lambda: self.add_block("resources"))
-        act_res.setEnabled("resources" not in data)
-
-        act_tr = add_menu.addAction("Trainer Overrides")
-        act_tr.triggered.connect(lambda: self.add_block("trainer"))
-        act_tr.setEnabled("trainer" not in data)
-
         act_ckpt = add_menu.addAction("Checkpoint Settings")
         act_ckpt.triggered.connect(lambda: self.add_block("checkpoint"))
         act_ckpt.setEnabled("checkpoint" not in data)
-
-        act_env = add_menu.addAction("Environment Overrides")
-        act_env.triggered.connect(lambda: self.add_block("env"))
-        act_env.setEnabled(not isinstance(data.get("env"), dict))
-
-        act_ds = add_menu.addAction("Dataset Configuration")
-        act_ds.triggered.connect(lambda: self.add_block("dataset"))
-        act_ds.setEnabled("dataset_path" not in data)
-
-        act_sw = add_menu.addAction("Hyperparameter Sweeper (Optuna)")
-        act_sw.triggered.connect(lambda: self.add_block("sweeper"))
-        act_sw.setEnabled(not has_sweeper)
 
         self.btn_add_block.setMenu(add_menu)
         btn_add_block_row.addWidget(self.btn_add_block)
@@ -3539,6 +3293,65 @@ class ConfigViewer(QWidget):
         self.boxes_layout.addLayout(btn_add_block_row)
 
         self._render_remaining_sections()
+
+    def _add_experiment_context_fields(self, box: ConfigBox, data: dict, resolved: dict) -> None:
+        """Add the always-visible runtime defaults to the top experiment card."""
+        desc_row = QHBoxLayout()
+        desc_row.setSpacing(10)
+        desc_row.addWidget(label("Description"))
+        self.txt_description = QLineEdit(str(data.get("description") or ""))
+        self.txt_description.setMaximumWidth(520)
+        self.txt_description.setPlaceholderText("Optional commit-style notes or hypothesis for this experiment...")
+        self.txt_description.textChanged.connect(
+            lambda v: self._on_field_edited("description", v.strip()) if v.strip()
+            else (self.raw_data.pop("description", None), self._mark_dirty())
+        )
+        desc_row.addWidget(self.txt_description)
+        if data.get("description"):
+            btn_del_desc = _make_subtle_tool_button("close", "Clear description override", size=20, icon_size=12)
+            btn_del_desc.clicked.connect(lambda: self.txt_description.setText(""))
+            desc_row.addWidget(btn_del_desc)
+        desc_row.addStretch()
+        self.field_widgets["description"] = self.txt_description
+        box.add_layout(desc_row)
+
+        env_source = data.get("env") if isinstance(data.get("env"), dict) else resolved.get("env")
+        env_source = env_source if isinstance(env_source, dict) else {}
+        trainer_source = data.get("trainer") if isinstance(data.get("trainer"), dict) else resolved.get("trainer")
+        trainer_source = trainer_source if isinstance(trainer_source, dict) else {}
+
+        runtime_grid = QGridLayout()
+        runtime_grid.setVerticalSpacing(10)
+        runtime_grid.setHorizontalSpacing(16)
+        runtime_grid.addWidget(label("Parallel Envs (num_envs)"), 0, 0)
+        spin_num_envs = SpinBox()
+        spin_num_envs.setMaximumWidth(NUMBER_FIELD_WIDTH)
+        spin_num_envs.setRange(1, 1024)
+        spin_num_envs.setValue(int(env_source.get("num_envs") or 4))
+        spin_num_envs.valueChanged.connect(lambda v: self._on_nested_edited("env", "num_envs", v))
+        runtime_grid.addWidget(spin_num_envs, 0, 1)
+        runtime_grid.addWidget(label("Steps per Env (num_steps)"), 0, 2)
+        spin_num_steps = SpinBox()
+        spin_num_steps.setMaximumWidth(NUMBER_FIELD_WIDTH)
+        spin_num_steps.setRange(1, 100000)
+        spin_num_steps.setValue(int(env_source.get("num_steps") or 128))
+        spin_num_steps.valueChanged.connect(lambda v: self._on_nested_edited("env", "num_steps", v))
+        runtime_grid.addWidget(spin_num_steps, 0, 3)
+        runtime_grid.addWidget(label("Accelerator"), 1, 0)
+        combo_accel = ComboBox()
+        combo_accel.setMaximumWidth(NUMBER_FIELD_WIDTH)
+        combo_accel.addItems(["cpu", "gpu", "mps", "auto"])
+        combo_accel.setCurrentText(str(trainer_source.get("accelerator") or "cpu"))
+        combo_accel.currentTextChanged.connect(lambda v: self._on_nested_edited("trainer", "accelerator", v))
+        runtime_grid.addWidget(combo_accel, 1, 1)
+        runtime_grid.addWidget(label("Max Epochs"), 1, 2)
+        spin_epochs = SpinBox()
+        spin_epochs.setMaximumWidth(NUMBER_FIELD_WIDTH)
+        spin_epochs.setRange(1, 1000)
+        spin_epochs.setValue(int(trainer_source.get("max_epochs") or 1))
+        spin_epochs.valueChanged.connect(lambda v: self._on_nested_edited("trainer", "max_epochs", v))
+        runtime_grid.addWidget(spin_epochs, 1, 3)
+        box.add_layout(runtime_grid)
 
     def _add_dataset_source_fields(self, box, data, resolved, *, required: bool, paradigm: str) -> None:
         """Add a static environment source and its representation adapter."""
@@ -4080,8 +3893,12 @@ class ConfigViewer(QWidget):
                         return k, copy.deepcopy(v)
         return None, None
 
-    def _start_add_new_method(self):
-        """Initiate adding a new method card with focus on the name editor."""
+    def _start_add_new_method(self, *, empty: bool = False):
+        """Initiate adding a new method card with focus on the name editor.
+
+        ``empty`` is used by the Methods header action: it deliberately does
+        not clone a group's default method into a new experiment variant.
+        """
         tree = config_tree()
         paradigm = self.raw_data.get("paradigm") or self._inherited_paradigm()
         if not tree or paradigm not in tree.paradigms:
@@ -4102,7 +3919,7 @@ class ConfigViewer(QWidget):
 
         def_name, def_spec = self._get_group_default_method()
         self._pending_new_method = True
-        self._pending_new_method_spec = copy.deepcopy(def_spec) if def_spec else {}
+        self._pending_new_method_spec = {} if empty else (copy.deepcopy(def_spec) if def_spec else {})
         self._render_boxes()
 
     def _cancel_new_method(self):
@@ -4319,20 +4136,9 @@ class ConfigViewer(QWidget):
                 self.combo_dataset_path.setEditText(rel)
             self._on_field_edited("dataset_path", rel)
 
-    def _on_sweeper_edited(self, key, value):
-        if self._block_updates:
-            return
-        if "hydra" in self.raw_data and isinstance(self.raw_data["hydra"], dict) and "sweeper" in self.raw_data["hydra"]:
-            self.raw_data["hydra"]["sweeper"][key] = _parse_yaml_value(value)
-        else:
-            self.raw_data.setdefault("sweeper", {})[key] = _parse_yaml_value(value)
-        self._mark_dirty()
-
     def remove_block(self, block_name: str):
         """Remove a configuration block from the open experiment."""
-        if block_name == "resources":
-            self.raw_data.pop("resources", None)
-        elif block_name == "trainer":
+        if block_name == "trainer":
             self.raw_data.pop("trainer", None)
         elif block_name == "checkpoint":
             self.raw_data.pop("checkpoint", None)
@@ -4343,12 +4149,6 @@ class ConfigViewer(QWidget):
             self.raw_data.pop("dataset_path", None)
             self.raw_data.pop("offline_datasets", None)
             self.raw_data.pop("data_module", None)
-        elif block_name == "sweeper":
-            self.raw_data.pop("sweeper", None)
-            if "hydra" in self.raw_data and isinstance(self.raw_data["hydra"], dict):
-                self.raw_data["hydra"].pop("sweeper", None)
-                if not self.raw_data["hydra"]:
-                    self.raw_data.pop("hydra", None)
         elif block_name == "params":
             if "methods" in self.raw_data and isinstance(self.raw_data["methods"], dict):
                 self.raw_data["methods"].pop("params", None)
@@ -4357,27 +4157,20 @@ class ConfigViewer(QWidget):
 
     def add_block(self, block_name: str):
         """Add an optional configuration block to the open experiment."""
-        if block_name == "resources":
-            self.raw_data["resources"] = {"time": "02:00:00", "gpus": 1, "cores": 8, "memory": "16G"}
-        elif block_name == "trainer":
+        if block_name == "trainer":
             self.raw_data["trainer"] = {"accelerator": "cpu", "max_epochs": 25}
         elif block_name == "checkpoint":
             self.raw_data["checkpoint"] = {"monitor": "val/loss", "mode": "min", "save_top_k": 1, "every_n_epochs": 1}
         elif block_name == "env":
             self.raw_data["env"] = {"num_envs": 4, "num_steps": 128}
         elif block_name == "dataset":
+            tree = config_tree()
+            paradigm = self.raw_data.get("paradigm") or self._inherited_paradigm()
+            rules = tree.paradigms.get(paradigm) if tree else None
+            if not rules or not rules.uses_static_dataset:
+                return
             env_name = self.env_selection() or self._get_explicit_env() or self._inherited_env() or self._group_name() or "dataset"
             self.raw_data["dataset_path"] = f"in/datasets/{env_name}"
-        elif block_name == "sweeper":
-            exp_stem = self.current_path.stem if self.current_path else "sweep"
-            self.raw_data.setdefault("hydra", {})["sweeper"] = {
-                "sampler": {"_target_": "optuna.samplers.TPESampler", "seed": 42},
-                "direction": "maximize",
-                "storage": "sqlite:///results/optuna/optuna.db",
-                "study_name": exp_stem,
-                "n_trials": 50,
-                "n_jobs": 1,
-            }
         elif block_name == "params":
             self.raw_data.setdefault("methods", {})["params"] = {"lr": 0.0003}
         self._mark_dirty()
@@ -4803,7 +4596,17 @@ class ConfigViewer(QWidget):
             state["tail"] = button
         self._mark_dirty()
 
-    def _add_experiment_param(self, key: str, default_val: Any = None):
+    def _add_experiment_param_from_menu(self, key: str, default_val: Any = None):
+        """Apply a menu choice after its popup has closed.
+
+        Rebuilding the entire pane while a popup still owns focus can cause Qt
+        to re-parent the checkpoint row twice, leaving a phantom row on both
+        sides of the add button.
+        """
+        self._add_experiment_param(key, default_val, render=False)
+        QTimer.singleShot(0, self._render_boxes)
+
+    def _add_experiment_param(self, key: str, default_val: Any = None, *, render: bool = True):
         """Add an experiment-level parameter override to the configuration."""
         if not key:
             return
@@ -4823,7 +4626,8 @@ class ConfigViewer(QWidget):
         else:
             self.raw_data[key] = ""
         self._mark_dirty()
-        self._render_boxes()
+        if render:
+            self._render_boxes()
 
     def _prompt_add_custom_experiment_param(self):
         """Prompt user to add an arbitrary top-level experiment parameter."""
@@ -4997,12 +4801,6 @@ class ConfigViewer(QWidget):
 
         if "dataset_path" in data and data["dataset_path"]:
             overrides.append(f"dataset_path='{data['dataset_path']}'")
-
-        # Slurm resources overrides
-        if "resources" in data and isinstance(data["resources"], dict):
-            for k, v in data["resources"].items():
-                if isinstance(v, (int, float, str, bool)):
-                    overrides.append(f"++resources.{k}='{v}'" if isinstance(v, str) else f"++resources.{k}={v}")
 
         # Universal params overrides
         if "methods" in data and isinstance(data["methods"], dict) and "params" in data["methods"]:

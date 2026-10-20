@@ -593,26 +593,25 @@ class TestConfigViewer(unittest.TestCase):
         self.assertNotIn("ent_coef", self.viewer.raw_data["methods"]["ppo"])
 
     def test_modular_block_crud(self):
-        # Add resources block
+        # Runtime defaults now live in the top card, and unsupported blocks
+        # are not offered by the remaining override menu.
         self.assertNotIn("resources", self.viewer.raw_data)
+        menu_labels = [action.text() for action in self.viewer.btn_add_block.menu().actions()]
+        self.assertEqual(menu_labels, ["Checkpoint Settings"])
+        self.assertNotIn("Trainer Overrides", menu_labels)
+        self.assertNotIn("Environment Overrides", menu_labels)
+        self.assertNotIn("Dataset Configuration", menu_labels)
+        self.assertNotIn("Compute & Slurm Resources", menu_labels)
+        self.assertNotIn("Hyperparameter Sweeper (Optuna)", menu_labels)
+
+        # Unsupported direct calls do not create hidden configuration blocks.
         self.viewer.add_block("resources")
-        self.assertIn("resources", self.viewer.raw_data)
-        self.assertEqual(self.viewer.raw_data["resources"]["gpus"], 1)
-
-        # Add trainer block
-        self.assertNotIn("trainer", self.viewer.raw_data)
-        self.viewer.add_block("trainer")
-        self.assertIn("trainer", self.viewer.raw_data)
-
-        # Remove resources block
-        self.viewer.remove_block("resources")
         self.assertNotIn("resources", self.viewer.raw_data)
 
     def test_dataset_card_specification(self):
+        # An online RL experiment cannot opt into a static dataset source.
         self.viewer.add_block("dataset")
-        self.assertIn("dataset_path", self.viewer.raw_data)
-        self.viewer._on_field_edited("dataset_path", "in/datasets/mimic/train.pkl")
-        self.assertIn("dataset_path='in/datasets/mimic/train.pkl'", self.viewer.get_overrides())
+        self.assertNotIn("dataset_path", self.viewer.raw_data)
 
     def test_method_inline_rename(self):
         self.viewer.auto_save = False
