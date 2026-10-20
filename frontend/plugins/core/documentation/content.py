@@ -74,7 +74,7 @@ pip install -e ".[gui]"</code></pre>
 <h3>2. Start Theta-IDE</h3>
 <pre><code>source venv/bin/activate          # Windows: .\venv\Scripts\Activate.ps1
 python -m frontend</code></pre>
-<p>That is the only command. The app composes configs in-process and runs training itself; there is no server to start first. The status bar shows <code>PIPELINE ● local</code> once the pipeline has loaded.</p>
+<p>That is the only command. The app composes configs in-process and runs training itself; there is no server to start first. The status bar shows <b>Pipeline ready</b> once the pipeline has loaded.</p>
 
 <h3>Launch Options</h3>
 <table border="1" cellpadding="8" cellspacing="0" style="border-collapse: collapse; width: 100%; border-color: rgba(255,255,255,0.15);">
@@ -95,7 +95,7 @@ python -m frontend</code></pre>
 </ul>
 
 <h3>If the Pipeline Is Unavailable</h3>
-<p>The status bar shows <code>PIPELINE ○ unavailable</code> when the app isn't running from the project venv. You can still browse and edit configs (the preview shows an unvalidated local draft) and run <i>Run &rarr; Start simulated demo</i>. Reinstall with <code>pip install -e ".[gui]"</code> and start the app again with <code>python -m frontend</code>.</p>
+<p>The status bar shows <b>Pipeline unavailable</b> when the app isn't running from the project venv. You can still browse and edit configs (the preview shows an unvalidated local draft) and run <i>Queue &rarr; Start simulated demo</i>. Reinstall with <code>pip install -e ".[gui]"</code> and start the app again with <code>python -m frontend</code>.</p>
 
 <h3>Stopping</h3>
 <p>Closing the window while a run is training (or the queue is running) hides ThetaIDE to the <b>system tray</b> and training keeps going. The tray icon gets a green dot while a run is training (blue while the queue waits to start the next job), shows what is training, notifies you when runs finish or fail, and reopens the window when clicked; its menu also has <i>Stop all training</i>. To exit, use <i>File &rarr; Quit</i> (<code>Ctrl+Q</code>) or <i>Quit ThetaIDE</i> in the tray menu: if a run is still training ThetaIDE asks first, then stops it. Metrics written so far stay in <code>results/logs/</code>. Queued jobs are kept and wait for <i>Start queue</i> next time. TensorBoard stops with the app.</p>
@@ -425,12 +425,14 @@ python -m frontend</code></pre>
     <td>Shortcut</td>
     <td>Action</td>
   </tr>
+  <tr><td><code>F1</code></td><td>Help &rarr; Documentation: open these docs</td></tr>
   <tr><td><code>F5</code></td><td>Queue &rarr; Launch now: train the open experiment</td></tr>
   <tr><td><code>Shift+F5</code></td><td>Queue &rarr; Stop the active run</td></tr>
   <tr><td><code>Ctrl+F5</code></td><td>Queue &rarr; Start simulated demo (no backend needed)</td></tr>
   <tr><td><code>Ctrl+Shift+Q</code></td><td>Queue &rarr; Add to queue</td></tr>
   <tr><td><code>Ctrl+Shift+R</code></td><td>Queue &rarr; Start or pause queue</td></tr>
   <tr><td><code>Ctrl+N</code></td><td>File &rarr; New experiment</td></tr>
+  <tr><td><code>Ctrl+Alt+R</code></td><td>File &rarr; Reload component code</td></tr>
   <tr><td><code>Ctrl+S</code></td><td>File &rarr; Save configuration</td></tr>
   <tr><td><code>Ctrl+Shift+S</code></td><td>File &rarr; Export draft YAML</td></tr>
   <tr><td><code>Ctrl+Q</code></td><td>File &rarr; Quit</td></tr>
@@ -992,7 +994,7 @@ python run_pipeline.py mimic/tune_mimic_all sweep=true dash=true</code></pre>
     <td>Control</td>
     <td>What it does</td>
   </tr>
-  <tr><td><b>+ Add Node</b></td><td>Add a stage to the canvas</td></tr>
+  <tr><td><b>Add Node</b></td><td>Add a stage to the canvas</td></tr>
   <tr><td>Drag between ports</td><td>Connect an output port to an input port with a wire</td></tr>
   <tr><td><b>Validate Strings</b></td><td>Check every wire and required input (see below)</td></tr>
   <tr><td><b>Zoom Fit</b></td><td>Fit the whole diagram in view</td></tr>
@@ -1150,7 +1152,7 @@ workflow: sepsis_reciprocal</code></pre>
         keywords=["settings", "preferences", "settings.toml", "toml", "backend", "storage", "plugins", "hotkeys", "config"],
         html_content=r"""
 <h2>Settings & settings.toml</h2>
-<p>Open Settings with <code>Action + 0</code> or <i>View &rarr; Settings &amp; About</i>.</p>
+<p>Open Settings with <code>Action + 0</code> or <i>View &rarr; Settings</i>.</p>
 
 <h3>Settings Pages</h3>
 <table border="1" cellpadding="8" cellspacing="0" style="border-collapse: collapse; width: 100%; border-color: rgba(255,255,255,0.15);">
@@ -1158,7 +1160,7 @@ workflow: sepsis_reciprocal</code></pre>
     <td>Page</td>
     <td>What you can change</td>
   </tr>
-  <tr><td><b>Appearance</b></td><td>Color theme, which sidebar panels are shown, auto-hide sidebar, the sculpture animation, and the Results panel layout</td></tr>
+  <tr><td><b>Appearance</b></td><td>Color theme, which sidebar panels are shown, auto-hide sidebar, and the Results panel layout</td></tr>
   <tr><td><b>Core Plugins</b></td><td>Turn built-in plugins (such as this Documentation plugin) on or off</td></tr>
   <tr><td><b>Community Plugins</b></td><td>Install, configure, or remove plugins from the Community Hub</td></tr>
   <tr><td><b>Hotkeys</b></td><td>Action key, terminal precedence, the <code>Action + digit</code> pane mapping, and menu shortcuts</td></tr>
@@ -1180,7 +1182,7 @@ workflow: sepsis_reciprocal</code></pre>
     <td>Section</td>
     <td>Keys</td>
   </tr>
-  <tr><td><code>[appearance]</code></td><td><code>theme</code>, plus <code>ascii_*</code> animation settings</td></tr>
+  <tr><td><code>[appearance]</code></td><td><code>theme</code>, <code>zoom</code></td></tr>
   <tr><td><code>[backend]</code></td><td><code>url</code>, <code>timeout</code> (seconds)</td></tr>
   <tr><td><code>[sidebar]</code></td><td><code>order</code> and <code>visible</code> pane lists</td></tr>
   <tr><td><code>[plugins]</code></td><td><code>enabled</code> plugin IDs</td></tr>
@@ -1265,7 +1267,7 @@ workflow: sepsis_reciprocal</code></pre>
         html_content="""
 <h2>Troubleshooting & FAQ</h2>
 
-<h3>1. Status bar says "PIPELINE ○ unavailable"</h3>
+<h3>1. Status bar says "Pipeline unavailable"</h3>
 <p>Theta-IDE imports the training pipeline directly, so it must run from the project venv:</p>
 <ul>
   <li>Activate <code>venv/</code> and run <code>pip install -e ".[gui]"</code>, then start the app with <code>python -m frontend</code> from the repository root.</li>

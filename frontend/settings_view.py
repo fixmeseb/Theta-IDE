@@ -170,6 +170,7 @@ DEFAULT_MENU_SHORTCUTS = [
     ("launch_training", "Launch training", "F5"),
     ("stop_run", "Stop training", "Shift+F5"),
     ("new_experiment", "New experiment", "Ctrl+N"),
+    ("reload_components", "Reload component code", "Ctrl+Alt+R"),
     ("export_config", "Export draft YAML…", "Ctrl+Shift+S"),
     ("save_config", "Save configuration", "Ctrl+S"),
     ("add_to_queue", "Add to queue", "Ctrl+Shift+Q"),
@@ -179,6 +180,7 @@ DEFAULT_MENU_SHORTCUTS = [
     ("zoom_out", "Zoom out (decrease text size)", "Ctrl+-"),
     ("reset_zoom", "Reset zoom (default text size)", "Ctrl+0"),
     ("open_launcher", "Open launcher (panels, plugins, settings, commands)", "Ctrl+Space"),
+    ("open_docs", "Open the documentation", "F1"),
     ("quit", "Quit", "Ctrl+Q"),
 ]
 
@@ -875,37 +877,7 @@ class SettingsView(QWidget):
 
         layout.addWidget(sidebar_card)
 
-        # Card 3: 3-D ASCII Sculpture Setting
-        sculpture_card = QFrame()
-        sculpture_card.setObjectName("card")
-        sc_layout = QVBoxLayout(sculpture_card)
-        sc_layout.setContentsMargins(16, 14, 16, 14)
-        sc_layout.setSpacing(8)
-
-        sc_layout.addWidget(label("3D ASCII Sculpture Animation", "cardTitle"))
-        sc_sub = label("Configure the software-rendered rotating ASCII Theta sculpture.", "muted")
-        sc_sub.setWordWrap(True)
-        sc_layout.addWidget(sc_sub)
-
-        row_sc = QHBoxLayout()
-        row_sc.addWidget(label("Enable sculpture animation on overview", "muted"), 1)
-        anim_slider = ToggleSlider(checked=self.window.settings_manager.ascii_animation)
-        anim_slider.toggled.connect(self._on_ascii_setting_toggled)
-        row_sc.addWidget(anim_slider)
-        sc_layout.addLayout(row_sc)
-
-        btn_row = QHBoxLayout()
-        btn_anim_config = QPushButton("Animation Settings…")
-        btn_anim_config.setCursor(Qt.CursorShape.PointingHandCursor)
-        btn_anim_config.setToolTip("Configure speed, size, thickness, and 3D projection")
-        btn_anim_config.clicked.connect(self._open_animation_settings_dialog)
-        btn_row.addWidget(btn_anim_config)
-        btn_row.addStretch()
-        sc_layout.addLayout(btn_row)
-
-        layout.addWidget(sculpture_card)
-
-        # Card 4: Experiment Panel Preferences
+        # Card 3: Experiment Panel Preferences
         exp_card = QFrame()
         exp_card.setObjectName("card")
         ec_layout = QVBoxLayout(exp_card)
@@ -1064,10 +1036,6 @@ class SettingsView(QWidget):
             slider.setChecked(visible)
             slider.blockSignals(False)
 
-    def _open_animation_settings_dialog(self):
-        if hasattr(self.window, "show_about"):
-            self.window.show_about(animation_settings=True)
-
     def _on_show_resolved_defaults_toggled(self, checked: bool):
         if hasattr(self.window, "settings_manager") and self.window.settings_manager:
             self.window.settings_manager.show_resolved_defaults = checked
@@ -1087,19 +1055,6 @@ class SettingsView(QWidget):
     def _on_visual_layer_editor_toggled(self, checked: bool):
         if hasattr(self.window, "settings_manager") and self.window.settings_manager:
             self.window.settings_manager.visual_layer_editor = checked
-
-
-    def _on_ascii_setting_toggled(self, checked: bool):
-        if hasattr(self.window, "settings_manager") and self.window.settings_manager:
-            self.window.settings_manager.set("appearance", "ascii_animation", checked)
-        if hasattr(self.window, "settings_ascii") and self.window.settings_ascii:
-            self.window.settings_ascii.set_paused(not checked)
-        if hasattr(self, "anim_toggle_active") and self.anim_toggle_active:
-            self.anim_toggle_active.blockSignals(True)
-            self.anim_toggle_active.setChecked(checked)
-            self.anim_toggle_active.blockSignals(False)
-            if hasattr(self, "anim_status_lbl") and self.anim_status_lbl:
-                self.anim_status_lbl.setText("Running" if checked else "Paused")
 
     def _build_core_plugins_page(self) -> QWidget:
         container = QWidget()
@@ -1967,15 +1922,6 @@ class SettingsView(QWidget):
             self.window.zoom_slider.blockSignals(False)
         if hasattr(self.window, "zoom_percent_label") and self.window.zoom_percent_label:
             self.window.zoom_percent_label.setText(f"{zoom_pct}%")
-
-        # 6. Animation playback toggle
-        if hasattr(self, "anim_toggle_active") and self.anim_toggle_active:
-            is_anim = bool(sm.get("appearance", "ascii_animation", default=True))
-            self.anim_toggle_active.blockSignals(True)
-            self.anim_toggle_active.setChecked(is_anim)
-            self.anim_toggle_active.blockSignals(False)
-            if hasattr(self, "anim_status_lbl") and self.anim_status_lbl:
-                self.anim_status_lbl.setText("Running" if is_anim else "Paused")
 
         # 7. Experiment panel resolved defaults toggle
         if hasattr(self, "defaults_toggle") and self.defaults_toggle:

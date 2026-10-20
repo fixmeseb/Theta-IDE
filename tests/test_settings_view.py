@@ -1,4 +1,4 @@
-"""SettingsView (the sidebar gear) and its separation from the About page (the sidebar logo)."""
+"""SettingsView (the sidebar gear), and F1 opening the documentation."""
 import os
 import sys
 import tempfile
@@ -13,7 +13,6 @@ try:
     QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
     app = QApplication.instance() or QApplication(sys.argv[:1])
     from frontend.app import Window
-    from frontend.about import AboutView
     from frontend.settings_view import SettingsDetailWindow, SettingsView
     HAS_PYQT6 = True
 except ImportError:
@@ -51,7 +50,6 @@ class TestSettingsViewStructureAndNavigation(unittest.TestCase):
         self.assertIsNotNone(self.window.settings_backend_status)  # Training pipeline page
         self.assertIsNotNone(self.window.settings_backend_status)
         self.assertIsNotNone(self.window.settings_runs_count_label)
-        self.assertIs(self.window.settings_ascii, self.window.about_view.logo)  # Appearance pauses the About logo
         self.assertEqual(set(self.window.pane_sliders), set(self.window.tabs.tabs))  # built-in panes and plugin tabs
 
     def test_opens_on_the_first_category(self):
@@ -129,14 +127,13 @@ class TestSettingsViewStructureAndNavigation(unittest.TestCase):
         self.assertEqual(self.window.statusBar().currentMessage(), "Zoom: 110%")
         self.window.set_zoom(1.0, persist=False)
 
-    def test_no_animation_or_about_content_in_settings(self):
+    def test_no_animation_content_in_settings(self):
         self.assertNotIn("animation", self.settings.tab_buttons)
         self.assertNotIn("animation", self.settings.page_widgets)
-        self.assertFalse(self.settings.findChildren(AboutView))
 
 
 @unittest.skipIf(not HAS_PYQT6, "PyQt6 not installed in current environment")
-class TestSettingsAndAboutAreSeparate(unittest.TestCase):
+class TestLogoAndF1OpenTheDocs(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.window = Window(Path(self.temp_dir.name))
@@ -147,39 +144,60 @@ class TestSettingsAndAboutAreSeparate(unittest.TestCase):
         self.window.close()
         self.temp_dir.cleanup()
 
-    def test_gear_opens_settings_and_logo_opens_about(self):
-        self.tabs.settings_button.click()
-        self.assertIs(self.tabs.currentWidget(), self.window.settings_panel)
-        self.assertTrue(self.tabs.settings_button.isChecked())
-        self.assertFalse(self.tabs.logo_button.isChecked())
+    def docs_open(self):
+        entry = self.tabs.tabs.get("documentation")
+        return entry is not None and entry["visible"] and self.tabs.currentWidget() is entry["widget"]
 
-        self.tabs.logo_button.click()
-        self.assertIs(self.tabs.currentWidget(), self.window.about_panel)
-        self.assertIsInstance(self.window.about_panel, AboutView)
-        self.assertTrue(self.tabs.logo_button.isChecked())
-        self.assertFalse(self.tabs.settings_button.isChecked())
+    def test_there_is_no_about_page(self):
+        self.assertFalse(hasattr(self.window, "about_panel"))
+        self.assertFalse(hasattr(self.window, "show_about"))
+        help_menu = next(a.menu() for a in self.window.menuBar().actions() if a.text() == "Help")
+        self.assertEqual([a.text() for a in help_menu.actions()], ["Documentation"])
 
+    def test_f1_opens_the_docs_switching_the_plugin_on_if_needed(self):
+        action = self.window.menu_actions["open_docs"]
+        self.assertEqual(action.shortcut().toString(), "F1")
+        if "documentation" in self.window.plugin_manager.instances:
+            slider = self.window.plugin_sliders.get("documentation")
+            if slider is not None:
+                slider.setChecked(False)  # as the user would, in Settings > Core plugins
+            else:
+                self.window.on_plugin_slider_toggled("documentation", False)
+        self.assertNotIn("documentation", self.tabs.tabs)
         self.tabs.setCurrentWidget(self.window.console_panel)
-        self.assertFalse(self.tabs.logo_button.isChecked() or self.tabs.settings_button.isChecked())
+        action.trigger()
+        self.assertTrue(self.docs_open())
 
-    def test_about_page_shows_the_logo_name_and_version(self):
-        about = self.window.about_view
-        self.assertIsNotNone(about.logo)
-        self.assertTrue(about.version_label.text())
-        self.assertEqual(about.anim_btn.text(), "Animation settings…")
+    def test_f1_shows_a_hidden_docs_tab(self):
+        self.window.show_docs()
+        self.tabs.setCurrentWidget(self.window.console_panel)
+        self.tabs.set_tab_visible("documentation", False)
+        self.window.menu_actions["open_docs"].trigger()
+        self.assertTrue(self.docs_open())
 
-    def test_menus_and_hotkeys_reach_each_page(self):
+    def test_the_gear_is_the_only_button_below_the_tabs(self):
+        self.assertFalse(hasattr(self.tabs, "logo_button"))
+        layout = self.tabs.bar_layout
+        self.assertIs(layout.itemAt(layout.count() - 1).widget(), self.tabs.settings_button)
+
+    def test_default_menu_shortcuts_are_unique(self):
+        """Qt fires neither action when two share a shortcut, so no two defaults may collide."""
+        owners = {}
+        for aid, action in self.window.menu_actions.items():
+            for seq in action.shortcuts():
+                self.assertNotIn(seq.toString(), owners, f"{aid} and {owners.get(seq.toString())} share it")
+                owners[seq.toString()] = aid
+
+    def test_menus_and_hotkeys_reach_settings(self):
         self.window.show_settings("hotkeys")
         self.assertIs(self.tabs.currentWidget(), self.window.settings_panel)
         self.assertEqual(self.window.settings_view.active_tab_id, "hotkeys")
-        self.window.show_about()
-        self.assertIs(self.tabs.currentWidget(), self.window.about_panel)
 
         hotkeys = self.window.hotkey_manager
+        self.tabs.setCurrentWidget(self.window.console_panel)
         self.assertTrue(hotkeys.switch_to_pane("settings"))
         self.assertIs(self.tabs.currentWidget(), self.window.settings_panel)
-        self.assertTrue(hotkeys.switch_to_pane("about"))
-        self.assertIs(self.tabs.currentWidget(), self.window.about_panel)
+        self.assertFalse(hotkeys.switch_to_pane("about"))
         self.assertTrue(hotkeys.switch_to_pane("settings_about"))  # the combined pane's old name
         self.assertIs(self.tabs.currentWidget(), self.window.settings_panel)
 
@@ -208,29 +226,6 @@ class TestSettingsViewPages(unittest.TestCase):
             QApplication.processEvents()
             h_bar = self.settings.settings_window.scroll_area.horizontalScrollBar()
             self.assertEqual(h_bar.maximum(), 0)
-
-    def test_appearance_animation_button_opens_them_on_the_about_page(self):
-        """Animation settings preview on the About logo, so Settings sends you there to change them."""
-        from unittest import mock
-
-        with mock.patch.object(self.window.about_view, "open_animation_settings") as open_dialog:
-            self.settings._open_animation_settings_dialog()
-            self.assertIs(self.window.tabs.currentWidget(), self.window.about_panel)
-            for _ in range(3):
-                QApplication.processEvents()  # the dialog opens once the page has shown
-            open_dialog.assert_called_once()
-
-    def test_animation_dialog_drives_the_about_logo(self):
-        from frontend.about import AnimationSettingsDialog
-
-        logo = self.window.about_view.logo
-        dialog = AnimationSettingsDialog(target=logo, settings_manager=self.window.settings_manager)
-        dialog.slider_speed.setValue(180)
-        self.assertAlmostEqual(logo.speed, 1.8)
-        dialog.reset_to_defaults()
-        self.assertAlmostEqual(logo.speed, 1.0)
-        dialog.close()
-        dialog.deleteLater()
 
 
 @unittest.skipIf(not HAS_PYQT6, "PyQt6 not installed in current environment")

@@ -401,7 +401,6 @@ class SideTabBar(QWidget):
 class SideTabs(QWidget):
     """Icon-over-label buttons stacked on the left, with the pages in a QStackedWidget beside them."""
     currentChanged = pyqtSignal(int)
-    logoClicked = pyqtSignal()  # the logo opens About
     settingsClicked = pyqtSignal()  # the gear opens Settings
     tabOrderChanged = pyqtSignal(list)  # also emitted when bins change, so the layout is saved
     tabVisibilityChanged = pyqtSignal(str, bool)
@@ -420,7 +419,7 @@ class SideTabs(QWidget):
         self.bar_layout.setSpacing(3)
         self.bar_layout.addStretch()
 
-        # Settings and About sit at the bottom, outside the reorderable tabs: the gear, then the logo
+        # Settings sits at the bottom, outside the reorderable tabs
         self.settings_button = QToolButton()
         self.settings_button.setObjectName("sideTab")
         self.settings_button.setCheckable(True)
@@ -434,19 +433,6 @@ class SideTabs(QWidget):
         self.settings_button.setIcon(svg_icon("gear", TAB_ICON_COLORS))
         self.settings_button.clicked.connect(self._on_settings_clicked)
         self.bar_layout.addWidget(self.settings_button)
-
-        self.logo_button = QToolButton()
-        self.logo_button.setObjectName("sideTabLogo")
-        self.logo_button.setCheckable(True)
-        self.logo_button.setAutoRaise(True)
-        self.logo_button.setToolTip("About ThetaIDE")
-        self.logo_button.setAccessibleName("About ThetaIDE")
-        self.logo_button.setIconSize(QSize(36, 36))
-        self.logo_button.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        self.logo_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        self.logo_button.clicked.connect(self._on_logo_clicked)
-        self.set_logo_icon()
-        self.bar_layout.addWidget(self.logo_button)
 
         # Auto-hide: the bar leaves the layout and floats over the pages; this strip reveals it on hover
         self.auto_hide = False
@@ -475,8 +461,6 @@ class SideTabs(QWidget):
         self._bin_serial = 0
         self.settings_widget = None
         self.settings_index = -1
-        self.about_widget = None
-        self.about_index = -1
 
     @property
     def buttons(self):
@@ -485,23 +469,6 @@ class SideTabs(QWidget):
     @property
     def icon_names(self):
         return [self.tabs[tid]["icon"] for tid in self.tab_order]
-
-    def set_logo_icon(self):
-        """Corner logo: the bracket-theta mark, tinted with the current theme's accent."""
-        source_path = ICON_DIR / "theta_bracket_mark.svg"
-        if not source_path.exists():
-            return
-        ratio = QApplication.instance().devicePixelRatio() if QApplication.instance() else 1.0
-        source = source_path.read_text(encoding="utf-8").replace("currentColor", theme_color("accent"))
-        renderer = QSvgRenderer(QByteArray(source.encode("utf-8")))
-        pixmap = QPixmap(round(36 * ratio), round(36 * ratio))
-        pixmap.fill(Qt.GlobalColor.transparent)
-        painter = QPainter(pixmap)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        renderer.render(painter, QRectF(0, 0, pixmap.width(), pixmap.height()))
-        painter.end()
-        pixmap.setDevicePixelRatio(ratio)
-        self.logo_button.setIcon(QIcon(pixmap))
 
     def addTab(self, widget, text, icon=None, short=None, tab_id=None):
         """icon names an SVG in frontend/icons/; short is the label shown under it (text becomes the tooltip)."""
@@ -900,7 +867,6 @@ class SideTabs(QWidget):
             b["header"].setIcon(svg_icon("bin_expanded" if b["expanded"] else "bin_collapsed",
                                          TAB_ICON_COLORS, size=10))
         self.settings_button.setIcon(svg_icon("gear", TAB_ICON_COLORS))
-        self.set_logo_icon()
         self.bar.update()
 
     # ── Auto-hide ────────────────────────────────────────────────────────────
@@ -966,23 +932,12 @@ class SideTabs(QWidget):
         self.settings_index = self.stack.addWidget(widget)
         return self.settings_index
 
-    def set_about_widget(self, widget):
-        self.about_widget = widget
-        self.about_index = self.stack.addWidget(widget)
-        return self.about_index
-
     def _on_settings_clicked(self):
         self.settingsClicked.emit()
         if self.settings_widget is not None:
             self.setCurrentWidget(self.settings_widget)
         else:
             self.settings_button.setChecked(False)
-
-    def _on_logo_clicked(self):
-        self.logoClicked.emit()
-        target = self.about_widget if self.about_widget is not None else self.settings_widget
-        if target is not None:
-            self.setCurrentWidget(target)
 
     def widget(self, index):
         return self.stack.widget(index)
@@ -997,7 +952,6 @@ class SideTabs(QWidget):
 
     def setCurrentWidget(self, widget):
         self.settings_button.setChecked(widget is not None and widget is self.settings_widget)
-        self.logo_button.setChecked(widget is not None and widget is self.about_widget)
         for item in self.tabs.values():
             item["button"].setChecked(item["widget"] is widget)
         if widget is not None and widget != self.stack.currentWidget():
