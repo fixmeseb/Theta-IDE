@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from frontend.model_builder.graph import ModelGraph, model_config_yaml
+from frontend.plugins.core.model_builder.graph import ModelGraph, model_config_yaml
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -23,7 +23,7 @@ try:
     from PyQt6.QtWidgets import QApplication, QDialogButtonBox
 
     _app = QApplication.instance() or QApplication(sys.argv[:1])
-    from frontend.model_builder.dialog import ModelBuilderDialog
+    from frontend.plugins.core.model_builder.dialog import ModelBuilderDialog
 
     HAS_QT = True
 except ImportError:  # pragma: no cover - exercised only without a GUI build
@@ -375,3 +375,74 @@ class TestModelBuilderDialog:
         reopened = ModelBuilderDialog(model_dir=self.tmp, input_shape=(30,), initial_layers=dialog.graph.layers())
         assert not reopened._restored_layout
         assert [position[0] for position in reopened.graph.layout()] == [0, 0, 0, 0]
+
+
+# ── The plugin and the slot it fills ──────────────────────────────────────
+
+
+@pytest.mark.skipif(not HAS_QT, reason="PyQt6 not installed")
+class TestModelBuilderPlugin:
+    """The GUI half is an app plugin; the architecture it writes is a component."""
+
+    def test_the_slot_contribution_knows_which_method_its_row_serves(self):
+        from PyQt6.QtWidgets import QPushButton
+
+        from frontend.plugins.core.model_builder import ACTION_ID, SLOT_ID, ModelBuilderPlugin
+        from frontend.plugins.slots import ExtensionSlot, ExtensionSlotWidget
+
+        slot = ExtensionSlot(SLOT_ID)
+        plugin = ModelBuilderPlugin(manifest=None)
+
+        class Ctx:
+            def contribute_to_slot(self, slot_id, action_id, factory_or_widget, priority=100):
+                slot.add_action(action_id, factory_or_widget, priority)
+
+            def log(self, message):
+                pass
+
+        plugin.activate(Ctx())
+        assert [a for a, _ in slot.get_items()] == [ACTION_ID]
+
+        # One row per method, each carrying its own context.
+        seen = []
+        for method in ("clf", "ae"):
+            widget = ExtensionSlotWidget(
+                slot, context={"method": method, "model": "", "paradigm": "supervised", "apply": seen.append}
+            )
+            buttons = widget.findChildren(QPushButton)
+            assert [b.text() for b in buttons] == ["Design..."]
+
+    def test_a_factory_taking_no_context_still_works(self):
+        # Existing plugins contribute zero-argument factories.
+        from PyQt6.QtWidgets import QPushButton
+
+        from frontend.plugins.slots import ExtensionSlot, ExtensionSlotWidget
+
+        slot = ExtensionSlot("legacy")
+        slot.add_action("plain", lambda: QPushButton("Plain"))
+        widget = ExtensionSlotWidget(slot, context={"method": "clf"})
+        assert [b.text() for b in widget.findChildren(QPushButton)] == ["Plain"]
+
+    def test_deactivate_removes_the_contribution(self):
+        from frontend.plugins.core.model_builder import ACTION_ID, SLOT_ID, ModelBuilderPlugin
+        from frontend.plugins.slots import ExtensionSlot
+
+        slot = ExtensionSlot(SLOT_ID)
+        removed = []
+
+        class Ctx:
+            def contribute_to_slot(self, slot_id, action_id, factory_or_widget, priority=100):
+                slot.add_action(action_id, factory_or_widget, priority)
+
+            def remove_from_slot(self, slot_id, action_id):
+                removed.append((slot_id, action_id))
+                slot.remove_action(action_id)
+
+            def log(self, message):
+                pass
+
+        plugin = ModelBuilderPlugin(manifest=None)
+        plugin.activate(Ctx())
+        plugin.deactivate()
+        assert removed == [(SLOT_ID, ACTION_ID)]
+        assert slot.get_items() == []

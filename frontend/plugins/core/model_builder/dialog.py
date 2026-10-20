@@ -29,7 +29,7 @@ from PyQt6.QtWidgets import (
 )
 
 from src.usr.models.sequential_spec.sequential_spec import LAYER_KINDS
-from ..theme import theme_color
+from ....theme import theme_color
 from .canvas import GraphCanvas, LayerPalette
 from .graph import GraphNode, ModelGraph, model_config_yaml
 

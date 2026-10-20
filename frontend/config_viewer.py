@@ -24,7 +24,6 @@ from PyQt6.QtWidgets import (
     QLabel,
     QLineEdit,
     QMenu,
-    QDialog,
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
@@ -2882,17 +2881,9 @@ class ConfigViewer(QWidget):
                     row_mo.addWidget(txt_model)
                     if btn_add_mp:
                         row_mo.addWidget(btn_add_mp)
-                    btn_design = QPushButton("Design...")
-                    btn_design.setToolTip(
-                        "Design this architecture by wiring layer blocks together.\n"
-                        "Saves a new architecture into in/config/model/."
-                    )
-                    # clicked passes a checked flag, which would arrive as the
-                    # method name if the slot took it positionally.
-                    btn_design.clicked.connect(
-                        lambda _checked=False, mn=m_name, cur=model_name: self._open_model_builder(mn, cur)
-                    )
-                    row_mo.addWidget(btn_design)
+                    slot_widget = self._model_row_slot(m_name, model_name)
+                    if slot_widget is not None:
+                        row_mo.addWidget(slot_widget)
                     row_mo.addStretch()
                     sc_layout.addRow("Model", row_mo)
 
@@ -4850,50 +4841,49 @@ class ConfigViewer(QWidget):
         focus = QApplication.focusWidget()
         return isinstance(focus, (QLineEdit, QPlainTextEdit, QTextEdit)) and self.isAncestorOf(focus)
 
-    def _open_model_builder(self, method_name: str, current_model: str) -> None:
-        """Open the visual builder, then point this method at what it saved.
+    def _model_row_slot(self, method_name: str, current_model: str):
+        """The extension point beside a method's model picker.
 
-        Pre-loads the current architecture when it is one the builder wrote, so
-        reopening a design edits it instead of starting over. Anything else is
-        a Python class with no layer list to show, so the canvas starts empty.
+        Anything that edits a model architecture is a GUI concern and belongs
+        in a plugin, not in this panel. The panel offers the row and the
+        context describing it; a plugin decides whether to put anything there.
+
+        The context carries `apply` rather than letting a contribution write
+        to raw_data itself, so the panel stays the only thing that mutates
+        its own document.
         """
-        from .model_builder.dialog import ModelBuilderDialog
+        host = self.window()
+        slots = getattr(host, "extension_slots", None)
+        if slots is None:
+            return None
+        slot = slots.get_slot("experiment.method.model_row")
+        if slot is None:
+            return None
 
-        tree = config_tree()
-        if tree is None:
-            QMessageBox.warning(self, "No configuration", "The config tree is not loaded yet.")
-            return
+        from .plugins.slots import ExtensionSlotWidget
 
-        params = dict(tree.models[current_model].parameters) if current_model in tree.models else {}
-        layers = params.get("layers") if isinstance(params.get("layers"), list) else None
-        shape = params.get("input_shape")
-        input_shape = tuple(int(d) for d in shape) if isinstance(shape, (list, tuple)) and shape else (30,)
-
-        declared = params.get("lightning_module")
-        if not isinstance(declared, str):
-            paradigm = str(self.raw_data.get("paradigm", "") or "")
-            declared = (
-                "AutoencoderLightningModule" if paradigm == "unsupervised" else "TabularClassifierLightningModule"
-            )
-
-        dialog = ModelBuilderDialog(
-            model_dir=tree.config_root / "model",
-            input_shape=input_shape,
-            lightning_module=declared,
-            initial_layers=layers,
-            initial_layout=params.get("builder_layout"),
-            initial_name=current_model if layers else "",
+        return ExtensionSlotWidget(
+            slot,
             parent=self,
+            context={
+                "method": method_name,
+                "model": current_model,
+                "paradigm": str(self.raw_data.get("paradigm", "") or ""),
+                "apply": lambda name, mn=method_name: self._set_method_model(mn, name),
+            },
         )
-        if dialog.exec() != QDialog.DialogCode.Accepted or not dialog.saved_name:
-            return
 
+    def _set_method_model(self, method_name: str, model_name: str) -> None:
+        """Point a method at a model, and re-read the configs from disk.
+
+        The model combo is filled from in/config/model/, so a model written
+        while the app is open is invisible until the cached tree re-scans.
+        """
+        if not model_name:
+            return
         methods = self.raw_data.setdefault("methods", {})
-        spec = methods.setdefault(method_name, {})
-        spec["model"] = dialog.saved_name
+        methods.setdefault(method_name, {})["model"] = model_name
         self._mark_dirty()
-        # The combo is filled from in/config/model/, so the cached tree has to
-        # re-scan before the row is rebuilt or the new name will not be there.
         config_tree(force_reload=True)
         self._render_boxes()
 

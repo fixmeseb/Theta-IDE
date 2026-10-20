@@ -94,6 +94,9 @@ temp/
 !/in/config/agent/.gitkeep
 /in/config/model/*
 !/in/config/model/.gitkeep
+# Ships with the sequential_spec component below, so the model is
+# selectable without installing anything.
+!/in/config/model/sequential_spec.yaml
 /in/config/env/*
 !/in/config/env/.gitkeep
 /src/usr/methods/*

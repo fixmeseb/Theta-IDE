@@ -1,0 +1,14 @@
+# Default architecture for the spec-driven model. The Visual Model Builder
+# writes files like this one; editing `layers:` by hand works just as well.
+architecture: sequential_spec
+# Resolved through paradigm_loader's component registry. Without this the
+# paradigm falls back to its default module, which expects a different batch.
+lightning_module: TabularClassifierLightningModule
+layers:
+  - type: linear
+    out_features: 64
+  - type: relu
+  - type: dropout
+    p: 0.1
+  - type: linear
+    out_features: 1
