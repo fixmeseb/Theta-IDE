@@ -1728,6 +1728,8 @@ class ConfigViewer(QWidget):
                 self.field_widgets["paradigm"] = self.combo_paradigm
 
                 self.combo_env = ComboBox()
+                self.combo_env.setMinimumWidth(280)
+                self.combo_env.setMaximumWidth(360)
                 inherited_env = tree.group(self._group_name() or "").env
                 inherit_label = f"(inherit from base — {inherited_env})" if inherited_env else self.INHERIT
                 self.combo_env.addItem(inherit_label, self.INHERIT)
@@ -2218,17 +2220,9 @@ class ConfigViewer(QWidget):
             note_row = QHBoxLayout()
             note_row.addWidget(label("No default method configured for this group.", "muted"))
             note_row.addStretch()
-            btn_add_base_m = _make_subtle_tool_button("plus", "Add default method for this group", size=24, icon_size=14)
-            btn_add_base_m.clicked.connect(lambda: self._start_add_new_method())
-            note_row.addWidget(btn_add_base_m)
             m_layout.addLayout(note_row)
         elif not is_base and not has_methods and not pending_new:
-            empty_row = QHBoxLayout()
-            empty_row.addStretch()
-            btn_add_first = _make_subtle_tool_button("plus", "Add method", size=24, icon_size=14)
-            btn_add_first.clicked.connect(lambda: self._start_add_new_method())
-            empty_row.addWidget(btn_add_first)
-            m_layout.addLayout(empty_row)
+            pass  # The Methods header already provides the add-method action.
         else:
             # Sub-cards for each method wrapped in MethodCardsContainer for drag reordering
             method_container = MethodCardsContainer(self)
@@ -2266,6 +2260,17 @@ class ConfigViewer(QWidget):
                 m_edit.setStyleSheet("font-size: 16px; font-weight: 600; padding: 2px 6px; border-radius: 4px;")
                 m_edit.hide()
                 title_row.addWidget(m_edit)
+
+                cand_train = get_training_candidate_hyperparameters(set(m_spec.keys()))
+                btn_add_tp = None
+                if cand_train:
+                    btn_add_tp = _make_param_adder_button(
+                        "Add training parameter",
+                        cand_train,
+                        lambda p, mn=m_name: self._add_method_param(mn, p),
+                        parent_widget=sub_card,
+                    )
+                    title_row.addWidget(btn_add_tp)
 
                 committing_m_rename = [False]
 
@@ -2993,27 +2998,10 @@ class ConfigViewer(QWidget):
                         row_extra.addWidget(btn_del)
                         train_rows.append((str(extra_k), row_extra))
 
-                cand_train = get_training_candidate_hyperparameters(set(m_spec.keys()))
-                btn_add_tp = None
-                if cand_train:
-                    btn_add_tp = _make_param_adder_button(
-                        "Add training parameter",
-                        cand_train,
-                        lambda p, mn=m_name: self._add_method_param(mn, p),
-                        parent_widget=sub_card
-                    )
-
                 if train_rows:
-                    if btn_add_tp:
-                        train_rows[-1][1].addWidget(btn_add_tp)
                     for t_lbl, t_row in train_rows:
                         t_row.addStretch()
                         sc_layout.addRow(t_lbl, t_row)
-                elif btn_add_tp:
-                    row_tr = QHBoxLayout()
-                    row_tr.addWidget(btn_add_tp)
-                    row_tr.addStretch()
-                    sc_layout.addRow("Training", row_tr)
 
                 card_vbox.addLayout(sc_layout)
                 card_vbox.addStretch()
@@ -3313,18 +3301,14 @@ class ConfigViewer(QWidget):
         desc_label.setFixedWidth(145)
         desc_row.addWidget(desc_label)
         self.txt_description = QLineEdit(str(data.get("description") or ""))
-        self.txt_description.setMaximumWidth(520)
-        self.txt_description.setPlaceholderText("Optional commit-style notes or hypothesis for this experiment...")
         self.txt_description.textChanged.connect(
             lambda v: self._on_field_edited("description", v.strip()) if v.strip()
             else (self.raw_data.pop("description", None), self._mark_dirty())
         )
         desc_row.addWidget(self.txt_description)
-        if data.get("description"):
-            btn_del_desc = _make_subtle_tool_button("close", "Clear description override", size=20, icon_size=12)
-            btn_del_desc.clicked.connect(lambda: self.txt_description.setText(""))
-            desc_row.addWidget(btn_del_desc)
-        desc_row.addStretch()
+        btn_del_desc = _make_subtle_tool_button("close", "Clear description", size=20, icon_size=12)
+        btn_del_desc.clicked.connect(lambda: self.txt_description.setText(""))
+        desc_row.addWidget(btn_del_desc)
         self.field_widgets["description"] = self.txt_description
         box.add_layout(desc_row)
 
