@@ -549,6 +549,24 @@ def _read_group_base(tree, group):
         return {}
 
 
+def _component_profiles(config_root: Path, directory: str, selector: str) -> dict[str, dict]:
+    """Installed YAML profiles, keyed by the runtime component name."""
+    profiles = {}
+    profile_root = config_root / directory
+    if profile_root.is_dir():
+        for path in sorted(profile_root.rglob("*.yaml")):
+            if path.name.startswith(("_", ".")):
+                continue
+            try:
+                values = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+            except (OSError, yaml.YAMLError):
+                continue
+            if isinstance(values, dict):
+                name = str(values.get(selector) or path.stem)
+                profiles.setdefault(name, values)
+    return profiles
+
+
 class ConfigBox(QFrame):
     """Themed card container representing a section of configuration."""
     def __init__(self, title=None, subtitle=None, parent=None):
@@ -783,7 +801,7 @@ class ConfigViewer(QWidget):
     export_component_requested = pyqtSignal(object, str)
     delete_component_requested = pyqtSignal(object, str)
 
-    INHERIT = "(inherit from base)"
+    INHERIT = "Default"
 
     @property
     def tree(self):
@@ -1660,28 +1678,6 @@ class ConfigViewer(QWidget):
                 self.combo_env.setCurrentIndex(0)
             form_base.addWidget(self.combo_env, 0, 3)
 
-            datamodule_label = label("Data Module")
-            datamodule_label.setFixedWidth(145)
-            form_base.addWidget(datamodule_label, 1, 0)
-            self.combo_datamodule = ComboBox()
-            self.combo_datamodule.addItem("— Default for Paradigm —", None)
-            try:
-                from src.app.core.datamodule_registry import list_registered_datamodules
-                dm_names = sorted(set(name for name in list_registered_datamodules() if any(c.isupper() for c in name)))
-                self.combo_datamodule.addItems(dm_names)
-            except Exception:
-                pass
-            base_dm = data.get("data_module")
-            if isinstance(base_dm, dict):
-                base_dm_name = base_dm.get("name") or base_dm.get("class")
-            else:
-                base_dm_name = base_dm
-            if base_dm_name:
-                self.combo_datamodule.setCurrentText(str(base_dm_name))
-            else:
-                self.combo_datamodule.setCurrentIndex(0)
-            form_base.addWidget(self.combo_datamodule, 1, 1)
-
             def _on_base_p_changed(p_text):
                 val = None if p_text in ("", "— Select Paradigm —") else p_text
                 self.raw_data["paradigm"] = val
@@ -1692,21 +1688,11 @@ class ConfigViewer(QWidget):
                 val = None if e_text in ("", "— Select Environment —") else e_text
                 self._set_base_env(val)
 
-            def _on_base_dm_changed(dm_text):
-                val = None if dm_text in ("", "— Default for Paradigm —") else dm_text
-                if val is None:
-                    self.raw_data.pop("data_module", None)
-                else:
-                    self.raw_data["data_module"] = val
-                self._mark_dirty()
-
             self.combo_paradigm.currentTextChanged.connect(_on_base_p_changed)
             self.combo_env.currentTextChanged.connect(_on_base_e_changed)
-            self.combo_datamodule.currentTextChanged.connect(_on_base_dm_changed)
 
             self.field_widgets["paradigm"] = self.combo_paradigm
             self.field_widgets["env"] = self.combo_env
-            self.field_widgets["data_module"] = self.combo_datamodule
 
             box_base.add_layout(form_base)
             if self._has_experiment_lower_params(data, resolved):
@@ -1732,7 +1718,7 @@ class ConfigViewer(QWidget):
                 self.combo_env.setMinimumWidth(280)
                 self.combo_env.setMaximumWidth(360)
                 inherited_env = tree.group(self._group_name() or "").env
-                inherit_label = f"(inherit from base — {inherited_env})" if inherited_env else self.INHERIT
+                inherit_label = inherited_env or self._inherited_env() or "Default"
                 self.combo_env.addItem(inherit_label, self.INHERIT)
                 selected_paradigm = self.combo_paradigm.currentText()
                 allowed_envs = [e.name for e in tree.environments_for(selected_paradigm)] if selected_paradigm in tree.paradigms else []
@@ -1868,7 +1854,7 @@ class ConfigViewer(QWidget):
             btn_del_ep.clicked.connect(lambda: (self.raw_data.pop("epochs", None), self._mark_dirty(), self._render_boxes()))
             row_epochs.addWidget(btn_del_ep)
         else:
-            row_epochs.addWidget(label("(inherited)", "muted"))
+            row_epochs.addWidget(label(str(self.spin_epochs.value()), "muted"))
         row_epochs.addStretch()
 
         # Row layout for eval_every_n_epochs
@@ -1887,7 +1873,7 @@ class ConfigViewer(QWidget):
             btn_del_ee.clicked.connect(lambda: (self.raw_data.pop("eval_every_n_epochs", None), self._mark_dirty(), self._render_boxes()))
             row_eval_every.addWidget(btn_del_ee)
         else:
-            row_eval_every.addWidget(label("(inherited)", "muted"))
+            row_eval_every.addWidget(label(str(self.spin_eval_every.value()), "muted"))
         row_eval_every.addStretch()
 
         # Row layout for timesteps
@@ -1899,7 +1885,7 @@ class ConfigViewer(QWidget):
             btn_del_tt.clicked.connect(lambda: (self.raw_data.pop("total_timesteps", None), self._mark_dirty(), self._render_boxes()))
             row_timesteps.addWidget(btn_del_tt)
         else:
-            row_timesteps.addWidget(label("(inherited)", "muted"))
+            row_timesteps.addWidget(label(str(self.spin_timesteps.value()), "muted"))
         row_timesteps.addStretch()
 
         # Row layout for seed
@@ -1916,7 +1902,7 @@ class ConfigViewer(QWidget):
             btn_del_seed.clicked.connect(lambda: (self.raw_data.pop("seed", None), self._mark_dirty(), self._render_boxes()))
             row_seed.addWidget(btn_del_seed)
         else:
-            row_seed.addWidget(label("(inherited)", "muted"))
+            row_seed.addWidget(label(str(self.spin_seed.value()), "muted"))
         row_seed.addStretch()
 
         # Row layout for eval_episodes
@@ -1928,7 +1914,7 @@ class ConfigViewer(QWidget):
             btn_del_ee.clicked.connect(lambda: (self.raw_data.pop("eval_episodes", None), self._mark_dirty(), self._render_boxes()))
             row_eval_ep.addWidget(btn_del_ee)
         elif eval_ep_enabled:
-            row_eval_ep.addWidget(label("(inherited)", "muted"))
+            row_eval_ep.addWidget(label(str(self.spin_eval_ep.value()), "muted"))
         row_eval_ep.addStretch()
 
         # Row layout for eval frequency (steps)
@@ -1950,7 +1936,7 @@ class ConfigViewer(QWidget):
                 btn_del_ef.clicked.connect(lambda _, fk=freq_key: (self.raw_data.pop(fk, None), self._mark_dirty(), self._render_boxes()))
                 row_eval_freq.addWidget(btn_del_ef)
             else:
-                row_eval_freq.addWidget(label("(inherited)", "muted"))
+                row_eval_freq.addWidget(label(str(spin_eval_freq.value()), "muted"))
             row_eval_freq.addStretch()
 
         row_checkpoints = self._checkpoint_row(data, resolved)
@@ -2069,7 +2055,7 @@ class ConfigViewer(QWidget):
                 )
                 row_flag.addWidget(btn_del_flag)
             else:
-                row_flag.addWidget(label("(inherited)", "muted"))
+                row_flag.addWidget(label(str(chk.isChecked()).lower(), "muted"))
 
             chk_row.addLayout(row_flag)
 
@@ -2128,8 +2114,6 @@ class ConfigViewer(QWidget):
             lbl_shared.setStyleSheet("font-size: 16px; font-weight: 600;")
             p_header.addWidget(lbl_shared)
 
-            if not has_params:
-                p_header.addWidget(label("(inherited from base)", "muted"))
             p_header.addStretch()
             if has_params:
                 btn_rm_params = _make_subtle_tool_button("trash", "Remove Shared Parameters block", size=24, icon_size=14)
@@ -3169,8 +3153,6 @@ class ConfigViewer(QWidget):
                 btn_rm_ckpt = _make_subtle_tool_button("trash", "Remove checkpoint overrides", size=24, icon_size=14)
                 btn_rm_ckpt.clicked.connect(lambda: self.remove_block("checkpoint"))
                 ckpt_header.addWidget(btn_rm_ckpt)
-            else:
-                ckpt_header.addWidget(label("(inherited defaults)", "muted"))
             box_ckpt.add_layout(ckpt_header)
 
             grid_c = QGridLayout()
@@ -3215,6 +3197,9 @@ class ConfigViewer(QWidget):
             box_ckpt.add_layout(grid_c)
             self.boxes_layout.addWidget(box_ckpt)
 
+        self._render_component_overrides(data, resolved)
+        self._render_remaining_sections()
+
         # --- ADD CONFIGURATION BLOCK DROPDOWN BUTTON ---
         btn_add_block_row = QHBoxLayout()
         self.btn_add_block = _make_subtle_tool_button("plus", "Add overrides", size=26, icon_size=14)
@@ -3240,6 +3225,10 @@ class ConfigViewer(QWidget):
         """)
         self.btn_add_block.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         add_menu = QMenu(self.btn_add_block)
+        for kind, title in (("data_module", "Data Loaders"), ("evaluator", "Evaluators"), ("plots", "Figures")):
+            action = add_menu.addAction(title)
+            action.triggered.connect(lambda _, k=kind: self.add_component_override(k, resolved))
+            action.setEnabled(not self._has_component_override(kind, data))
         act_ckpt = add_menu.addAction("Checkpoint Settings")
         act_ckpt.triggered.connect(lambda: self.add_block("checkpoint"))
         act_ckpt.setEnabled("checkpoint" not in data)
@@ -3250,7 +3239,357 @@ class ConfigViewer(QWidget):
         btn_add_block_row.addStretch()
         self.boxes_layout.addLayout(btn_add_block_row)
 
-        self._render_remaining_sections()
+    @staticmethod
+    def _has_component_override(kind: str, data: dict) -> bool:
+        return ("plots" in data or "plot_overrides" in data) if kind == "plots" else kind in data
+
+    def add_component_override(self, kind: str, resolved: dict | None = None) -> None:
+        resolved = resolved or self._get_resolved_defaults()
+        if kind in ("data_module", "evaluator"):
+            inherited = self._component_name(self._inherited_component(kind, resolved))
+            choices = self._component_choices(kind)
+            name = inherited or (sorted(choices)[0] if choices else "")
+            if name:
+                self.raw_data[kind] = {"name": name, "params": self._component_default_params(kind, name)}
+        elif kind == "plots":
+            inherited = resolved.get("plots")
+            if isinstance(inherited, (list, dict)):
+                plots = copy.deepcopy(inherited)
+            else:
+                plots = self._inherited_plot_names(resolved)
+            self.raw_data["plots"] = plots
+            selected = ([str(item) for item in plots] if isinstance(plots, list) else
+                        [str(key) for key, value in plots.items() if value is not None and key != "style"] if isinstance(plots, dict) else [])
+            self.raw_data["plot_overrides"] = {
+                name: self._component_default_params("plots", name)
+                for name in selected if name in self._component_choices("plots")
+            }
+            if not self.raw_data["plot_overrides"]:
+                self.raw_data.pop("plot_overrides", None)
+        else:
+            return
+        self._mark_dirty()
+        self._render_boxes()
+
+    def _component_choices(self, kind: str) -> dict[str, dict]:
+        tree = config_tree()
+        root = tree.config_root if tree else PROJECT_ROOT / "in" / "config"
+        directory, selector = {
+            "data_module": ("data", "data_module"),
+            "evaluator": ("eval", "evaluator"),
+            "plots": ("plot", "plotter"),
+        }[kind]
+        profiles = _component_profiles(root, directory, selector)
+        try:
+            if kind == "data_module":
+                from src.app.core.datamodule_registry import get_datamodule_class, list_registered_datamodules
+                names = list_registered_datamodules()
+                resolve = get_datamodule_class
+            elif kind == "evaluator":
+                from src.app.core.eval_registry import get_evaluator_class, list_registered_evaluators
+                names = list_registered_evaluators()
+                resolve = get_evaluator_class
+            else:
+                from src.app.core.plotter_registry import get_plotter_class, list_registered_plotters
+                names = list_registered_plotters()
+                resolve = get_plotter_class
+            for name in names:
+                profiles.setdefault(str(name), {})
+            paradigm = self.raw_data.get("paradigm") or self._inherited_paradigm()
+            if paradigm:
+                allowed = {}
+                for name, values in profiles.items():
+                    supported = values.get("compatible_paradigms") or values.get("paradigms")
+                    if not supported:
+                        try:
+                            cls = resolve(name)
+                        except Exception:
+                            cls = None
+                        declared = getattr(cls, "get_supported_paradigms", None)
+                        if callable(declared):
+                            try:
+                                supported = declared()
+                            except Exception:
+                                supported = None
+                    if not supported or paradigm in supported:
+                        allowed[name] = values
+                profiles = allowed
+        except Exception:
+            pass
+        return profiles
+
+    @staticmethod
+    def _component_name(value: Any) -> str:
+        if isinstance(value, Mapping):
+            return str(value.get("name") or value.get("class") or value.get("type") or "")
+        return str(value or "")
+
+    def _component_default_params(self, kind: str, name: str) -> dict:
+        profile = self._component_choices(kind).get(name, {})
+        reserved = {
+            "data_module": {"name", "class", "type", "data_module", "compatible_paradigms", "paradigms"},
+            "evaluator": {"name", "class", "type", "evaluator", "compatible_paradigms", "paradigms"},
+        }.get(kind, {"name", "class", "type", "plotter", "compatible_paradigms", "paradigms"})
+        return {key: copy.deepcopy(value) for key, value in profile.items() if key not in reserved}
+
+    def _inherited_component(self, kind: str, resolved: dict) -> Any:
+        value = resolved.get(kind)
+        if value is not None:
+            return value
+        tree = config_tree()
+        env_name = self._get_explicit_env() or self._inherited_env()
+        env = tree.environments.get(env_name) if tree and env_name else None
+        if env and env.raw.get(kind) is not None:
+            return env.raw[kind]
+        paradigm = self.raw_data.get("paradigm") or self._inherited_paradigm()
+        rules = tree.paradigms.get(paradigm) if tree and paradigm else None
+        if rules:
+            key = "default_data_module" if kind == "data_module" else "eval_protocol"
+            return rules.raw.get(key)
+        return None
+
+    def _set_component_choice(self, kind: str, name: str) -> None:
+        if not name:
+            self.raw_data.pop(kind, None)
+        else:
+            old = self.raw_data.get(kind)
+            if isinstance(old, dict) and self._component_name(old) == name:
+                return
+            self.raw_data[kind] = {"name": name, "params": self._component_default_params(kind, name)}
+        self._mark_dirty()
+        QTimer.singleShot(0, self._render_boxes)
+
+    def _add_component_parameter(self, kind: str, key: str, default: Any) -> None:
+        if not key:
+            return
+        value = self.raw_data.get(kind)
+        if not isinstance(value, dict):
+            value = {"name": self._component_name(value)}
+            self.raw_data[kind] = value
+        value.setdefault("params", {})[key] = copy.deepcopy(default)
+        self._mark_dirty()
+        QTimer.singleShot(0, self._render_boxes)
+
+    def _inherited_plot_names(self, resolved: dict) -> list[str]:
+        plots = resolved.get("plots")
+        if isinstance(plots, list):
+            return [str(item) for item in plots]
+        if isinstance(plots, dict):
+            choices = self._component_choices("plots")
+            return [name for name, value in plots.items() if name in choices or isinstance(value, dict) and name != "style"]
+        tree = config_tree()
+        env_name = self._get_explicit_env() or self._inherited_env()
+        env = tree.environments.get(env_name) if tree and env_name else None
+        defaults = env.raw.get("default_plots") if env else None
+        return [str(item) for item in defaults] if isinstance(defaults, list) else []
+
+    def _set_plot_override(self, name: str, enabled: bool, resolved: dict | None = None) -> None:
+        plots = self.raw_data.get("plots")
+        inherited = (resolved or self._get_resolved_defaults()).get("plots")
+        if isinstance(plots, list):
+            plots = [str(item) for item in plots]
+        elif plots is None and isinstance(inherited, list):
+            plots = [str(item) for item in inherited]
+        elif not isinstance(plots, dict):
+            plots = {item: {} for item in self._inherited_plot_names(resolved or self._get_resolved_defaults())}
+        if isinstance(plots, list):
+            if enabled and name not in plots:
+                plots.append(name)
+            elif not enabled:
+                plots = [item for item in plots if item != name]
+        elif enabled:
+            plots[name] = plots.get(name) or {}
+        else:
+            if isinstance(inherited, dict) and name in inherited:
+                plots[name] = None  # tombstone: Hydra deep-merges group dictionaries
+            else:
+                plots.pop(name, None)
+        if enabled:
+            params = self.raw_data.setdefault("plot_overrides", {})
+            params.setdefault(name, self._component_default_params("plots", name))
+        self.raw_data["plots"] = plots
+        if not enabled and isinstance(self.raw_data.get("plot_overrides"), dict):
+            self.raw_data["plot_overrides"].pop(name, None)
+            if not self.raw_data["plot_overrides"]:
+                self.raw_data.pop("plot_overrides", None)
+        self._mark_dirty()
+        QTimer.singleShot(0, self._render_boxes)
+
+    def _add_plot_parameter(self, name: str, key: str, default: Any) -> None:
+        plot = self.raw_data.setdefault("plot_overrides", {}).setdefault(name, {})
+        plot[key] = copy.deepcopy(default)
+        self._mark_dirty()
+        QTimer.singleShot(0, self._render_boxes)
+
+    def _render_component_overrides(self, data: dict, resolved: dict) -> None:
+        """Expose component selection and per-component YAML parameters in recipes."""
+        for kind, title in (("data_module", "Data Loaders"), ("evaluator", "Evaluators")):
+            if kind not in data:
+                continue
+            explicit = data.get(kind)
+            inherited = self._inherited_component(kind, resolved)
+            name = self._component_name(explicit)
+            inherited_name = self._component_name(inherited)
+            choices = self._component_choices(kind)
+            box = ConfigBox()
+            heading = QHBoxLayout()
+            heading.addWidget(label(title, "cardTitle"))
+            heading.addStretch()
+            trash = _make_subtle_tool_button("trash", f"Remove {title.lower()} override", size=24, icon_size=14)
+            trash.clicked.connect(lambda _, k=kind: self.remove_block(k))
+            heading.addWidget(trash)
+            box.add_layout(heading)
+            row = QHBoxLayout()
+            row.addWidget(label("Component"))
+            combo = ComboBox()
+            combo.setEditable(True)
+            inherited_label = inherited_name or "None"
+            combo.addItem(inherited_label, "")
+            for choice in sorted((set(choices) | ({name} if name else set())) - ({inherited_name} if inherited_name else set())):
+                combo.addItem(choice, choice)
+            if name:
+                explicit_index = combo.findData(name)
+                if explicit_index < 0 and name == inherited_name:
+                    combo.insertItem(1, name, name)
+                    explicit_index = 1
+                combo.setCurrentIndex(explicit_index if explicit_index >= 0 else 0)
+            else:
+                combo.setCurrentIndex(0)
+            combo.currentTextChanged.connect(
+                lambda selected, k=kind, c=combo: self._set_component_choice(
+                    k, str(c.currentData() or selected) if c.currentIndex() != 0 else ""
+                )
+            )
+            row.addWidget(combo)
+            if explicit:
+                reset = _make_subtle_tool_button("close", f"Use inherited {title.lower()} component", size=20, icon_size=12)
+                reset.clicked.connect(lambda _, k=kind: self._set_component_choice(k, ""))
+                row.addWidget(reset)
+            elif inherited_name:
+                customize = QPushButton("Use with defaults")
+                customize.setToolTip("Create an experiment override using this component and its profile defaults")
+                customize.clicked.connect(lambda _, k=kind, n=inherited_name: self._set_component_choice(k, n))
+                row.addWidget(customize)
+            row.addStretch()
+            box.add_layout(row)
+            self.field_widgets[kind] = combo
+
+            if name:
+                params = explicit.get("params", {}) if isinstance(explicit, dict) else {}
+                if not isinstance(params, dict):
+                    params = {}
+                defaults = self._component_default_params(kind, name)
+                candidates = {key: val for key, val in defaults.items() if key not in params}
+                param_row = QHBoxLayout()
+                param_row.addWidget(label("Parameters", "muted"))
+                add = _make_param_adder_button(
+                    f"Add {title.lower()} parameter", list(candidates),
+                    lambda key, k=kind, options=candidates: self._add_component_parameter(k, key, options.get(key)),
+                    parent_widget=self,
+                )
+                param_row.addWidget(add)
+                param_row.addStretch()
+                box.add_layout(param_row)
+                form = QFormLayout()
+                self._render_generic_dict_contents(form, params, (kind, "params"))
+                if params:
+                    box.add_layout(form)
+                if isinstance(explicit, dict):
+                    extra = {key: value for key, value in explicit.items()
+                             if key not in ("name", "class", "type", "params")}
+                    if extra:
+                        extra_form = QFormLayout()
+                        self._render_generic_dict_contents(extra_form, extra, (kind,))
+                        box.add_layout(extra_form)
+            self.boxes_layout.addWidget(box)
+
+        if not ("plots" in data or "plot_overrides" in data):
+            return
+        plot_choices = self._component_choices("plots")
+        explicit_plots = data.get("plots")
+        per_plot_overrides = data.get("plot_overrides") if isinstance(data.get("plot_overrides"), dict) else {}
+        box = ConfigBox()
+        heading = QHBoxLayout()
+        heading.addWidget(label("Figures", "cardTitle"))
+        heading.addStretch()
+        trash = _make_subtle_tool_button("trash", "Remove figures override", size=24, icon_size=14)
+        trash.clicked.connect(lambda: self.remove_block("plots"))
+        heading.addWidget(trash)
+        box.add_layout(heading)
+        if explicit_plots is not None:
+            box.add_widget(label("Selected Figures", "muted"))
+        if isinstance(explicit_plots, list):
+            list_form = QFormLayout()
+            list_form.addRow("items", self._list_field(
+                explicit_plots, lambda value: self._on_field_edited("plots", value)
+            ))
+            box.add_layout(list_form)
+        if isinstance(explicit_plots, list):
+            selected = [str(item) for item in explicit_plots]
+        else:
+            selected = self._inherited_plot_names(resolved)
+            if isinstance(explicit_plots, dict):
+                for key, value in explicit_plots.items():
+                    if value is None:
+                        selected = [item for item in selected if item != key]
+                    elif key in plot_choices or isinstance(value, dict) and key != "style":
+                        if key not in selected:
+                            selected.append(key)
+        header = QHBoxLayout()
+        header.addWidget(label("Figures"))
+        available = [name for name in plot_choices if name not in selected]
+        header.addWidget(_make_param_adder_button(
+            "Add figure", available,
+            lambda name: self._set_plot_override(name, True, resolved), parent_widget=self,
+        ))
+        if explicit_plots is not None:
+            reset = _make_subtle_tool_button("close", "Inherit figures from group or environment", size=20, icon_size=12)
+            reset.clicked.connect(lambda: self._remove_generic_field("plots"))
+            header.addWidget(reset)
+        header.addStretch()
+        box.add_layout(header)
+        for name in selected:
+            row = QHBoxLayout()
+            row.addWidget(label(name))
+            profile = plot_choices.get(name, {})
+            inline_values = explicit_plots.get(name, {}) if isinstance(explicit_plots, dict) else {}
+            values = per_plot_overrides.get(name, inline_values)
+            if not isinstance(values, dict):
+                values = {}
+            candidates = {key: val for key, val in profile.items() if key not in values}
+            if name not in per_plot_overrides and not values:
+                customize = QPushButton("Use with defaults")
+                customize.clicked.connect(lambda _, n=name: self._add_plot_parameter_defaults(n))
+                row.addWidget(customize)
+            row.addWidget(_make_param_adder_button(
+                f"Override {name} parameter", list(candidates),
+                lambda key, n=name, options=candidates: self._add_plot_parameter(n, key, options.get(key)),
+                parent_widget=self,
+            ))
+            row.addWidget(_make_subtle_tool_button("close", f"Remove {name} figure", size=20, icon_size=12))
+            row.itemAt(row.count() - 1).widget().clicked.connect(lambda _, n=name: self._set_plot_override(n, False, resolved))
+            row.addStretch()
+            box.add_layout(row)
+            if values:
+                form = QFormLayout()
+                path = ("plot_overrides", name) if name in per_plot_overrides else ("plots", name)
+                self._render_generic_dict_contents(form, values, path)
+                box.add_layout(form)
+        if isinstance(explicit_plots, dict):
+            general = {key: value for key, value in explicit_plots.items() if key not in selected and value is not None}
+            if general:
+                box.add_widget(label("Figure settings", "muted"))
+                form = QFormLayout()
+                self._render_generic_dict_contents(form, general, ("plots",))
+                box.add_layout(form)
+        self.boxes_layout.addWidget(box)
+
+    def _add_plot_parameter_defaults(self, name: str) -> None:
+        """Materialize all first-level defaults for a selected inherited figure."""
+        params = self._component_default_params("plots", name)
+        self.raw_data.setdefault("plot_overrides", {})[name] = params
+        self._mark_dirty()
+        QTimer.singleShot(0, self._render_boxes)
 
     def _add_experiment_section_header(self, box: ConfigBox, data: dict, resolved: dict) -> None:
         """Render the Experiment/Group Defaults heading and its override picker."""
@@ -3566,38 +3905,6 @@ class ConfigViewer(QWidget):
         source_row.addStretch()
         ds_form.addRow("Dataset / Static Environment", source_row)
 
-        adapter_row = QHBoxLayout()
-        adapter_row.setSpacing(6)
-        self.combo_ds_datamodule = ComboBox()
-        self.combo_ds_datamodule.setMaximumWidth(320)
-        self.combo_ds_datamodule.addItem("— Default adapter (inherit from Group / Paradigm) —", None)
-        try:
-            from src.app.core.datamodule_registry import list_registered_datamodules
-
-            names = sorted(set(name for name in list_registered_datamodules() if any(char.isupper() for char in name)))
-            self.combo_ds_datamodule.addItems(names)
-        except Exception:
-            pass
-        adapter = data.get("data_module")
-        if isinstance(adapter, dict):
-            adapter = adapter.get("name") or adapter.get("class")
-        if adapter:
-            self.combo_ds_datamodule.setCurrentText(str(adapter))
-        else:
-            self.combo_ds_datamodule.setCurrentIndex(0)
-
-        def _on_adapter_changed(adapter_name):
-            value = None if adapter_name in ("", "— Default adapter (inherit from Group / Paradigm) —") else adapter_name
-            if value is None:
-                self.raw_data.pop("data_module", None)
-            else:
-                self.raw_data["data_module"] = value
-            self._mark_dirty()
-
-        self.combo_ds_datamodule.currentTextChanged.connect(_on_adapter_changed)
-        adapter_row.addWidget(self.combo_ds_datamodule)
-        adapter_row.addStretch()
-        ds_form.addRow("Data Module / Adapter", adapter_row)
         box.add_layout(ds_form)
 
     def _scalar_widget(self, value, write):
@@ -3633,7 +3940,8 @@ class ConfigViewer(QWidget):
         dictionaries are rendered recursively so every value round-trips from
         the panel, regardless of how a component structures its parameters.
         """
-        leftovers = {k: v for k, v in self.raw_data.items() if k not in FIXED_BOX_KEYS}
+        leftovers = {k: v for k, v in self.raw_data.items()
+                     if k not in FIXED_BOX_KEYS and k not in ("data_module", "evaluator", "plots", "plot_overrides")}
         if not leftovers:
             return
 
@@ -4309,6 +4617,11 @@ class ConfigViewer(QWidget):
         elif block_name == "params":
             if "methods" in self.raw_data and isinstance(self.raw_data["methods"], dict):
                 self.raw_data["methods"].pop("params", None)
+        elif block_name in ("data_module", "evaluator"):
+            self.raw_data.pop(block_name, None)
+        elif block_name == "plots":
+            self.raw_data.pop("plots", None)
+            self.raw_data.pop("plot_overrides", None)
         self._mark_dirty()
         self._render_boxes()
 
@@ -4710,7 +5023,7 @@ class ConfigViewer(QWidget):
         row.setSpacing(6)
         row.addWidget(mode)
         row.addWidget(spin)
-        state["tail"] = self._checkpoint_remove_button() if key in data else label("(inherited)", "muted")
+        state["tail"] = self._checkpoint_remove_button() if key in data else label(str(source[key]), "muted")
         row.addWidget(state["tail"])
         row.addStretch()
         mode.currentIndexChanged.connect(lambda _: self._switch_checkpoint_mode(state, spin, row, mode.currentData()))

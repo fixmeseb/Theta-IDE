@@ -4,6 +4,7 @@ import os
 import signal
 import sys
 import time
+from collections.abc import Mapping
 from pathlib import Path
 
 import lightning as L
@@ -65,6 +66,85 @@ class SaveInitialCheckpointCallback(Callback):
         init_epoch = os.path.join(self.ckpt_dir, "epoch_000.ckpt")
         trainer.save_checkpoint(init_epoch)
         print(f"[Init Checkpoint] Saved initial model checkpoint to: {init_ckpt}")
+
+
+class ConfiguredEvaluatorCallback(Callback):
+    """Run a registered evaluation protocol selected by an experiment recipe."""
+
+    def __init__(self, evaluator, cfg, frequency: int = 1):
+        super().__init__()
+        self.evaluator = evaluator
+        self.cfg = cfg
+        self.frequency = frequency
+
+    def _due(self, trainer) -> bool:
+        return (trainer.current_epoch + 1) % self.frequency == 0
+
+    def _record(self, trainer, metrics):
+        if not isinstance(metrics, Mapping):
+            raise TypeError("Configured evaluator must return a metrics mapping")
+        if metrics and trainer.logger is not None:
+            trainer.logger.log_metrics(dict(metrics), step=trainer.global_step)
+
+    def on_validation_start(self, trainer, pl_module):
+        if self._due(trainer) and hasattr(self.evaluator, "on_eval_start"):
+            self.evaluator.on_eval_start(pl_module, trainer.datamodule, stage="val")
+
+    def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=0):
+        if self._due(trainer) and hasattr(self.evaluator, "evaluate_step"):
+            self.evaluator.evaluate_step(pl_module, batch)
+
+    def on_validation_end(self, trainer, pl_module):
+        if self._due(trainer) and hasattr(self.evaluator, "on_eval_end"):
+            self._record(trainer, self.evaluator.on_eval_end())
+
+    def on_fit_end(self, trainer, pl_module):
+        if hasattr(self.evaluator, "evaluate_step"):
+            return  # evaluated through validation hooks
+        source = trainer.datamodule
+        if source is not None and hasattr(source, "val_dataloader") and self.cfg.get("paradigm") != "online_rl":
+            source = source.val_dataloader()
+        self._record(trainer, self.evaluator.evaluate(pl_module, source, self.cfg))
+
+
+def configured_evaluator_callbacks(cfg) -> list[Callback]:
+    """Resolve explicit evaluator YAML (string or name/params mapping) at launch."""
+    spec = cfg.get("evaluator") if hasattr(cfg, "get") else None
+    if not spec:
+        return []
+    from src.app.core.eval_registry import get_evaluator_class
+
+    if isinstance(spec, str):
+        name, params = spec, {}
+    elif isinstance(spec, (dict, DictConfig)):
+        name = spec.get("name") or spec.get("class") or spec.get("type")
+        params = dict(spec.get("params") or {})
+        params.update({key: value for key, value in spec.items()
+                       if key not in ("name", "class", "type", "params")})
+    else:
+        raise ValueError("evaluator must be a registered name or a name/params mapping")
+    if not name:
+        raise ValueError("evaluator needs a name")
+    if not params.get("enabled", True):
+        return []
+    frequency = int(params.get("frequency", 1))
+    if frequency < 1:
+        raise ValueError("evaluator.frequency must be at least 1")
+    cls = get_evaluator_class(str(name))
+    if cls is None:
+        raise ValueError(f"Evaluator '{name}' is not registered")
+    supported = getattr(cls, "get_supported_paradigms", None)
+    paradigm = cfg.get("paradigm")
+    if paradigm and callable(supported) and paradigm not in supported():
+        raise ValueError(f"Evaluator '{name}' does not support paradigm '{paradigm}'")
+    instance = cls(**{key: value for key, value in params.items() if key not in ("enabled", "frequency")})
+    if isinstance(instance, Callback):
+        return [instance]
+    if not hasattr(instance, "evaluate") and not all(
+        hasattr(instance, method) for method in ("on_eval_start", "evaluate_step", "on_eval_end")
+    ):
+        raise TypeError(f"Evaluator '{name}' needs evaluate() or the evaluation hook methods")
+    return [ConfiguredEvaluatorCallback(instance, cfg, frequency)]
 
 
 def print_hardware_diagnostics():
@@ -233,7 +313,7 @@ def build_trainer(cfg, model=None):
         logger.debug("Unexpected error registering shutdown signal handlers: %s", e)
 
     is_online = cfg.get("paradigm") == "online_rl"
-    callbacks = [SaveInitialCheckpointCallback(ckpt_dir, cfg)]
+    callbacks = [SaveInitialCheckpointCallback(ckpt_dir, cfg), *configured_evaluator_callbacks(cfg)]
 
     has_explicit_ckpt = "checkpoint" in cfg and cfg.get("checkpoint") is not None
     ckpt_cfg = cfg.get("checkpoint") if has_explicit_ckpt else None

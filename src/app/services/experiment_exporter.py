@@ -23,6 +23,27 @@ from . import PROJECT_ROOT
 log = logging.getLogger(__name__)
 
 
+def _component_names(value: Any) -> Set[str]:
+    """Names from a recipe's scalar, name/params mapping, or list selection."""
+    if isinstance(value, str):
+        return {value} if value else set()
+    if isinstance(value, dict):
+        name = value.get("name") or value.get("class") or value.get("type")
+        return {str(name)} if name else set()
+    if isinstance(value, (list, tuple)):
+        return set().union(*(_component_names(item) for item in value)) if value else set()
+    return set()
+
+
+def _plot_names(value: Any) -> Set[str]:
+    if isinstance(value, list):
+        return {str(item) for item in value}
+    if isinstance(value, dict):
+        return {str(name) for name, options in value.items()
+                if isinstance(options, dict) and name not in ("style", "figsize")}
+    return set()
+
+
 @dataclass
 class ExportOptions:
     """Configuration options for exporting an experiment or experiment group plugin."""
@@ -128,7 +149,7 @@ class ExperimentExporter:
 
             # 7. Plotters
             if opts.include_plotters:
-                self._trace_plotters(group, env_name, files_to_pack)
+                self._trace_plotters(group, env_name, files_to_pack, raw_cfg=raw_cfg)
 
             # 8. Data modules
             if opts.include_data_modules:
@@ -358,11 +379,7 @@ class ExperimentExporter:
             candidates.add(env_name)
         if raw_cfg:
             for k in ("evaluator", "evaluators"):
-                v = raw_cfg.get(k)
-                if isinstance(v, str):
-                    candidates.add(v)
-                elif isinstance(v, (list, tuple)):
-                    candidates.update(str(x) for x in v if x)
+                candidates.update(_component_names(raw_cfg.get(k)))
 
         for name in candidates:
             eval_dir = self.workspace_root / "src" / "usr" / "eval" / name
@@ -383,11 +400,14 @@ class ExperimentExporter:
                 for p in sorted(cfg_dir.rglob("*.yaml")):
                     files_to_pack[p.relative_to(self.workspace_root).as_posix()] = p
 
-    def _trace_plotters(self, group: str, env_name: str | None, files_to_pack: Dict[str, Path]) -> None:
+    def _trace_plotters(self, group: str, env_name: str | None, files_to_pack: Dict[str, Path],
+                        raw_cfg: Dict[str, Any] | None = None) -> None:
         """Trace plotters and visualization configs."""
         candidates = {group}
         if env_name:
             candidates.add(env_name)
+        if raw_cfg:
+            candidates.update(_plot_names(raw_cfg.get("plots")))
 
         for name in candidates:
             plot_dir = self.workspace_root / "plot" / name
@@ -399,10 +419,16 @@ class ExperimentExporter:
                 plot_file = self.workspace_root / "plot" / f"{name}.py"
                 if plot_file.is_file():
                     files_to_pack[plot_file.relative_to(self.workspace_root).as_posix()] = plot_file
+                else:
+                    for p in sorted((self.workspace_root / "plot").rglob(f"{name}.py")):
+                        files_to_pack[p.relative_to(self.workspace_root).as_posix()] = p
 
             pcfg_dir = self.workspace_root / "in" / "config" / "plot" / name
             if pcfg_dir.is_dir():
                 for p in sorted(pcfg_dir.rglob("*.yaml")):
+                    files_to_pack[p.relative_to(self.workspace_root).as_posix()] = p
+            else:
+                for p in sorted((self.workspace_root / "in" / "config" / "plot").rglob(f"{name}.yaml")):
                     files_to_pack[p.relative_to(self.workspace_root).as_posix()] = p
 
     def _trace_data_modules(
@@ -418,15 +444,9 @@ class ExperimentExporter:
             candidates.add(env_name)
         if raw_cfg:
             for k in ("data_module", "datamodule", "data"):
-                v = raw_cfg.get(k)
-                if isinstance(v, str):
-                    candidates.add(v)
-                    candidates.add(re.sub(r'(?<!^)(?=[A-Z])', '_', v).lower())
-                elif isinstance(v, (list, tuple)):
-                    for item in v:
-                        if isinstance(item, str):
-                            candidates.add(item)
-                            candidates.add(re.sub(r'(?<!^)(?=[A-Z])', '_', item).lower())
+                for name in _component_names(raw_cfg.get(k)):
+                    candidates.add(name)
+                    candidates.add(re.sub(r'(?<!^)(?=[A-Z])', '_', name).lower())
 
         for name in candidates:
             data_dir = self.workspace_root / "src" / "usr" / "data" / name
@@ -500,6 +520,7 @@ class ExperimentExporter:
         workflows_found: Set[str] = set()
         data_modules_found: Set[str] = set()
         evaluators_found: Set[str] = set()
+        plotters_found: Set[str] = set()
         env_name: str | None = None
 
         for exp_yaml in sorted(group_dir.rglob("*.yaml")):
@@ -512,9 +533,10 @@ class ExperimentExporter:
                 if "workflow" in cfg and cfg["workflow"]:
                     workflows_found.add(str(cfg["workflow"]))
                 if "data_module" in cfg and cfg["data_module"]:
-                    data_modules_found.add(str(cfg["data_module"]))
+                    data_modules_found.update(_component_names(cfg["data_module"]))
                 if "evaluator" in cfg and cfg["evaluator"]:
-                    evaluators_found.add(str(cfg["evaluator"]))
+                    evaluators_found.update(_component_names(cfg["evaluator"]))
+                plotters_found.update(_plot_names(cfg.get("plots")))
                 self._trace_methods_and_models(
                     cfg, files_to_pack, agents_found, models_found, include_models=opts.include_models
                 )
@@ -537,7 +559,9 @@ class ExperimentExporter:
             )
 
         if opts.include_plotters:
-            self._trace_plotters(group, env_name, files_to_pack)
+            self._trace_plotters(
+                group, env_name, files_to_pack, raw_cfg={"plots": {name: {} for name in plotters_found}}
+            )
 
         if opts.include_data_modules:
             self._trace_data_modules(

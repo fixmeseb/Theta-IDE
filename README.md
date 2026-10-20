@@ -72,6 +72,26 @@ that ID. Pass `experiment_id=<new name>` to keep both. (Runs launched from the I
 `python run_pipeline.py --help` lists the orchestration overrides (`plot_only`, `no_plot`,
 `no_online`, `no_offline` and more).
 
+### Component overrides in experiments
+
+Open a group default or individual experiment in the **Experiment** panel and use the **Data Loaders**, **Evaluators**, and **Figures** boxes to choose components. Selecting a component fills its first level of parameters from the installed profile; you can edit those defaults or add custom parameters. Inherited selectors show the resolved component name. Individual recipes inherit group values until they add an override. The same fields can be written directly in an experiment YAML:
+
+```yaml
+data_module:
+  name: tabular_data
+  params:
+    batch_size: 32
+evaluator:
+  name: my_evaluator
+  params:
+    threshold: 0.8
+plot_overrides:
+  losses:
+    smoothing_window: 7
+```
+
+`data_module` and `evaluator` also accept a registered name as a string. `plots` selects figures as a list or mapping; `plot_overrides` adjusts a figure's parameters without changing that selection. Existing `plots.<figure>` options still work. Evaluators can implement Lightning's `Callback`, the `evaluate(model, data_source, cfg)` protocol, or the evaluation hook methods `on_eval_start`, `evaluate_step`, and `on_eval_end`. Evaluator parameters can include `enabled: false`; `frequency: 2` runs evaluation hooks every second validation epoch.
+
 Plots and reports are generated automatically at the end of a run. To regenerate them, pass the run's ID,
 which is its folder name under `results/logs/<group>/`:
 
