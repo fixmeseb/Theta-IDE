@@ -328,3 +328,33 @@ class TestFigureWorkspace:
         w.lst_placed.setCurrentRow(0)
         w._update(0, title="Renamed")
         assert "Renamed" in w.lst_placed.item(0).text()
+
+
+# ── Installed Hub plotters ────────────────────────────────────────────────
+
+
+def test_a_plotter_registered_under_several_names_is_offered_once():
+    """The registry maps each plotter under its own name and its module name.
+
+    Offering the registry's keys directly would list every installed plotter
+    twice in the panel.
+    """
+    from frontend.figures.sources import PanelSource
+
+    class Shared:
+        name = "shared"
+
+    source = PanelSource()
+    source._registry = {"shared": Shared, "shared_plotter": Shared, "other": type("Other", (), {"name": "other"})}
+    assert source.plotter_names() == ["other", "shared"]
+
+
+def test_the_plotters_own_name_wins_over_its_module_name():
+    from frontend.figures.sources import PanelSource
+
+    class Named:
+        name = "convergence"
+
+    source = PanelSource()
+    source._registry = {"convergence_plotter": Named, "convergence": Named}
+    assert source.plotter_names() == ["convergence"]

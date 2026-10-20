@@ -58,7 +58,20 @@ class PanelSource:
         return self._registry
 
     def plotter_names(self) -> list[str]:
-        return sorted(self.registry())
+        """One name per distinct plotter, not one per registry key.
+
+        The registry maps a plotter under both its own `name` and its module
+        name, so iterating the keys offers every installed plotter twice. The
+        plotter's own name wins, since that is what its config file and its
+        panels are keyed on.
+        """
+        best: dict[int, str] = {}
+        for key, cls in self.registry().items():
+            own = str(getattr(cls, "name", "") or "")
+            current = best.get(id(cls))
+            if current is None or key == own or (current != own and len(key) < len(current)):
+                best[id(cls)] = key
+        return sorted(best.values())
 
     # ── Composable panels ────────────────────────────────────────────────
 
