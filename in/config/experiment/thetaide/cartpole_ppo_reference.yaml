@@ -3,11 +3,9 @@
 # ThetaIDE experiment builder's default form composes to exactly this config.
 defaults:
 - thetaide/_base
-
 experiment_id: cartpole_ppo_baseline
 seed: 42
 total_timesteps: 10000
-
 methods:
   ppo:
     agent: ppo

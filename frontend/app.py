@@ -1494,6 +1494,9 @@ class Window(QMainWindow):
         if error or not isinstance(data, dict):
             self.compose_error = str(error or "Invalid pipeline response")
             self.compose_valid = False
+            # Do not let the launch guard inspect a previous experiment's
+            # resolved configuration after a failed refresh.
+            self.composed_config = None
             self.update_launch_state()
             self.set_backend_state(False, error or "Invalid pipeline response")
             self.preview_status.setText("Pipeline unavailable • local recipe draft, not validated")
@@ -1520,8 +1523,9 @@ class Window(QMainWindow):
         # The launched run is described by the experiment, not by the builder. Without
         # this the run record keeps Config's defaults - env "cartpole", 10,000 steps -
         # so every experiment launched from the tree was labelled as CartPole.
-        if isinstance(data.get("config"), dict):
-            composed = data["config"]
+        self.composed_config = data.get("config") if isinstance(data.get("config"), dict) else None
+        if self.composed_config is not None:
+            composed = self.composed_config
             env = composed.get("env")
             self.composed_facts = {
                 "env": env.get("name") if isinstance(env, dict) else env,
@@ -1723,10 +1727,16 @@ class Window(QMainWindow):
                     except Exception:
                         data = None
 
-        if data:
+        # A child experiment often inherits `env` from its group's _base.yaml.
+        # Raw editor data therefore is not itself launchable.  Prefer the
+        # exact config that the backend just composed and validated, falling
+        # back to raw data only while composition is pending.
+        composed_config = getattr(self, "composed_config", None)
+        component_config = composed_config if isinstance(composed_config, dict) else data
+        if component_config:
             try:
                 from src.app.pipeline.validation import find_missing_components
-                missing.extend(find_missing_components(data))
+                missing.extend(find_missing_components(component_config))
             except Exception:
                 pass
 
