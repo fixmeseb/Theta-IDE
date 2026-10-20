@@ -6,6 +6,10 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
 [![Python 3.10–3.13](https://img.shields.io/badge/python-3.10--3.13-blue.svg)](https://www.python.org/downloads/)
 
+
+https://github.com/user-attachments/assets/a9c3aaf1-2062-439f-b9f0-a224b9340653
+
+
 ThetaIDE is a desktop IDE and experiment pipeline for reinforcement learning and deep learning research. You
 compose experiments from Hydra configs, launch training on your machine, watch metrics stream in live, and
 compare runs side by side. The pipeline is built on PyTorch Lightning and Hydra.
