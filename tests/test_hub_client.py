@@ -269,6 +269,13 @@ class TestHubClientAndInstaller(unittest.TestCase):
         card.update_action_state()
         self.assertIn("Update to v2.0.0", card.btn_action.text())
         self.assertIn(theme_color("secondary"), card.btn_action.styleSheet())  # Update follows the theme
+        self.assertFalse(card.btn_uninstall_update.isHidden())
+        self.assertEqual(card.btn_uninstall_update.text(), "Uninstall")
+        self.assertIn("#cc241d", card.btn_uninstall_update.styleSheet())
+        requested = []
+        card._prompt_and_uninstall = lambda: requested.append(True)
+        card.btn_uninstall_update.click()
+        self.assertEqual(requested, [True])
 
         # Simulate uninstall completion
         comp.is_installed = False
@@ -276,6 +283,7 @@ class TestHubClientAndInstaller(unittest.TestCase):
         card.update_action_state()
         self.assertEqual(card.btn_action.text(), "Install")
         self.assertIn(theme_color("primary"), card.btn_action.styleSheet())  # Install follows the theme
+        self.assertTrue(card.btn_uninstall_update.isHidden())
 
     def test_suite_filtering_and_dialog_display(self):
         """Package metadata hides supplied components and exposes the installable suite."""

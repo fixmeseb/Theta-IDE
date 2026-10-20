@@ -325,7 +325,9 @@ class HubClient(QObject):
         """Uninstall component in a background thread."""
         def worker():
             try:
-                self.installer.uninstall(component, remove_configs=remove_configs)
+                removed = self.installer.uninstall(component, remove_configs=remove_configs)
+                if removed is False:
+                    raise RuntimeError("The installer could not remove this component.")
                 self.refresh_installed_status()
                 self.uninstallFinished.emit(component.id, True, "Uninstalled.")
             except Exception as exc:

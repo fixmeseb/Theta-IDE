@@ -173,6 +173,16 @@ class HubComponentCard(QFrame):
         self.btn_action.clicked.connect(self._on_action_clicked)
         top_row.addWidget(self.btn_action)
 
+        # An installed component with an available update still needs an uninstall
+        # path. Keep Update as the primary action and expose Uninstall alongside it.
+        self.btn_uninstall_update = QPushButton("Uninstall")
+        self.btn_uninstall_update.setObjectName("actionUninstall")
+        self.btn_uninstall_update.setFixedHeight(28)
+        self.btn_uninstall_update.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_uninstall_update.setToolTip("Uninstall this component without updating it")
+        self.btn_uninstall_update.clicked.connect(self._on_uninstall_clicked)
+        top_row.addWidget(self.btn_uninstall_update)
+
         layout.addLayout(top_row)
 
         # ── Description ──────────────────────────────────────────────────────
@@ -222,6 +232,8 @@ class HubComponentCard(QFrame):
             self.btn_action.setText("Install")
             self.btn_action.setObjectName("actionInstall")
         self.btn_action.setEnabled(True)
+        self.btn_uninstall_update.setVisible(bool(self.component.is_installed and self.component.has_update))
+        self.btn_uninstall_update.setEnabled(True)
         self._style_action_button()
 
     def _style_action_button(self):
@@ -239,9 +251,14 @@ class HubComponentCard(QFrame):
         self.btn_action.setStyleSheet(css)
         self.btn_action.style().unpolish(self.btn_action)
         self.btn_action.style().polish(self.btn_action)
+        danger_css = _filled_button_css(DANGER, DANGER_HOVER, ON_DANGER)
+        self.btn_uninstall_update.setStyleSheet(danger_css)
+        self.btn_uninstall_update.style().unpolish(self.btn_uninstall_update)
+        self.btn_uninstall_update.style().polish(self.btn_uninstall_update)
 
     def _on_action_clicked(self):
         self.btn_action.setEnabled(False)
+        self.btn_uninstall_update.setEnabled(False)
         if self.component.is_installed and not self.component.has_update:
             self._prompt_and_uninstall()
         else:
@@ -249,6 +266,11 @@ class HubComponentCard(QFrame):
             self.progress_bar.setValue(0)
             self.progress_bar.show()
             self.client.install_async(self.component)
+
+    def _on_uninstall_clicked(self):
+        self.btn_action.setEnabled(False)
+        self.btn_uninstall_update.setEnabled(False)
+        self._prompt_and_uninstall()
 
     def _prompt_and_uninstall(self):
         has_configs = self.client.installer.has_configs(self.component)
@@ -269,8 +291,7 @@ class HubComponentCard(QFrame):
 
         dlg = UninstallComponentDialog(self.component.name, parent=self)
         if dlg.exec() != QDialog.DialogCode.Accepted or dlg.choice == "cancel":
-            self.btn_action.setEnabled(True)
-            self.btn_action.setText("Uninstall")
+            self.update_action_state()
             return
 
         if dlg.remember:
