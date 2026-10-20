@@ -39,6 +39,8 @@ ARTICLES: List[DocArticle] = [
   <li><b>Extensible Component Hub &amp; Plugin System:</b> Core plugins shipping natively with zero overhead when toggled off, plus community plugins (UI tabs, RL methods, models, environments, and experiment recipes) installable directly from the Community Hub.</li>
 </ul>
 
+<p>Diagrams of how these pieces talk to each other are in <a href="architecture">System Architecture</a>.</p>
+
 <h3>Key Workflows</h3>
 <ol>
   <li><b>Configure:</b> Select or compose an experiment in the <i>Experiment Config</i> pane.</li>
@@ -46,6 +48,49 @@ ARTICLES: List[DocArticle] = [
   <li><b>Monitor:</b> Observe real-time reward curves, minibatch losses, and metric tables with moving-average curve smoothing.</li>
   <li><b>Analyze:</b> Generate publication-ready convergence plots, loss breakdowns, and markdown comparative reports.</li>
 </ol>
+""",
+    ),
+    DocArticle(
+        id="architecture",
+        title="System Architecture",
+        category="Getting Started",
+        summary="How the IDE, the training pipeline and the files between them fit together.",
+        keywords=["architecture", "system", "diagram", "frontend", "backend", "pipeline", "process", "telemetry",
+                  "qprocess", "codebase", "structure", "how it works"],
+        html_content="""
+<h2>System Architecture</h2>
+<p>ThetaIDE has no server. The IDE imports the pipeline's services and calls them directly, and it runs training as child processes. Click a diagram to open it full size.</p>
+
+<h3>Processes and the files between them</h3>
+<p><a href="diagram:architecture_overview"><img src="diagram:architecture_overview" width="860"></a></p>
+<p><i>Training never talks to the IDE except through its stdout. Everything else crosses through files. The highlighted path is the live one: the engine appends telemetry to <code>results/logs</code>, the IDE's file watcher picks it up, and the Monitor redraws. Runs started from the command line land in the same folders, so Results lists them too. The Theta Hub is the only network dependency.</i></p>
+
+<h3>What happens when you press F5</h3>
+<p><a href="diagram:launch_sequence"><img src="diagram:launch_sequence" width="860"></a></p>
+<p><i>The config is composed twice through the same code (<code>src/app/pipeline/compose.py</code>): once in the IDE for the form and the pre-flight check (1&ndash;2), and again inside <code>run_pipeline.py</code> (5). That is why a recipe built in the IDE runs identically from the command line. Steps 7&ndash;9 repeat for as long as the engine trains.</i></p>
+
+<h3>Codebase map</h3>
+<table width="100%" cellspacing="0" cellpadding="8">
+  <tr><th>Where</th><th>What it holds</th></tr>
+  <tr><td><code>frontend/</code></td><td>The PyQt6 IDE: <code>app.py</code> (the window), the panels, <code>hub/</code> and <code>plugins/</code>. <code>local_backend.py</code>, <code>job_manager.py</code> and <code>live_run.py</code> are the bridge to the pipeline.</td></tr>
+  <tr><td><code>run_pipeline.py</code></td><td>The command-line entry point, and what the IDE launches: <code>python run_pipeline.py &lt;group&gt;/&lt;experiment&gt; [overrides]</code>.</td></tr>
+  <tr><td><code>src/app/pipeline/</code></td><td>Composition, pre-flight validation, engine dispatch (<code>engine.py</code>), the local runner, and which Python runs each engine (<code>runtime.py</code>).</td></tr>
+  <tr><td><code>src/app/services/</code></td><td>What the IDE calls in-process: <code>config_service</code>, <code>catalog</code>, <code>metrics</code>, <code>job_store</code>, <code>processes</code>, the exporters and the scaffolder.</td></tr>
+  <tr><td><code>src/app/telemetry/</code></td><td>One logging API for every engine: <code>run.log()</code> writes <code>metrics.csv</code> and the <code>events.jsonl</code> live feed.</td></tr>
+  <tr><td><code>src/app/core/</code></td><td>Registries (models, algorithms, plotters, data modules), the paradigm loader, the Lightning builder, callbacks and checkpoints.</td></tr>
+  <tr><td><code>src/app/train.py</code>, <code>src/usr/algorithms/</code></td><td>Engine scripts: the Lightning driver and the Stable-Baselines3 runner. Other runners arrive with their Hub packages.</td></tr>
+  <tr><td><code>src/usr/</code>, <code>in/config/</code></td><td>Components and their Hydra configs. Mostly installed from the Theta Hub and not tracked in git.</td></tr>
+  <tr><td><code>plot/</code></td><td><code>manager.py</code> runs the plotters an experiment asks for; built-ins live in <code>standard_figures/</code>.</td></tr>
+  <tr><td><code>results/</code>, <code>.thetaide/</code></td><td>Run output (logs, plots, checkpoints, TensorBoard) and the IDE's workspace (settings, <code>runs/jobs/jobs.db</code>, Hub cache). Neither is tracked.</td></tr>
+</table>
+
+<h3>Things that are easy to miss</h3>
+<ul>
+  <li><b>One worker thread.</b> Composition and the run catalog run on <code>LocalBackend</code>'s single background thread, because Hydra's global state is not thread-safe. Results come back to the window as callbacks.</li>
+  <li><b>Files are the interface.</b> Apart from stdout, the IDE learns about a run only from <code>results/logs</code>.</li>
+  <li><b>Two interpreters can be involved.</b> The IDE starts <code>run_pipeline.py</code> with its own Python, but <code>run_pipeline.py</code> starts each engine with <code>venv/bin/python3</code> when that exists. A project venv on an unsupported Python breaks training even when the IDE itself runs on a good one.</li>
+  <li><b>Settings have two layers:</b> the workspace's <code>.thetaide/settings.toml</code> over <code>~/.config/thetaide/settings.toml</code>.</li>
+</ul>
 """,
     ),
     DocArticle(

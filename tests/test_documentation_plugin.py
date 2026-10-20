@@ -213,6 +213,65 @@ class TestDocumentationPlugin(unittest.TestCase):
         self.assertIn(light["raised"], panel.toc.styleSheet())
         self.window.theme_manager.apply(BUILTINS["Gruvbox Dark"])
 
+    def test_architecture_article_shows_both_diagrams(self):
+        from PyQt6.QtCore import QUrl
+        from PyQt6.QtGui import QTextDocument
+
+        from frontend.plugins.core.documentation.panel import DIAGRAM_DIR
+
+        article = get_article_by_id("architecture")
+        self.assertIsNotNone(article)
+        for name in sorted(p.stem for p in DIAGRAM_DIR.glob("*.svg")):
+            self.assertIn(f'<img src="diagram:{name}"', article.html_content)
+            self.assertIn(f'<a href="diagram:{name}">', article.html_content)  # click to open full size
+
+        panel = DocumentationPanel(context=None)
+        self.addCleanup(panel.deleteLater)
+        panel.show()
+        panel.select_article("architecture")
+        app.processEvents()
+        image = panel.browser.document().resource(
+            QTextDocument.ResourceType.ImageResource.value, QUrl("diagram:architecture_overview"))
+        self.assertFalse(image.isNull())
+
+    def test_diagrams_render_in_the_current_theme(self):
+        from frontend.plugins.core.documentation.panel import DIAGRAM_DIR, diagram_svg, render_diagram
+        from frontend.theme import BUILTINS
+
+        names = sorted(p.stem for p in DIAGRAM_DIR.glob("*.svg"))
+        self.assertEqual(names, ["architecture_overview", "launch_sequence"])
+        for theme in ("Gruvbox Dark", "Gruvbox Light"):
+            self.window.theme_manager.apply(BUILTINS[theme])
+            colors = BUILTINS[theme]["colors"]
+            for name in names:
+                svg = diagram_svg(name)
+                self.assertNotIn("{{text}}", svg)  # every placeholder an element uses is filled in
+                self.assertNotIn("{{accent_soft}}", svg)
+                self.assertIn(colors["text"], svg)
+                self.assertIn(colors["accent"], svg)  # the live telemetry path
+                image = render_diagram(name, 860)
+                self.assertEqual(image.width(), 860)
+                self.assertGreater(image.height(), 400)
+        self.window.theme_manager.apply(BUILTINS["Gruvbox Dark"])
+        self.assertTrue(render_diagram("no_such_diagram", 860).isNull())
+        self.assertIsNone(diagram_svg("../content"))  # names are plain file stems, never paths
+
+    def test_clicking_a_diagram_opens_it_full_size(self):
+        from PyQt6.QtCore import QUrl
+
+        from frontend.plugins.core.documentation.panel import DiagramDialog
+
+        panel = DocumentationPanel(context=None)
+        self.addCleanup(panel.deleteLater)
+        panel.show()
+        panel._on_anchor_clicked(QUrl("diagram:launch_sequence"))
+        app.processEvents()
+        dialogs = [d for d in panel.findChildren(DiagramDialog) if d.isVisible()]
+        self.assertEqual(len(dialogs), 1)
+        self.assertEqual(dialogs[0].windowTitle(), "What happens when you press F5")
+        self.assertFalse(dialogs[0].image.pixmap().isNull())
+        dialogs[0].close()
+
     def test_outline_is_categories_articles_and_sections(self):
         from frontend.plugins.core.documentation.content import ARTICLES
         from frontend.plugins.core.documentation.panel import ARTICLE, CATEGORY, SECTION, article_sections
