@@ -223,7 +223,7 @@ def test_top_box_defaults_hidden_until_added(qapp, tmp_path):
     assert viewer.chk_tb is None
 
 
-def test_method_card_duplicate_and_plus_icons(qapp, tmp_path):
+def test_method_card_duplicate_and_header_plus_icons(qapp, tmp_path):
     from PyQt6.QtWidgets import QToolButton
     src_file = Path("in/config/experiment/cartpole/final_cartpole.yaml")
     dest_file = tmp_path / "final_cartpole.yaml"
@@ -236,12 +236,13 @@ def test_method_card_duplicate_and_plus_icons(qapp, tmp_path):
     assert not hasattr(viewer, "combo_new_method")
     assert not hasattr(viewer, "btn_add_method")
 
-    # 2. Check that method cards have duplicate and plus buttons
+    # 2. Duplicate stays beside delete on each card; method creation is a
+    # single, explicit control in the Methods header.
     tool_buttons = viewer.findChildren(QToolButton)
     copy_buttons = [b for b in tool_buttons if "Duplicate method" in b.toolTip()]
-    plus_buttons = [b for b in tool_buttons if "Add new method" in b.toolTip() or "Add method" in b.toolTip()]
+    plus_buttons = [b for b in tool_buttons if b.toolTip() == "Add new empty method"]
     assert len(copy_buttons) >= 2, "Expected duplicate buttons on method cards"
-    assert len(plus_buttons) >= 2, "Expected plus buttons on method cards"
+    assert len(plus_buttons) == 1, "Expected one Methods-header add button"
 
     # 3. Test duplicate_method
     initial_methods = list(viewer.raw_data["methods"].keys())

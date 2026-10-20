@@ -171,7 +171,10 @@ class NewExperimentDialog(QDialog):
             return
         current = self.env.currentText()
         self.env.clear()
-        self.env.addItems([e.name for e in self.tree.environments_for(paradigm)])
+        self.env.addItems([
+            e.name for e in self.tree.environments_for(paradigm)
+            if isinstance(e.name, str) and e.name.strip() and not e.name.strip().endswith(("/", "\\"))
+        ])
         if current:
             self.env.setCurrentText(current)
 

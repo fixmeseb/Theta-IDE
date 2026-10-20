@@ -203,11 +203,13 @@ class HubClient(QObject):
             if comp.id.startswith(cid) or cid.startswith(comp.id):
                 return comp
 
-        # Fallback for thetalib constituent components
-        if cid in ("standard-figures", "standard_figures", "image-data", "image_data", "replay-buffer", "replay_buffer", "tabular-data", "tabular_data"):
-            for comp in self.components:
-                if comp.id == "thetalib":
-                    return comp
+        # Packages may provide several component identifiers from one archive.
+        # This also gives older dependency declarations a metadata-backed upgrade
+        # path without teaching the client about package names.
+        for comp in self.components:
+            package_names = [comp.id, *comp.provides, *comp.aliases]
+            if any(name.lower().replace("-", "_") == cid_norm for name in package_names):
+                return comp
 
         return None
 
@@ -223,8 +225,8 @@ class HubClient(QObject):
         results = []
 
         for comp in self.components:
-            # Skip hidden and internal thetalib subcomponents from browser search
-            if not include_internal and (comp.is_thetalib_component or comp.hidden):
+            # Skip hidden and package-internal subcomponents from browser search.
+            if not include_internal and (comp.is_grouped_component or comp.hidden):
                 continue
 
             # Kind filter

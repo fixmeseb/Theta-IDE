@@ -99,18 +99,20 @@ def main(cfg: DictConfig):
 
     DataModuleCls = None
     if dm_name:
-        DataModuleCls = get_datamodule_class(dm_name) or get_component(dm_name)
-
-    if DataModuleCls is None:
+        DataModuleCls = get_datamodule_class(dm_name)
+        if DataModuleCls is None:
+            try:
+                DataModuleCls = get_component(dm_name)
+            except KeyError as exc:
+                raise ValueError(f"Data module '{dm_name}' is not registered") from exc
+    else:
         DataModuleCls = paradigm_def.data_module_cls or RLDataModule
 
-    try:
-        if dm_params:
-            datamodule = DataModuleCls(cfg, **dm_params)
-        else:
-            datamodule = DataModuleCls(cfg)
-    except TypeError:
-        datamodule = DataModuleCls(cfg)
+    supported = getattr(DataModuleCls, "get_supported_paradigms", None)
+    if dm_name and callable(supported) and paradigm_name not in supported():
+        raise ValueError(f"Data module '{dm_name}' does not support paradigm '{paradigm_name}'")
+
+    datamodule = DataModuleCls(cfg, **dm_params) if dm_params else DataModuleCls(cfg)
 
     # 2. Build Model / Agent based on paradigm
     # Driven by whether the paradigm declares agents, not by its name, so an

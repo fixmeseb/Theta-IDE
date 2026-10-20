@@ -230,6 +230,7 @@ class SamplePlugin(Plugin):
         c2 = HubComponent(id="comp_uninst", name="Beta Uninstalled", kind="plugin", version="1.0.0", is_installed=False)
         client.components = [c1, c2]
         client.registry = {"comp_inst": c1, "comp_uninst": c2}
+        client.fetch_index_async = lambda *a, **k: None
 
         dialog = HubDialog(client, parent=self.window)
         try:

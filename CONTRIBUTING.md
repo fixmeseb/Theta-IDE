@@ -1,92 +1,131 @@
-# Contributing to NeSyRL
+# Contributing to ThetaIDE
 
-Thank you for your interest in contributing! This guide will help you get started.
+Thanks for helping out. This guide covers setting up a development environment, the checks your change has to
+pass, and where to start for the most common kinds of contribution.
 
-## Quick Setup
+## Set up
+
+Follow [INSTALL.md](INSTALL.md), cloning your fork instead of the main repository, then install the git hooks:
 
 ```bash
-# 1. Fork and clone
-git clone https://github.com/<YOUR_FORK>/NeSyRL.git
-cd NeSyRL
-
-# 2. Create a virtual environment
-python -m venv venv
+git clone https://github.com/<your-username>/Offline-BlendRL.git
+cd Offline-BlendRL
+python3 -m venv venv                      # Python 3.10–3.13
 source venv/bin/activate
-
-# 3. Install in development mode
-pip install -e ".[dev]"
-
-# 4. Install pre-commit hooks
+pip install -e ".[dev,gui]"
 pre-commit install
-
-# 5. Verify everything works
-pytest tests/ -v
 ```
 
-## Development Workflow
+Install **ThetaIDE Basics** from the Hub (see INSTALL.md, step 4) before running the tests: many of them build
+the default experiment, which needs its components.
 
-1. **Branch from `main`** — create a descriptive branch name (`feat/new-agent`, `fix/config-bug`).
-2. **Write tests** for new features — add them to the `tests/` directory.
-3. **Lint before committing** — `ruff check --fix .` and `ruff format .`
-4. **CI must pass** before merge — the GitHub Actions workflow runs lint, tests, and type checking.
+## Workflow
 
-## Adding a New RL Method
+1. **Branch from `main`** with a descriptive name, such as `feat/results-export` or `fix/queue-shortcut`.
+2. **Add or update tests** in `tests/` for what you change.
+3. **Run the checks below** before you push.
+4. **Open a pull request against `main`.** CI runs lint, format, type and test checks on every pull request,
+   and they must pass before merge.
 
-See [WORKFLOW_GUIDE.md](docs/WORKFLOW_GUIDE.md) for step-by-step instructions on:
-- Registering a new agent class
-- Adding Hydra configuration YAML
-- Wiring the architecture into the pipeline
+## Checks
 
-## Adding a New Plotter
-
-Plotters are auto-discovered by `plot/manager.py`. To add one:
-1. Create a new Python file in `plot/` that subclasses `BasePlotter` from `plot/base.py`.
-2. Implement the required `plot()` method.
-3. Add a `_config.yaml` file for default plotter settings.
-4. The manager will auto-discover and dispatch it.
-
-## Project Structure
-
-```
-run_pipeline.py          # CLI entry point
-src/                     # Core source code
-  methods/               # RL agents (PPO, IQL, CQL, BlendRL variants)
-  pipeline/              # Orchestration, config parsing, Slurm submission
-  data/                  # Offline data modules
-  core/                  # Factories, callbacks, Lightning builder
-in/config/               # Hydra YAML configuration
-plot/                    # Modular plotting framework
-tests/                   # Test suite
-```
-
-## Commit Messages
-
-Use [Conventional Commits](https://www.conventionalcommits.org/):
-- `feat: add new plotting metric`
-- `fix: resolve config override precedence`
-- `docs: update installation instructions`
-- `test: add dataset round-trip tests`
-- `chore: update dependencies`
-
-## Running Tests
+CI runs these. Run the same ones locally:
 
 ```bash
-# Run all tests
-pytest tests/ -v
+# Lint and format (CI checks src/, plot/ and run_pipeline.py)
+ruff check src/ plot/ run_pipeline.py
+ruff format --check src/ plot/ run_pipeline.py
 
-# Run with coverage
-pytest tests/ -v --cov=src --cov-report=html
+# Type check
+mypy src/app/pipeline/ src/usr/algorithms/agent_registry.py
 
-# Run a specific test file
-pytest tests/test_method_registry.py -v
-
-# Skip slow tests
-pytest tests/ -v -m "not slow"
+# Tests, as CI runs them
+QT_QPA_PLATFORM=offscreen pytest tests/ --timeout=120 --cov=src --cov=frontend
 ```
 
-## Code Style
+The pre-commit hooks run ruff (with `--fix`), ruff-format and mypy on the files in each commit. Much of the
+codebase is not ruff-formatted yet, so a commit can reformat the whole of a file you only touched in one place.
+If that happens, commit the formatting on its own (`style: ruff format <file>`) before your change, so reviewers
+can tell the two apart.
 
-- **Linter & Formatter:** [Ruff](https://github.com/astral-sh/ruff) (configured in `pyproject.toml`)
-- **Type Checker:** [mypy](https://mypy-lang.org/) (configured in `pyproject.toml`)
-- **Line length:** 120 characters
-- **Python version:** 3.10+
+Don't run `ruff format .` on the whole repository: it reformats a large part of `frontend/` and buries your
+change in an unrelated diff.
+
+### Running tests
+
+```bash
+pytest tests/test_launcher.py           # one file
+pytest tests/ -k hotkeys                # tests whose name matches
+pytest tests/ -m "not slow"             # skip tests that train for real
+```
+
+GUI tests need a display. On a headless machine, set `QT_QPA_PLATFORM=offscreen`. INSTALL.md lists the tests
+that currently fail on a clean install.
+
+## Where things live
+
+```
+run_pipeline.py          # Command-line entry point
+frontend/                # The desktop IDE (PyQt6)
+  plugins/core/          # Built-in IDE plugins: documentation, TensorBoard, arXiv papers
+  hub/                   # Theta Hub client and installer
+src/app/                 # Framework
+  pipeline/              # Config composition, validation and orchestration
+  core/                  # Interfaces, registries (agents, plotters, ...), factories, callbacks
+  services/              # Run catalog, metrics and job store used by the IDE
+  data/                  # Offline replay data modules
+src/usr/                 # Components: algorithms, methods, models, environments, evaluators
+in/config/               # Hydra configs: experiment/, agent/, model/, env/, paradigms/, plot/
+plot/                    # Plotting framework; built-in plotters in plot/standard_figures/
+tests/                   # pytest suite
+```
+
+Most of `src/usr/`, `in/config/agent/`, `in/config/model/` and `in/config/env/` comes from the Theta Hub and is
+gitignored, so new components are published as Hub packages rather than committed here.
+
+## Common contributions
+
+### A new algorithm, model or environment
+
+Components are packaged and installed through the Theta Hub. The
+[Component Plugin Authoring Guide](docs/COMPONENT_PLUGIN_GUIDE.md) covers the protocols each kind implements
+(section 2.2 for algorithms) and how to export one as a Hub package. In the IDE, **File → Scaffold New Component
+Plugin…** (Ctrl+Shift+P) generates a starting point.
+
+### A new plotter
+
+Plotters are discovered automatically from modules in `plot/` and its subfolders, such as
+`plot/standard_figures/`:
+
+1. Subclass `BasePlotter` from `plot/base.py`, passing the plotter's name to `super().__init__("my_plot")`.
+2. Implement `run(self, exp_id, cli_overrides=None)`. Call `self.get_effective_config(exp_id, cli_overrides)`
+   to get the merged settings, the experiment's group and the output folder.
+3. Put the default settings in `in/config/plot/<library>/my_plot.yaml`, like the built-in
+   `in/config/plot/thetalib/losses.yaml`.
+4. Experiments request the plotter by name under their `plots:` section, which can also override its settings.
+
+### An IDE feature or plugin
+
+The IDE lives in `frontend/`. Self-contained features (a new sidebar tab, for example) work best as plugins:
+see `frontend/plugins/core/` for working examples, and the **Authoring Guide: All Component & Plugin Types**
+article in the built-in documentation (press **F1**).
+
+If your change affects what users see or do, update the built-in documentation in
+`frontend/plugins/core/documentation/content.py` in the same pull request.
+
+## Commit messages
+
+Use [Conventional Commits](https://www.conventionalcommits.org/), with a scope where it helps:
+
+- `feat(results): export the comparison table as CSV`
+- `fix(hotkeys): stop two menu actions sharing Ctrl+Shift+R`
+- `docs: rewrite the install guide`
+- `test(queue): cover pausing an empty queue`
+- `chore: bump PyQt6`
+
+## Code style
+
+- Formatter and linter: [Ruff](https://github.com/astral-sh/ruff), configured in `pyproject.toml`, with
+  120-character lines.
+- Type checker: [mypy](https://mypy-lang.org/), configured in `pyproject.toml`.
+- Python 3.10+ syntax. Code must also run on 3.10, so avoid features newer than that.

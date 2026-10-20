@@ -79,6 +79,8 @@ class SupervisedDataModule(L.LightningDataModule, BaseDataModule):
             dm_name = (
                 self._cfg.get("data_module") if hasattr(self._cfg, "get") else getattr(self._cfg, "data_module", None)
             )
+            if hasattr(dm_name, "get"):
+                dm_name = dm_name.get("name") or dm_name.get("class") or dm_name.get("type")
             # Excluding this class's own name too: a config naming the
             # subclass in use would otherwise delegate to itself forever.
             if dm_name and dm_name not in (type(self).__name__, "SupervisedDataModule"):

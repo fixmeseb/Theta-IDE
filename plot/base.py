@@ -294,7 +294,7 @@ class BasePlotter:
             # Live config allows overriding visualization-only keys (plots, default_plots, etc.).
             merged = dict(saved_cfg)
             for k, v in live_cfg.items():
-                if k in ("plots", "default_plots", "style", "plot_style"):
+                if k in ("plots", "plot_overrides", "default_plots", "style", "plot_style"):
                     merged[k] = v
                 elif k not in merged:
                     merged[k] = v
@@ -330,7 +330,7 @@ class BasePlotter:
     ) -> tuple[dict, str, Path]:
         """
         Merges default module config < default_cfg
-               < experiment config plots.<module_name>
+               < experiment config plots.<module_name> < plot_overrides.<module_name>
                < CLI overrides
         Returns (merged_config, group, output_dir).
         """
@@ -345,13 +345,16 @@ class BasePlotter:
         if isinstance(plots_sec, dict):
             # General plot parameters (e.g. title, xlabel, ylabel, smoothing_window, figsize, dpi)
             for k, v in plots_sec.items():
-                if k != self.name and k != "output_dir" and not (isinstance(v, dict) and k not in ("style", "figsize")):
+                if v is not None and k != self.name and k != "output_dir" and not (isinstance(v, dict) and k not in ("style", "figsize")):
                     general_plot_opts[k] = v
             if self.name in plots_sec and isinstance(plots_sec[self.name], dict):
                 exp_plot_opts = plots_sec[self.name]
 
         merged = deep_update(self.default_cfg, general_plot_opts)
         merged = deep_update(merged, exp_plot_opts)
+        overrides = exp_cfg.get("plot_overrides", {})
+        if isinstance(overrides, dict) and isinstance(overrides.get(self.name), dict):
+            merged = deep_update(merged, overrides[self.name])
         if cli_overrides:
             merged = deep_update(merged, cli_overrides)
 

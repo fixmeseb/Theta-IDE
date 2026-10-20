@@ -1,0 +1,8 @@
+# @package _global_
+defaults:
+  - /experiment/theta_validation/_base@_global_
+
+methods:
+  invalid_algorithm:
+    agent: d3rlpy/cql
+    model: basics/dnn

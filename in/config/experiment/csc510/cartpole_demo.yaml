@@ -19,3 +19,4 @@ methods:
   ppo_cp_tuned:
     agent: ppo
     model: dnn
+num_checkpoints: 10

@@ -131,6 +131,13 @@ class ConfigTabManager(QTabWidget):
             return w
         return self._fallback_viewer
 
+    def refresh_component_choices(self) -> None:
+        """Refresh open config forms after installed component files change."""
+        viewers = list(self._tabs.values()) + [self._fallback_viewer]
+        for viewer in viewers:
+            if viewer.current_path or viewer.raw_data:
+                viewer._render_boxes()
+
     def _tab_label(self, rel_path: str) -> str:
         """Derive clean tab label from relative path."""
         p = Path(rel_path)
