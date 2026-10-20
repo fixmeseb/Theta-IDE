@@ -15,4 +15,25 @@ EXPORTS_DIR = PROJECT_ROOT / "results" / "exports"
 
 from .experiment_exporter import ExperimentExporter, ExportOptions, ExportResult  # noqa: E402
 from .plugin_scaffolder import PluginScaffolder, ScaffoldOptions, ScaffoldResult  # noqa: E402
+from .component_exporter import (  # noqa: E402
+    ComponentExporter,
+    ComponentExportOptions,
+    ComponentExportResult,
+    find_component_assets,
+    find_workspace_root,
+)
+from .test_suite import (  # noqa: E402
+    TEST_SUITE_FORMAT,
+    ComponentContract,
+    ComponentContractResult,
+    TestCase,
+    TestCaseResult,
+    TestSuite,
+    TestSuiteManifestError,
+    evaluate_component_contracts,
+    evaluate_test_suite,
+    load_test_suite_manifest,
+    parse_test_suite_manifest,
+    run_pipeline_case,
+)
 

@@ -1,0 +1,8 @@
+# @package _global_
+defaults:
+  - /experiment/theta_validation/_base@_global_
+
+methods:
+  smoke:
+    agent: sb3/ppo
+    model: basics/dnn

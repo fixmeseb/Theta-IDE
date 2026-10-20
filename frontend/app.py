@@ -37,10 +37,10 @@ from .settings import SettingsManager
 from .theme import STYLE, ThemeManager, theme_color
 from .theme_builder import ThemeBuilder
 from .widgets import ToggleSlider, YamlHighlighter, label
-from .about import AboutDialog
 from .app_icon import DESKTOP_FILE_NAME, ICON_PATH, app_icon, install_desktop_entry, set_windows_app_id
 from .components_panel import ComponentsPanel
 from .config_tree import ConfigTreeWidget
+from .config_model import config_fingerprint
 from .config_viewer import ConfigViewer
 from .config_tab_manager import ConfigTabManager
 from .hub import HubClient, HubDialog
@@ -165,6 +165,7 @@ class Window(QMainWindow):
         self.jobs.queue_changed.connect(self.on_queue_changed)
         self.tray = None  # TrayController, set up by main(): closing while training hides to the tray
         self._quitting = False  # an explicit Quit (menu, tray, reload) closes for real
+        self._shutting_down = False  # set once closeEvent commits to closing
         self.schema = None
         self.schema_pending = False
         self.compose_serial = 0
@@ -179,8 +180,14 @@ class Window(QMainWindow):
         self.active_config_path = None
         self.active_config_rel_path = None
         self.current_experiment = None
-        self.state_label = None
-        self.backend_label = None
+        # Created before anything that talks to the backend: its replies arrive on the event loop, which
+        # the splash progress steps below spin, so a reply can land before the rest of the window exists.
+        self.state_label = label("Idle", "muted")
+        self.backend_label = label("", "muted")
+        for status in (self.state_label, self.backend_label):
+            status.setContentsMargins(12, 0, 12, 0)
+        self.pipeline_state = "loading"  # "loading", "ready" or "unavailable"
+        self.show_pipeline_state()
         self.fixed_fields = {}
         self.fields = {}
         step("Building the workspace…", 0.08)
@@ -196,15 +203,12 @@ class Window(QMainWindow):
             self.tabs.set_auto_hide(bool(self.settings_manager.get("sidebar", "auto_hide", default=False)))
         self.tabs.autoHideChanged.connect(self.on_sidebar_auto_hide_changed)
         self.make_menus()
-        self.theme_status = label("", "muted")
-        self.statusBar().addWidget(self.theme_status)
+        self.statusBar().setSizeGripEnabled(False)
         self.theme_manager.changed.connect(self.theme_changed)
         self.theme_manager.committed.connect(self.persist_theme_choice)
         step("Applying theme…", 0.68)
         self.theme_changed()
-        self.state_label = label("TRAINING   •   idle  ", "muted")
         self.statusBar().addPermanentWidget(self.state_label)
-        self.backend_label = label("PIPELINE   ○   loading…  ", "muted")
         self.statusBar().addPermanentWidget(self.backend_label)
         step("Loading runs…", 0.79)
         self.refresh_runs()
@@ -235,8 +239,7 @@ class Window(QMainWindow):
         return button
 
     def make_center(self):
-        self.tabs = SideTabs()
-        self.tabs.logoClicked.connect(self.show_about)
+        self.tabs = SideTabs()  # its gear opens Settings
         self.setCentralWidget(self.tabs)
 
         # 1. Components Panel
@@ -390,7 +393,6 @@ class Window(QMainWindow):
 
         self.settings_panel = self.make_settings()
         self.tabs.set_settings_widget(self.settings_panel)
-        self.tabs.logoClicked.connect(lambda: getattr(self, "settings_view", None) and self.settings_view.reset_to_ascii())
         self.tabs.currentChanged.connect(self.tab_changed)
 
     def dock(self, title, name, widget, area):
@@ -401,19 +403,22 @@ class Window(QMainWindow):
         return dock
 
     def init_default_experiment(self):
-        default_exp = "experiment/cartpole/quick_test.yaml"
-        if not (self.config_tree.root_dir / default_exp).exists():
-            default_exp = "experiment/thetaide/cartpole_ppo_reference.yaml"
-        if not (self.config_tree.root_dir / default_exp).exists():
+        default_exp = None
+        for pref in [
+            "experiment/thetaide/cartpole_ppo_reference.yaml",
+            "experiment/cartpole/quick_test.yaml",
+        ]:
+            if (self.config_tree.root_dir / pref).exists():
+                default_exp = pref
+                break
+        if not default_exp:
             exp_dir = self.config_tree.root_dir / "experiment"
             candidates = sorted(
                 p for p in exp_dir.rglob("*.yaml")
-                if not p.name.startswith("_") and p.is_file()
+                if not p.name.startswith("_") and p.is_file() and "/methods/" not in p.as_posix()
             ) if exp_dir.is_dir() else []
             if candidates:
                 default_exp = str(candidates[0].relative_to(self.config_tree.root_dir))
-            else:
-                default_exp = None
         if default_exp:
             self.config_tree.select_file(default_exp)
 
@@ -528,7 +533,7 @@ class Window(QMainWindow):
         viewer = self.config_viewer
         if viewer and viewer.current_rel_path:
             self.statusBar().showMessage(f"Saved {viewer.current_rel_path}", 4000)
-        self.request_compose()
+        self.compose_timer.start()  # debounced: an edit's config_changed has usually queued one already
 
     def on_config_file_renamed(self, old_rel, new_rel):
         viewer = self.config_viewer
@@ -1049,7 +1054,9 @@ class Window(QMainWindow):
         self.statusBar().showMessage("Restored default sidebar panels and order.", 4000)
 
     def save_layout(self):
-        if not hasattr(self, "settings_manager"):
+        if not hasattr(self, "settings_manager") or self._shutting_down:
+            # Shutdown removes each plugin's tab. That isn't the user's layout, and each save
+            # rebuilt the open experiment three times, flashing its boxes as windows.
             return
         try:
             order = list(self.tabs.tab_order)
@@ -1099,12 +1106,18 @@ class Window(QMainWindow):
     def backend_health_callback(self, data, error):
         if not hasattr(self, "settings_backend_status"):
             return
+        self._backend_ok = not error
         if error:
             self.settings_backend_status.setText(f"Status: Unavailable ({error})")
-            self.settings_backend_status.setStyleSheet(f"color: {theme_color('number')};")
         else:
             self.settings_backend_status.setText(f"Status: Ready · composes {data['base_experiment']} in-process")
-            self.settings_backend_status.setStyleSheet(f"color: {theme_color('primary')};")
+        self.color_backend_status()
+
+    def color_backend_status(self):
+        """Colour the pipeline status by the last check's result, in the current theme."""
+        ok = getattr(self, "_backend_ok", None)
+        if ok is not None and hasattr(self, "settings_backend_status"):
+            self.settings_backend_status.setStyleSheet(f"color: {theme_color('primary' if ok else 'number')};")
 
     def run_quick_command(self, command):
         self.tabs.setCurrentWidget(self.console_panel)
@@ -1112,19 +1125,13 @@ class Window(QMainWindow):
             self.command.setText(command)
         self.console_command(command)
 
-    def toggle_ascii_animation(self, paused):
-        if hasattr(self, "settings_ascii"):
-            self.settings_ascii.set_paused(paused)
-        if hasattr(self, "anim_toggle_btn") and getattr(self.anim_toggle_btn, "tab_id", None) != "animation" and hasattr(self.anim_toggle_btn, "isCheckable") and self.anim_toggle_btn.isCheckable():
-            self.anim_toggle_btn.setText("Resume animation" if paused else "Pause animation")
-
     def make_menus(self):
         self.menu_actions = {}
         file_menu = self.menuBar().addMenu("File")
         for aid, title, default_sc, callback in (
             ("new_experiment", "New experiment", "Ctrl+N", self.new_experiment),
             ("scaffold_plugin", "Scaffold New Component Plugin…", "Ctrl+Shift+P", self.scaffold_plugin),
-            ("reload_components", "Reload Component Code", "Ctrl+Shift+R", self.reload_components),
+            ("reload_components", "Reload Component Code", "Ctrl+Alt+R", self.reload_components),  # Ctrl+Shift+R is the queue's
             ("export_config", "Export draft YAML…", "Ctrl+Shift+S", self.export_config),
             ("save_config", "Save configuration", "Ctrl+S", self.save_current_config),
             ("close_tab", "Close tab", "Ctrl+W", self.close_active_tab),
@@ -1206,7 +1213,7 @@ class Window(QMainWindow):
         view_menu.addAction("Job queue", lambda: self.tabs.setCurrentWidget(self.queue_panel))
         view_menu.addAction("Terminal", lambda: self.tabs.setCurrentWidget(self.terminal_panel))
         view_menu.addAction("Console", lambda: self.tabs.setCurrentWidget(self.console_panel))
-        view_menu.addAction("Settings & About", lambda: self.tabs.setCurrentWidget(self.settings_panel))
+        view_menu.addAction("Settings", self.show_settings)
         view_menu.addAction("Restore default layout", lambda: self.restoreState(self.default_layout))
         self.auto_hide_action = QAction("Auto-hide sidebar", self, checkable=True)
         self.auto_hide_action.setChecked(self.tabs.auto_hide)
@@ -1215,7 +1222,17 @@ class Window(QMainWindow):
         view_menu.addSeparator()
         view_menu.addAction("Preferences: Open Settings File", self.open_settings_file)
         help_menu = self.menuBar().addMenu("Help")
-        help_menu.addAction("Settings & About", self.show_about)
+        action = QAction("Documentation", self)
+        action.setProperty("_default_sc", "F1")
+        sc = self.settings_manager.get("shortcuts", "open_docs", default="F1") if hasattr(self, "settings_manager") else "F1"
+        sc_norm = normalize_menu_shortcut(sc)
+        if sc_norm:
+            action.setShortcut(QKeySequence(sc_norm))
+        action.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
+        action.triggered.connect(self.show_docs)
+        help_menu.addAction(action)
+        self.addAction(action)
+        self.menu_actions["open_docs"] = action
 
     def open_settings_file(self):
         """Open the workspace settings.toml in the user's default text editor."""
@@ -1288,6 +1305,8 @@ class Window(QMainWindow):
         if hasattr(self, "settings_view") and hasattr(self.settings_view, "refresh_styles"):
             if self.settings_view.isVisible():
                 self.settings_view.refresh_styles()
+            else:
+                self._settings_styles_stale = True  # restyled when the Settings tab is next shown
 
         # 6. Update appearance UI zoom controls if built
         if hasattr(self, "zoom_slider") and self.zoom_slider:
@@ -1297,8 +1316,10 @@ class Window(QMainWindow):
         if hasattr(self, "zoom_percent_label") and self.zoom_percent_label:
             self.zoom_percent_label.setText(f"{int(round(factor * 100))}%")
 
-        # 7. Status bar confirmation
-        if hasattr(self, "statusBar") and self.statusBar():
+        # 7. Status bar confirmation, for zooms the user makes. Not while starting up: a message shown
+        # before the window is visible doesn't hide the status bar's normal widgets (QStatusBar only
+        # hides visible ones), so for its 1.5 s it was drawn on top of the theme label.
+        if self.isVisible() and hasattr(self, "statusBar") and self.statusBar():
             self.statusBar().showMessage(f"Zoom: {int(round(factor * 100))}%", 1500)
 
     def _persist_zoom(self):
@@ -1316,9 +1337,12 @@ class Window(QMainWindow):
             if hasattr(self.components_panel, "viewer") and self.components_panel.viewer and self.components_panel.viewer.is_dirty:
                 self.components_panel.save_current()
 
-        # Invalidate the config tree cache so the active panel sees fresh models/agents/envs
-        from .config_viewer import invalidate_config_tree
-        invalidate_config_tree()
+        # Refresh the config panels only when something under in/config changed since they last
+        # loaded (the Components panel, a hub install, an edit in the terminal). Reloading on every
+        # switch rebuilt the tree and re-rendered the open form each time (~0.5s).
+        if self._configs_changed_since(self):
+            from .config_viewer import invalidate_config_tree
+            invalidate_config_tree()  # other panels read the shared tree too
 
         w = self.tabs.widget(index)
         if hasattr(w, "activate") and callable(w.activate):
@@ -1328,13 +1352,14 @@ class Window(QMainWindow):
         if w is getattr(self, "config_panel", None):
             if hasattr(self, "config_tab_manager"):
                 active_v = self.config_tab_manager.current_viewer()
-                if active_v and hasattr(active_v, "reload_data"):
+                if active_v and hasattr(active_v, "reload_data") and self._configs_changed_since(active_v):
                     active_v.reload_data(force_tree_refresh=True)
 
         # If switching to components_panel, refresh viewer
         if w is getattr(self, "components_panel", None):
-            if hasattr(self.components_panel, "viewer") and hasattr(self.components_panel.viewer, "reload_data"):
-                self.components_panel.viewer.reload_data(force_tree_refresh=True)
+            viewer = getattr(self.components_panel, "viewer", None)
+            if hasattr(viewer, "reload_data") and self._configs_changed_since(viewer):
+                viewer.reload_data(force_tree_refresh=True)
 
         if self.tabs.widget(index) is self.queue_panel:
             self.on_queue_changed(self.jobs.queue_state())
@@ -1346,21 +1371,37 @@ class Window(QMainWindow):
         if hasattr(self, "settings_panel") and self.tabs.widget(index) is self.settings_panel:
             self.test_backend_connection()
             if hasattr(self, "settings_view"):
-                self.settings_view.reset_to_ascii()
-                self.settings_view.refresh_styles()
+                # Theme changes restyle it immediately; only a zoom made while it was hidden is pending.
+                if getattr(self, "_settings_styles_stale", False):
+                    self._settings_styles_stale = False
+                    self.settings_view.refresh_styles()
 
-    def show_about(self):
+    def _configs_changed_since(self, holder) -> bool:
+        """True if in/config changed since `holder` last checked; remembers the new state on it."""
+        fingerprint = config_fingerprint(self.config_tree.root_dir)
+        changed = getattr(holder, "_config_fingerprint", None) != fingerprint
+        holder._config_fingerprint = fingerprint
+        return changed
+
+    def show_settings(self, tab_id=None):
+        """Open Settings, on `tab_id` (e.g. "hotkeys") if given."""
         if hasattr(self, "settings_panel"):
             self.tabs.setCurrentWidget(self.settings_panel)
-            if hasattr(self, "settings_view"):
-                self.settings_view.reset_to_ascii()
+            if tab_id and hasattr(self, "settings_view"):
+                self.settings_view.show_tab(tab_id)
+
+    def show_docs(self):
+        """Open the Documentation tab (F1), showing it if hidden and switching its plugin on if it is off."""
+        if "documentation" in self.tabs.tabs:
+            self.hotkey_manager.switch_to_pane("documentation")
+        elif "documentation" in getattr(getattr(self, "plugin_manager", None), "manifests", {}):
+            from .launcher import _enable_plugin
+            _enable_plugin(self, "documentation")
         else:
-            dialog = AboutDialog(self)
-            dialog.exec()
-            dialog.deleteLater()
+            self.statusBar().showMessage("The Documentation plugin isn't installed.", 4000)
 
     def theme_changed(self):
-        self.theme_status.setText(f"  ●  Local workspace    /    {self.theme_manager.active['name']}")
+        self.show_pipeline_state()
         self.highlighter.rehighlight()
         self.tabs.refresh_icons()
         for tree in (getattr(self, "config_tree", None),
@@ -1373,10 +1414,9 @@ class Window(QMainWindow):
             self.settings_theme_select.blockSignals(True)
             self.settings_theme_select.setCurrentText(self.theme_manager.active["name"])
             self.settings_theme_select.blockSignals(False)
-        if hasattr(self, "settings_ascii"):
-            self.settings_ascii.update()
         if hasattr(self, "settings_backend_status"):
-            self.test_backend_connection()
+            # Recolour only: re-running the check would recompose the whole pipeline config.
+            self.color_backend_status()
         if hasattr(self, "terminal_panel"):
             self.terminal_panel.apply_theme(self.theme_manager.active)
         if hasattr(self, "settings_view"):
@@ -1418,7 +1458,7 @@ class Window(QMainWindow):
     def config(self):
         if hasattr(self, "config_viewer") and getattr(self.config_viewer, "raw_data", None):
             d = self.config_viewer.raw_data
-            exp_id = d.get("experiment_id") or (self.config_viewer.current_path.stem if getattr(self.config_viewer, "current_path", None) else "cartpole_ppo_baseline")
+            exp_id = d.get("experiment_id") or (self.config_viewer.current_path.stem if getattr(self.config_viewer, "current_path", None) else "default_experiment")
             seed = int(d.get("seed") if d.get("seed") is not None else 42)
             steps = int(d.get("total_timesteps") or 10000)
             tb = bool(d.get("tensorboard", False))
@@ -1436,7 +1476,17 @@ class Window(QMainWindow):
     def request_compose(self):
         self.compose_serial += 1
         serial, config = self.compose_serial, self.config()
-        exp_target = getattr(self, "current_experiment", None) or BASE_EXPERIMENT
+        exp_target = getattr(self, "current_experiment", None)
+        if not exp_target:
+            if hasattr(self, "config_tree") and (self.config_tree.root_dir / f"experiment/{BASE_EXPERIMENT}.yaml").exists():
+                exp_target = BASE_EXPERIMENT
+            else:
+                self.preview.setPlainText("# No experiment currently selected.\n# Select an experiment from the tree or click 'New Experiment' to create one.")
+                self.preview_status.setText("No experiment selected")
+                self.compose_valid = False
+                self.compose_error = None
+                self.update_launch_state()
+                return
         overrides = self.config_viewer.get_overrides() if hasattr(self, "config_viewer") else config.overrides()
         self.backend.compose(exp_target, overrides,
                              lambda data, error: self.compose_finished(serial, config, data, error))
@@ -1447,6 +1497,9 @@ class Window(QMainWindow):
         if error or not isinstance(data, dict):
             self.compose_error = str(error or "Invalid pipeline response")
             self.compose_valid = False
+            # Do not let the launch guard inspect a previous experiment's
+            # resolved configuration after a failed refresh.
+            self.composed_config = None
             self.update_launch_state()
             self.set_backend_state(False, error or "Invalid pipeline response")
             self.preview_status.setText("Pipeline unavailable • local recipe draft, not validated")
@@ -1473,8 +1526,9 @@ class Window(QMainWindow):
         # The launched run is described by the experiment, not by the builder. Without
         # this the run record keeps Config's defaults - env "cartpole", 10,000 steps -
         # so every experiment launched from the tree was labelled as CartPole.
-        if isinstance(data.get("config"), dict):
-            composed = data["config"]
+        self.composed_config = data.get("config") if isinstance(data.get("config"), dict) else None
+        if self.composed_config is not None:
+            composed = self.composed_config
             env = composed.get("env")
             self.composed_facts = {
                 "env": env.get("name") if isinstance(env, dict) else env,
@@ -1514,13 +1568,19 @@ class Window(QMainWindow):
             self.request_disk_runs()  # list runs on disk, including ones started outside the app
         if not connected and hasattr(self, "results_view"):
             self.results_view.set_offline()
+        self.pipeline_state = "ready" if connected else "unavailable"
+        self.show_pipeline_state()
         if connected:
-            self.backend_label.setText("PIPELINE   ●   local  ")
             self.backend_label.setToolTip(f"Configs compose in-process and training runs with {sys.executable}.")
         else:
-            self.backend_label.setText("PIPELINE   ○   unavailable  ")
             self.backend_label.setToolTip(f"{error}\nRun ThetaIDE from the project venv: "
                                           'pip install -e ".[gui]" then python -m frontend')
+
+    def show_pipeline_state(self):
+        """The status bar's pipeline indicator: a dot in the theme's colour for the state, then its name."""
+        text, color = {"ready": ("Pipeline ready", "primary"), "unavailable": ("Pipeline unavailable", "number"),
+                       "loading": ("Loading pipeline…", "muted")}[self.pipeline_state]
+        self.backend_label.setText(f'<span style="color: {theme_color(color)}">●</span>&nbsp; {text}')
 
     def request_schema(self, apply_defaults):
         self.schema_pending = True
@@ -1587,14 +1647,6 @@ class Window(QMainWindow):
             return []
 
         missing = []
-        ct = getattr(self, "config_tree", None)
-        tree = getattr(ct, "tree_model", None) if ct is not None else None
-        if tree is None:
-            try:
-                from frontend.config_model import config_tree
-                tree = config_tree()
-            except Exception:
-                tree = None
 
         # 1. Check from compose errors if any
         compose_err = getattr(self, "compose_error", "") or ""
@@ -1602,55 +1654,94 @@ class Window(QMainWindow):
         find_matches = re.findall(r"Could not find '(agent|model|env|paradigms)/([^']+)'", compose_err)
         for cat, name in find_matches:
             missing.append(f"{cat}: {name}")
+        err_matches = re.findall(r"missing component[s]?: ([^.]+)", compose_err, re.IGNORECASE)
+        for m in err_matches:
+            for item in m.split(","):
+                item_clean = item.strip()
+                if item_clean:
+                    missing.append(item_clean)
+
+        ct = getattr(self, "config_tree", None)
+        tree = getattr(ct, "tree_model", None) if ct is not None else None
 
         # 2. Check from current viewer or experiment file
+        data = None
         viewer = getattr(self, "config_viewer", None)
-        if viewer and getattr(viewer, "raw_data", None):
+        if viewer and getattr(viewer, "raw_data", None) and isinstance(viewer.raw_data, dict):
             data = viewer.raw_data
-            # Environment check
-            env_val = viewer._get_explicit_env() or viewer._get_base_env()
-            if env_val and tree:
-                env_exists = (
-                    env_val in tree.environments
-                    or any(e.name == env_val for e in tree.environments.values())
-                    or (tree.config_root / "env" / f"{env_val}.yaml").is_file()
-                )
-                if not env_exists:
-                    missing.append(f"environment: {env_val}")
+            if tree is not None:
+                env_val = getattr(viewer, "_get_explicit_env", lambda: None)() or getattr(viewer, "_get_base_env", lambda: None)()
+                if env_val and hasattr(tree, "environments"):
+                    env_exists = (
+                        env_val in tree.environments
+                        or any(getattr(e, "name", None) == env_val for e in tree.environments.values())
+                        or (getattr(tree, "config_root", Path("in/config")) / "env" / f"{env_val}.yaml").is_file()
+                    )
+                    if not env_exists:
+                        missing.append(f"environment: {env_val}")
 
-            # Methods check
-            methods = data.get("methods", {})
-            if isinstance(methods, dict):
-                for m_name, m_spec in methods.items():
-                    if not isinstance(m_spec, dict):
-                        continue
-                    ag = m_spec.get("agent")
-                    if isinstance(ag, dict):
-                        ag = ag.get("algorithm") or ag.get("name")
-                    if ag and tree:
-                        ag_str = str(ag)
-                        ag_exists = (
-                            ag_str in tree.agents
-                            or any(a.name == ag_str or a.algorithm == ag_str for a in tree.agents.values())
-                            or (tree.config_root / "agent" / f"{ag_str}.yaml").is_file()
-                        )
-                        if not ag_exists:
-                            missing.append(f"algorithm: {ag_str}")
+                methods = data.get("methods", {})
+                if isinstance(methods, dict):
+                    for m_name, m_spec in methods.items():
+                        if not isinstance(m_spec, dict):
+                            continue
+                        ag = m_spec.get("agent")
+                        if isinstance(ag, dict):
+                            ag = ag.get("algorithm") or ag.get("name")
+                        if ag and hasattr(tree, "agents"):
+                            ag_str = str(ag)
+                            ag_exists = (
+                                ag_str in tree.agents
+                                or any(getattr(a, "name", None) == ag_str or getattr(a, "algorithm", None) == ag_str for a in tree.agents.values())
+                                or (getattr(tree, "config_root", Path("in/config")) / "agent" / f"{ag_str}.yaml").is_file()
+                            )
+                            if not ag_exists:
+                                missing.append(f"agent: {ag_str}")
 
-                    mo = m_spec.get("model")
-                    if isinstance(mo, dict):
-                        mo = next(iter(mo)) if mo else None
-                    if mo and tree:
-                        mo_str = str(mo)
-                        mo_stem = mo_str.split("/")[-1]
-                        mo_exists = (
-                            mo_str in tree.models
-                            or mo_stem in tree.models
-                            or (tree.config_root / "model" / f"{mo_str}.yaml").is_file()
-                            or (tree.config_root / "model" / "basics" / f"{mo_stem}.yaml").is_file()
-                        )
-                        if not mo_exists:
-                            missing.append(f"model: {mo_str}")
+                        mo = m_spec.get("model")
+                        if isinstance(mo, dict):
+                            mo = next(iter(mo)) if mo else None
+                        if mo and hasattr(tree, "models"):
+                            mo_str = str(mo)
+                            mo_stem = mo_str.split("/")[-1]
+                            mo_exists = (
+                                mo_str in tree.models
+                                or mo_stem in tree.models
+                                or (getattr(tree, "config_root", Path("in/config")) / "model" / f"{mo_str}.yaml").is_file()
+                                or (getattr(tree, "config_root", Path("in/config")) / "model" / "basics" / f"{mo_stem}.yaml").is_file()
+                            )
+                            if not mo_exists:
+                                missing.append(f"model: {mo_str}")
+
+        if not data and hasattr(self, "active_config_path") and self.active_config_path:
+            try:
+                import yaml
+                data = yaml.safe_load(Path(self.active_config_path).read_text(encoding="utf-8"))
+            except Exception:
+                data = None
+        if not data:
+            exp_target = getattr(self, "current_experiment", None)
+            if exp_target:
+                p = Path("in/config/experiment") / f"{exp_target}.yaml"
+                if p.is_file():
+                    try:
+                        import yaml
+                        data = yaml.safe_load(p.read_text(encoding="utf-8"))
+                    except Exception:
+                        data = None
+
+        # A child experiment often inherits `env` from its group's _base.yaml.
+        # Raw editor data therefore is not itself launchable.  Prefer the
+        # exact config that the backend just composed and validated, falling
+        # back to raw data only while composition is pending.
+        composed_config = getattr(self, "composed_config", None)
+        component_config = composed_config if isinstance(composed_config, dict) else data
+        if component_config:
+            try:
+                from src.app.pipeline.validation import find_missing_components
+                missing.extend(find_missing_components(component_config))
+            except Exception:
+                pass
 
         return list(dict.fromkeys(missing))
 
@@ -1658,6 +1749,8 @@ class Window(QMainWindow):
         idle = self.active is None
         has_experiment = bool(getattr(self, "current_experiment", None))
         missing_components = Window.check_missing_components(self) if has_experiment else []
+        if not isinstance(missing_components, list):
+            missing_components = []
         ready = idle and self.compose_valid and has_experiment and not missing_components
         for button in launch_buttons(self):  # the experiment tree's and the Queue tab's
             button.setEnabled(ready)
@@ -1707,11 +1800,13 @@ class Window(QMainWindow):
         if getattr(self, "state_label", None) is not None:
             run = self.active
             if run is None:
-                self.state_label.setText("TRAINING   •   idle  ")
+                self.state_label.setText("Idle")
             elif run.get("simulated"):
-                self.state_label.setText(f"DEMO   •   {run['status']}  ")
+                self.state_label.setText(f"Demo · {run['status']}")
             else:
-                self.state_label.setText(f"TRAINING   •   {run['status']}   •   {run.get('backend', {}).get('experiment_id', '')}  ")
+                experiment_id = run.get("backend", {}).get("experiment_id", "")
+                self.state_label.setText(f"{run['status'].capitalize()} · {experiment_id}" if experiment_id
+                                         else run["status"].capitalize())
 
     def activate(self, run):
         self.active = run
@@ -1739,7 +1834,13 @@ class Window(QMainWindow):
             self.config_viewer.save_to_disk()
 
         config = self.config()
-        exp_target = getattr(self, "current_experiment", None) or BASE_EXPERIMENT
+        exp_target = getattr(self, "current_experiment", None)
+        if not exp_target:
+            if hasattr(self, "config_tree") and (self.config_tree.root_dir / f"experiment/{BASE_EXPERIMENT}.yaml").exists():
+                exp_target = BASE_EXPERIMENT
+            else:
+                self.statusBar().showMessage("Please select or create an experiment to launch.", 5000)
+                return
         is_recover = False
         if hasattr(self, "config_viewer") and getattr(self.config_viewer, "raw_data", None):
             is_recover = bool(self.config_viewer.raw_data.get("recover", False))
@@ -1964,7 +2065,13 @@ class Window(QMainWindow):
             self.config_viewer.save_to_disk()
 
         config = self.config()
-        exp_target = getattr(self, "current_experiment", None) or BASE_EXPERIMENT
+        exp_target = getattr(self, "current_experiment", None)
+        if not exp_target:
+            if hasattr(self, "config_tree") and (self.config_tree.root_dir / f"experiment/{BASE_EXPERIMENT}.yaml").exists():
+                exp_target = BASE_EXPERIMENT
+            else:
+                self.statusBar().showMessage("Please select or create an experiment to queue.", 5000)
+                return
         is_recover = False
         if hasattr(self, "config_viewer") and getattr(self.config_viewer, "raw_data", None):
             is_recover = bool(self.config_viewer.raw_data.get("recover", False))
@@ -2412,6 +2519,9 @@ class Window(QMainWindow):
             if answer != QMessageBox.StandardButton.Yes:
                 event.ignore()
                 return
+        self._shutting_down = True
+        for viewer in self.findChildren(ConfigViewer):
+            viewer.flush_pending_save()  # edits typed in the last moment before closing
         if self.active and self.active["simulated"]:
             self.stop_run()
         elif self.active:

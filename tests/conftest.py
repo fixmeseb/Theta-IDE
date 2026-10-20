@@ -64,6 +64,24 @@ def _delete_leftover_widgets():
     QApplication.sendPostedEvents(None, QEvent.Type.DeferredDelete.value)
 
 
+@pytest.fixture(autouse=True)
+def _no_hub_network(monkeypatch):
+    """Keep the Component Hub offline in tests.
+
+    Opening a HubView starts fetch_index_async: a thread that downloads the registry from
+    GitHub and signals the view when it is done. Tests close the view straight away, so the
+    thread outlived it (and wrote a .thetaide cache into the workspace); on CI that aborted
+    the whole run. Tests that need components set client.components themselves.
+    """
+    if "frontend.hub.client" not in sys.modules:
+        try:
+            import frontend.hub.client  # noqa: F401
+        except ImportError:  # no GUI stack installed
+            return
+    monkeypatch.setattr(sys.modules["frontend.hub.client"].HubClient, "fetch_index_async",
+                        lambda self, force=False: None)
+
+
 @pytest.fixture
 def project_root():
     """Return the project root directory."""

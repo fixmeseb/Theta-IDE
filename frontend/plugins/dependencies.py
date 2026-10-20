@@ -38,8 +38,8 @@ def parse_package_name(requirement: str) -> Tuple[str, str]:
     if "#" in cleaned:
         cleaned = cleaned.split("#", 1)[0].strip()
 
-    # Match package name before versions or extras (e.g., pkg[extra]>=1.0.0)
-    match = re.match(r"^([A-Za-z0-9_\-\.]+)", cleaned)
+    # Match package name and optional extras (e.g., gymnasium[atari]>=1.0.0)
+    match = re.match(r"^([A-Za-z0-9_\-\.]+)(?:\[([A-Za-z0-9_,\-\.]+)\])?", cleaned)
     if not match:
         return cleaned, cleaned.replace("-", "_")
 
@@ -64,9 +64,11 @@ def check_missing_dependencies(requirements: List[str]) -> List[str]:
         req_clean = req.strip()
         if not req_clean or req_clean.startswith("#"):
             continue
-        _, mod_name = parse_package_name(req_clean)
+        pkg_name, mod_name = parse_package_name(req_clean)
         if not is_module_installed(mod_name):
             missing.append(req_clean)
+        elif "[atari]" in req_clean.lower() and not is_module_installed("ale_py"):
+            missing.append("ale-py>=0.8.1")
     return missing
 
 

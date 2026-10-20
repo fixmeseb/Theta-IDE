@@ -41,6 +41,14 @@ def build_method_overrides(
     Returns:
         list[str]: Hydra override arguments ready to pass to train.py.
     """
+    if hasattr(method_cfg, "items"):
+        from omegaconf import DictConfig, OmegaConf
+
+        if isinstance(method_cfg, DictConfig):
+            method_cfg = OmegaConf.to_container(method_cfg, resolve=True)
+        else:
+            method_cfg = dict(method_cfg)
+
     paradigm = cfg.get("paradigm", "offline_rl") if cfg is not None else "offline_rl"
     # Asked once: a paradigm with no allowed agents drives its methods by model.
     uses_agents = paradigm_uses_agents(paradigm)
@@ -101,6 +109,7 @@ def build_method_overrides(
 
     if not uses_agents:
         overrides.append(f"++model.name={agent_name}")
+        overrides.append(f"++model.architecture={model_arch}")
         overrides.append(f"++agent.name={agent_name}")
     else:
         if not agent_algo:
@@ -108,7 +117,9 @@ def build_method_overrides(
         overrides.extend(
             [
                 f"agent={agent_algo}",
+                f"++agent.algorithm={agent_algo}",
                 f"++agent.name={agent_name}",
+                f"++model.architecture={model_arch}",
             ]
         )
 
@@ -139,14 +150,12 @@ def build_method_overrides(
         "search_space",
         "from_study",
     }
-    if (
-        not method_cfg.get("explicit_modules", False)
-        and not merged_model_params.get("explicit_modules", False)
-    ):
+    if not method_cfg.get("explicit_modules", False) and not merged_model_params.get("explicit_modules", False):
         _INTERNAL_KEYS.add("modules")
     _MODEL_KEYS = {
         "architecture",
         "modules",
+        "slots",
         "rules",
         "ecm_dthr",
         "fyd",
@@ -162,8 +171,24 @@ def build_method_overrides(
         "symbolic",
         "hidden_sizes",
         "activation",
+        "dropout",
+        "d_model",
+        "nhead",
+        "dim_feedforward",
+        "num_layers",
+        "hidden_dim",
         "blend_q_values",
     }
+    # Dynamically expand model keys if base model config is discovered
+    try:
+        from src.app.pipeline.config import load_model_base_config
+
+        base_m_cfg = load_model_base_config(model_arch)
+        if base_m_cfg and isinstance(base_m_cfg, dict):
+            _MODEL_KEYS.update(base_m_cfg.keys())
+    except Exception:
+        pass
+
     for k, v in method_cfg.items():
         if k in _INTERNAL_KEYS:
             continue

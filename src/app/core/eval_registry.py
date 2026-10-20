@@ -29,6 +29,7 @@ def register_evaluator(*names: str) -> Callable[[Type[Any]], Type[Any]]:
             # Also register into paradigm_loader component registry for cross-compatibility
             try:
                 from src.app.core.paradigm_loader import register_component
+
                 register_component(clean_name)(cls)
             except Exception:
                 pass
@@ -37,7 +38,7 @@ def register_evaluator(*names: str) -> Callable[[Type[Any]], Type[Any]]:
     return decorator
 
 
-def get_evaluator_class(name: str) -> Optional[Type[Any]]:
+def get_evaluator_class(name: str) -> Type[Any] | None:
     """Resolve an evaluator name to its registered class.
 
     Args:
@@ -61,6 +62,7 @@ def get_evaluator_class(name: str) -> Optional[Type[Any]]:
     # Fallback to paradigm_loader's component registry
     try:
         from src.app.core.paradigm_loader import get_component
+
         cls = get_component(clean_name)
         if cls is not None:
             return cls
@@ -101,24 +103,28 @@ def _register_builtins() -> None:
     """Ensure core built-in eval protocols are registered."""
     try:
         from src.app.core.paradigm_impls.base.online_rl import EpisodicRewardEvalProtocol
+
         register_evaluator("EpisodicRewardEvalProtocol")(EpisodicRewardEvalProtocol)
     except Exception:
         pass
 
     try:
         from src.app.core.paradigm_impls.base.offline_rl import OfflineRLEvalProtocol
+
         register_evaluator("OfflineRLEvalProtocol")(OfflineRLEvalProtocol)
     except Exception:
         pass
 
     try:
         from src.app.core.paradigm_impls.base.supervised import ClassificationEvalProtocol
+
         register_evaluator("ClassificationEvalProtocol")(ClassificationEvalProtocol)
     except Exception:
         pass
 
     try:
         from src.app.core.paradigm_impls.base.unsupervised import ReconstructionEvalProtocol
+
         register_evaluator("ReconstructionEvalProtocol")(ReconstructionEvalProtocol)
     except Exception:
         pass

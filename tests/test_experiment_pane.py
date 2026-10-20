@@ -142,10 +142,9 @@ class TestConfigTree(unittest.TestCase):
         try:
             top_count = comp_tree.tree.topLevelItemCount()
             top_texts = [comp_tree.tree.topLevelItem(i).text(0) for i in range(top_count)]
-            self.assertTrue(any("agent" in t for t in top_texts))
-            self.assertTrue(any("env" in t for t in top_texts))
-            self.assertTrue(any("config" in t.lower() for t in top_texts))
-            self.assertTrue("config" in top_texts[0].lower(), "Global defaults config must be pinned at the top")
+            self.assertTrue(any(t in ("Algorithms", "agent") for t in top_texts))
+            self.assertTrue(any(t in ("Environments", "env") for t in top_texts))
+            self.assertTrue(any("System" in t or "config" in t.lower() for t in top_texts))
             self.assertFalse(any("experiment" in t for t in top_texts))
         finally:
             comp_tree.close()
@@ -204,7 +203,7 @@ class TestConfigTree(unittest.TestCase):
             agent_item = None
             for i in range(comp_tree.tree.topLevelItemCount()):
                 item = comp_tree.tree.topLevelItem(i)
-                if "agent" in item.text(0):
+                if item.text(0) in ("Algorithms", "agent"):
                     agent_item = item
                     item.setExpanded(True)
                     break
@@ -219,7 +218,7 @@ class TestConfigTree(unittest.TestCase):
             found_agent = None
             for i in range(comp_tree.tree.topLevelItemCount()):
                 item = comp_tree.tree.topLevelItem(i)
-                if "agent" in item.text(0):
+                if item.text(0) in ("Algorithms", "agent"):
                     found_agent = item
                     break
             self.assertIsNotNone(found_agent)
@@ -233,7 +232,7 @@ class TestConfigTree(unittest.TestCase):
             found_agent_after = None
             for i in range(comp_tree.tree.topLevelItemCount()):
                 item = comp_tree.tree.topLevelItem(i)
-                if "agent" in item.text(0):
+                if item.text(0) in ("Algorithms", "agent"):
                     found_agent_after = item
                     break
             self.assertIsNotNone(found_agent_after)
@@ -594,26 +593,25 @@ class TestConfigViewer(unittest.TestCase):
         self.assertNotIn("ent_coef", self.viewer.raw_data["methods"]["ppo"])
 
     def test_modular_block_crud(self):
-        # Add resources block
+        # Runtime defaults now live in the top card, and unsupported blocks
+        # are not offered by the remaining override menu.
         self.assertNotIn("resources", self.viewer.raw_data)
+        menu_labels = [action.text() for action in self.viewer.btn_add_block.menu().actions()]
+        self.assertEqual(menu_labels, ["Checkpoint Settings"])
+        self.assertNotIn("Trainer Overrides", menu_labels)
+        self.assertNotIn("Environment Overrides", menu_labels)
+        self.assertNotIn("Dataset Configuration", menu_labels)
+        self.assertNotIn("Compute & Slurm Resources", menu_labels)
+        self.assertNotIn("Hyperparameter Sweeper (Optuna)", menu_labels)
+
+        # Unsupported direct calls do not create hidden configuration blocks.
         self.viewer.add_block("resources")
-        self.assertIn("resources", self.viewer.raw_data)
-        self.assertEqual(self.viewer.raw_data["resources"]["gpus"], 1)
-
-        # Add trainer block
-        self.assertNotIn("trainer", self.viewer.raw_data)
-        self.viewer.add_block("trainer")
-        self.assertIn("trainer", self.viewer.raw_data)
-
-        # Remove resources block
-        self.viewer.remove_block("resources")
         self.assertNotIn("resources", self.viewer.raw_data)
 
     def test_dataset_card_specification(self):
+        # An online RL experiment cannot opt into a static dataset source.
         self.viewer.add_block("dataset")
-        self.assertIn("dataset_path", self.viewer.raw_data)
-        self.viewer._on_field_edited("dataset_path", "in/datasets/mimic/train.pkl")
-        self.assertIn("dataset_path='in/datasets/mimic/train.pkl'", self.viewer.get_overrides())
+        self.assertNotIn("dataset_path", self.viewer.raw_data)
 
     def test_method_inline_rename(self):
         self.viewer.auto_save = False
@@ -673,7 +671,9 @@ class TestConfigViewer(unittest.TestCase):
 class TestComponentsPanel(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
-        self.root = Path(self.temp_dir.name)
+        # The real layout, <workspace>/in/config: the panel takes the workspace (and the Hub's
+        # .thetaide) from two levels up, which for a bare temp dir is "/" on Linux and unwritable
+        self.root = Path(self.temp_dir.name) / "in" / "config"
         (self.root / "experiment" / "cartpole").mkdir(parents=True)
         (self.root / "agent").mkdir(parents=True)
         (self.root / "env").mkdir(parents=True)
@@ -694,7 +694,7 @@ class TestComponentsPanel(unittest.TestCase):
     def test_components_panel_tree_only_has_components(self):
         top_count = self.panel.components_tree.tree.topLevelItemCount()
         top_texts = [self.panel.components_tree.tree.topLevelItem(i).text(0) for i in range(top_count)]
-        self.assertTrue(any("agent" in t for t in top_texts))
+        self.assertTrue(any(t in ("Algorithms", "agent") for t in top_texts))
         self.assertFalse(any("experiment" in t for t in top_texts))
 
     def test_select_component_loads_into_viewer_and_raw_editor(self):
@@ -811,6 +811,7 @@ class TestComponentsPanel(unittest.TestCase):
 
     def test_filetree_unsynced_indicator(self):
         # Initial state: clean
+        self.panel.components_tree.select_file("agent/ppo.yaml")
         item = self.panel.components_tree.find_file_item("agent/ppo.yaml")
         self.assertIsNotNone(item)
         self.assertEqual(item.text(0), "ppo")
@@ -819,9 +820,8 @@ class TestComponentsPanel(unittest.TestCase):
 
         # Modify value in viewer
         from frontend.widgets import SpinBox, DoubleSpinBox
-        from frontend.config_viewer import ConfigBox
-        card = self.panel.viewer.findChildren(ConfigBox)[0]
-        spins = card.findChildren(SpinBox) + card.findChildren(DoubleSpinBox)
+        from frontend.config_viewer import CompactDoubleSpinBox
+        spins = self.panel.viewer.findChildren((SpinBox, DoubleSpinBox, CompactDoubleSpinBox))
         self.assertGreater(len(spins), 0)
         orig_val = spins[0].value()
         spins[0].setValue(orig_val + 1)
@@ -927,7 +927,7 @@ class TestExperimentPaneWindowIntegration(unittest.TestCase):
         top_texts = [self.window.config_tree.tree.topLevelItem(i).text(0) for i in range(self.window.config_tree.tree.topLevelItemCount())]
         self.assertFalse(any(t == "experiment" for t in top_texts))
         self.assertFalse(any(t in ("agent", "env", "model", "paradigms", "site") for t in top_texts))
-        self.assertTrue(any(t in ("cartpole", "mimic") for t in top_texts))
+        self.assertTrue(any(t in ("thetaide", "tabular_classification", "cartpole", "mimic") for t in top_texts))
 
     def test_components_pane_integrated_in_window(self):
         self.assertIsNotNone(self.window.components_panel)

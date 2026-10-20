@@ -6,8 +6,13 @@ plain folder name, and run files are only read from inside that run's own result
 
 from __future__ import annotations
 
+import copy
 import csv
+import io
 import json
+import os
+import threading
+from collections import OrderedDict
 from pathlib import Path
 from typing import Any
 
@@ -36,11 +41,15 @@ def _float(value) -> float | None:
 
 def list_environments() -> list[dict[str, Any]]:
     envs = []
-    for f in sorted((CONFIG_DIR / "env").glob("*.yaml")):
-        if f.name.startswith("_"):
+    env_dir = CONFIG_DIR / "env"
+    if not env_dir.is_dir():
+        return envs
+    for f in sorted(env_dir.rglob("*.yaml")):
+        if f.name.startswith("_") or "/_" in f.as_posix():
             continue
         try:
-            envs.append({"name": f.stem, "config": yaml.safe_load(f.read_text(encoding="utf-8"))})
+            rel_name = f.relative_to(env_dir).with_suffix("").as_posix()
+            envs.append({"name": rel_name, "stem": f.stem, "config": yaml.safe_load(f.read_text(encoding="utf-8"))})
         except (OSError, yaml.YAMLError):
             pass
     return envs
@@ -73,6 +82,79 @@ def list_experiments() -> list[dict[str, Any]]:
 
 # agent_summary results by agent folder, valid while the files they were read from are unchanged.
 _SUMMARY_CACHE: dict[Path, tuple[tuple, dict[str, Any] | None]] = {}
+# Per-run files, keyed by path and reused until their stamp changes (see _cached_by_stamp)
+_CONFIG_SUMMARY_CACHE: dict[Path, tuple[tuple, dict[str, Any]]] = {}
+_RUN_METADATA_CACHE: dict[Path, tuple[tuple, dict[str, Any]]] = {}
+
+# The caches above are also kept on disk between sessions: without them, the first list_runs of a session
+# parses every metrics.csv (~9 s for 900 agents). Every entry keeps the stamp it was read at and is only
+# reused while the file still matches it, as in memory, so a run that changed while the app was closed is
+# read again. The file is a convenience: if it can't be read or written, listing works as before.
+_PERSISTED_CACHES = {"agents": _SUMMARY_CACHE, "configs": _CONFIG_SUMMARY_CACHE, "metadata": _RUN_METADATA_CACHE}
+_PERSISTED_FORMAT = 1
+_persisted_loaded_for: Path | None = None  # the LOGS_DIR whose cache file has been read this session
+_cache_dirty = False  # an entry was computed since the cache file was last written
+
+
+def _summary_cache_file() -> Path:
+    return LOGS_DIR.parent / ".cache" / "catalog-summaries.json"
+
+
+def _as_tuples(value):
+    """JSON turns the stamps' tuples into lists; turn them back so stamps compare equal."""
+    return tuple(_as_tuples(v) for v in value) if isinstance(value, list) else value
+
+
+def _load_persisted_summaries() -> None:
+    global _persisted_loaded_for
+    if _persisted_loaded_for == LOGS_DIR:
+        return
+    _persisted_loaded_for = LOGS_DIR
+    try:
+        data = json.loads(_summary_cache_file().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return
+    if not isinstance(data, dict) or data.get("format") != _PERSISTED_FORMAT or data.get("logs_dir") != str(LOGS_DIR):
+        return
+    for name, cache in _PERSISTED_CACHES.items():
+        entries = data.get(name)
+        if not isinstance(entries, dict):
+            continue
+        for key, entry in entries.items():
+            if isinstance(entry, list) and len(entry) == 2:
+                cache.setdefault(Path(key), (_as_tuples(entry[0]), entry[1]))  # this session's entries win
+
+
+def _save_persisted_summaries(seen: dict[str, set[Path]]) -> None:
+    """Keep only entries for paths this listing saw (runs deleted since drop out), and write the file
+    if anything changed. Written to a temporary file and renamed, so a reader never sees half of it."""
+    global _cache_dirty
+    pruned = False
+    for name, cache in _PERSISTED_CACHES.items():
+        for key in [k for k in cache if k not in seen[name]]:
+            del cache[key]
+            pruned = True
+    if not (_cache_dirty or pruned):
+        return
+    data: dict[str, Any] = {"format": _PERSISTED_FORMAT, "logs_dir": str(LOGS_DIR)}
+    for name, cache in _PERSISTED_CACHES.items():
+        entries = {}
+        for key, (stamp, value) in cache.items():
+            try:
+                json.dumps(value, allow_nan=True)  # values JSON can't hold (a YAML date) stay in memory only
+            except (TypeError, ValueError):
+                continue
+            entries[str(key)] = [stamp, value]
+        data[name] = entries
+    target = _summary_cache_file()
+    try:
+        target.parent.mkdir(parents=True, exist_ok=True)
+        temporary = target.with_name(f"{target.name}.{os.getpid()}.tmp")
+        temporary.write_text(json.dumps(data), encoding="utf-8")
+        os.replace(temporary, target)
+        _cache_dirty = False
+    except OSError:
+        pass  # e.g. a read-only results folder: the next session reads the files again
 
 
 def _file_stamp(path: Path | None) -> tuple:
@@ -92,14 +174,22 @@ def agent_summary(agent_dir: Path) -> dict[str, Any] | None:
     """
     runtime_file = latest_version_file(agent_dir, "runtime.json")
     metrics_file = latest_version_file(agent_dir, "metrics.csv")
-    key = agent_dir.resolve()
-    stamp = (_file_stamp(runtime_file and runtime_file.resolve()), _file_stamp(metrics_file and metrics_file.resolve()))
+    # No .resolve(): the paths come from LOGS_DIR, already absolute, and resolving three paths per agent
+    # (an lstat for every path segment) was most of a repeated list_runs
+    key = agent_dir
+    stamp = (_file_stamp(runtime_file), _file_stamp(metrics_file))
     cached = _SUMMARY_CACHE.get(key)
     if cached is not None and cached[0] == stamp:
         return cached[1]
     summary = _read_agent_summary(agent_dir, runtime_file, metrics_file)
     _SUMMARY_CACHE[key] = (stamp, summary)
+    _mark_cache_dirty()
     return summary
+
+
+def _mark_cache_dirty() -> None:
+    global _cache_dirty
+    _cache_dirty = True
 
 
 def _read_agent_summary(agent_dir: Path, runtime_file: Path | None, metrics_file: Path | None) -> dict[str, Any] | None:
@@ -138,10 +228,36 @@ def _read_agent_summary(agent_dir: Path, runtime_file: Path | None, metrics_file
     }
 
 
+def _cached_by_stamp(cache: dict, path: Path, load):
+    """load(path), reused until the file's mtime or size changes (or it appears or disappears)."""
+    stamp = _file_stamp(path)
+    cached = cache.get(path)
+    if cached is not None and cached[0] == stamp:
+        return copy.deepcopy(cached[1])
+    value = load(path)
+    cache[path] = (stamp, value)
+    _mark_cache_dirty()
+    return copy.deepcopy(value)  # callers get their own copy; the cached one must not change
+
+
 def run_config_summary(run_dir: Path) -> dict[str, Any]:
-    """The fields of a run's saved Hydra config (config.yaml) that the Results browser shows."""
+    """The fields of a run's saved Hydra config (config.yaml) that the Results browser shows.
+
+    Cached per file: listing runs re-read every run's config.yaml, and YAML parsing was about two thirds
+    of a repeated list_runs."""
+    return _cached_by_stamp(_CONFIG_SUMMARY_CACHE, run_dir / "config.yaml", _read_config_summary)
+
+
+def _read_run_metadata(runtime_file: Path) -> dict[str, Any]:
     try:
-        cfg = yaml.safe_load((run_dir / "config.yaml").read_text(encoding="utf-8")) or {}
+        return json.loads(runtime_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+
+
+def _read_config_summary(config_file: Path) -> dict[str, Any]:
+    try:
+        cfg = yaml.safe_load(config_file.read_text(encoding="utf-8")) or {}
     except (OSError, yaml.YAMLError):
         return {}
     if not isinstance(cfg, dict):
@@ -171,21 +287,17 @@ def list_runs() -> list[dict[str, Any]]:
     runs = []
     if not LOGS_DIR.exists():
         return runs
+    _load_persisted_summaries()
+    seen: dict[str, set[Path]] = {name: set() for name in _PERSISTED_CACHES}
     for run_dir in LOGS_DIR.glob("*/*"):
         if not run_dir.is_dir():
             continue
-        metadata = {}
-        runtime_file = run_dir / "runtime.json"
-        if runtime_file.exists():
-            try:
-                metadata = json.loads(runtime_file.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                pass
-        agents = [
-            summary
-            for agent_dir in sorted(p for p in run_dir.iterdir() if p.is_dir())
-            if (summary := agent_summary(agent_dir)) is not None
-        ]
+        metadata = _cached_by_stamp(_RUN_METADATA_CACHE, run_dir / "runtime.json", _read_run_metadata)
+        agent_dirs = sorted(p for p in run_dir.iterdir() if p.is_dir())
+        seen["metadata"].add(run_dir / "runtime.json")
+        seen["configs"].add(run_dir / "config.yaml")
+        seen["agents"].update(agent_dirs)
+        agents = [summary for agent_dir in agent_dirs if (summary := agent_summary(agent_dir)) is not None]
         runs.append(
             {
                 "group": run_dir.parent.name,
@@ -196,6 +308,7 @@ def list_runs() -> list[dict[str, Any]]:
                 "finished": bool(agents) and all(agent["finished"] for agent in agents),
             }
         )
+    _save_persisted_summaries(seen)
     return runs
 
 
@@ -233,18 +346,90 @@ def run_metrics(
         metrics_file = agent_dir / name / "metrics.csv"
     if metrics_file is None or not metrics_file.exists():
         raise FileNotFoundError(f"No metrics for {group}/{experiment_id}/{agent}")
-    with open(metrics_file, encoding="utf-8", newline="") as f:
-        reader = csv.DictReader(f)
-        rows = list(reader)
-        columns = list(reader.fieldnames or [])
+    rows, columns, total = _metrics_rows(metrics_file, max(int(since), 0))
     return {
-        "metrics": rows[max(int(since), 0) :],
+        "metrics": rows,
         "columns": columns,
-        "total_rows": len(rows),
+        "total_rows": total,
         "version": metrics_file.parent.name,
         "versions": versions,
         "source": str(metrics_file),
     }
+
+
+class _MetricsTail:
+    """Where the last read of one metrics.csv stopped, so a later read can start there."""
+
+    __slots__ = ("inode", "header", "rows", "last_row_start", "end")
+
+    def __init__(self, inode, header, rows, last_row_start, end):
+        self.inode, self.header, self.rows, self.last_row_start, self.end = inode, header, rows, last_row_start, end
+
+
+# metrics.csv path -> where its last read stopped. A run being followed is polled with since=N every few
+# seconds; re-reading the whole file each time cost ~0.5 s per poll at 100k rows, and grew with the run.
+_METRICS_TAILS: "OrderedDict[Path, _MetricsTail]" = OrderedDict()
+_METRICS_TAILS_LIMIT = 64
+_METRICS_TAILS_LOCK = threading.Lock()
+
+
+def _parse_rows(header_text: str, body: bytes) -> list[dict[str, str]]:
+    """Rows of `body` (complete CSV lines) as DictReader yields them for a file with this header."""
+    text = header_text + body.decode("utf-8", errors="replace")
+    return list(csv.DictReader(io.StringIO(text, newline="")))
+
+
+def _metrics_rows(path: Path, since: int) -> tuple[list[dict[str, str]], list[str], int]:
+    """(rows from `since` on, columns, total rows) of a metrics.csv; only complete lines count.
+
+    A row still being written (no newline yet) is left for the next read. Reads continue from where the
+    previous read of this file stopped when they can: same file (inode), same header, not shrunk, and
+    `since` at or after its last row (the GUI re-fetches its last row, which may have been half-written).
+    Anything else (a first load, a rewrite with new columns, a replaced file) reads the file whole.
+    """
+    key = path.resolve()
+    try:
+        stat = path.stat()
+        with open(path, "rb") as f:
+            header_line = f.readline()
+            if not header_line.endswith(b"\n"):
+                return [], [], 0  # the header itself is still being written
+            header_text = header_line.decode("utf-8", errors="replace")
+            header = next(csv.reader([header_text.rstrip("\r\n")]), [])
+            with _METRICS_TAILS_LOCK:
+                tail = _METRICS_TAILS.get(key)
+            resumable = (
+                tail is not None
+                and tail.inode == stat.st_ino
+                and tail.header == header
+                and stat.st_size >= tail.end
+                and tail.rows >= 1
+                and since >= tail.rows - 1
+            )
+            if resumable:
+                start, first_row = (tail.last_row_start, tail.rows - 1) if since == tail.rows - 1 else (tail.end, tail.rows)
+            else:
+                start, first_row = len(header_line), 0
+            f.seek(start)
+            body = f.read()
+    except OSError as exc:
+        raise FileNotFoundError(f"Cannot read {path}: {exc}") from exc
+
+    complete = body[: body.rfind(b"\n") + 1]
+    rows = _parse_rows(header_text, complete)
+    total = first_row + len(rows)
+    if rows:
+        # The byte offset where the last complete row starts, so the next read can re-serve it
+        last_line = complete[:-1].rfind(b"\n") + 1
+        last_row_start = start + last_line
+    else:
+        last_row_start = tail.last_row_start if resumable else start
+    with _METRICS_TAILS_LOCK:
+        _METRICS_TAILS[key] = _MetricsTail(stat.st_ino, header, total, last_row_start, start + len(complete))
+        _METRICS_TAILS.move_to_end(key)
+        while len(_METRICS_TAILS) > _METRICS_TAILS_LIMIT:
+            _METRICS_TAILS.popitem(last=False)
+    return rows[max(since - first_row, 0):], header, total
 
 
 # ── Run manifest: every artifact a run produced ───────────────────────────────

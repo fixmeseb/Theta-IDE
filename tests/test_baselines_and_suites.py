@@ -208,6 +208,37 @@ def test_missing_component_run_guard(tmp_path):
     assert "Missing component" in mock_btn.setText.call_args[0][0]
 
 
+def test_component_run_guard_uses_composed_inherited_environment(tmp_path):
+    """A child recipe must be checked after its _base.yaml is composed."""
+    from unittest.mock import MagicMock
+    from frontend.app import Window
+
+    win = MagicMock()
+    win.current_experiment = "theta_validation/online_smoke"
+    win.compose_error = ""
+    viewer = MagicMock()
+    viewer._get_explicit_env.return_value = None
+    viewer._get_base_env.return_value = "gym_classic_control/cartpole"
+    viewer.raw_data = {
+        "methods": {"smoke": {"agent": "sb3/ppo", "model": "basics/dnn"}},
+    }
+    win.config_viewer = viewer
+
+    tree = MagicMock()
+    tree.config_root = tmp_path
+    tree.environments = {"gym_classic_control/cartpole": MagicMock()}
+    tree.agents = {"sb3/ppo": MagicMock()}
+    tree.models = {"basics/dnn": MagicMock()}
+    win.config_tree = MagicMock(tree_model=tree)
+    win.composed_config = {
+        "paradigm": "online_rl",
+        "env": {"name": "gym_classic_control/cartpole", "env_id": "CartPole-v1"},
+        "methods": {"smoke": {"agent": "sb3/ppo", "model": "basics/dnn"}},
+    }
+
+    assert Window.check_missing_components(win) == []
+
+
 def test_dl_basics_suite_and_mnist_package_install_and_uninstall(tmp_path):
     """Verify that installing dl_basics_suite installs mlp, transformer, lstm, and autoencoder, and mnist installs cleanly."""
     workspace = tmp_path / "workspace"

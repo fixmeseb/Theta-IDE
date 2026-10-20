@@ -4,6 +4,7 @@ import os
 import signal
 import sys
 import time
+from collections.abc import Mapping
 from pathlib import Path
 
 import lightning as L
@@ -67,6 +68,85 @@ class SaveInitialCheckpointCallback(Callback):
         print(f"[Init Checkpoint] Saved initial model checkpoint to: {init_ckpt}")
 
 
+class ConfiguredEvaluatorCallback(Callback):
+    """Run a registered evaluation protocol selected by an experiment recipe."""
+
+    def __init__(self, evaluator, cfg, frequency: int = 1):
+        super().__init__()
+        self.evaluator = evaluator
+        self.cfg = cfg
+        self.frequency = frequency
+
+    def _due(self, trainer) -> bool:
+        return (trainer.current_epoch + 1) % self.frequency == 0
+
+    def _record(self, trainer, metrics):
+        if not isinstance(metrics, Mapping):
+            raise TypeError("Configured evaluator must return a metrics mapping")
+        if metrics and trainer.logger is not None:
+            trainer.logger.log_metrics(dict(metrics), step=trainer.global_step)
+
+    def on_validation_start(self, trainer, pl_module):
+        if self._due(trainer) and hasattr(self.evaluator, "on_eval_start"):
+            self.evaluator.on_eval_start(pl_module, trainer.datamodule, stage="val")
+
+    def on_validation_batch_end(self, trainer, pl_module, outputs, batch, batch_idx, dataloader_idx=0):
+        if self._due(trainer) and hasattr(self.evaluator, "evaluate_step"):
+            self.evaluator.evaluate_step(pl_module, batch)
+
+    def on_validation_end(self, trainer, pl_module):
+        if self._due(trainer) and hasattr(self.evaluator, "on_eval_end"):
+            self._record(trainer, self.evaluator.on_eval_end())
+
+    def on_fit_end(self, trainer, pl_module):
+        if hasattr(self.evaluator, "evaluate_step"):
+            return  # evaluated through validation hooks
+        source = trainer.datamodule
+        if source is not None and hasattr(source, "val_dataloader") and self.cfg.get("paradigm") != "online_rl":
+            source = source.val_dataloader()
+        self._record(trainer, self.evaluator.evaluate(pl_module, source, self.cfg))
+
+
+def configured_evaluator_callbacks(cfg) -> list[Callback]:
+    """Resolve explicit evaluator YAML (string or name/params mapping) at launch."""
+    spec = cfg.get("evaluator") if hasattr(cfg, "get") else None
+    if not spec:
+        return []
+    from src.app.core.eval_registry import get_evaluator_class
+
+    if isinstance(spec, str):
+        name, params = spec, {}
+    elif isinstance(spec, (dict, DictConfig)):
+        name = spec.get("name") or spec.get("class") or spec.get("type")
+        params = dict(spec.get("params") or {})
+        params.update({key: value for key, value in spec.items()
+                       if key not in ("name", "class", "type", "params")})
+    else:
+        raise ValueError("evaluator must be a registered name or a name/params mapping")
+    if not name:
+        raise ValueError("evaluator needs a name")
+    if not params.get("enabled", True):
+        return []
+    frequency = int(params.get("frequency", 1))
+    if frequency < 1:
+        raise ValueError("evaluator.frequency must be at least 1")
+    cls = get_evaluator_class(str(name))
+    if cls is None:
+        raise ValueError(f"Evaluator '{name}' is not registered")
+    supported = getattr(cls, "get_supported_paradigms", None)
+    paradigm = cfg.get("paradigm")
+    if paradigm and callable(supported) and paradigm not in supported():
+        raise ValueError(f"Evaluator '{name}' does not support paradigm '{paradigm}'")
+    instance = cls(**{key: value for key, value in params.items() if key not in ("enabled", "frequency")})
+    if isinstance(instance, Callback):
+        return [instance]
+    if not hasattr(instance, "evaluate") and not all(
+        hasattr(instance, method) for method in ("on_eval_start", "evaluate_step", "on_eval_end")
+    ):
+        raise TypeError(f"Evaluator '{name}' needs evaluate() or the evaluation hook methods")
+    return [ConfiguredEvaluatorCallback(instance, cfg, frequency)]
+
+
 def print_hardware_diagnostics():
     """Print GPU hardware info and diagnostics before training."""
     if torch.cuda.is_available():
@@ -126,8 +206,12 @@ def infer_dynamic_timesteps(cfg):
 
 def setup_loggers(cfg, base_root):
     method_name = get_method_name(cfg)
-    group_name = str(cfg.get("group", "default_group") if hasattr(cfg, "get") else getattr(cfg, "group", "default_group"))
-    exp_id = str(cfg.get("experiment_id", "default_exp") if hasattr(cfg, "get") else getattr(cfg, "experiment_id", "default_exp"))
+    group_name = str(
+        cfg.get("group", "default_group") if hasattr(cfg, "get") else getattr(cfg, "group", "default_group")
+    )
+    exp_id = str(
+        cfg.get("experiment_id", "default_exp") if hasattr(cfg, "get") else getattr(cfg, "experiment_id", "default_exp")
+    )
     log_dir = os.path.join(base_root, "results/logs", group_name, exp_id)
     loggers = [CSVLogger(log_dir, name=method_name)]
 
@@ -206,8 +290,12 @@ def build_trainer(cfg, model=None):
         except Exception as e:
             logger.debug("Could not inspect Hydra job num: %s", e)
     method_name = get_method_name(cfg)
-    group_name = str(cfg.get("group", "default_group") if hasattr(cfg, "get") else getattr(cfg, "group", "default_group"))
-    exp_id = str(cfg.get("experiment_id", "default_exp") if hasattr(cfg, "get") else getattr(cfg, "experiment_id", "default_exp"))
+    group_name = str(
+        cfg.get("group", "default_group") if hasattr(cfg, "get") else getattr(cfg, "group", "default_group")
+    )
+    exp_id = str(
+        cfg.get("experiment_id", "default_exp") if hasattr(cfg, "get") else getattr(cfg, "experiment_id", "default_exp")
+    )
     ckpt_dir = os.path.join(base_root, "results/checkpoints", group_name, exp_id, method_name, trial_id)
 
     def graceful_shutdown(signum, frame):
@@ -225,7 +313,7 @@ def build_trainer(cfg, model=None):
         logger.debug("Unexpected error registering shutdown signal handlers: %s", e)
 
     is_online = cfg.get("paradigm") == "online_rl"
-    callbacks = [SaveInitialCheckpointCallback(ckpt_dir, cfg)]
+    callbacks = [SaveInitialCheckpointCallback(ckpt_dir, cfg), *configured_evaluator_callbacks(cfg)]
 
     has_explicit_ckpt = "checkpoint" in cfg and cfg.get("checkpoint") is not None
     ckpt_cfg = cfg.get("checkpoint") if has_explicit_ckpt else None
@@ -234,8 +322,18 @@ def build_trainer(cfg, model=None):
         enable_checkpoint = False
 
     if enable_checkpoint:
-        default_monitor = "eval/reward" if is_online else cfg.env.get("monitor_metric", "val/loss")
-        default_mode = "max" if is_online else ("max" if any(k in str(default_monitor).lower() for k in ["f1", "reward", "auc", "acc", "prc"]) else "min")
+        env_cfg = cfg.get("env") if hasattr(cfg, "get") else getattr(cfg, "env", None)
+        env_monitor = env_cfg.get("monitor_metric", "val/loss") if (env_cfg and hasattr(env_cfg, "get")) else "val/loss"
+        default_monitor = "eval/reward" if is_online else env_monitor
+        default_mode = (
+            "max"
+            if is_online
+            else (
+                "max"
+                if any(k in str(default_monitor).lower() for k in ["f1", "reward", "auc", "acc", "prc"])
+                else "min"
+            )
+        )
         default_save_top_k = 1
         default_save_last = not is_online
         default_filename = "best_model"
@@ -244,7 +342,11 @@ def build_trainer(cfg, model=None):
             monitor_metric = ckpt_cfg.get("monitor", default_monitor)
             monitor_mode = ckpt_cfg.get("mode")
             if not monitor_mode:
-                monitor_mode = "max" if any(k in str(monitor_metric).lower() for k in ["f1", "reward", "auc", "acc", "prc"]) else "min"
+                monitor_mode = (
+                    "max"
+                    if any(k in str(monitor_metric).lower() for k in ["f1", "reward", "auc", "acc", "prc"])
+                    else "min"
+                )
             save_top_k = int(ckpt_cfg.get("save_top_k", default_save_top_k))
             save_last = bool(ckpt_cfg.get("save_last", default_save_last))
             filename = str(ckpt_cfg.get("filename", default_filename))
@@ -269,7 +371,8 @@ def build_trainer(cfg, model=None):
 
         if not is_online:
             eval_every_n_epochs = (
-                ckpt_cfg.get("every_n_epochs") if hasattr(ckpt_cfg, "get") and "every_n_epochs" in ckpt_cfg
+                ckpt_cfg.get("every_n_epochs")
+                if hasattr(ckpt_cfg, "get") and "every_n_epochs" in ckpt_cfg
                 else _agent_or_global(cfg, "eval_every_n_epochs", 1)
             )
             if eval_every_n_epochs:
@@ -294,8 +397,9 @@ def build_trainer(cfg, model=None):
             callbacks.append(PeriodicCheckpointCallback(ckpt_dir, interval, int(cfg.get("total_timesteps") or 0)))
 
     if cfg.get("paradigm") == "online_rl":
-        num_envs = getattr(model, "num_envs", cfg.env.num_envs) if model else cfg.env.num_envs
-        num_steps = getattr(model, "num_steps", cfg.env.num_steps) if model else getattr(cfg.env, "num_steps", 256)
+        env_cfg = cfg.get("env") if hasattr(cfg, "get") else getattr(cfg, "env", None)
+        num_envs = getattr(model, "num_envs", getattr(env_cfg, "num_envs", 1) if env_cfg else 1) if model else (getattr(env_cfg, "num_envs", 1) if env_cfg else 1)
+        num_steps = getattr(model, "num_steps", getattr(env_cfg, "num_steps", 256) if env_cfg else 256) if model else (getattr(env_cfg, "num_steps", 256) if env_cfg else 256)
         batch_size = num_envs * num_steps
 
         import math
@@ -510,7 +614,9 @@ def finalize_training(trainer, cfg, ckpt_dir, training_time, start_time, end_tim
         except Exception as e:
             logger.debug("Could not copy single-trial checkpoint to agent root: %s", e)
 
-    metric_name = cfg.env.get("monitor_metric", "eval/reward")
+    is_online = cfg.get("paradigm") == "online_rl" if hasattr(cfg, "get") else False
+    env_cfg = cfg.get("env") if hasattr(cfg, "get") else getattr(cfg, "env", None)
+    metric_name = env_cfg.get("monitor_metric", "eval/reward" if is_online else "val/loss") if (env_cfg and hasattr(env_cfg, "get")) else ("eval/reward" if is_online else "val/loss")
     if metric_name in trainer.callback_metrics:
         return trainer.callback_metrics[metric_name].item()
     return 0.0

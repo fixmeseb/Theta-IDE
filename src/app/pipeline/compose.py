@@ -56,7 +56,7 @@ def compose_experiment(raw_experiment: str, extra_args: list[str] | tuple[str, .
     for arg in extra_args:
         if any(marker in arg for marker in _SWEEP_MARKERS):
             continue
-        if "=" in arg:
+        if "=" in arg or arg.startswith("~"):
             overrides.append(arg)
 
     # Subprocesses need everything PLUS the internal experiment tracking

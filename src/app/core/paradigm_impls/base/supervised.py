@@ -79,6 +79,8 @@ class SupervisedDataModule(L.LightningDataModule, BaseDataModule):
             dm_name = (
                 self._cfg.get("data_module") if hasattr(self._cfg, "get") else getattr(self._cfg, "data_module", None)
             )
+            if hasattr(dm_name, "get"):
+                dm_name = dm_name.get("name") or dm_name.get("class") or dm_name.get("type")
             # Excluding this class's own name too: a config naming the
             # subclass in use would otherwise delegate to itself forever.
             if dm_name and dm_name not in (type(self).__name__, "SupervisedDataModule"):
@@ -93,15 +95,15 @@ class SupervisedDataModule(L.LightningDataModule, BaseDataModule):
                     self.input_dim = getattr(self._delegate, "input_dim", 64)
                     return
 
-            if hasattr(self._cfg, "get") and (
-                self._cfg.get("early_prediction")
-                or (hasattr(self._cfg, "env") and getattr(self._cfg.env, "name", None) == "mimic")
-            ):
-                from src.usr.eval.early_prediction.data_module import EPSepsisDataModule
+            if hasattr(self._cfg, "get") and self._cfg.get("early_prediction"):
+                try:
+                    from src.usr.eval.early_prediction.data_module import EPSepsisDataModule
 
-                self._delegate = EPSepsisDataModule(self._cfg)
-                self.input_dim = getattr(self._delegate, "input_dim", 64)
-                return
+                    self._delegate = EPSepsisDataModule(self._cfg)
+                    self.input_dim = getattr(self._delegate, "input_dim", 64)
+                    return
+                except ImportError:
+                    pass
 
             # Any other offline dataset: a labelled .npz. Resolved here rather
             # than demanded as a `data_module` key, because that key cannot be

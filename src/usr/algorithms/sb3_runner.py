@@ -54,12 +54,19 @@ def main(cfg: DictConfig):
 
     # Determine environment ID
     env_cfg = cfg.get("env", {})
-    env_name = env_cfg.get("name")
-    env_id = env_cfg.get("env_id") or env_name or "CartPole-v1"
-    if env_id == "cartpole":
-        env_id = "CartPole-v1"
-    elif env_id == "mountaincar":
-        env_id = "MountainCar-v0"
+    if isinstance(env_cfg, str):
+        env_name = env_cfg
+        env_id = env_cfg
+    elif hasattr(env_cfg, "get"):
+        env_name = env_cfg.get("name")
+        env_id = env_cfg.get("env_id") or env_name
+    else:
+        env_name = getattr(env_cfg, "name", None)
+        env_id = getattr(env_cfg, "env_id", None) or env_name
+
+    if not env_id:
+        print("\n[SB3 Engine] Error: No environment specified in config ('env.name' or 'env.env_id').")
+        sys.exit(1)
 
     print(f"\n=== [SB3 Engine] Initializing {algo_name} on {env_id} ===")
     print(f"Group: {group} | Experiment: {exp_id} | Total Timesteps: {total_timesteps}")
@@ -92,8 +99,12 @@ def main(cfg: DictConfig):
                 path = ckpt_dir / f"{checkpoint_name(self.num_timesteps)}.zip"
                 self.model.save(str(path))
                 self.run.artifact(path, kind="checkpoint", transitions=self.num_timesteps)
-                self.run.event("checkpoint", f"Saved {path.name} at {self.num_timesteps:,} transitions",
-                               path=str(path), transitions=self.num_timesteps)
+                self.run.event(
+                    "checkpoint",
+                    f"Saved {path.name} at {self.num_timesteps:,} transitions",
+                    path=str(path),
+                    transitions=self.num_timesteps,
+                )
             # Check episodic rewards from monitor or locals
             if self.n_calls % self.eval_freq == 0:
                 infos = self.locals.get("infos", [])
@@ -134,6 +145,12 @@ def main(cfg: DictConfig):
 
         try:
             gym.register_envs(ale_py)
+        except Exception:
+            pass
+        try:
+            from ale_py.registration import register_v0_v4_envs, register_v5_envs
+            register_v0_v4_envs()
+            register_v5_envs()
         except Exception:
             pass
         game_stem = (str(env_name).split("/")[-1] if "/" in str(env_name) else str(env_id)).lower()

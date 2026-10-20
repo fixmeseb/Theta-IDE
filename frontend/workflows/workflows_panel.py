@@ -5,7 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import QEvent, QSize, Qt, pyqtSignal
+from PyQt6.QtGui import QIcon
 from PyQt6.QtWidgets import (
     QComboBox,
     QFileDialog,
@@ -27,6 +28,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from frontend.sidetabs import svg_icon
 from frontend.theme import theme_color
 from frontend.widgets import label
 from src.app.pipeline.workflow.model import (
@@ -52,6 +54,14 @@ from .canvas import WorkflowCanvasView, WorkflowScene
 from .diagram_items import NodeBoxItem, StringItem
 
 
+BUTTON_ICON_COLORS = {
+    (QIcon.Mode.Normal, QIcon.State.Off): "text",
+    (QIcon.Mode.Disabled, QIcon.State.Off): "disabled",
+}
+# Status badge kind -> (icon, theme role); None shows the text alone
+STATUS_ICONS = {"valid": ("check", "primary"), "issues": ("warning", "focus")}
+
+
 class WorkflowsPanel(QWidget):
     """Theta-IDE panel for visual experiment string diagram composition."""
     workflow_changed = pyqtSignal()
@@ -60,8 +70,10 @@ class WorkflowsPanel(QWidget):
         super().__init__(parent)
         self.log_fn = log_fn or (lambda msg: None)
         self.selected_item = None
+        self.status_kind = None
 
         self._init_ui()
+        self._apply_icons()
         # Load default preset on startup
         self.load_preset("online_vs_offline")
 
@@ -86,36 +98,39 @@ class WorkflowsPanel(QWidget):
         actions_bar.addWidget(self.preset_combo)
 
         # Add node dropdown menu
-        self.btn_add_node = QPushButton("+ Add Node ▾")
+        self.btn_add_node = QPushButton("Add Node")
         self.btn_add_node.setToolTip("Add a new paradigm, task, or data transform node")
-        self.btn_add_node.clicked.connect(self._show_add_node_menu)
+        self.btn_add_node.setMenu(self._build_add_node_menu())  # Qt draws the dropdown arrow
         actions_bar.addWidget(self.btn_add_node)
 
         # Validate button
-        self.btn_validate = QPushButton("✓ Validate Strings")
+        self.btn_validate = QPushButton("Validate Strings")
         self.btn_validate.setToolTip("Check type safety, required inputs, and diagram topology")
         self.btn_validate.clicked.connect(self.validate_current_diagram)
         actions_bar.addWidget(self.btn_validate)
 
-        self.btn_zoom_fit = QPushButton("⊡ Zoom Fit")
+        self.btn_zoom_fit = QPushButton("Zoom Fit")
         self.btn_zoom_fit.setToolTip("Fit all nodes nicely in view")
         self.btn_zoom_fit.clicked.connect(lambda: self.canvas_view.zoom_fit())
         actions_bar.addWidget(self.btn_zoom_fit)
 
         actions_bar.addStretch()
 
+        self.status_icon = QLabel()
+        self.status_icon.hide()
+        actions_bar.addWidget(self.status_icon)
         self.status_badge = label("Ready", "muted")
         actions_bar.addWidget(self.status_badge)
 
-        self.btn_load_yaml = QPushButton("📂 Load YAML…")
+        self.btn_load_yaml = QPushButton("Load YAML…")
         self.btn_load_yaml.clicked.connect(self.load_yaml_dialog)
         actions_bar.addWidget(self.btn_load_yaml)
 
-        self.btn_save_yaml = QPushButton("💾 Save YAML…")
+        self.btn_save_yaml = QPushButton("Save YAML…")
         self.btn_save_yaml.clicked.connect(self.save_yaml_dialog)
         actions_bar.addWidget(self.btn_save_yaml)
 
-        self.btn_clear = QPushButton("↺ Clear")
+        self.btn_clear = QPushButton("Clear")
         self.btn_clear.clicked.connect(self.clear_workflow)
         actions_bar.addWidget(self.btn_clear)
 
@@ -175,7 +190,7 @@ class WorkflowsPanel(QWidget):
         self.palette_list.itemDoubleClicked.connect(lambda item: self._spawn_from_palette(item.data(Qt.ItemDataRole.UserRole)))
         layout.addWidget(self.palette_list, 1)
 
-        btn_add_selected = QPushButton("+ Add to Diagram")
+        self.btn_add_selected = btn_add_selected = self._icon_button("Add to Diagram", "plus")
         btn_add_selected.clicked.connect(self._on_add_palette_clicked)
         layout.addWidget(btn_add_selected)
 
@@ -221,7 +236,7 @@ class WorkflowsPanel(QWidget):
         self.scene.add_node_to_scene(node)
         self.log_fn(f"Added node '{node.label}' to diagram.")
 
-    def _show_add_node_menu(self):
+    def _build_add_node_menu(self) -> QMenu:
         menu = QMenu(self)
         items = [
             ("Online RL (PPO)", "online_rl"),
@@ -235,7 +250,46 @@ class WorkflowsPanel(QWidget):
         ]
         for title, key in items:
             menu.addAction(title, lambda k=key: self._spawn_from_palette(k))
-        menu.exec(self.btn_add_node.mapToGlobal(self.btn_add_node.rect().bottomLeft()))
+        return menu
+
+    # ── Icons and status ───────────────────────────────────────────────────────
+
+    def changeEvent(self, event):
+        # A theme switch sets the application palette, which reaches every widget as a PaletteChange
+        super().changeEvent(event)
+        if event.type() == QEvent.Type.PaletteChange and hasattr(self, "btn_clear"):
+            self._apply_icons()
+
+    def _apply_icons(self):
+        """Toolbar icons in the current theme's colours."""
+        for button, name in ((self.btn_add_node, "plus"), (self.btn_validate, "check"),
+                             (self.btn_zoom_fit, "zoom_fit"), (self.btn_load_yaml, "folder"),
+                             (self.btn_save_yaml, "save"), (self.btn_clear, "clear"),
+                             (self.btn_add_selected, "plus")):
+            button.setIcon(svg_icon(name, BUTTON_ICON_COLORS, size=16))
+            button.setIconSize(QSize(16, 16))
+        self._show_status_icon()
+
+    def _set_status(self, text: str, kind: str | None = None):
+        """The toolbar's status text, with a check or warning icon for validation results."""
+        self.status_kind = kind
+        self.status_badge.setText(text)
+        self._show_status_icon()
+
+    def _show_status_icon(self):
+        if self.status_kind not in STATUS_ICONS:
+            self.status_icon.hide()
+            return
+        name, role = STATUS_ICONS[self.status_kind]
+        icon = svg_icon(name, {(QIcon.Mode.Normal, QIcon.State.Off): role}, size=16)
+        self.status_icon.setPixmap(icon.pixmap(16, 16))
+        self.status_icon.show()
+
+    def _icon_button(self, text: str, icon_name: str) -> QPushButton:
+        button = QPushButton(text)
+        button.setIcon(svg_icon(icon_name, BUTTON_ICON_COLORS, size=16))
+        button.setIconSize(QSize(16, 16))
+        return button
 
     # ── Inspector Builder ──────────────────────────────────────────────────────
 
@@ -364,7 +418,7 @@ class WorkflowsPanel(QWidget):
                 pb_layout.addWidget(label(f"• <font color='{p.port_type.color}'><b>{p.name}</b></font> ({p.port_type.value})"))
         self.inspector_content.addWidget(ports_box)
 
-        btn_delete = QPushButton("🗑 Delete Node")
+        btn_delete = self._icon_button("Delete Node", "trash")
         btn_delete.clicked.connect(lambda: self.scene.remove_node_from_scene(node.id))
         self.inspector_content.addWidget(btn_delete)
 
@@ -387,7 +441,7 @@ class WorkflowsPanel(QWidget):
         binding_edit.textChanged.connect(lambda txt: setattr(wire, "param_binding", txt))
         self.inspector_content.addWidget(binding_edit)
 
-        btn_delete = QPushButton("🗑 Disconnect Wire")
+        btn_delete = self._icon_button("Disconnect Wire", "unlink")
         btn_delete.clicked.connect(lambda: self.scene.remove_string_from_scene(wire.id))
         self.inspector_content.addWidget(btn_delete)
 
@@ -403,7 +457,7 @@ class WorkflowsPanel(QWidget):
         if graph:
             self.scene.set_graph(graph)
             self.canvas_view.zoom_fit()
-            self.status_badge.setText(f"Loaded: {graph.name}")
+            self._set_status(f"Loaded: {graph.name}")
             self.log_fn(f"Loaded workflow preset '{graph.name}'.")
             self.preset_combo.blockSignals(True)
             idx = self.preset_combo.findData(preset_id)
@@ -420,22 +474,22 @@ class WorkflowsPanel(QWidget):
             QMessageBox.information(
                 self,
                 "Validation Success",
-                f"✓ Diagram '{self.scene.graph.name}' is valid!\n\n"
+                f"Diagram '{self.scene.graph.name}' is valid.\n\n"
                 f"• {len(self.scene.graph.nodes)} nodes\n"
                 f"• {len(self.scene.graph.strings)} typed strings\n"
                 f"• All port types and required inputs are satisfied."
             )
-            self.status_badge.setText("✓ Valid")
+            self._set_status("Valid", "valid")
         else:
             msg = "Validation detected issues:\n\n" + "\n".join(f"• {iss}" for iss in issues)
             QMessageBox.warning(self, "Validation Warnings", msg)
-            self.status_badge.setText(f"⚠ {len(issues)} issue(s)")
+            self._set_status(f"{len(issues)} issue{'' if len(issues) == 1 else 's'}", "issues")
 
     def clear_workflow(self):
         new_g = WorkflowGraph(id="new_workflow", name="Untitled Workflow")
         self.scene.set_graph(new_g)
         self.preset_combo.setCurrentIndex(0)
-        self.status_badge.setText("Cleared")
+        self._set_status("Cleared")
         self.log_fn("Workflow diagram cleared.")
         self._clear_inspector_content()
         self._show_diagram_overview()
@@ -449,7 +503,7 @@ class WorkflowsPanel(QWidget):
         )
         if path:
             self.scene.graph.save_yaml(path)
-            self.status_badge.setText(f"Saved: {Path(path).name}")
+            self._set_status(f"Saved: {Path(path).name}")
             self.log_fn(f"Saved workflow YAML: {path}")
 
     def load_yaml_dialog(self):
@@ -463,7 +517,7 @@ class WorkflowsPanel(QWidget):
             graph = WorkflowGraph.load_yaml(path)
             self.scene.set_graph(graph)
             self.canvas_view.zoom_fit()
-            self.status_badge.setText(f"Loaded: {Path(path).name}")
+            self._set_status(f"Loaded: {Path(path).name}")
             self.log_fn(f"Loaded workflow YAML: {path}")
             if self.selected_item is None:
                 self._clear_inspector_content()
@@ -471,7 +525,7 @@ class WorkflowsPanel(QWidget):
 
     def _on_graph_modified(self):
         self.workflow_changed.emit()
-        self.status_badge.setText("Modified")
+        self._set_status("Modified")
         if self.selected_item is None:
             self._clear_inspector_content()
             self._show_diagram_overview()

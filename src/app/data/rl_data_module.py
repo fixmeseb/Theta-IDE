@@ -50,15 +50,25 @@ class RLDataModule(L.LightningDataModule, BaseDataModule):
             if self.cfg.env.get("preprocess_on_load", False) and (
                 not dataset_path.exists() or not list(dataset_path.glob("*.pkl"))
             ):
-                print(
-                    f"[RLDataModule] Pyrenees dataset missing at '{dataset_path}'. Auto-running preprocess_pyrenees_per_problem.py..."
-                )
-                import subprocess
-                import sys
+                preprocess_script = self.cfg.env.get("preprocess_script", None)
+                if not preprocess_script:
+                    env_name = self.cfg.env.get("name", getattr(self.cfg.env, "id", "env"))
+                    candidate = Path(f"in/envs/{env_name}/tools/preprocess_{env_name}_per_problem.py")
+                    if candidate.exists():
+                        preprocess_script = str(candidate)
+                    else:
+                        candidate2 = Path(f"in/envs/{env_name}/tools/preprocess.py")
+                        if candidate2.exists():
+                            preprocess_script = str(candidate2)
 
-                script = Path("in/envs/pyrenees/tools/preprocess_pyrenees_per_problem.py")
-                if script.exists():
-                    subprocess.run([sys.executable, str(script)], check=True)
+                if preprocess_script and Path(preprocess_script).exists():
+                    print(
+                        f"[RLDataModule] Dataset missing at '{dataset_path}'. Auto-running {preprocess_script}..."
+                    )
+                    import subprocess
+                    import sys
+
+                    subprocess.run([sys.executable, str(preprocess_script)], check=True)
 
             full_reader = DatasetReader(self.cfg.dataset_path)
 

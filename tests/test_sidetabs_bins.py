@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 pytest.importorskip("PyQt6")
-from PyQt6.QtCore import QMimeData, QPointF, Qt  # noqa: E402
+from PyQt6.QtCore import QMimeData, QPoint, QPointF, Qt  # noqa: E402
 from PyQt6.QtGui import QDropEvent  # noqa: E402
 from PyQt6.QtWidgets import QApplication, QLabel  # noqa: E402
 
@@ -120,6 +120,61 @@ def test_rename_inline_and_names_are_cleaned(tabs):
     assert tabs.bins[bin_id]["name"] == "Training runs" and header.editor is None
     tabs.rename_bin(bin_id, "   ")
     assert tabs.bins[bin_id]["name"] == "Training runs"  # empty names are ignored
+
+
+def _click_twice(header, gap_ms):
+    """Two left clicks on the header as real input arrives: press, release, double-click, release.
+    Qt reports the second press as a double-click whenever it's inside the platform interval."""
+    from PyQt6.QtCore import QEvent
+    from PyQt6.QtGui import QMouseEvent
+
+    class TimedMouseEvent(QMouseEvent):  # PyQt6 has no QMouseEvent.setTimestamp
+        def __init__(self, ts, *args):
+            super().__init__(*args)
+            self._ts = ts
+
+        def timestamp(self):
+            return self._ts
+
+    pos = QPointF(header.rect().center())
+    glob = QPointF(header.mapToGlobal(header.rect().center()))
+    left, none = Qt.MouseButton.LeftButton, Qt.MouseButton.NoButton
+    for kind, ts, buttons in ((QEvent.Type.MouseButtonPress, 1000, left), (QEvent.Type.MouseButtonRelease, 1040, none),
+                              (QEvent.Type.MouseButtonDblClick, 1000 + gap_ms, left),
+                              (QEvent.Type.MouseButtonRelease, 1040 + gap_ms, none)):
+        event = TimedMouseEvent(ts, kind, pos, glob, left, buttons, Qt.KeyboardModifier.NoModifier)
+        QApplication.sendEvent(header, event)
+        app.processEvents()
+
+
+def test_two_unhurried_clicks_toggle_twice_and_do_not_rename(tabs):
+    bin_id = tabs.group_tabs("monitor", "queue")
+    header = tabs.bins[bin_id]["header"]
+    _click_twice(header, 380)  # inside the 400 ms platform interval, but not a quick double-click
+    assert header.editor is None
+    assert tabs.bins[bin_id]["expanded"]  # collapsed, then expanded again
+
+
+def test_a_quick_double_click_renames_and_leaves_the_bin_as_it_was(tabs):
+    bin_id = tabs.group_tabs("monitor", "queue")
+    header = tabs.bins[bin_id]["header"]
+    _click_twice(header, 150)
+    assert header.editor is not None
+    assert tabs.bins[bin_id]["expanded"]
+    header.finish_rename(False)
+
+
+def test_clicking_elsewhere_ends_the_rename_and_keeps_the_name(tabs):
+    from PyQt6.QtTest import QTest
+
+    bin_id = tabs.group_tabs("monitor", "queue")
+    header = tabs.bins[bin_id]["header"]
+    header.start_rename()
+    header.editor.setText("Training runs")
+    # the sidebar's empty area below the tabs takes no focus, so only the click itself can end editing
+    QTest.mouseClick(tabs.bar, Qt.MouseButton.LeftButton, pos=tabs.bar.rect().bottomLeft() + QPoint(4, -4))
+    app.processEvents()
+    assert header.editor is None and tabs.bins[bin_id]["name"] == "Training runs"
 
 
 def test_dragging_a_member_out_by_the_edges_leaves_the_bin_and_the_last_one_out_removes_it(tabs):

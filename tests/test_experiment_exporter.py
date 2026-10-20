@@ -130,3 +130,74 @@ def test_hub_installer_roundtrip(tmp_path):
     is_inst, ver = installer.check_installed(comp)
     assert is_inst is True
     assert ver == "2.0.0"
+
+
+def test_export_composite_model_and_recursive_configs(tmp_path):
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+
+    # Create recursive agent config
+    agent_dir = workspace / "in" / "config" / "agent" / "deep"
+    agent_dir.mkdir(parents=True, exist_ok=True)
+    (agent_dir / "cql.yaml").write_text("name: cql\nalgorithm: cql\n", encoding="utf-8")
+
+    # Create recursive and flat model configs
+    model_dir = workspace / "in" / "config" / "model"
+    (model_dir / "symbolic").mkdir(parents=True, exist_ok=True)
+    (model_dir / "dueling_resnet.yaml").write_text("name: dueling_resnet\n", encoding="utf-8")
+    (model_dir / "symbolic" / "cew.yaml").write_text("name: cew\n", encoding="utf-8")
+
+    # Create recursive env config
+    env_dir = workspace / "in" / "config" / "env" / "atari"
+    env_dir.mkdir(parents=True, exist_ok=True)
+    (env_dir / "seaquest.yaml").write_text("name: seaquest\n", encoding="utf-8")
+
+    # Create experiment with composite BlendRL submodels
+    exp_dir = workspace / "in" / "config" / "experiment" / "suite"
+    exp_dir.mkdir(parents=True, exist_ok=True)
+    (exp_dir / "_base.yaml").write_text("paradigm: offline_rl\n", encoding="utf-8")
+    (exp_dir / "hybrid.yaml").write_text(
+        """defaults:
+  - suite/_base
+experiment_id: hybrid
+env: atari/seaquest
+methods:
+  cql_blend:
+    agent: cql
+    model:
+      blendrl:
+        neural: dueling_resnet
+        symbolic:
+          cew:
+            ecm_dthr: 0.03
+""",
+        encoding="utf-8",
+    )
+
+    exporter = ExperimentExporter(workspace_root=workspace)
+    out_zip = tmp_path / "hybrid_export.zip"
+    opts = ExportOptions(
+        include_environment=True,
+        include_models=True,
+        output_path=out_zip,
+    )
+
+    result = exporter.export("suite/hybrid", options=opts)
+    assert result.success is True
+    assert out_zip.is_file()
+
+    with zipfile.ZipFile(out_zip, "r") as zf:
+        namelist = zf.namelist()
+        assert "in/config/experiment/suite/hybrid.yaml" in namelist
+        assert "in/config/experiment/suite/_base.yaml" in namelist
+        assert "in/config/agent/deep/cql.yaml" in namelist
+        assert "in/config/model/dueling_resnet.yaml" in namelist
+        assert "in/config/model/symbolic/cew.yaml" in namelist
+        assert "in/config/env/atari/seaquest.yaml" in namelist
+
+        manifest = json.loads(zf.read(".theta_component.json").decode("utf-8"))
+        assert "cql" in manifest["agents"]
+        assert "dueling_resnet" in manifest["models"]
+        assert "cew" in manifest["models"]
+        assert "blendrl" in manifest["models"]
+

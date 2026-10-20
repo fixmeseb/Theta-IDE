@@ -4,15 +4,17 @@ Packages experiment configurations, base templates, environment hooks/valuations
 domain rules, custom model architectures, and optional checkpoint weights into a
 self-contained, installable Theta Hub component package (.zip).
 """
+
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
 import json
 import logging
+import re
+import zipfile
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set
-import zipfile
 
 import yaml
 
@@ -21,39 +23,66 @@ from . import PROJECT_ROOT
 log = logging.getLogger(__name__)
 
 
+def _component_names(value: Any) -> Set[str]:
+    """Names from a recipe's scalar, name/params mapping, or list selection."""
+    if isinstance(value, str):
+        return {value} if value else set()
+    if isinstance(value, dict):
+        name = value.get("name") or value.get("class") or value.get("type")
+        return {str(name)} if name else set()
+    if isinstance(value, (list, tuple)):
+        return set().union(*(_component_names(item) for item in value)) if value else set()
+    return set()
+
+
+def _plot_names(value: Any) -> Set[str]:
+    if isinstance(value, list):
+        return {str(item) for item in value}
+    if isinstance(value, dict):
+        return {str(name) for name, options in value.items()
+                if isinstance(options, dict) and name not in ("style", "figsize")}
+    return set()
+
+
 @dataclass
 class ExportOptions:
-    """Configuration options for exporting an experiment."""
+    """Configuration options for exporting an experiment or experiment group plugin."""
+
     include_checkpoints: bool = False
     include_environment: bool = True
     include_models: bool = True
     include_rules: bool = True
-    output_path: Optional[Path] = None
+    include_evaluators: bool = True
+    include_plotters: bool = True
+    include_data_modules: bool = True
+    include_all_group_experiments: bool = True
+    output_path: Path | None = None
     author: str = "Theta Researcher"
     version: str = "1.0.0"
-    description: Optional[str] = None
+    description: str | None = None
 
 
 @dataclass
 class ExportResult:
     """Result of an experiment export operation."""
+
     success: bool
-    archive_path: Optional[Path] = None
-    manifest: Optional[Dict[str, Any]] = None
+    archive_path: Path | None = None
+    manifest: Dict[str, Any] | None = None
     files_included: List[str] = field(default_factory=list)
-    error: Optional[str] = None
+    error: str | None = None
 
 
 class ExperimentExporter:
     """Extracts, traces dependencies, and packages experiments into installable Hub components."""
 
-    def __init__(self, workspace_root: Optional[Path] = None):
+    def __init__(self, workspace_root: Path | None = None):
         self.workspace_root = Path(workspace_root) if workspace_root else PROJECT_ROOT
 
     def export(
         self,
         experiment_id_or_path: str | Path,
-        options: Optional[ExportOptions] = None,
+        options: ExportOptions | None = None,
     ) -> ExportResult:
         """Export an experiment and its full dependency closure to a .zip archive.
 
@@ -114,7 +143,22 @@ class ExperimentExporter:
                 include_models=opts.include_models,
             )
 
-            # 6. Checkpoints (optional)
+            # 6. Evaluators
+            if opts.include_evaluators:
+                self._trace_evaluators(group, env_name, files_to_pack, raw_cfg=raw_cfg)
+
+            # 7. Plotters
+            if opts.include_plotters:
+                self._trace_plotters(group, env_name, files_to_pack, raw_cfg=raw_cfg)
+
+            # 8. Data modules
+            if opts.include_data_modules:
+                self._trace_data_modules(group, env_name, files_to_pack, raw_cfg=raw_cfg)
+
+            # 9. Workflows
+            self._trace_workflows(group, files_to_pack, raw_cfg=raw_cfg)
+
+            # 10. Checkpoints (optional)
             if opts.include_checkpoints:
                 self._trace_checkpoints(group, exp_name, files_to_pack)
 
@@ -142,6 +186,7 @@ class ExperimentExporter:
 
             # Validate manifest against formal JSON schema
             from src.app.core.manifest_schema import validate_manifest_data
+
             is_valid, schema_err = validate_manifest_data(manifest)
             if not is_valid:
                 return ExportResult(
@@ -192,7 +237,7 @@ class ExperimentExporter:
         else:
             s = str(target).strip()
             if s.startswith("in/config/experiment/"):
-                s = s[len("in/config/experiment/"):]
+                s = s[len("in/config/experiment/") :]
             rel = Path(s)
 
         parts = rel.parts
@@ -240,7 +285,7 @@ class ExperimentExporter:
                 rel = mfile.relative_to(self.workspace_root).as_posix()
                 files_to_pack[rel] = mfile
 
-    def _resolve_env_name(self, cfg: Dict[str, Any], group: str) -> Optional[str]:
+    def _resolve_env_name(self, cfg: Dict[str, Any], group: str) -> str | None:
         """Extract environment name from configuration or defaults."""
         if "env" in cfg and isinstance(cfg["env"], str):
             return cfg["env"]
@@ -277,11 +322,30 @@ class ExperimentExporter:
 
         return None
 
+    def _find_config_file(self, folder: str, name: str) -> Path | None:
+        """Find a configuration file in in/config/<folder>/ directly or recursively."""
+        root = self.workspace_root / "in" / "config" / folder
+        if not root.is_dir():
+            return None
+        direct = root / f"{name}.yaml"
+        if direct.is_file():
+            return direct
+        direct_yml = root / f"{name}.yml"
+        if direct_yml.is_file():
+            return direct_yml
+        for p in sorted(root.rglob(f"{name}.yaml")):
+            if p.is_file():
+                return p
+        for p in sorted(root.rglob(f"{name}.yml")):
+            if p.is_file():
+                return p
+        return None
+
     def _trace_environment_assets(self, env_name: str, files_to_pack: Dict[str, Path]) -> None:
         """Trace environment YAML config and custom environment code directory."""
-        # 1. in/config/env/<env_name>.yaml
-        env_yaml = self.workspace_root / "in" / "config" / "env" / f"{env_name}.yaml"
-        if env_yaml.is_file():
+        # 1. in/config/env/<env_name>.yaml (direct or recursive)
+        env_yaml = self._find_config_file("env", env_name)
+        if env_yaml and env_yaml.is_file():
             rel = env_yaml.relative_to(self.workspace_root).as_posix()
             files_to_pack[rel] = env_yaml
 
@@ -301,6 +365,264 @@ class ExperimentExporter:
                 if p.is_file() and "__pycache__" not in p.parts:
                     rel = p.relative_to(self.workspace_root).as_posix()
                     files_to_pack[rel] = p
+
+    def _trace_evaluators(
+        self,
+        group: str,
+        env_name: str | None,
+        files_to_pack: Dict[str, Path],
+        raw_cfg: Dict[str, Any] | None = None,
+    ) -> None:
+        """Trace evaluator implementations and YAML configurations."""
+        candidates = {group}
+        if env_name:
+            candidates.add(env_name)
+        if raw_cfg:
+            for k in ("evaluator", "evaluators"):
+                candidates.update(_component_names(raw_cfg.get(k)))
+
+        for name in candidates:
+            eval_dir = self.workspace_root / "src" / "usr" / "eval" / name
+            if eval_dir.is_dir():
+                for p in sorted(eval_dir.rglob("*")):
+                    if p.is_file() and "__pycache__" not in p.parts:
+                        files_to_pack[p.relative_to(self.workspace_root).as_posix()] = p
+            else:
+                eval_file = self.workspace_root / "src" / "usr" / "eval" / f"{name}.py"
+                if eval_file.is_file():
+                    files_to_pack[eval_file.relative_to(self.workspace_root).as_posix()] = eval_file
+
+            cfg1 = self.workspace_root / "in" / "config" / "eval" / f"{name}.yaml"
+            if cfg1.is_file():
+                files_to_pack[cfg1.relative_to(self.workspace_root).as_posix()] = cfg1
+            cfg_dir = self.workspace_root / "in" / "config" / "eval" / name
+            if cfg_dir.is_dir():
+                for p in sorted(cfg_dir.rglob("*.yaml")):
+                    files_to_pack[p.relative_to(self.workspace_root).as_posix()] = p
+
+    def _trace_plotters(self, group: str, env_name: str | None, files_to_pack: Dict[str, Path],
+                        raw_cfg: Dict[str, Any] | None = None) -> None:
+        """Trace plotters and visualization configs."""
+        candidates = {group}
+        if env_name:
+            candidates.add(env_name)
+        if raw_cfg:
+            candidates.update(_plot_names(raw_cfg.get("plots")))
+
+        for name in candidates:
+            plot_dir = self.workspace_root / "plot" / name
+            if plot_dir.is_dir():
+                for p in sorted(plot_dir.rglob("*")):
+                    if p.is_file() and "__pycache__" not in p.parts:
+                        files_to_pack[p.relative_to(self.workspace_root).as_posix()] = p
+            else:
+                plot_file = self.workspace_root / "plot" / f"{name}.py"
+                if plot_file.is_file():
+                    files_to_pack[plot_file.relative_to(self.workspace_root).as_posix()] = plot_file
+                else:
+                    for p in sorted((self.workspace_root / "plot").rglob(f"{name}.py")):
+                        files_to_pack[p.relative_to(self.workspace_root).as_posix()] = p
+
+            pcfg_dir = self.workspace_root / "in" / "config" / "plot" / name
+            if pcfg_dir.is_dir():
+                for p in sorted(pcfg_dir.rglob("*.yaml")):
+                    files_to_pack[p.relative_to(self.workspace_root).as_posix()] = p
+            else:
+                for p in sorted((self.workspace_root / "in" / "config" / "plot").rglob(f"{name}.yaml")):
+                    files_to_pack[p.relative_to(self.workspace_root).as_posix()] = p
+
+    def _trace_data_modules(
+        self,
+        group: str,
+        env_name: str | None,
+        files_to_pack: Dict[str, Path],
+        raw_cfg: Dict[str, Any] | None = None,
+    ) -> None:
+        """Trace data modules and configurations."""
+        candidates = {group}
+        if env_name:
+            candidates.add(env_name)
+        if raw_cfg:
+            for k in ("data_module", "datamodule", "data"):
+                for name in _component_names(raw_cfg.get(k)):
+                    candidates.add(name)
+                    candidates.add(re.sub(r'(?<!^)(?=[A-Z])', '_', name).lower())
+
+        for name in candidates:
+            data_dir = self.workspace_root / "src" / "usr" / "data" / name
+            if data_dir.is_dir():
+                for p in sorted(data_dir.rglob("*")):
+                    if p.is_file() and "__pycache__" not in p.parts:
+                        files_to_pack[p.relative_to(self.workspace_root).as_posix()] = p
+            else:
+                data_file = self.workspace_root / "src" / "usr" / "data" / f"{name}.py"
+                if data_file.is_file():
+                    files_to_pack[data_file.relative_to(self.workspace_root).as_posix()] = data_file
+
+            dcfg_dir = self.workspace_root / "in" / "config" / "data" / name
+            if dcfg_dir.is_dir():
+                for p in sorted(dcfg_dir.rglob("*.yaml")):
+                    files_to_pack[p.relative_to(self.workspace_root).as_posix()] = p
+            dcfg_file = self.workspace_root / "in" / "config" / "data" / f"{name}.yaml"
+            if dcfg_file.is_file():
+                files_to_pack[dcfg_file.relative_to(self.workspace_root).as_posix()] = dcfg_file
+
+    def _trace_workflows(
+        self,
+        group: str,
+        files_to_pack: Dict[str, Path],
+        raw_cfg: Dict[str, Any] | None = None,
+    ) -> None:
+        """Trace any associated DAG workflows in in/config/workflow/."""
+        wf_dir = self.workspace_root / "in" / "config" / "workflow"
+        if not wf_dir.is_dir():
+            return
+        workflow_names = set()
+        if raw_cfg and raw_cfg.get("workflow"):
+            workflow_names.add(str(raw_cfg["workflow"]))
+
+        for p in sorted(wf_dir.glob("*.yaml")):
+            if group in p.stem or p.stem in workflow_names:
+                files_to_pack[p.relative_to(self.workspace_root).as_posix()] = p
+
+
+    def _trace_all_group_experiments(self, group: str, files_to_pack: Dict[str, Path]) -> None:
+        """Trace all experiment recipe YAML files in the group directory."""
+        g_dir = self.workspace_root / "in" / "config" / "experiment" / group
+        if g_dir.is_dir():
+            for p in sorted(g_dir.rglob("*.yaml")):
+                files_to_pack[p.relative_to(self.workspace_root).as_posix()] = p
+
+    def export_group(
+        self,
+        group: str,
+        options: ExportOptions | None = None,
+    ) -> ExportResult:
+        """Export an entire experiment group and its full component ecosystem as an installable Experiment Plugin."""
+        opts = options or ExportOptions()
+        group_dir = self.workspace_root / "in" / "config" / "experiment" / group
+        if not group_dir.is_dir():
+            return ExportResult(
+                success=False,
+                error=f"Experiment group directory not found: {group_dir}",
+            )
+
+        files_to_pack: Dict[str, Path] = {}
+        # 1. Pack all experiment configs in the group
+        for p in sorted(group_dir.rglob("*.yaml")):
+            rel = p.relative_to(self.workspace_root).as_posix()
+            files_to_pack[rel] = p
+
+        # 2. Extract configs to resolve env, agents, models, paradigms
+        agents_found: Set[str] = set()
+        models_found: Set[str] = set()
+        paradigms_found: Set[str] = set()
+        workflows_found: Set[str] = set()
+        data_modules_found: Set[str] = set()
+        evaluators_found: Set[str] = set()
+        plotters_found: Set[str] = set()
+        env_name: str | None = None
+
+        for exp_yaml in sorted(group_dir.rglob("*.yaml")):
+            try:
+                cfg = yaml.safe_load(exp_yaml.read_text(encoding="utf-8")) or {}
+                if not env_name:
+                    env_name = self._resolve_env_name(cfg, group)
+                if "paradigm" in cfg and cfg["paradigm"]:
+                    paradigms_found.add(str(cfg["paradigm"]))
+                if "workflow" in cfg and cfg["workflow"]:
+                    workflows_found.add(str(cfg["workflow"]))
+                if "data_module" in cfg and cfg["data_module"]:
+                    data_modules_found.update(_component_names(cfg["data_module"]))
+                if "evaluator" in cfg and cfg["evaluator"]:
+                    evaluators_found.update(_component_names(cfg["evaluator"]))
+                plotters_found.update(_plot_names(cfg.get("plots")))
+                self._trace_methods_and_models(
+                    cfg, files_to_pack, agents_found, models_found, include_models=opts.include_models
+                )
+            except Exception:
+                pass
+
+        if not env_name:
+            env_name = group
+
+        # 3. Environment, rules, evaluators, plotters, data loaders, workflows
+        if opts.include_environment and env_name:
+            self._trace_environment_assets(env_name, files_to_pack)
+
+        if opts.include_rules and env_name:
+            self._trace_rules(env_name, files_to_pack)
+
+        if opts.include_evaluators:
+            self._trace_evaluators(
+                group, env_name, files_to_pack, raw_cfg={"evaluators": list(evaluators_found)}
+            )
+
+        if opts.include_plotters:
+            self._trace_plotters(
+                group, env_name, files_to_pack, raw_cfg={"plots": {name: {} for name in plotters_found}}
+            )
+
+        if opts.include_data_modules:
+            self._trace_data_modules(
+                group, env_name, files_to_pack, raw_cfg={"data": list(data_modules_found)}
+            )
+
+        self._trace_workflows(
+            group,
+            files_to_pack,
+            raw_cfg={"workflow": list(workflows_found)[0] if workflows_found else None},
+        )
+
+        # 4. Output archive path
+        output_path = opts.output_path
+        if output_path is None:
+            exports_dir = self.workspace_root / "results" / "exports"
+            exports_dir.mkdir(parents=True, exist_ok=True)
+            output_path = exports_dir / f"{group}_experiment_v{opts.version}.zip"
+        else:
+            output_path = Path(output_path)
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # 5. Manifest
+        manifest = self._generate_manifest(
+            group=group,
+            exp_name="all",
+            env_name=env_name,
+            agents=sorted(agents_found),
+            models=sorted(models_found),
+            files=sorted(files_to_pack.keys()),
+            options=opts,
+            paradigms=sorted(paradigms_found) if paradigms_found else ["offline_rl"],
+        )
+
+        from src.app.core.manifest_schema import validate_manifest_data
+
+        is_valid, schema_err = validate_manifest_data(manifest)
+        if not is_valid:
+            return ExportResult(
+                success=False,
+                error=f"Export manifest failed schema validation: {schema_err}",
+            )
+
+        readme_content = self._generate_readme(group, "all", env_name, opts)
+
+        with zipfile.ZipFile(output_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr(".theta_component.json", json.dumps(manifest, indent=2) + "\n")
+            zf.writestr("README.md", readme_content + "\n")
+            for rel_path, abs_path in sorted(files_to_pack.items()):
+                if abs_path.is_file():
+                    zf.write(abs_path, arcname=rel_path)
+
+        file_list = sorted(list(files_to_pack.keys()) + [".theta_component.json", "README.md"])
+        log.info("Exported experiment group '%s' (%d files) to %s", group, len(file_list), output_path)
+
+        return ExportResult(
+            success=True,
+            archive_path=output_path,
+            manifest=manifest,
+            files_included=file_list,
+        )
 
     def _trace_methods_and_models(
         self,
@@ -322,32 +644,53 @@ class ExperimentExporter:
             agent_name = m_cfg.get("agent")
             if agent_name and isinstance(agent_name, str):
                 agents_found.add(agent_name)
-                # in/config/agent/<agent>.yaml
-                agent_yaml = self.workspace_root / "in" / "config" / "agent" / f"{agent_name}.yaml"
-                if agent_yaml.is_file():
+                # in/config/agent/<agent>.yaml (direct or recursive)
+                agent_yaml = self._find_config_file("agent", agent_name)
+                if agent_yaml and agent_yaml.is_file():
                     rel = agent_yaml.relative_to(self.workspace_root).as_posix()
                     files_to_pack[rel] = agent_yaml
 
             # Extract model names (handle flat or nested composite specs)
-            model_spec = m_cfg.get("model")
             extracted_models: List[str] = []
-            if isinstance(model_spec, str):
-                extracted_models.append(model_spec)
-            elif isinstance(model_spec, dict):
-                for k, v in model_spec.items():
-                    extracted_models.append(k)
-                    if isinstance(v, dict):
-                        for sub_k, sub_v in v.items():
-                            if isinstance(sub_v, str):
-                                extracted_models.append(sub_v)
-                            elif isinstance(sub_v, dict):
-                                extracted_models.append(sub_k)
 
-            for m in extracted_models:
+            def _collect_models(val: Any):
+                if isinstance(val, str):
+                    clean = val.strip()
+                    if clean and clean.lower() not in (
+                        "default", "none", "true", "false", "identity", "neural", "symbolic",
+                        "blender", "learned", "heuristic", "linear", "softmax"
+                    ):
+                        extracted_models.append(clean)
+                elif isinstance(val, dict):
+                    arch = val.get("architecture") or val.get("name") or val.get("type") or val.get("base")
+                    if arch and isinstance(arch, str):
+                        extracted_models.append(arch)
+                    for k, sub in val.items():
+                        if k in ("architecture", "name", "type", "base", "slots", "rules", "mode", "lr"):
+                            continue
+                        if isinstance(sub, dict):
+                            if len(sub) == 1 and not any(ik in sub for ik in ("lr", "hidden_sizes", "activation", "dim")):
+                                first_k = next(iter(sub))
+                                if isinstance(sub[first_k], dict):
+                                    extracted_models.append(first_k)
+                                    _collect_models(sub[first_k])
+                                    continue
+                            if k not in ("symbolic", "neural", "blender", "encoder", "decoder", "head"):
+                                extracted_models.append(k)
+                            _collect_models(sub)
+                        elif isinstance(sub, str):
+                            _collect_models(sub)
+
+            _collect_models(m_cfg.get("model"))
+            for slot in ("neural", "symbolic", "blender", "encoder", "decoder", "head"):
+                if slot in m_cfg:
+                    _collect_models(m_cfg[slot])
+
+            for m in sorted(set(extracted_models)):
                 models_found.add(m)
-                # in/config/model/<m>.yaml
-                model_yaml = self.workspace_root / "in" / "config" / "model" / f"{m}.yaml"
-                if model_yaml.is_file():
+                # in/config/model/<m>.yaml (direct or recursive)
+                model_yaml = self._find_config_file("model", m)
+                if model_yaml and model_yaml.is_file():
                     rel = model_yaml.relative_to(self.workspace_root).as_posix()
                     files_to_pack[rel] = model_yaml
 
@@ -383,36 +726,46 @@ class ExperimentExporter:
         self,
         group: str,
         exp_name: str,
-        env_name: Optional[str],
+        env_name: str | None,
         agents: List[str],
         models: List[str],
         files: List[str],
         options: ExportOptions,
+        paradigms: List[str] | None = None,
     ) -> Dict[str, Any]:
         """Generate component manifest matching Theta Hub specifications."""
-        component_id = f"{group}_{exp_name}".replace("/", "_")
-        return {
+        is_group_bundle = exp_name in ("all", group)
+        component_id = group if is_group_bundle else f"{group}_{exp_name}".replace("/", "_")
+        config_paths = sorted([k for k in files if k.startswith("in/config/")])
+        manifest = {
             "id": component_id,
-            "name": f"{group}/{exp_name}",
+            "name": f"{group.replace('_', ' ').title()} Experiment Suite" if is_group_bundle else f"{group}/{exp_name}",
             "kind": "experiment",
             "version": options.version,
-            "description": options.description or f"Exported experiment recipe and dependencies for {group}/{exp_name}",
+            "description": options.description
+            or f"Complete {group} experiment suite: recipes, group defaults, environment hooks, evaluators, and plotters.",
             "author": {"name": options.author},
             "created_at": datetime.now(timezone.utc).isoformat(),
             "target_path": f"in/config/experiment/{group}",
-            "entry_point": f"in/config/experiment/{group}/{exp_name}.yaml",
+            "config_paths": config_paths,
             "compatibility": {"theta": ">=2.0.0"},
             "environment": env_name,
             "agents": agents,
             "models": models,
+            "dependencies": {"components": ["thetalib"]},
             "package_contents": files,
         }
+        if not is_group_bundle:
+            manifest["entry_point"] = f"in/config/experiment/{group}/{exp_name}.yaml"
+        if paradigms:
+            manifest["paradigms"] = paradigms
+        return manifest
 
     def _generate_readme(
         self,
         group: str,
         exp_name: str,
-        env_name: Optional[str],
+        env_name: str | None,
         options: ExportOptions,
     ) -> str:
         """Generate descriptive reproduction README."""

@@ -10,6 +10,7 @@ selection turns into.
 
 from __future__ import annotations
 
+import copy
 import re
 import shlex
 from dataclasses import dataclass, field
@@ -27,12 +28,35 @@ _ALLOW_FLAGS = {
 _GROUPS = ("paradigms", "env", "agent", "model", "site")
 
 
+# path -> (file bytes, parsed value). The tree is rebuilt often (every save invalidates it) but
+# usually only one file changed, and parsing is what costs: reading the bytes is ~100x cheaper.
+# Keyed on the exact contents, not mtime, so two quick same-size writes can't return stale data.
+_PARSED: dict[Path, tuple[bytes, Any]] = {}
+
+
 def _read_yaml(path: Path) -> dict[str, Any]:
     try:
-        with path.open() as handle:
-            return yaml.safe_load(handle) or {}
+        data = path.read_bytes()
+        cached = _PARSED.get(path)
+        if cached is not None and cached[0] == data:
+            parsed = cached[1]
+        else:
+            parsed = yaml.safe_load(data) or {}
+            _PARSED[path] = (data, parsed)
     except (OSError, yaml.YAMLError):
         return {}
+    return copy.deepcopy(parsed)  # callers may mutate what they get; the cache must not change
+
+
+def config_fingerprint(config_root: Path) -> int:
+    """A hash of every YAML file under `config_root` (paths and contents): equal means unchanged."""
+    entries = []
+    for path in sorted(Path(config_root).rglob("*.yaml")):
+        try:
+            entries.append((str(path), path.read_bytes()))
+        except OSError:
+            continue
+    return hash(tuple(entries))
 
 
 def _yaml_files(directory: Path) -> list[Path]:
@@ -113,6 +137,9 @@ class Agent:
         elif isinstance(paradigms, str):
             cp = (paradigms,)
         else:
+            # Compatibility is component metadata, not an inference from an
+            # implementation package name.  An omitted declaration means the
+            # component is unconstrained for legacy third-party packages.
             cp = ()
 
         return cls(
@@ -265,6 +292,67 @@ class Paradigm:
             return True
         return self.name in environment.compatible_paradigms
 
+    @property
+    def environment_source(self) -> str:
+        """The kind of research environment an experiment supplies.
+
+        A static dataset is the offline form of an environment or task.  It is
+        deliberately distinct from ``data_module``: the latter only adapts
+        the environment's observations into batches a model can consume.
+
+        Older component packages did not declare this capability, so retain a
+        conservative compatibility inference while all paradigm manifests are
+        migrated.
+        """
+        declared = self.raw.get("environment_source")
+        if isinstance(declared, str) and declared:
+            return declared
+        data_module = self.raw.get("data_module") or self.raw.get("default_data_module")
+        return "live_environment" if data_module == "SimulatorDataModule" else "static_dataset"
+
+    @property
+    def uses_static_dataset(self) -> bool:
+        """Whether this paradigm's environment is realized by static data."""
+        return self.environment_source == "static_dataset"
+
+    @property
+    def budget_unit(self) -> str:
+        """The primary training budget displayed when authoring this paradigm."""
+        training = self.raw.get("training")
+        declared = training.get("budget") if isinstance(training, Mapping) else None
+        if declared in {"timesteps", "epochs"}:
+            return declared
+        # Migration behavior for third-party paradigms authored before this
+        # capability was made explicit.
+        return "epochs" if self.uses_static_dataset else "timesteps"
+
+    @property
+    def algorithm_requirement(self) -> str:
+        """Return ``required``, ``optional``, or ``forbidden`` for methods.
+
+        This is a form contract, not a statement about installed components.
+        In particular, a required algorithm field must remain visible when no
+        compatible algorithm is installed, so the UI can explain the missing
+        dependency instead of quietly authoring an invalid model-only method.
+        """
+        method = self.raw.get("method")
+        declared = method.get("algorithm") if isinstance(method, Mapping) else None
+        if declared in ("required", "optional", "forbidden"):
+            return declared
+        if "allowed_agents" in self.raw and not self.allowed_agents:
+            return "forbidden"
+        if self.requires.get("agent") == "required" or self.allowed_agents:
+            return "required"
+        return "optional"
+
+    @property
+    def allows_algorithm(self) -> bool:
+        return self.algorithm_requirement != "forbidden"
+
+    @property
+    def requires_algorithm(self) -> bool:
+        return self.algorithm_requirement == "required"
+
     def field_enabled(self, name: str) -> bool:
         if name in self.forbids:
             return False
@@ -288,6 +376,7 @@ class ConfigTree:
 
     def __init__(self, config_root: Path):
         self.config_root = Path(config_root)
+        self._experiment_groups: dict[str, ExperimentGroup] | None = None
         self.paradigms = {p.stem: Paradigm.from_file(p) for p in _yaml_files(self.config_root / "paradigms")}
         agent_dir = self.config_root / "agent"
         self.agents = {}
@@ -318,6 +407,8 @@ class ConfigTree:
 
         self.sites = tuple(s.stem for s in _yaml_files(self.config_root / "site"))
 
+        self._discover_plugin_manifests()
+
         experiment_root = self.config_root / "experiment"
         self.experiments: dict[str, Experiment] = {}
         if experiment_root.is_dir():
@@ -327,10 +418,71 @@ class ConfigTree:
                 experiment = Experiment.from_file(path, experiment_root)
                 self.experiments[experiment.name] = experiment
 
+    def _discover_plugin_manifests(self) -> None:
+        """Scan workspace for installed plugin manifests (.theta_component.json / plugin.json)
+        and register them into self.agents, self.models, and self.environments if not already present.
+        """
+        import json
+
+        # Infer workspace root
+        if self.config_root.name == "config" and self.config_root.parent.name == "in":
+            ws_root = self.config_root.parent.parent
+        else:
+            ws_root = self.config_root.parent
+
+        scan_dirs = [
+            (ws_root / "src" / "usr" / "algorithms", "agent"),
+            (ws_root / "src" / "usr" / "methods", "agent"),
+            (ws_root / "src" / "usr" / "models", "model"),
+            (ws_root / "in" / "envs", "env"),
+        ]
+
+        for sdir, default_kind in scan_dirs:
+            if not sdir.is_dir():
+                continue
+            for meta_file in sorted(list(sdir.glob("*/.theta_component.json")) + list(sdir.glob("*/plugin.json"))):
+                try:
+                    meta = json.loads(meta_file.read_text(encoding="utf-8"))
+                    kind = str(meta.get("kind", default_kind)).lower()
+                    comp_id = str(meta.get("id") or meta_file.parent.name)
+                    paradigms = meta.get("paradigms") or meta.get("compatible_paradigms") or ()
+                    if isinstance(paradigms, list):
+                        paradigms_tuple = tuple(str(p) for p in paradigms)
+                    elif isinstance(paradigms, str):
+                        paradigms_tuple = (paradigms,)
+                    else:
+                        paradigms_tuple = ()
+
+                    if kind in ("agent", "algorithm") and comp_id not in self.agents:
+                        self.agents[comp_id] = Agent(
+                            name=comp_id,
+                            algorithm=str(meta.get("algorithm") or comp_id),
+                            compatible_paradigms=paradigms_tuple,
+                            hyperparameters=dict(meta.get("hyperparameters", {})),
+                            raw=meta,
+                        )
+                    elif kind == "model" and comp_id not in self.models:
+                        self.models[comp_id] = Model(
+                            name=comp_id,
+                            architecture=str(meta.get("architecture") or comp_id),
+                            compatible_paradigms=paradigms_tuple,
+                            parameters=dict(meta.get("parameters", {})),
+                            raw=meta,
+                        )
+                    elif kind == "env" and comp_id not in self.environments:
+                        self.environments[comp_id] = Environment(
+                            name=comp_id,
+                            compatible_paradigms=paradigms_tuple,
+                            raw=meta,
+                        )
+                except Exception:
+                    continue
+
     def create_folder(self, group: str, subpath: str) -> Path:
         """Create a new organizational folder under an experiment group."""
         folder = self.config_root / "experiment" / group / subpath
         folder.mkdir(parents=True, exist_ok=True)
+        self.refresh_groups()
         return folder
 
     def rename_folder(self, old_path: Path | str, new_name: str) -> Path:
@@ -340,6 +492,7 @@ class ConfigTree:
         if new_p.exists() and not old_p.samefile(new_p):
             raise FileExistsError(f"A folder named '{new_name}' already exists.")
         old_p.rename(new_p)
+        self.refresh_groups()
         return new_p
 
     def delete_folder(self, folder_path: Path | str) -> bool:
@@ -348,6 +501,7 @@ class ConfigTree:
         folder_p = Path(folder_path)
         if folder_p.is_dir():
             shutil.rmtree(folder_p)
+            self.refresh_groups()
             return True
         return False
 
@@ -414,10 +568,19 @@ class ConfigTree:
 
     @property
     def experiment_groups(self) -> dict[str, ExperimentGroup]:
-        root = self.config_root / "experiment"
-        if not root.is_dir():
-            return {}
-        return {d.name: ExperimentGroup.from_dir(d) for d in sorted(root.iterdir()) if d.is_dir()}
+        # Built once per tree: group() alone reads it up to three times. Folder edits through this
+        # tree reset it; anything else that changes in/config invalidates the whole tree.
+        if self._experiment_groups is None:
+            root = self.config_root / "experiment"
+            self._experiment_groups = (
+                {d.name: ExperimentGroup.from_dir(d) for d in sorted(root.iterdir()) if d.is_dir()}
+                if root.is_dir() else {}
+            )
+        return self._experiment_groups
+
+    def refresh_groups(self) -> None:
+        """Re-read the experiment groups on next use (after writing a group's folder or _base.yaml)."""
+        self._experiment_groups = None
 
     def group(self, name: str) -> ExperimentGroup:
         if not name:
@@ -511,20 +674,34 @@ def default_method_model(
             return spec["model"]
     names = set(known or ())
     declared = paradigm.raw.get("default_model") if paradigm is not None else None
-    if isinstance(declared, str) and (not names or declared in names):
+    if isinstance(declared, str):
+        # Keep the paradigm contract visible even if the corresponding Hub
+        # component has not been installed yet. The UI can then name the
+        # missing dependency instead of silently substituting an incompatible
+        # architecture.
         return declared
     if not names or fallback in names:
         return fallback
     return sorted(names)[0]
 
 
-def group_base_yaml(env: str, paradigm: str, rules: Paradigm | None = None, seed: int = 1) -> str:
+def group_base_yaml(env: str | None, paradigm: str, rules: Paradigm | None = None, seed: int = 1) -> str:
     """The _base.yaml for a new group, which is what binds env and paradigm."""
     lines = [
         "# @package _global_",
-        "defaults:",
-        f"  - override /env: {env}",
-        "",
+    ]
+    if env and str(env).strip().lower() not in ("", "none"):
+        lines += [
+            "defaults:",
+            f"  - override /env: {env}",
+            "",
+        ]
+    else:
+        lines += [
+            "defaults: []",
+            "",
+        ]
+    lines += [
         f"paradigm: {paradigm}",
         "",
     ]

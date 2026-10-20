@@ -15,11 +15,20 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
+import importlib.util
+
 import pytest
 import torch
 from torch.utils.data import DataLoader, TensorDataset
 
 from src.app.core.paradigm_loader import get_component, load_paradigm_definition
+
+# The classifier and dnn come from the Hub's `neural` model component
+needs_neural = pytest.mark.skipif(
+    importlib.util.find_spec("src.usr.models.neural") is None  # checked first: a missing parent raises
+    or importlib.util.find_spec("src.usr.models.neural.classifier") is None,
+    reason="the 'neural' model component is not installed",
+)
 
 CONFIG = Path("in/config")
 
@@ -46,15 +55,18 @@ def _write_npz(path: Path, n=120, dim=8, separable=True):
 # ---------------------------------------------------------------------------
 
 
+@needs_neural
 def test_the_rl_dnn_is_not_a_classifier():
-    """`dnn` is MLPQNetwork, built around n_actions and a duelling head, which is
-    why supervised needed an architecture of its own rather than reusing it."""
+    """`dnn` is an action/value model, so supervised uses a classifier instead."""
     from src.app.core.model_registry import MODEL_REGISTRY, auto_discover_models
 
     auto_discover_models()
-    assert MODEL_REGISTRY["dnn"].__name__ == "MLPQNetwork"
+    dnn = MODEL_REGISTRY["dnn"]
+    assert hasattr(dnn, "get_action_and_value")
+    assert hasattr(dnn, "get_q_values")
 
 
+@needs_neural
 def test_the_classifier_is_registered():
     from src.app.core.model_registry import MODEL_REGISTRY, auto_discover_models
 
@@ -62,6 +74,7 @@ def test_the_classifier_is_registered():
     assert "mlp_classifier" in MODEL_REGISTRY
 
 
+@needs_neural
 def test_a_binary_classifier_emits_one_logit_per_sample():
     """ClassificationEvalProtocol takes the sigmoid of a 1-D output."""
     from src.usr.models.neural.classifier import MLPClassifier
@@ -69,6 +82,7 @@ def test_a_binary_classifier_emits_one_logit_per_sample():
     assert MLPClassifier(input_dim=8)(torch.randn(5, 8)).shape == (5,)
 
 
+@needs_neural
 def test_a_multiclass_classifier_emits_one_logit_per_class():
     from src.usr.models.neural.classifier import MLPClassifier
 
@@ -152,6 +166,7 @@ def test_an_unknown_architecture_is_rejected():
         _module(architecture_name="not_an_architecture")
 
 
+@needs_neural
 def test_it_logs_the_metric_build_trainer_monitors():
     module = _module()
     logged = []
@@ -161,10 +176,12 @@ def test_it_logs_the_metric_build_trainer_monitors():
     assert "val/loss" in logged
 
 
+@needs_neural
 def test_a_binary_task_uses_a_binary_loss():
     assert type(_module().loss_fn).__name__ == "BCEWithLogitsLoss"
 
 
+@needs_neural
 def test_a_multiclass_task_uses_cross_entropy():
     assert type(_module(n_classes=3).loss_fn).__name__ == "CrossEntropyLoss"
 
@@ -174,6 +191,7 @@ def test_a_multiclass_task_uses_cross_entropy():
 # ---------------------------------------------------------------------------
 
 
+@needs_neural
 def test_the_supervised_runner_trains_a_classifier():
     """Drives the shipped supervised runner and eval protocol, unchanged."""
     import tempfile
@@ -221,6 +239,7 @@ def test_the_model_config_names_a_resolvable_lightning_module():
     assert model_cfg.get("architecture") == "mlp_classifier" or model_cfg.get("type") == "mlp_classifier"
 
 
+@needs_neural
 def test_scoring_does_not_leave_the_model_in_eval_mode():
     """The classifier has dropout, so evaluating a checkpoint and then resuming
     training would quietly train without it."""
@@ -234,6 +253,7 @@ def test_scoring_does_not_leave_the_model_in_eval_mode():
         assert module.training is True
 
 
+@needs_neural
 def test_scoring_leaves_eval_mode_alone_when_it_started_there():
     import tempfile
 

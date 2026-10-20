@@ -13,32 +13,25 @@ import pkgutil
 import shutil
 
 from plot.base import BasePlotter
+from src.app.core.plotter_registry import (
+    PLOTTER_REGISTRY,
+    auto_discover_plotters,
+    get_plotter_class,
+    list_registered_plotters,
+)
 
 FALLBACK_PLOTS = ["convergence", "losses", "reports"]
+GENERAL_PLOT_OPTIONS = {
+    "output_dir", "title", "xlabel", "ylabel", "figsize", "dpi", "style",
+    "smoothing_window", "x_axis", "metrics", "filename_prefix", "output_subdir",
+    "use_cache",
+}
 
 
 def discover_plotters() -> dict:
-    """Auto-discover all BasePlotter subclasses in the plot/ package."""
-    registry = {}
-    plot_pkg_dir = str(Path(__file__).parent)
-    for importer, modname, ispkg in pkgutil.iter_modules([plot_pkg_dir]):
-        if modname.startswith("_") or modname in ("base", "manager"):
-            continue
-        try:
-            mod = importlib.import_module(f"plot.{modname}")
-            for attr_name in dir(mod):
-                cls = getattr(mod, attr_name)
-                if (
-                    isinstance(cls, type)
-                    and issubclass(cls, BasePlotter)
-                    and cls is not BasePlotter
-                    and hasattr(cls, "name")
-                ):
-                    inst = cls()
-                    registry[inst.name] = cls
-        except Exception as e:
-            print(f"Warning: Could not load plotter module 'plot.{modname}': {e}")
-    return registry
+    """Auto-discover all BasePlotter subclasses via the central Plotter Registry."""
+    auto_discover_plotters()
+    return dict(PLOTTER_REGISTRY)
 
 
 def get_requested_plots(exp_cfg: dict, exp_id: str) -> dict:
@@ -54,7 +47,10 @@ def get_requested_plots(exp_cfg: dict, exp_id: str) -> dict:
         if isinstance(plots_val, list):
             return {name: {} for name in plots_val}
         elif isinstance(plots_val, dict):
-            return plots_val
+            requested = {name: options for name, options in plots_val.items()
+                         if name not in GENERAL_PLOT_OPTIONS and options is not None}
+            if requested or not plots_val:
+                return requested
 
     # Fall back to env-based defaults
     env_val = exp_cfg.get("env", {})

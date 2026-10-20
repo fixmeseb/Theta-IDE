@@ -11,11 +11,14 @@ The pipeline resolves data modules via get_datamodule_class():
 """
 
 import importlib
+import logging
 import os
 import pkgutil
 from typing import Any, Callable, Dict, List, Optional, Type
 
 DATAMODULE_REGISTRY: Dict[str, Type[Any]] = {}
+_DISCOVERY_COMPLETE = False
+log = logging.getLogger(__name__)
 
 
 def register_datamodule(*names: str) -> Callable[[Type[Any]], Type[Any]]:
@@ -29,6 +32,7 @@ def register_datamodule(*names: str) -> Callable[[Type[Any]], Type[Any]]:
             # Also register into paradigm_loader component registry for cross-compatibility
             try:
                 from src.app.core.paradigm_loader import register_component
+
                 register_component(clean_name)(cls)
             except Exception:
                 pass
@@ -37,7 +41,7 @@ def register_datamodule(*names: str) -> Callable[[Type[Any]], Type[Any]]:
     return decorator
 
 
-def get_datamodule_class(dm_name: str) -> Optional[Type[Any]]:
+def get_datamodule_class(dm_name: str) -> Type[Any] | None:
     """Resolve a data module name to its registered class.
 
     Args:
@@ -61,6 +65,7 @@ def get_datamodule_class(dm_name: str) -> Optional[Type[Any]]:
     # Fallback to paradigm_loader's component registry
     try:
         from src.app.core.paradigm_loader import get_component
+
         cls = get_component(clean_name)
         if cls is not None:
             return cls
@@ -73,6 +78,14 @@ def get_datamodule_class(dm_name: str) -> Optional[Type[Any]]:
 def auto_discover_datamodules() -> None:
     """Auto-discover data modules in src/usr/data/, src/app/data/, and plugin entrypoints."""
     import sys
+
+    global _DISCOVERY_COMPLETE
+    if _DISCOVERY_COMPLETE:
+        return
+    # Discovery is invoked whenever the UI asks for choices.  Mark it complete
+    # up front so a missing optional training dependency cannot repeatedly
+    # emit the same import warning while the user edits a config.
+    _DISCOVERY_COMPLETE = True
 
     core_dir = os.path.dirname(os.path.abspath(__file__))
     app_dir = os.path.dirname(core_dir)
@@ -92,8 +105,19 @@ def auto_discover_datamodules() -> None:
                 continue
             try:
                 importlib.import_module(f"src.usr.data.{module_info.name}")
+            except ModuleNotFoundError as exc:
+                if exc.name in {"lightning", "pytorch_lightning"}:
+                    log.debug(
+                        "Skipping data module '%s': Lightning is not installed.",
+                        module_info.name,
+                    )
+                    continue
+                log.debug("Skipping data module '%s': %s", module_info.name, exc, exc_info=True)
             except Exception as e:
-                print(f"[Warning] Failed to import data module '{module_info.name}': {e}")
+                # User-contributed data modules are optional.  Preserve the
+                # traceback for diagnostics without turning a picker refresh
+                # into a visible application warning.
+                log.debug("Skipping data module '%s': %s", module_info.name, e, exc_info=True)
 
     # 2. Register core built-in data modules
     _register_builtins()
@@ -103,30 +127,35 @@ def _register_builtins() -> None:
     """Ensure core built-in data modules are registered."""
     try:
         from src.app.data.rl_data_module import RLDataModule
+
         register_datamodule("RLDataModule")(RLDataModule)
     except Exception:
         pass
 
     try:
         from src.app.core.paradigm_impls.base.online_rl import SimulatorDataModule
+
         register_datamodule("SimulatorDataModule")(SimulatorDataModule)
     except Exception:
         pass
 
     try:
         from src.app.core.paradigm_impls.base.offline_rl import RLReplayBufferDataModule
+
         register_datamodule("RLReplayBufferDataModule")(RLReplayBufferDataModule)
     except Exception:
         pass
 
     try:
         from src.app.core.paradigm_impls.base.supervised import SupervisedDataModule
+
         register_datamodule("SupervisedDataModule", "CrossValidationDataModule")(SupervisedDataModule)
     except Exception:
         pass
 
     try:
-        from src.app.core.paradigm_impls.base.tabular import TabularNpzDataModule, SupervisedNpzDataModule
+        from src.app.core.paradigm_impls.base.tabular import SupervisedNpzDataModule, TabularNpzDataModule
+
         register_datamodule("TabularNpzDataModule")(TabularNpzDataModule)
         register_datamodule("SupervisedNpzDataModule")(SupervisedNpzDataModule)
     except Exception:
@@ -134,12 +163,14 @@ def _register_builtins() -> None:
 
     try:
         from src.app.core.paradigm_impls.base.unsupervised import UnsupervisedDataModule
+
         register_datamodule("UnsupervisedDataModule")(UnsupervisedDataModule)
     except Exception:
         pass
 
     try:
         from src.usr.eval.early_prediction.data_module import EPSepsisDataModule
+
         register_datamodule("EPSepsisDataModule", "SepsisDataModule")(EPSepsisDataModule)
     except Exception:
         pass

@@ -4,7 +4,7 @@ The window is built on the GUI thread, so the event loop isn't running while the
 therefore repaints itself synchronously on every progress step (QWidget.repaint) rather than animating.
 
 Background: a public-domain classical landscape painting (images/splash_landscape.jpg), faded into the
-theme's base colour at the bottom so the title and progress bar read in light and dark themes.
+theme's base colour at the bottom so the title and the phase circles read in light and dark themes.
 """
 from __future__ import annotations
 
@@ -21,6 +21,23 @@ from .theme import BUILTINS, DEFAULT, validate_theme
 WIDTH, HEIGHT = 560, 340
 BACKGROUND_PATH = Path(__file__).resolve().parent / "images" / "splash_landscape.jpg"
 CREDIT = "Pierre-Henri de Valenciennes, Landscape of Ancient Greece, 1786"
+
+# The startup phases, in order: one connected circle each. These are the messages Window.__init__ and
+# main() pass to set_progress; a message not listed here is still shown but doesn't move the circles.
+PHASES = (
+    "Loading settings…",
+    "Discovering plugins…",
+    "Loading run history…",
+    "Building the workspace…",
+    "Starting plugins…",
+    "Loading the default experiment…",
+    "Restoring layout…",
+    "Applying theme…",
+    "Loading runs…",
+    "Finishing up…",
+    "Opening window…",
+)
+PHASE_RADIUS = 5.5
 
 
 def splash_theme(data_dir) -> dict:
@@ -57,11 +74,14 @@ class SplashScreen(QSplashScreen):
         self.background = QPixmap(str(BACKGROUND_PATH))  # null if missing: the card is then plain
         self.message = "Starting…"
         self.progress = 0.0
+        self.phase = -1  # index into PHASES of the step under way; -1 before the first
 
     def set_progress(self, message: str, fraction: float):
-        """Show a startup step. Progress never moves backwards."""
+        """Show a startup step: the phases before it are complete. Progress never moves backwards."""
         self.message = message
         self.progress = max(self.progress, min(1.0, max(0.0, fraction)))
+        if message in PHASES:
+            self.phase = max(self.phase, PHASES.index(message))
         if self.isVisible():
             self.repaint()
 
@@ -103,22 +123,16 @@ class SplashScreen(QSplashScreen):
         painter.setFont(subtitle)
         painter.setPen(c["muted"])
         painter.drawText(QRectF(109, 214, WIDTH - 140, 22), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                         "Research workspace for NeSyRL experiments")
+                         "An IDE for reinforcement learning and deep learning experiments")
 
-        # status line and progress bar along the bottom
+        # status line and the phase circles along the bottom
         status = QFont(base_font)
         status.setPixelSize(12)
         painter.setFont(status)
         painter.setPen(c["muted"])
         painter.drawText(QRectF(32, HEIGHT - 62, WIDTH - 64, 20),
                          Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter, self.message)
-        track = QRectF(32, HEIGHT - 36, WIDTH - 64, 4)
-        painter.setPen(Qt.PenStyle.NoPen)
-        painter.setBrush(c["raised"])
-        painter.drawRoundedRect(track, 2, 2)
-        if self.progress > 0:
-            painter.setBrush(c["accent"])
-            painter.drawRoundedRect(QRectF(track.x(), track.y(), track.width() * self.progress, track.height()), 2, 2)
+        self._draw_phases(painter, c)
 
         if not self.background.isNull():
             caption = QFont(base_font)
@@ -128,6 +142,38 @@ class SplashScreen(QSplashScreen):
             painter.setPen(c["comment"])
             painter.drawText(QRectF(32, HEIGHT - 26, WIDTH - 64, 16),
                              Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter, CREDIT)
+
+    def phase_centers(self) -> list[QPointF]:
+        """Where each phase's circle sits: evenly spaced along the bottom, inside the text margins."""
+        left, right, y = 32 + PHASE_RADIUS, WIDTH - 32 - PHASE_RADIUS, HEIGHT - 34
+        step = (right - left) / (len(PHASES) - 1)
+        return [QPointF(left + i * step, y) for i in range(len(PHASES))]
+
+    def _draw_phases(self, painter: QPainter, c: dict[str, QColor]):
+        """Connected circles: completed phases filled, the current one ringed with a dot, the rest hollow."""
+        centers = self.phase_centers()
+        line = 2.0
+        for i in range(len(centers) - 1):  # connectors first, so the circles sit on top
+            reached = i < self.phase  # the segment after a completed phase leads to one that has started
+            painter.setPen(QPen(c["accent"] if reached else c["disabled"], line, cap=Qt.PenCapStyle.FlatCap))
+            start, end = centers[i], centers[i + 1]
+            painter.drawLine(QPointF(start.x() + PHASE_RADIUS, start.y()), QPointF(end.x() - PHASE_RADIUS, end.y()))
+        for i, center in enumerate(centers):
+            if i < self.phase:  # done
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(c["accent"])
+                painter.drawEllipse(center, PHASE_RADIUS, PHASE_RADIUS)
+            elif i == self.phase:  # under way
+                painter.setPen(QPen(c["accent"], line))
+                painter.setBrush(c["base"])
+                painter.drawEllipse(center, PHASE_RADIUS - line / 2, PHASE_RADIUS - line / 2)
+                painter.setPen(Qt.PenStyle.NoPen)
+                painter.setBrush(c["accent"])
+                painter.drawEllipse(center, PHASE_RADIUS / 2.5, PHASE_RADIUS / 2.5)
+            else:  # still to come
+                painter.setPen(QPen(c["disabled"], line))
+                painter.setBrush(c["base"])
+                painter.drawEllipse(center, PHASE_RADIUS - line / 2, PHASE_RADIUS - line / 2)
 
     def _cover_source(self) -> QRectF:
         """The centred part of the painting with the card's aspect ratio (like CSS background-size: cover)."""

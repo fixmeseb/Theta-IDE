@@ -202,6 +202,15 @@ class HubClient(QObject):
                     return comp
             if comp.id.startswith(cid) or cid.startswith(comp.id):
                 return comp
+
+        # Packages may provide several component identifiers from one archive.
+        # This also gives older dependency declarations a metadata-backed upgrade
+        # path without teaching the client about package names.
+        for comp in self.components:
+            package_names = [comp.id, *comp.provides, *comp.aliases]
+            if any(name.lower().replace("-", "_") == cid_norm for name in package_names):
+                return comp
+
         return None
 
     def search(
@@ -209,12 +218,17 @@ class HubClient(QObject):
         query: str = "",
         kind: Optional[str] = None,
         tag: Optional[str] = None,
+        include_internal: bool = False,
     ) -> List[HubComponent]:
         """Filter components by search query, component kind, or tag."""
         q = query.strip().lower()
         results = []
 
         for comp in self.components:
+            # Skip hidden and package-internal subcomponents from browser search.
+            if not include_internal and (comp.is_grouped_component or comp.hidden):
+                continue
+
             # Kind filter
             if kind and kind.lower() != "all":
                 k = kind.lower()

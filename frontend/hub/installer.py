@@ -59,7 +59,7 @@ class HubInstaller:
         elif component.kind == "env":
             return self.workspace_dir / "in" / "envs" / component.id
         elif component.kind == "experiment":
-            return self.workspace_dir / "in" / "config" / "experiment" / component.id
+            return self.workspace_dir / ".thetaide" / "experiments" / component.id
         elif component.kind in ("suite", "package"):
             return self.workspace_dir / ".thetaide" / "suites" / component.id
         else:
@@ -73,22 +73,38 @@ class HubInstaller:
         if extra_cfg:
             return self.workspace_dir / extra_cfg
 
+        folder_prefix = None
+        if hasattr(component, "extra") and isinstance(component.extra, dict):
+            folder_prefix = component.extra.get("namespace") or component.extra.get("group")
+
+        filename = f"{component.id}.yaml"
+
         if component.kind == "model":
-            if component.id in ("dnn", "nature_cnn", "dueling_resnet"):
-                return self.workspace_dir / "in" / "config" / "model" / "basics" / f"{component.id}.yaml"
-            return self.workspace_dir / "in" / "config" / "model" / f"{component.id}.yaml"
+            if folder_prefix:
+                return self.workspace_dir / "in" / "config" / "model" / folder_prefix / filename
+            return self.workspace_dir / "in" / "config" / "model" / filename
         elif component.kind in ("method", "agent", "algorithm"):
-            return self.workspace_dir / "in" / "config" / "agent" / f"{component.id}.yaml"
+            if folder_prefix:
+                return self.workspace_dir / "in" / "config" / "agent" / folder_prefix / filename
+            return self.workspace_dir / "in" / "config" / "agent" / filename
         elif component.kind in ("datamodule", "data"):
-            return self.workspace_dir / "in" / "config" / "data" / f"{component.id}.yaml"
+            if folder_prefix:
+                return self.workspace_dir / "in" / "config" / "data" / folder_prefix / filename
+            return self.workspace_dir / "in" / "config" / "data" / filename
         elif component.kind in ("evaluator", "eval"):
-            return self.workspace_dir / "in" / "config" / "eval" / f"{component.id}.yaml"
+            if folder_prefix:
+                return self.workspace_dir / "in" / "config" / "eval" / folder_prefix / filename
+            return self.workspace_dir / "in" / "config" / "eval" / filename
         elif component.kind in ("plotter", "plot"):
-            return self.workspace_dir / "in" / "config" / "plot" / f"{component.id}.yaml"
+            if folder_prefix:
+                return self.workspace_dir / "in" / "config" / "plot" / folder_prefix / filename
+            return self.workspace_dir / "in" / "config" / "plot" / filename
         elif component.kind == "env":
-            return self.workspace_dir / "in" / "config" / "env" / f"{component.id}.yaml"
+            if folder_prefix:
+                return self.workspace_dir / "in" / "config" / "env" / folder_prefix / filename
+            return self.workspace_dir / "in" / "config" / "env" / filename
         elif component.kind == "experiment":
-            return self.workspace_dir / "in" / "config" / "experiment" / f"{component.id}.yaml"
+            return self.workspace_dir / "in" / "config" / "experiment" / filename
         return None
 
     def lookup_component(self, component_id: str) -> Optional[HubComponent]:
@@ -96,6 +112,14 @@ class HubInstaller:
         if self.lookup_component_fn is not None:
             comp = self.lookup_component_fn(component_id)
             if comp:
+                # Internal registry entries describe capabilities that are
+                # supplied by a parent package.  A dependency on one must
+                # install its provider, not attempt to fetch a standalone
+                # archive that does not exist.
+                if comp.suite:
+                    provider = self.lookup_component_fn(comp.suite)
+                    if provider:
+                        return provider
                 return comp
 
         hub_candidates = [
@@ -134,6 +158,18 @@ class HubInstaller:
         """Check if a component is installed and determine its version."""
         target_dir = self.resolve_target_dir(component)
         if not target_dir.exists() or not target_dir.is_dir():
+            if component.suite:
+                provider = self.lookup_component(component.suite)
+                if provider and provider.id != component.id:
+                    provider_dir = self.resolve_target_dir(provider)
+                    for name in (".theta_component.json", "plugin.json"):
+                        manifest = provider_dir / name
+                        if manifest.is_file():
+                            try:
+                                data = json.loads(manifest.read_text(encoding="utf-8"))
+                                return True, data.get("version", provider.version)
+                            except Exception:
+                                return True, provider.version
             return False, None
 
         # 1. Check .theta_component.json manifest
@@ -248,6 +284,12 @@ class HubInstaller:
             progress_callback=progress_callback,
         )
 
+        if not hasattr(self, "_installing_stack"):
+            self._installing_stack = set()
+        if component.id in self._installing_stack:
+            return True
+        self._installing_stack.add(component.id)
+
         target_dir = self.resolve_target_dir(component)
         staging_dir = Path(tempfile.mkdtemp(prefix="theta_staging_"))
 
@@ -272,18 +314,25 @@ class HubInstaller:
 
             # Check for packaged configuration YAML(s) and deploy to in/config/
             installed_config_paths = []
-            is_root_relative = (source_dir / "in").is_dir() or component.kind == "experiment"
+            installed_files = []
+            is_root_relative = (
+                (source_dir / "in").is_dir()
+                or (source_dir / "src").is_dir()
+                or (source_dir / "plot").is_dir()
+                or component.kind in ("experiment", "suite")
+            )
 
             if is_root_relative:
-                # Deploy root-relative assets directly to workspace_dir (in/, src/, results/)
+                # Deploy root-relative assets directly to workspace_dir (in/, src/, results/, plot/)
                 for item in sorted(source_dir.rglob("*")):
                     if not item.is_file():
                         continue
                     rel = item.relative_to(source_dir)
-                    if rel.parts and rel.parts[0] in ("in", "src", "results"):
+                    if rel.parts and rel.parts[0] in ("in", "src", "results", "plot"):
                         dest_file = self.workspace_dir / rel
                         dest_file.parent.mkdir(parents=True, exist_ok=True)
                         shutil.copy2(str(item), str(dest_file))
+                        installed_files.append(str(dest_file.relative_to(self.workspace_dir)))
                         if len(rel.parts) >= 2 and rel.parts[0] == "in" and rel.parts[1] == "config":
                             installed_config_paths.append(str(dest_file.relative_to(self.workspace_dir)))
 
@@ -292,7 +341,14 @@ class HubInstaller:
                 target_in_config = self.workspace_dir / "in" / "config"
                 for yaml_file in sorted(pkg_config_dir.rglob("*.yaml")):
                     rel = yaml_file.relative_to(pkg_config_dir)
-                    dest_file = target_in_config / rel
+                    if len(rel.parts) == 1:
+                        config_dest = self.resolve_config_path(component)
+                        if config_dest is not None:
+                            dest_file = config_dest.parent / yaml_file.name
+                        else:
+                            dest_file = target_in_config / rel
+                    else:
+                        dest_file = target_in_config / rel
                     dest_file.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(str(yaml_file), str(dest_file))
                     installed_config_paths.append(str(dest_file.relative_to(self.workspace_dir)))
@@ -328,6 +384,11 @@ class HubInstaller:
                     existing_pkg_meta = json.loads((source_dir / ".theta_component.json").read_text(encoding="utf-8"))
                 except Exception:
                     pass
+            elif (source_dir / "plugin.json").is_file():
+                try:
+                    existing_pkg_meta = json.loads((source_dir / "plugin.json").read_text(encoding="utf-8"))
+                except Exception:
+                    pass
 
             meta = dict(existing_pkg_meta)
             meta.update({
@@ -340,14 +401,28 @@ class HubInstaller:
                 "config_path": installed_config_rel,
                 "config_paths": installed_config_paths,
             })
+            if is_root_relative and installed_files:
+                meta["installed_files"] = installed_files
             if hasattr(component, "extra") and isinstance(component.extra, dict) and "paradigms" in component.extra:
                 meta["paradigms"] = component.extra["paradigms"]
 
             if is_root_relative:
                 target_dir.mkdir(parents=True, exist_ok=True)
+                for item in source_dir.iterdir():
+                    if item.name in ("in", "src", "results", "plot", "__pycache__"):
+                        continue
+                    dest = target_dir / item.name
+                    if item.is_dir():
+                        shutil.copytree(str(item), str(dest), dirs_exist_ok=True)
+                    else:
+                        shutil.copy2(str(item), str(dest))
+
                 (target_dir / ".theta_component.json").write_text(
                     json.dumps(meta, indent=2) + "\n", encoding="utf-8"
                 )
+                plugin_src = source_dir / "plugin.json"
+                if plugin_src.is_file():
+                    shutil.copy2(str(plugin_src), str(target_dir / "plugin.json"))
                 readme_src = source_dir / "README.md"
                 if readme_src.is_file():
                     shutil.copy2(str(readme_src), str(target_dir / "README.md"))
@@ -383,6 +458,14 @@ class HubInstaller:
                     suite_components = pkg_data.get("dependencies", {}).get("components", [])
                 except Exception:
                     pass
+            if not suite_components:
+                plugin_file = target_dir / "plugin.json"
+                if plugin_file.is_file():
+                    try:
+                        pdata = json.loads(plugin_file.read_text(encoding="utf-8"))
+                        suite_components = pdata.get("dependencies", {}).get("components", [])
+                    except Exception:
+                        pass
             if not suite_components and hasattr(component, "extra") and isinstance(component.extra, dict):
                 suite_components = component.extra.get("dependencies", {}).get("components", [])
 
@@ -445,6 +528,8 @@ class HubInstaller:
             return True
 
         finally:
+            if hasattr(self, "_installing_stack"):
+                self._installing_stack.discard(component.id)
             if archive_path.exists():
                 archive_path.unlink()
             if staging_dir.exists():
@@ -502,6 +587,8 @@ class HubInstaller:
             self.workspace_dir / "src" / "usr" / "eval",
             self.workspace_dir / "plot",
             self.workspace_dir / ".thetaide" / "suites",
+            self.workspace_dir / ".thetaide" / "experiments",
+            self.workspace_dir / "in" / "config" / "experiment",
             self.workspace_dir / "plugins",
             self.data_dir / "plugins",
         ]
@@ -525,6 +612,12 @@ class HubInstaller:
                     if data.get("config_path"):
                         cfg_full = (self.workspace_dir / data["config_path"]).resolve()
                         if target_path == cfg_full or target_path in cfg_full.parents:
+                            data["target_dir"] = comp_dir
+                            return data
+                    # Check 3: path is one of the explicitly deployed installed files
+                    for file_rel in data.get("installed_files", []):
+                        file_full = (self.workspace_dir / file_rel).resolve()
+                        if target_path == file_full or target_path in file_full.parents:
                             data["target_dir"] = comp_dir
                             return data
                 except Exception:
@@ -553,12 +646,45 @@ class HubInstaller:
                     except Exception:
                         pass
 
+        # Remove installed files deployed by root-relative packages.
+        recorded_installed_files = meta.get("installed_files") or []
+        for file_rel in recorded_installed_files:
+            fp = self.workspace_dir / file_rel
+            if fp.is_file():
+                try:
+                    fp.unlink()
+                    parent = fp.parent.resolve()
+                    stops = {
+                        (self.workspace_dir / "plot").resolve(),
+                        (self.workspace_dir / "src" / "usr" / "data").resolve(),
+                        (self.workspace_dir / "src" / "usr" / "eval").resolve(),
+                        (self.workspace_dir / "src" / "usr" / "models").resolve(),
+                        (self.workspace_dir / "src" / "usr" / "algorithms").resolve(),
+                        (self.workspace_dir / "in" / "config").resolve(),
+                        (self.workspace_dir / "in" / "config" / "experiment").resolve(),
+                        (self.workspace_dir / "in" / "config" / "env").resolve(),
+                        (self.workspace_dir / "in" / "config" / "data").resolve(),
+                        (self.workspace_dir / "in" / "config" / "eval").resolve(),
+                        (self.workspace_dir / "in" / "config" / "plot").resolve(),
+                        (self.workspace_dir / "in" / "config" / "workflow").resolve(),
+                        (self.workspace_dir / "in" / "envs").resolve(),
+                        (self.workspace_dir / "in" / "rules").resolve(),
+                        self.workspace_dir.resolve(),
+                    }
+                    while parent not in stops and parent.is_dir() and not any(parent.iterdir()):
+                        parent.rmdir()
+                        parent = parent.parent
+                except Exception:
+                    pass
+
         if self.on_change_callback:
             comp_id = meta.get("id") or target_dir.name
             self.on_change_callback(comp_id, "uninstall")
 
         children_to_uninstall = meta.get("installed_components") or meta.get("dependencies", {}).get("components", [])
         for child_id in children_to_uninstall:
+            if child_id == meta.get("id"):
+                continue
             child_comp = self.lookup_component(child_id)
             if child_comp:
                 try:
@@ -575,6 +701,7 @@ class HubInstaller:
 
         # Check .theta_component.json for recorded config paths before removing target_dir
         recorded_configs = []
+        recorded_installed_files = []
         recorded_installed_children = []
         meta_file = target_dir / ".theta_component.json"
         if meta_file.exists():
@@ -584,6 +711,8 @@ class HubInstaller:
                     recorded_configs.extend(mdata["config_paths"])
                 elif mdata.get("config_path"):
                     recorded_configs.append(mdata["config_path"])
+                if mdata.get("installed_files"):
+                    recorded_installed_files.extend(mdata["installed_files"])
                 if mdata.get("installed_components"):
                     recorded_installed_children.extend(mdata["installed_components"])
                 if not recorded_installed_children and mdata.get("dependencies", {}).get("components"):
@@ -597,8 +726,31 @@ class HubInstaller:
         if target_dir.exists():
             shutil.rmtree(target_dir, ignore_errors=True)
 
+        for file_rel in recorded_installed_files:
+            fp = self.workspace_dir / file_rel
+            if fp.is_file():
+                try:
+                    fp.unlink()
+                    parent = fp.parent.resolve()
+                    stops = {
+                        (self.workspace_dir / "plot").resolve(),
+                        (self.workspace_dir / "src" / "usr" / "data").resolve(),
+                        (self.workspace_dir / "src" / "usr" / "eval").resolve(),
+                        (self.workspace_dir / "src" / "usr" / "models").resolve(),
+                        (self.workspace_dir / "src" / "usr" / "algorithms").resolve(),
+                        (self.workspace_dir / "in" / "config").resolve(),
+                        self.workspace_dir.resolve(),
+                    }
+                    while parent not in stops and parent.is_dir() and not any(parent.iterdir()):
+                        parent.rmdir()
+                        parent = parent.parent
+                except Exception:
+                    pass
+
         # If this was a suite with recorded child components, uninstall them as well
         for child_id in recorded_installed_children:
+            if child_id == component.id:
+                continue
             child_comp = self.lookup_component(child_id)
             if child_comp:
                 try:

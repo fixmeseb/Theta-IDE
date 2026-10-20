@@ -84,7 +84,10 @@ def get_model_class(model_name: str) -> Any:
     matches = [
         (prefix, cls)
         for prefix, cls in MODEL_REGISTRY.items()
-        if clean_name == prefix or clean_name.startswith(prefix + "_") or basename == prefix or basename.startswith(prefix + "_")
+        if clean_name == prefix
+        or clean_name.startswith(prefix + "_")
+        or basename == prefix
+        or basename.startswith(prefix + "_")
     ]
     if matches:
         return max(matches, key=lambda x: len(x[0]))[1]
@@ -130,6 +133,16 @@ def build_model(
         cfg_dict = (
             OmegaConf.to_container(model_spec, resolve=True) if isinstance(model_spec, DictConfig) else dict(model_spec)
         )
+        if "model" in cfg_dict and isinstance(cfg_dict["model"], (dict, str)) and "name" not in cfg_dict:
+            return build_model(
+                cfg_dict["model"],
+                env=env,
+                device=device,
+                n_actions=n_actions,
+                obs_dim=obs_dim,
+                **kwargs,
+            )
+
         # Check standard config naming conventions
         model_name = (
             cfg_dict.get("name")

@@ -8,7 +8,7 @@ Supports two pane-switching modes for any configured action key:
 
 Default action key: Ctrl+B (tmux-style prefix).
 
-    Action + 0 → Settings & About
+    Action + 0 → Settings
     Action + 1 → Components
     Action + 2 → Experiment (config)
     Action + 3 → Training monitor
@@ -44,8 +44,8 @@ logger = logging.getLogger(__name__)
 
 PANE_ALIASES: dict[str, str] = {
     "settings": "settings",
-    "settings_about": "settings",
-    "about": "settings",
+    "settings_about": "settings",  # the combined pane's old name, still accepted in settings.toml
+    "preferences": "settings",
     "components": "components",
     "config": "config",
     "experiment": "config",
@@ -345,6 +345,11 @@ class HotkeyManager(QObject):
     # ── Event filter ──────────────────────────────────────────────────────
 
     def eventFilter(self, watched: QObject, event: QEvent) -> bool:
+        # This filter sees every event in the app (a theme switch alone sends ~100k style/polish
+        # events), so bail out on anything that isn't a key event before doing any other work.
+        etype = event.type()
+        if etype not in (QEvent.Type.KeyPress, QEvent.Type.KeyRelease):
+            return False
         if not self.enabled:
             return super().eventFilter(watched, event)
 
@@ -358,7 +363,6 @@ class HotkeyManager(QObject):
         if self.terminal_precedence and self.is_in_terminal(watched):
             return super().eventFilter(watched, event)
 
-        etype = event.type()
         if etype == QEvent.Type.KeyPress and isinstance(event, QKeyEvent):
             return self._handle_key_press(watched, event)
         if etype == QEvent.Type.KeyRelease and isinstance(event, QKeyEvent):
@@ -525,16 +529,14 @@ class HotkeyManager(QObject):
         pane_id = PANE_ALIASES.get(pane_id.lower(), pane_id)
         key_label = f"Action + {index}" if index is not None else "Hotkey"
 
-        # Special case: Settings & About lives outside the normal tab stack
+        # Special case: Settings lives outside the normal tab stack
         if pane_id == "settings":
-            if hasattr(self.window, "settings_panel") and hasattr(self.window, "tabs"):
-                self.window.tabs.setCurrentWidget(self.window.settings_panel)
+            panel = getattr(self.window, "settings_panel", None)
+            if panel is not None and hasattr(self.window, "tabs"):
+                self.window.tabs.setCurrentWidget(panel)
                 sb = self.window.statusBar() if hasattr(self.window, "statusBar") else None
                 if sb:
-                    sb.showMessage(f"Switched to Settings & About ({key_label})", 3000)
-                return True
-            if hasattr(self.window, "show_about"):
-                self.window.show_about()
+                    sb.showMessage(f"Switched to {pane_id.title()} ({key_label})", 3000)
                 return True
             return False
 

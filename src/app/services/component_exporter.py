@@ -4,16 +4,17 @@ Packages models, algorithms/agents, environments, datamodules, and evaluators in
 self-contained, installable Theta Hub component packages (.zip) or standalone
 directories ready for GitHub distribution.
 """
+
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from datetime import datetime, timezone
 import json
 import logging
-from pathlib import Path
 import shutil
-from typing import Any, Dict, List, Optional, Set
 import zipfile
+from dataclasses import dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Set
 
 import yaml
 
@@ -25,11 +26,12 @@ log = logging.getLogger(__name__)
 @dataclass
 class ComponentExportOptions:
     """Configuration options for exporting a Theta component plugin."""
+
     export_format: str = "zip"  # "zip" or "folder"
-    output_path: Optional[Path] = None
+    output_path: Path | None = None
     version: str = "1.0.0"
     author: str = "Theta Researcher"
-    description: Optional[str] = None
+    description: str | None = None
     include_configs: bool = True
     include_rules: bool = True
     generate_git_scaffold: bool = True
@@ -38,23 +40,268 @@ class ComponentExportOptions:
 @dataclass
 class ComponentExportResult:
     """Result of a component export operation."""
+
     success: bool
-    export_path: Optional[Path] = None
-    manifest: Optional[Dict[str, Any]] = None
+    export_path: Path | None = None
+    manifest: Dict[str, Any] | None = None
     files_included: List[str] = field(default_factory=list)
-    error: Optional[str] = None
+    error: str | None = None
+
+
+def find_workspace_root(start_path: Optional[Path] = None) -> Path:
+    """Find the workspace root by looking for 'in' and 'src' directories upwards."""
+    curr = (start_path or Path.cwd()).resolve()
+    if curr.is_file():
+        curr = curr.parent
+
+    for p in [curr, *curr.parents]:
+        if (p / "in").is_dir() and (p / "src").is_dir():
+            return p
+    return Path.cwd().resolve()
+
+
+def find_component_assets(
+    config_path: Path,
+    rel_path: Optional[str] = None,
+    workspace_dir: Optional[Path] = None,
+) -> Dict[str, Any]:
+    """Resolve all associated assets for a component given its configuration YAML path.
+
+    Returns a dict with:
+        comp_id: Component identifier stem
+        comp_name: Display name
+        kind: Component category (model, agent, env, etc.)
+        config_path: Path to the active config YAML
+        code_dir: Path to directory containing source code (if any)
+        primary_code_file: Path to the most relevant .py file to open in an editor
+        files_to_delete: List of Path objects (config files, source directories, rules)
+        is_component: True if this is an installed/managed component, False if a loose config
+        is_hub_installed: True if installed from Theta Hub
+        action_type: 'uninstall', 'delete_component', or 'delete_config'
+        meta: Parsed .theta_component.json dict if managed by Hub / scaffolder
+    """
+    ws = workspace_dir or find_workspace_root(config_path)
+    cfg = Path(config_path).resolve()
+    comp_id = cfg.stem
+
+    # 1. Attempt lookup via HubInstaller / .theta_component.json
+    meta: Optional[Dict[str, Any]] = None
+    try:
+        from frontend.hub.installer import HubInstaller
+        inst = HubInstaller(workspace_dir=ws, data_dir=ws / ".thetaide")
+        meta = inst.find_component_for_path(cfg)
+    except Exception:
+        # Fallback direct scan for .theta_component.json if HubInstaller unavailable
+        scan_roots = [
+            ws / "in" / "envs",
+            ws / "src" / "usr" / "algorithms",
+            ws / "src" / "usr" / "methods",
+            ws / "src" / "usr" / "models",
+            ws / "src" / "usr" / "data",
+            ws / "src" / "usr" / "eval",
+            ws / "plot",
+        ]
+        for root in scan_roots:
+            if not root.is_dir():
+                continue
+            for meta_file in root.rglob(".theta_component.json"):
+                try:
+                    data = json.loads(meta_file.read_text(encoding="utf-8"))
+                    comp_dir = meta_file.parent.resolve()
+                    if cfg == comp_dir or comp_dir in cfg.parents:
+                        data["target_dir"] = comp_dir
+                        meta = data
+                        break
+                    for cfg_rel in data.get("config_paths", []):
+                        if (ws / cfg_rel).resolve() == cfg:
+                            data["target_dir"] = comp_dir
+                            meta = data
+                            break
+                    if meta:
+                        break
+                    if data.get("config_path") and (ws / data["config_path"]).resolve() == cfg:
+                        data["target_dir"] = comp_dir
+                        meta = data
+                        break
+                except Exception:
+                    continue
+            if meta:
+                break
+
+    code_dir: Optional[Path] = None
+    primary_code_file: Optional[Path] = None
+    files_to_delete: List[Path] = [cfg]
+    kind = "component"
+    comp_name = comp_id
+    is_component = False
+
+    if meta:
+        is_component = True
+        comp_id = meta.get("id") or comp_id
+        comp_name = meta.get("name") or comp_id
+        kind = meta.get("kind") or kind
+        if meta.get("target_dir"):
+            code_dir = Path(meta["target_dir"]).resolve()
+            if code_dir.exists() and code_dir not in files_to_delete:
+                files_to_delete.append(code_dir)
+
+        # Include all declared config paths
+        for c_rel in meta.get("config_paths", []):
+            cp = (ws / c_rel).resolve()
+            if cp.exists() and cp not in files_to_delete:
+                files_to_delete.append(cp)
+        if meta.get("config_path"):
+            cp = (ws / meta["config_path"]).resolve()
+            if cp.exists() and cp not in files_to_delete:
+                files_to_delete.append(cp)
+
+    # 2. Heuristic fallback resolution if no metadata found
+    rel = rel_path or str(cfg.relative_to(ws / "in" / "config") if (ws / "in" / "config") in cfg.parents else cfg.name)
+    rel = rel.replace("\\", "/").lstrip("/")
+    if rel.startswith("in/config/"):
+        rel = rel[len("in/config/"):]
+
+    if not code_dir:
+        candidate_dir: Optional[Path] = None
+        candidate_file: Optional[Path] = None
+
+        prefix_map = {
+            "model/": ("model", ws / "src" / "usr" / "models"),
+            "agent/": ("algorithm", ws / "src" / "usr" / "algorithms"),
+            "algorithm/": ("algorithm", ws / "src" / "usr" / "algorithms"),
+            "env/": ("env", ws / "in" / "envs"),
+            "data/": ("datamodule", ws / "src" / "usr" / "data"),
+            "datamodule/": ("datamodule", ws / "src" / "usr" / "data"),
+            "eval/": ("evaluator", ws / "src" / "usr" / "eval"),
+            "evaluator/": ("evaluator", ws / "src" / "usr" / "eval"),
+            "plot/": ("plotter", ws / "plot"),
+        }
+
+        for pfx, (k, base_dir) in prefix_map.items():
+            if rel.startswith(pfx):
+                kind = k
+                sub = rel[len(pfx):]
+                sub_parent = Path(sub).parent
+                # 1. Namespaced candidate (if in subfolder)
+                if str(sub_parent) != ".":
+                    cand_d = base_dir / sub_parent / comp_id
+                    cand_f = base_dir / sub_parent / f"{comp_id}.py"
+                    if cand_d.is_dir():
+                        candidate_dir = cand_d
+                    elif cand_f.is_file():
+                        candidate_file = cand_f
+
+                # 2. Flat candidate under base_dir
+                if not candidate_dir and not candidate_file:
+                    cand_d = base_dir / comp_id
+                    cand_f = base_dir / f"{comp_id}.py"
+                    if cand_d.is_dir():
+                        candidate_dir = cand_d
+                    elif cand_f.is_file():
+                        candidate_file = cand_f
+
+                # Fallback for algorithm -> methods
+                if k == "algorithm" and not candidate_dir and not candidate_file:
+                    methods_dir = ws / "src" / "usr" / "methods"
+                    if str(sub_parent) != ".":
+                        cand_d = methods_dir / sub_parent / comp_id
+                        cand_f = methods_dir / sub_parent / f"{comp_id}.py"
+                        if cand_d.is_dir():
+                            candidate_dir = cand_d
+                        elif cand_f.is_file():
+                            candidate_file = cand_f
+                    if not candidate_dir and not candidate_file:
+                        cand_d = methods_dir / comp_id
+                        cand_f = methods_dir / f"{comp_id}.py"
+                        if cand_d.is_dir():
+                            candidate_dir = cand_d
+                        elif cand_f.is_file():
+                            candidate_file = cand_f
+
+                if k == "env":
+                    rules_dir = ws / "in" / "rules" / comp_id
+                    if rules_dir.is_dir() and rules_dir not in files_to_delete:
+                        files_to_delete.append(rules_dir)
+                break
+
+        if candidate_dir and candidate_dir.is_dir():
+            code_dir = candidate_dir
+            is_component = True
+            if code_dir not in files_to_delete:
+                files_to_delete.append(code_dir)
+        elif candidate_file and candidate_file.is_file():
+            primary_code_file = candidate_file
+
+    # 3. Dedicated subfolder check
+    cfg_parent = cfg.parent
+    in_config = (ws / "in" / "config").resolve()
+    if is_component and cfg_parent != in_config and in_config in cfg_parent.parents:
+        folder_matches = (
+            cfg_parent.name == comp_id
+            or (code_dir and cfg_parent.name == code_dir.name)
+            or (meta and meta.get("id") and cfg_parent.name in meta["id"])
+        )
+        if folder_matches:
+            for sibling_yaml in cfg_parent.glob("*.yaml"):
+                if sibling_yaml not in files_to_delete:
+                    files_to_delete.append(sibling_yaml)
+            for sibling_yml in cfg_parent.glob("*.yml"):
+                if sibling_yml not in files_to_delete:
+                    files_to_delete.append(sibling_yml)
+
+    # 4. Determine primary code file
+    if not primary_code_file and code_dir and code_dir.is_dir():
+        named_candidates = [
+            code_dir / f"{comp_id}_model.py",
+            code_dir / f"{comp_id}_agent.py",
+            code_dir / "env_vectorized.py",
+            code_dir / "env.py",
+            code_dir / f"{comp_id}_evaluator.py",
+            code_dir / f"{comp_id}_datamodule.py",
+            code_dir / f"{comp_id}_plotter.py",
+            code_dir / "plotter.py",
+            code_dir / f"{comp_id}.py",
+        ]
+        for c in named_candidates:
+            if c.is_file():
+                primary_code_file = c
+                break
+
+        if not primary_code_file:
+            py_files = sorted([f for f in code_dir.glob("*.py") if f.name != "__init__.py"])
+            if py_files:
+                primary_code_file = py_files[0]
+            elif (code_dir / "__init__.py").is_file():
+                primary_code_file = code_dir / "__init__.py"
+
+    is_hub_installed = bool(meta and meta.get("installed_from"))
+    action_type = "uninstall" if is_hub_installed else ("delete_component" if is_component else "delete_config")
+
+    return {
+        "comp_id": comp_id,
+        "comp_name": comp_name,
+        "kind": kind,
+        "config_path": cfg,
+        "code_dir": code_dir,
+        "primary_code_file": primary_code_file or code_dir or cfg,
+        "files_to_delete": files_to_delete,
+        "is_component": is_component,
+        "is_hub_installed": is_hub_installed,
+        "action_type": action_type,
+        "meta": meta,
+    }
 
 
 class ComponentExporter:
     """Extracts, traces dependencies, and packages components into installable Hub packages or Git repos."""
 
-    def __init__(self, workspace_root: Optional[Path] = None):
+    def __init__(self, workspace_root: Path | None = None):
         self.workspace_root = Path(workspace_root) if workspace_root else PROJECT_ROOT
 
     def export(
         self,
         config_path_or_id: str | Path,
-        options: Optional[ComponentExportOptions] = None,
+        options: ComponentExportOptions | None = None,
     ) -> ComponentExportResult:
         """Export a component plugin to a .zip archive or standalone directory.
 
@@ -68,12 +315,6 @@ class ComponentExporter:
         opts = options or ComponentExportOptions()
 
         try:
-            from frontend.component_actions import find_component_assets
-        except Exception:
-            # Fallback inline resolution if frontend cannot be imported
-            find_component_assets = None
-
-        try:
             # 1. Resolve component config path
             cfg_path, rel_path = self._resolve_config_path(config_path_or_id)
             if not cfg_path.exists():
@@ -83,10 +324,7 @@ class ComponentExporter:
                 )
 
             # 2. Discover component assets
-            if find_component_assets is not None:
-                assets = find_component_assets(cfg_path, rel_path, workspace_dir=self.workspace_root)
-            else:
-                assets = self._fallback_find_assets(cfg_path, rel_path)
+            assets = find_component_assets(cfg_path, rel_path, workspace_dir=self.workspace_root)
 
             comp_id = assets["comp_id"]
             comp_name = assets.get("comp_name") or comp_id
@@ -210,7 +448,7 @@ class ComponentExporter:
         # Check candidate locations under in/config/
         target_str = str(target).replace("\\", "/").strip()
         if target_str.startswith("in/config/"):
-            target_str = target_str[len("in/config/"):]
+            target_str = target_str[len("in/config/") :]
         if not target_str.endswith((".yaml", ".yml")):
             target_str_yaml = f"{target_str}.yaml"
         else:
@@ -235,22 +473,42 @@ class ComponentExporter:
     def _fallback_find_assets(self, cfg_path: Path, rel_path: str) -> Dict[str, Any]:
         stem = cfg_path.stem
         kind = "model"
-        if "agent" in rel_path or "method" in rel_path:
-            kind = "agent"
+        if "agent" in rel_path or "method" in rel_path or "algorithm" in rel_path:
+            kind = "algorithm"
         elif "env" in rel_path:
             kind = "env"
+        elif "data" in rel_path or "datamodule" in rel_path:
+            kind = "datamodule"
+        elif "eval" in rel_path or "evaluator" in rel_path:
+            kind = "evaluator"
+        elif "plot" in rel_path or "plotter" in rel_path:
+            kind = "plotter"
 
         code_dir = None
         if kind == "model":
             cd = self.workspace_root / "src" / "usr" / "models" / stem
             if cd.is_dir():
                 code_dir = cd
-        elif kind == "agent":
-            cd = self.workspace_root / "src" / "usr" / "methods" / stem
+        elif kind in ("agent", "algorithm"):
+            cd = self.workspace_root / "src" / "usr" / "algorithms" / stem
+            if not cd.is_dir():
+                cd = self.workspace_root / "src" / "usr" / "methods" / stem
             if cd.is_dir():
                 code_dir = cd
         elif kind == "env":
             cd = self.workspace_root / "in" / "envs" / stem
+            if cd.is_dir():
+                code_dir = cd
+        elif kind == "datamodule":
+            cd = self.workspace_root / "src" / "usr" / "data" / stem
+            if cd.is_dir():
+                code_dir = cd
+        elif kind == "evaluator":
+            cd = self.workspace_root / "src" / "usr" / "eval" / stem
+            if cd.is_dir():
+                code_dir = cd
+        elif kind == "plotter":
+            cd = self.workspace_root / "plot" / stem
             if cd.is_dir():
                 code_dir = cd
 
@@ -269,7 +527,7 @@ class ComponentExporter:
         comp_id: str,
         comp_name: str,
         kind: str,
-        code_dir: Optional[Path],
+        code_dir: Path | None,
         config_files: List[Path],
         existing_meta: Dict[str, Any],
         options: ComponentExportOptions,
@@ -281,7 +539,9 @@ class ComponentExporter:
         manifest["name"] = existing_meta.get("name") or comp_name
         manifest["kind"] = existing_meta.get("kind") or kind
         manifest["version"] = options.version
-        manifest["description"] = options.description or existing_meta.get("description") or f"{comp_name} component for Theta-IDE"
+        manifest["description"] = (
+            options.description or existing_meta.get("description") or f"{comp_name} component for Theta-IDE"
+        )
         author_val = options.author or existing_meta.get("author") or "Theta Researcher"
         manifest["author"] = {"name": author_val} if isinstance(author_val, str) else author_val
         manifest["created_at"] = datetime.now(timezone.utc).isoformat()
@@ -363,39 +623,49 @@ class ComponentExporter:
         ]
 
         if kind == "model":
-            lines.extend([
-                "methods:",
-                "  my_run:",
-                "    agent: ppo",
-                f"    model: {comp_id}",
-            ])
+            lines.extend(
+                [
+                    "methods:",
+                    "  my_run:",
+                    "    agent: ppo",
+                    f"    model: {comp_id}",
+                ]
+            )
         elif kind == "agent":
-            lines.extend([
-                "methods:",
-                "  my_run:",
-                f"    agent: {comp_id}",
-                "    model: dnn",
-            ])
+            lines.extend(
+                [
+                    "methods:",
+                    "  my_run:",
+                    f"    agent: {comp_id}",
+                    "    model: dnn",
+                ]
+            )
         elif kind == "env":
-            lines.extend([
-                f"env: {comp_id}",
-                "methods:",
-                "  my_run:",
-                "    agent: ppo",
-            ])
+            lines.extend(
+                [
+                    f"env: {comp_id}",
+                    "methods:",
+                    "  my_run:",
+                    "    agent: ppo",
+                ]
+            )
         else:
-            lines.extend([
-                f"{kind}: {comp_id}",
-            ])
+            lines.extend(
+                [
+                    f"{kind}: {comp_id}",
+                ]
+            )
 
-        lines.extend([
-            "```",
-            "",
-            "Run using the Theta execution engine:",
-            "```bash",
-            "python run_pipeline.py <group>/<experiment_name>",
-            "```",
-        ])
+        lines.extend(
+            [
+                "```",
+                "",
+                "Run using the Theta execution engine:",
+                "```bash",
+                "python run_pipeline.py <group>/<experiment_name>",
+                "```",
+            ]
+        )
         return "\n".join(lines) + "\n"
 
     def _export_to_zip(
@@ -494,7 +764,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "theta-component-{comp_id}"
 version = "{options.version}"
-description = "{manifest.get('description', '')}"
+description = "{manifest.get("description", "")}"
 readme = "README.md"
 requires-python = ">=3.9"
 dependencies = [
@@ -502,7 +772,7 @@ dependencies = [
 ]
 
 [project.entry-points."theta.components"]
-{comp_id} = "{manifest.get('target_path', '').replace('/', '.')}:{manifest.get('name', comp_id)}"
+{comp_id} = "{manifest.get("target_path", "").replace("/", ".")}:{manifest.get("name", comp_id)}"
 """
                 pyproject_file.write_text(pyproject_content, encoding="utf-8")
                 files_copied.append("pyproject.toml")

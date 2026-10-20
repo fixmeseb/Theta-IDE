@@ -3,88 +3,87 @@ would, and checking a launch before any process starts."""
 
 from __future__ import annotations
 
+import copy
+import functools
+import sys
+import threading
+from collections import OrderedDict
 from typing import Any
 
 import yaml
-from omegaconf import OmegaConf
 
-from src.app.pipeline.compose import compose_experiment, effective_config, method_plans, validate_composed
+from hydra import compose, initialize_config_dir
+from hydra.core.global_hydra import GlobalHydra
+
+from src.app.pipeline.compose import (
+    _HYDRA_LOCK,
+    CONFIG_DIR,
+    compose_experiment,
+    effective_config,
+    method_plans,
+    validate_composed,
+)
 from src.app.pipeline.config import normalize_agent_name
 
 from . import LOGS_DIR
 
-# The GUI composes GUI_BASE_EXPERIMENT plus one override per field; defaults are read from the
-# composed config rather than duplicated in the GUI.
-GUI_BASE_EXPERIMENT = "thetaide/_base"
-GUI_METHOD = {"name": "ppo", "agent": "ppo", "model": "dnn"}
-GUI_FIELDS = [
-    {
-        "key": "experiment_id",
-        "label": "Experiment name",
-        "type": "str",
-        "default": "cartpole_ppo_experiment",
-        "pattern": r"^[A-Za-z0-9_\-]+$",
-        "help": "Results directory name. Letters, digits, '_' and '-' only.",
-    },
-    {
-        "key": "seed",
-        "label": "Random seed",
-        "type": "int",
-        "default_from": "seed",
-        "min": 0,
-        "max": 2147483647,
-        "help": "Seeds environments and network initialization.",
-    },
-    {
-        "key": "total_timesteps",
-        "label": "Total timesteps",
-        "type": "int",
-        "default_from": "total_timesteps",
-        "min": 1000,
-        "max": 10000000,
-        "step": 1000,
-        "help": "Environment steps across all training intervals.",
-    },
-    {
-        "key": "methods.ppo.lr",
-        "label": "Learning rate",
-        "type": "float",
-        "default": 0.0003,
-        "default_from": "agent.lr",
-        "min": 1e-6,
-        "max": 1.0,
-        "step": 1e-4,
-        "help": "Adam learning rate for the PPO policy.",
-    },
-    {
-        "key": "methods.ppo.batch_size",
-        "label": "Batch size",
-        "type": "int",
-        "default": 64,
-        "default_from": "agent.batch_size",
-        "choices": [32, 64, 128, 256],
-        "help": "Minibatch size for each PPO update.",
-    },
-    {
-        "key": "methods.ppo.gamma",
-        "label": "Discount factor · γ",
-        "type": "float",
-        "default": 0.99,
-        "default_from": "env.gamma",
-        "min": 0.0,
-        "max": 1.0,
-        "step": 0.01,
-        "help": "Weight of future rewards.",
-    },
-    {
-        "key": "tensorboard",
-        "label": "Log to TensorBoard",
-        "type": "bool",
-        "default": False,
-        "default_from": "tensorboard",
-        "help": "Also write TensorBoard logs to results/tensorboard/ for the TensorBoard tab.",
-    },
-]
+# A Hydra compose costs ~130-200 ms, and the GUI asks for the same one again and again: at startup,
+# on every Settings visit, on reopening an experiment, after an undo. The result depends only on its
+# arguments, the YAML under in/config, and the agent registry (auto-discovered from src/usr), so
+# results are reused while all of those are byte-for-byte unchanged (~3 ms to check).
+_USER_CODE_DIR = CONFIG_DIR.parents[1] / "src" / "usr"
+_COMPOSE_CACHE: OrderedDict[tuple, tuple[bool, Any]] = OrderedDict()
+_COMPOSE_CACHE_SIZE = 64
+_COMPOSE_CACHE_LOCK = threading.Lock()
+
+
+def _inputs_fingerprint() -> int:
+    """Hash of everything a compose can depend on: the files (paths and exact contents) and the
+    agents registered in memory (hot reload and tests register agents without touching files)."""
+    registry_module = sys.modules.get("src.usr.algorithms.agent_registry")  # don't import it just to look
+    registry = getattr(registry_module, "AGENT_REGISTRY", None) or {}
+    parts: list[Any] = [tuple(sorted((name, id(cls)) for name, cls in registry.items()))]
+    for root, pattern in ((CONFIG_DIR, "*.yaml"), (_USER_CODE_DIR, "*.py")):
+        for path in sorted(root.rglob(pattern)):
+            try:
+                parts.append((str(path), path.read_bytes()))
+            except OSError:
+                continue
+    return hash(tuple(parts))
+
+
+def _cached_on_inputs(fn):
+    """Memoize `fn` on its arguments plus _inputs_fingerprint(). Errors are cached too: with the
+    same inputs a failed compose fails again. Callers get copies, so they can't alter the cache."""
+
+    @functools.wraps(fn)
+    def wrapper(*args):
+        key = (fn.__name__, repr(args), _inputs_fingerprint())  # args are strings and lists of strings
+        with _COMPOSE_CACHE_LOCK:
+            hit = _COMPOSE_CACHE.get(key)
+            if hit is not None:
+                _COMPOSE_CACHE.move_to_end(key)
+        if hit is None:
+            try:
+                hit = (True, fn(*args))
+            except Exception as exc:  # noqa: BLE001 - re-raised below, for this and later calls
+                hit = (False, exc)
+            with _COMPOSE_CACHE_LOCK:
+                _COMPOSE_CACHE[key] = hit
+                while len(_COMPOSE_CACHE) > _COMPOSE_CACHE_SIZE:
+                    _COMPOSE_CACHE.popitem(last=False)
+        ok, value = hit
+        if not ok:
+            raise value.with_traceback(None)
+        return copy.deepcopy(value)
+
+    wrapper.uncached = fn
+    return wrapper
+
+
+def clear_compose_cache() -> None:
+    with _COMPOSE_CACHE_LOCK:
+        _COMPOSE_CACHE.clear()
 
 
 class LaunchError(Exception):
@@ -114,35 +113,55 @@ def effective_timesteps(plans: dict[str, dict], total_timesteps):
     return max(rollouts, default=total_timesteps)
 
 
+@_cached_on_inputs
 def config_schema() -> dict[str, Any]:
-    """The builder's fields with defaults read from the composed base experiment."""
-    composed = compose_experiment(GUI_BASE_EXPERIMENT)
-    fields = []
-    for field in GUI_FIELDS:
-        field = dict(field)
-        source = field.pop("default_from", None)
-        if source:
-            val = OmegaConf.select(composed.cfg, source)
-            if val is None and source == "agent.lr":
-                val = OmegaConf.select(composed.cfg, "agent.learning_rate")
-            if val is not None:
-                field["default"] = val
-        fields.append(field)
-    method_prefix = f"methods.{GUI_METHOD['name']}"
+    """Describe one real workspace recipe for a backend-health check.
+
+    The experiment editor owns its schema and reads paradigm/component metadata
+    directly.  This service intentionally does not synthesize a PPO/DNN form:
+    doing so made a health check quietly dictate an unrelated experiment.
+    """
+    exp_dir = CONFIG_DIR / "experiment"
+    candidates = (
+        sorted(
+            path for path in exp_dir.rglob("*.yaml")
+            if path.is_file() and not path.name.startswith("_") and "/methods/" not in path.as_posix()
+        )
+        if exp_dir.is_dir() else []
+    )
+    for candidate in candidates:
+        try:
+            composed = compose_experiment(str(candidate.relative_to(exp_dir).with_suffix("")))
+            validate_composed(composed)
+            method_plans(composed)
+        except Exception:
+            continue
+        env = composed.cfg.get("env") or {}
+        return {
+            "base_experiment": composed.experiment,
+            "environment": {
+                "name": env.get("name") if hasattr(env, "get") else None,
+                "env_id": env.get("env_id") if hasattr(env, "get") else None,
+            },
+            "fixed_overrides": [],
+            "fields": [],
+        }
+
+    # Clean setup fallback: verify Hydra composition without requiring recipes.
+    with _HYDRA_LOCK:
+        GlobalHydra.instance().clear()
+        initialize_config_dir(version_base=None, config_dir=str(CONFIG_DIR))
+        compose(config_name="config", return_hydra_config=True)
+
     return {
-        "base_experiment": composed.experiment,
-        "environment": {
-            "name": getattr(composed.cfg.env, "name", None) if hasattr(composed.cfg, "env") and composed.cfg.env else None,
-            "env_id": composed.cfg.env.get("env_id") if hasattr(composed.cfg, "env") and composed.cfg.env and hasattr(composed.cfg.env, "get") else None,
-        },
-        "fixed_overrides": [
-            f"++{method_prefix}.agent={GUI_METHOD['agent']}",
-            f"++{method_prefix}.model={GUI_METHOD['model']}",
-        ],
-        "fields": fields,
+        "base_experiment": None,
+        "environment": {"name": None, "env_id": None},
+        "fixed_overrides": [],
+        "fields": [],
     }
 
 
+@_cached_on_inputs
 def compose_report(experiment: str, overrides: list[str] | None = None) -> dict[str, Any]:
     """Compose and validate an experiment exactly as `run_pipeline.py` would, without running it."""
     overrides = list(overrides or [])

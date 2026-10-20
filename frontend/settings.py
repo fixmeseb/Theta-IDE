@@ -55,14 +55,6 @@ theme = "Catppuccin"
 # Display zoom factor (1.0 = 100%). Use Cmd++ / Cmd+- to resize.
 zoom = 1.0
 
-# Enable the rotating 3-D ASCII sculpture on the Settings & About panel.
-ascii_animation = true
-ascii_speed = 1.0
-ascii_size = 1.0
-ascii_thickness = 1.0
-ascii_tilt = 1.0
-ascii_distance = 4.8
-
 # Show all resolved group defaults in the experiment configuration panel.
 # When disabled (false), only explicit overrides and configured methods are shown.
 show_resolved_defaults = false
@@ -75,6 +67,10 @@ show_method_model_defaults = false
 
 # Show all default parameters across methods and experiments
 show_all_default_params = false
+
+[editor]
+# Enable interactive visual block editor for network layers (hidden_sizes, hidden_dims).
+visual_layer_editor = true
 
 
 [sidebar]
@@ -177,6 +173,7 @@ zoom_in = "Ctrl++"
 zoom_out = "Ctrl+-"
 reset_zoom = "Ctrl+0"
 open_launcher = "Ctrl+Space"
+open_docs = "F1"
 """
 
 
@@ -406,45 +403,6 @@ class SettingsManager(QObject):
         return self.get("appearance", "theme", default="Catppuccin")
 
     @property
-    def ascii_animation(self) -> bool:
-        return bool(self.get("appearance", "ascii_animation", default=True))
-
-    @property
-    def ascii_speed(self) -> float:
-        try:
-            return float(self.get("appearance", "ascii_speed", default=1.0))
-        except (ValueError, TypeError):
-            return 1.0
-
-    @property
-    def ascii_size(self) -> float:
-        try:
-            return float(self.get("appearance", "ascii_size", default=1.0))
-        except (ValueError, TypeError):
-            return 1.0
-
-    @property
-    def ascii_thickness(self) -> float:
-        try:
-            return float(self.get("appearance", "ascii_thickness", default=1.0))
-        except (ValueError, TypeError):
-            return 1.0
-
-    @property
-    def ascii_tilt(self) -> float:
-        try:
-            return float(self.get("appearance", "ascii_tilt", default=1.0))
-        except (ValueError, TypeError):
-            return 1.0
-
-    @property
-    def ascii_distance(self) -> float:
-        try:
-            return float(self.get("appearance", "ascii_distance", default=4.8))
-        except (ValueError, TypeError):
-            return 4.8
-
-    @property
     def zoom(self) -> float:
         try:
             return float(self.get("appearance", "zoom", default=1.0))
@@ -486,6 +444,14 @@ class SettingsManager(QObject):
     @show_all_default_params.setter
     def show_all_default_params(self, val: bool) -> None:
         self.set("appearance", "show_all_default_params", bool(val))
+
+    @property
+    def visual_layer_editor(self) -> bool:
+        return bool(self.get("editor", "visual_layer_editor", default=True))
+
+    @visual_layer_editor.setter
+    def visual_layer_editor(self, val: bool) -> None:
+        self.set("editor", "visual_layer_editor", bool(val))
 
 
     @property

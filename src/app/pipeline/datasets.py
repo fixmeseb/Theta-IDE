@@ -104,8 +104,12 @@ def resolve_dataset_path(
             return cand
         if cand.exists() and (cand / "cql").exists() and any((cand / "cql").glob("*.pkl")):
             return cand / "cql"
-        if cand.with_suffix(".npz").exists() or (cand.parent / f"{cand.name}.npz").exists():
+        if cand.exists() and cand.is_file():
             return cand
+        if cand.with_suffix(".npz").exists():
+            return cand.with_suffix(".npz")
+        if (cand.parent / f"{cand.name}.npz").exists():
+            return cand.parent / f"{cand.name}.npz"
 
     if yaml_ds_path and Path(yaml_ds_path).exists():
         return Path(yaml_ds_path)
@@ -123,15 +127,18 @@ def resolve_dataset_for_method(method_name: str, method_cfg: dict, cfg: Any) -> 
         return Path(explicit_ds)
 
     # For offline paradigms, dataset comes from the environment config
-    if hasattr(cfg, "env"):
-        env_dataset = cfg.env.get("dataset_name", None)
-        env_name = cfg.env.get("name", None)
+    env_cfg = cfg.get("env") if hasattr(cfg, "get") else getattr(cfg, "env", None)
+    if env_cfg and hasattr(env_cfg, "get"):
+        env_dataset = env_cfg.get("dataset_name", None)
+        env_name = env_cfg.get("name", None)
         if env_dataset:
             try:
+                group_val = env_name or (cfg.get("group", "") if hasattr(cfg, "get") else getattr(cfg, "group", ""))
+                exp_val = cfg.get("experiment_id", "") if hasattr(cfg, "get") else getattr(cfg, "experiment_id", "")
                 return resolve_dataset_path(
                     dataset_id=str(env_dataset).replace(".npz", ""),
-                    group=env_name or cfg.get("group", ""),
-                    experiment_id=cfg.get("experiment_id", ""),
+                    group=group_val,
+                    experiment_id=exp_val,
                     yaml_ds_path=str(explicit_ds) if explicit_ds else None,
                 )
             except FileNotFoundError:

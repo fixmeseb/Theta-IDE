@@ -399,12 +399,34 @@ class TestParseMethodsDict:
         assert m["model_params"]["symbolic"]["type"] == "nsfr"
         assert m["model_params"]["symbolic"]["rules"] == "rigid"
 
-    def test_group_method_resolution(self):
+    def test_group_method_resolution(self, monkeypatch):
         """Methods defined in in/config/experiment/<group>/methods/ should resolve automatically."""
         from src.app.pipeline.config import parse_methods_dict
 
+        mock_templates = {
+            "cql_blendrl_cew_dueling_resnet": {
+                "agent": "cql",
+                "model": {
+                    "blendrl": {
+                        "neural": "dueling_resnet",
+                        "symbolic": {"cew": {"ecm_dthr": 0.03}},
+                    }
+                },
+                "style": {"label": "BlendRL CEW+ResNet"},
+            },
+            "cql_dnn": {
+                "agent": "cql",
+                "model": "dnn",
+                "style": {"label": "DNN"},
+            },
+        }
+        monkeypatch.setattr(
+            "src.app.pipeline.config.find_group_method_config",
+            lambda name, group=None: mock_templates.get(name, {}),
+        )
+
         cfg = {
-            "group": "mimic",
+            "group": "test_group",
             "methods": {
                 "cql_blendrl_cew_dueling_resnet": None,
                 "cql_dnn": {},
@@ -427,12 +449,29 @@ class TestParseMethodsDict:
         assert m_dnn["model"] == "dnn"
         assert m_dnn["style"]["label"] == "DNN"
 
-    def test_group_method_override_precedence(self):
+    def test_group_method_override_precedence(self, monkeypatch):
         """Experiment-level overrides on top of group methods should take precedence."""
         from src.app.pipeline.config import parse_methods_dict
 
+        mock_templates = {
+            "cql_blendrl_cew_dueling_resnet": {
+                "agent": "cql",
+                "model": {
+                    "blendrl": {
+                        "neural": "dueling_resnet",
+                        "symbolic": {"cew": {"ecm_dthr": 0.03}},
+                    }
+                },
+                "style": {"label": "BlendRL CEW+ResNet"},
+            },
+        }
+        monkeypatch.setattr(
+            "src.app.pipeline.config.find_group_method_config",
+            lambda name, group=None: mock_templates.get(name, {}),
+        )
+
         cfg = {
-            "group": "mimic",
+            "group": "test_group",
             "methods": {
                 "cql_blendrl_cew_dueling_resnet": {
                     "model": {
@@ -453,12 +492,24 @@ class TestParseMethodsDict:
         assert m["model_params"]["neural"]["architecture"] == "dueling_resnet"
         assert m["style"]["label"] == "BlendRL CEW+ResNet"
 
-    def test_group_method_base_decoupling(self):
+    def test_group_method_base_decoupling(self, monkeypatch):
         """Methods can declare a custom key with base: pointing to a group method template."""
         from src.app.pipeline.config import parse_methods_dict
 
+        mock_templates = {
+            "cql_dnn": {
+                "agent": "cql",
+                "model": "dnn",
+                "style": {"label": "DNN"},
+            },
+        }
+        monkeypatch.setattr(
+            "src.app.pipeline.config.find_group_method_config",
+            lambda name, group=None: mock_templates.get(name, {}),
+        )
+
         cfg = {
-            "group": "mimic",
+            "group": "test_group",
             "methods": {
                 "custom_baseline": {
                     "base": "cql_dnn",

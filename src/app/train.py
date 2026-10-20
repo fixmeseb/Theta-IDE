@@ -68,8 +68,11 @@ def main(cfg: DictConfig):
     # === OS ENVIRON BRIDGE PATTERN ===
     # We copy certain Hydra config values into os.environ to pass them down to nested components
     # (like gym environments or legacy hooks) that cannot easily receive the `cfg` object directly.
-    # While some components have been refactored to read from `cfg`, others still rely on this.
-    if "env" in cfg and "reward_type" in cfg.env:
+    if "env" in cfg and hasattr(cfg.env, "get") and cfg.env.get("reward_type"):
+        os.environ["REWARD_TYPE"] = str(cfg.env.reward_type)
+        env_name = str(cfg.env.get("name", getattr(cfg.env, "id", "env"))).upper()
+        os.environ[f"{env_name}_REWARD_TYPE"] = str(cfg.env.reward_type)
+        # Retain for backward compatibility with external plugins
         os.environ["MIMIC_REWARD_TYPE"] = str(cfg.env.reward_type)
 
     paradigm_name = cfg.get("paradigm", "online_rl")
@@ -96,18 +99,20 @@ def main(cfg: DictConfig):
 
     DataModuleCls = None
     if dm_name:
-        DataModuleCls = get_datamodule_class(dm_name) or get_component(dm_name)
-
-    if DataModuleCls is None:
+        DataModuleCls = get_datamodule_class(dm_name)
+        if DataModuleCls is None:
+            try:
+                DataModuleCls = get_component(dm_name)
+            except KeyError as exc:
+                raise ValueError(f"Data module '{dm_name}' is not registered") from exc
+    else:
         DataModuleCls = paradigm_def.data_module_cls or RLDataModule
 
-    try:
-        if dm_params:
-            datamodule = DataModuleCls(cfg, **dm_params)
-        else:
-            datamodule = DataModuleCls(cfg)
-    except TypeError:
-        datamodule = DataModuleCls(cfg)
+    supported = getattr(DataModuleCls, "get_supported_paradigms", None)
+    if dm_name and callable(supported) and paradigm_name not in supported():
+        raise ValueError(f"Data module '{dm_name}' does not support paradigm '{paradigm_name}'")
+
+    datamodule = DataModuleCls(cfg, **dm_params) if dm_params else DataModuleCls(cfg)
 
     # 2. Build Model / Agent based on paradigm
     # Driven by whether the paradigm declares agents, not by its name, so an
@@ -118,7 +123,16 @@ def main(cfg: DictConfig):
         input_dim = getattr(datamodule, "input_dim", 64)
 
         model_cfg = cfg.get("model", {}) if hasattr(cfg, "get") else getattr(cfg, "model", {})
-        arch_name = str(model_cfg.get("architecture", model_cfg.get("name", "lstm"))).lower()
+        method_name = str(model_cfg.get("name", ""))
+        method_cfg = cfg.get("methods", {}).get(method_name, {}) if hasattr(cfg, "get") else {}
+        arch_name = None
+        if hasattr(method_cfg, "get"):
+            arch_name = method_cfg.get("model")
+        if not arch_name and hasattr(model_cfg, "get"):
+            arch_name = model_cfg.get("architecture") or model_cfg.get("type") or model_cfg.get("arch")
+        if not arch_name:
+            arch_name = model_cfg.get("name", "lstm")
+        arch_name = str(arch_name).lower()
         lr = float(model_cfg.get("lr", cfg.get("lr", 1e-3)))
 
         # Check if an explicit LightningModule component was registered for this architecture
@@ -130,9 +144,21 @@ def main(cfg: DictConfig):
             except KeyError:
                 SupervisedModelCls = None
         if SupervisedModelCls is None:
-            from src.usr.eval.early_prediction.lightning_module import EPSepsisLightningModule
+            if paradigm_name == "unsupervised" or "autoencoder" in arch_name:
+                from src.app.core.paradigm_impls.base.unsupervised import AutoencoderLightningModule
 
-            SupervisedModelCls = EPSepsisLightningModule
+                SupervisedModelCls = AutoencoderLightningModule
+            elif "classif" in arch_name or "mlp" in arch_name:
+                from src.app.core.paradigm_impls.base.tabular import TabularClassifierLightningModule
+
+                SupervisedModelCls = TabularClassifierLightningModule
+            else:
+                try:
+                    SupervisedModelCls = get_component(arch_name)
+                except KeyError:
+                    from src.app.core.paradigm_impls.base.tabular import TabularClassifierLightningModule
+
+                    SupervisedModelCls = TabularClassifierLightningModule
 
         kwargs = {}
         if hasattr(model_cfg, "items"):

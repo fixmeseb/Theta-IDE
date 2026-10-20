@@ -1,0 +1,8 @@
+[project]
+name = "theta-agent-myrlloop"
+version = "0.1.0"
+description = "Custom myrlloop RL algorithm for Theta-IDE."
+dependencies = ["torch>=2.0.0", "lightning>=2.0.0"]
+
+[project.entry-points."theta.agents"]
+myrlloop = "src.usr.algorithms.myrlloop.myrlloop_agent:MyrlloopAgent"

@@ -231,7 +231,13 @@ class BaseAgent(L.LightningModule, ABC):
         if n_envs is None:
             n_envs = self.get_cfg("num_envs", 4)
 
-        env_name = self.get_cfg("env.name", getattr(getattr(self.cfg, "env", None), "name", None) or "cartpole")
+        env_cfg = getattr(self.cfg, "env", None)
+        env_name = (
+            self.get_cfg("env.name", None)
+            or (env_cfg if isinstance(env_cfg, str) else getattr(env_cfg, "name", None))
+        )
+        if not env_name:
+            raise ValueError("No environment specified in configuration ('env.name' or 'env').")
         algorithm = self.get_cfg("algorithm", self.get_cfg("name", env_name))
 
         self.env = VectorizedBaseEnv.from_name(

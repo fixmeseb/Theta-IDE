@@ -239,6 +239,22 @@ class TestWindowLayoutAndSliders(unittest.TestCase):
         finally:
             window2.close()
 
+    def test_closing_does_not_save_the_layout_or_rebuild_the_experiment(self):
+        # Shutdown removes each plugin's tab. Saving the layout after each removal rebuilt the open
+        # experiment three times per tab, and on Windows its boxes flashed up as separate windows.
+        from frontend.config_viewer import ConfigViewer
+
+        self.assertTrue(self.window.plugin_manager.instances, "expected plugins with tabs to remove")
+        writes, rebuilds = [], []
+        original_set = self.window.settings_manager.set
+        self.window.settings_manager.set = lambda *args, **kwargs: (writes.append(args[:2]), original_set(*args, **kwargs))
+        for viewer in self.window.findChildren(ConfigViewer):
+            viewer._render_boxes = lambda: rebuilds.append(1)
+        self.window.close()
+        self.assertFalse(self.window.plugin_manager.instances)
+        self.assertNotIn("sidebar", [section for section, _key in writes])
+        self.assertEqual(rebuilds, [])
+
 
 if __name__ == "__main__":
     unittest.main()
