@@ -425,6 +425,7 @@ python -m frontend</code></pre>
     <td>Shortcut</td>
     <td>Action</td>
   </tr>
+  <tr><td><code>F1</code></td><td>Help &rarr; Documentation: open these docs</td></tr>
   <tr><td><code>F5</code></td><td>Queue &rarr; Launch now: train the open experiment</td></tr>
   <tr><td><code>Shift+F5</code></td><td>Queue &rarr; Stop the active run</td></tr>
   <tr><td><code>Ctrl+F5</code></td><td>Queue &rarr; Start simulated demo (no backend needed)</td></tr>
@@ -1150,7 +1151,7 @@ workflow: sepsis_reciprocal</code></pre>
         keywords=["settings", "preferences", "settings.toml", "toml", "backend", "storage", "plugins", "hotkeys", "config"],
         html_content=r"""
 <h2>Settings & settings.toml</h2>
-<p>Open Settings with <code>Action + 0</code> or <i>View &rarr; Settings &amp; About</i>.</p>
+<p>Open Settings with <code>Action + 0</code> or <i>View &rarr; Settings</i>.</p>
 
 <h3>Settings Pages</h3>
 <table border="1" cellpadding="8" cellspacing="0" style="border-collapse: collapse; width: 100%; border-color: rgba(255,255,255,0.15);">
@@ -1158,7 +1159,7 @@ workflow: sepsis_reciprocal</code></pre>
     <td>Page</td>
     <td>What you can change</td>
   </tr>
-  <tr><td><b>Appearance</b></td><td>Color theme, which sidebar panels are shown, auto-hide sidebar, the sculpture animation, and the Results panel layout</td></tr>
+  <tr><td><b>Appearance</b></td><td>Color theme, which sidebar panels are shown, auto-hide sidebar, and the Results panel layout</td></tr>
   <tr><td><b>Core Plugins</b></td><td>Turn built-in plugins (such as this Documentation plugin) on or off</td></tr>
   <tr><td><b>Community Plugins</b></td><td>Install, configure, or remove plugins from the Community Hub</td></tr>
   <tr><td><b>Hotkeys</b></td><td>Action key, terminal precedence, the <code>Action + digit</code> pane mapping, and menu shortcuts</td></tr>
@@ -1180,7 +1181,7 @@ workflow: sepsis_reciprocal</code></pre>
     <td>Section</td>
     <td>Keys</td>
   </tr>
-  <tr><td><code>[appearance]</code></td><td><code>theme</code>, plus <code>ascii_*</code> animation settings</td></tr>
+  <tr><td><code>[appearance]</code></td><td><code>theme</code>, <code>zoom</code></td></tr>
   <tr><td><code>[backend]</code></td><td><code>url</code>, <code>timeout</code> (seconds)</td></tr>
   <tr><td><code>[sidebar]</code></td><td><code>order</code> and <code>visible</code> pane lists</td></tr>
   <tr><td><code>[plugins]</code></td><td><code>enabled</code> plugin IDs</td></tr>

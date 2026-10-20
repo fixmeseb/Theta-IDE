@@ -37,7 +37,6 @@ from .settings import SettingsManager
 from .theme import STYLE, ThemeManager, theme_color
 from .theme_builder import ThemeBuilder
 from .widgets import ToggleSlider, YamlHighlighter, label
-from .about import AboutDialog, AboutView
 from .app_icon import DESKTOP_FILE_NAME, ICON_PATH, app_icon, install_desktop_entry, set_windows_app_id
 from .components_panel import ComponentsPanel
 from .config_tree import ConfigTreeWidget
@@ -236,7 +235,7 @@ class Window(QMainWindow):
         return button
 
     def make_center(self):
-        self.tabs = SideTabs()  # its gear opens Settings and its logo opens About
+        self.tabs = SideTabs()  # its gear opens Settings
         self.setCentralWidget(self.tabs)
 
         # 1. Components Panel
@@ -390,8 +389,6 @@ class Window(QMainWindow):
 
         self.settings_panel = self.make_settings()
         self.tabs.set_settings_widget(self.settings_panel)
-        self.about_panel = self.make_about()
-        self.tabs.set_about_widget(self.about_panel)
         self.tabs.currentChanged.connect(self.tab_changed)
 
     def dock(self, title, name, widget, area):
@@ -594,11 +591,6 @@ class Window(QMainWindow):
         from .settings_view import SettingsView
         self.settings_view = SettingsView(self)
         return self.settings_view
-
-    def make_about(self):
-        self.about_view = AboutView(self)
-        self.settings_ascii = self.about_view.logo  # the rotating theta; Settings > Appearance can pause it
-        return self.about_view
 
 
     def settings_theme_selected(self, theme_name):
@@ -1124,12 +1116,6 @@ class Window(QMainWindow):
             self.command.setText(command)
         self.console_command(command)
 
-    def toggle_ascii_animation(self, paused):
-        if hasattr(self, "settings_ascii"):
-            self.settings_ascii.set_paused(paused)
-        if hasattr(self, "anim_toggle_btn") and getattr(self.anim_toggle_btn, "tab_id", None) != "animation" and hasattr(self.anim_toggle_btn, "isCheckable") and self.anim_toggle_btn.isCheckable():
-            self.anim_toggle_btn.setText("Resume animation" if paused else "Pause animation")
-
     def make_menus(self):
         self.menu_actions = {}
         file_menu = self.menuBar().addMenu("File")
@@ -1227,7 +1213,17 @@ class Window(QMainWindow):
         view_menu.addSeparator()
         view_menu.addAction("Preferences: Open Settings File", self.open_settings_file)
         help_menu = self.menuBar().addMenu("Help")
-        help_menu.addAction("About ThetaIDE", self.show_about)
+        action = QAction("Documentation", self)
+        action.setProperty("_default_sc", "F1")
+        sc = self.settings_manager.get("shortcuts", "open_docs", default="F1") if hasattr(self, "settings_manager") else "F1"
+        sc_norm = normalize_menu_shortcut(sc)
+        if sc_norm:
+            action.setShortcut(QKeySequence(sc_norm))
+        action.setShortcutContext(Qt.ShortcutContext.ApplicationShortcut)
+        action.triggered.connect(self.show_docs)
+        help_menu.addAction(action)
+        self.addAction(action)
+        self.menu_actions["open_docs"] = action
 
     def open_settings_file(self):
         """Open the workspace settings.toml in the user's default text editor."""
@@ -1385,16 +1381,15 @@ class Window(QMainWindow):
             if tab_id and hasattr(self, "settings_view"):
                 self.settings_view.show_tab(tab_id)
 
-    def show_about(self, animation_settings=False):
-        """Open the About page; with `animation_settings`, also its animation dialog over the logo."""
-        if hasattr(self, "about_panel"):
-            self.tabs.setCurrentWidget(self.about_panel)
-            if animation_settings:
-                QTimer.singleShot(0, self.about_view.open_animation_settings)  # once the page has shown
+    def show_docs(self):
+        """Open the Documentation tab (F1), showing it if hidden and switching its plugin on if it is off."""
+        if "documentation" in self.tabs.tabs:
+            self.hotkey_manager.switch_to_pane("documentation")
+        elif "documentation" in getattr(getattr(self, "plugin_manager", None), "manifests", {}):
+            from .launcher import _enable_plugin
+            _enable_plugin(self, "documentation")
         else:
-            dialog = AboutDialog(self)
-            dialog.exec()
-            dialog.deleteLater()
+            self.statusBar().showMessage("The Documentation plugin isn't installed.", 4000)
 
     def theme_changed(self):
         self.theme_status.setText(f"  ●  Local workspace    /    {self.theme_manager.active['name']}")
@@ -1410,8 +1405,6 @@ class Window(QMainWindow):
             self.settings_theme_select.blockSignals(True)
             self.settings_theme_select.setCurrentText(self.theme_manager.active["name"])
             self.settings_theme_select.blockSignals(False)
-        if hasattr(self, "settings_ascii"):
-            self.settings_ascii.update()
         if hasattr(self, "settings_backend_status"):
             # Recolour only: re-running the check would recompose the whole pipeline config.
             self.color_backend_status()
