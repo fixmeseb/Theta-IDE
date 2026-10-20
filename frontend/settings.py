@@ -93,7 +93,6 @@ order = [
 visible = [
     "components",
     "config",
-    "workflows",
     "monitor",
     "results",
     "terminal",
