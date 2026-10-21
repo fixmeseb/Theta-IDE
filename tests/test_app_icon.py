@@ -23,52 +23,6 @@ def test_windows_app_id_is_set():
     assert call.call_args.args[0].value == app_icon.WINDOWS_APP_ID
 
 
-class FakeRegistry:
-    """Just enough of winreg for register_windows_app_identity, so tests never touch the real registry."""
-
-    HKEY_CURRENT_USER, KEY_READ, KEY_WRITE, REG_SZ = "HKCU", 1, 2, 1
-
-    def __init__(self):
-        self.keys, self.writes = {}, []
-
-    def CreateKeyEx(self, root, path, reserved, access):  # noqa: N802 (winreg's names)
-        values = self.keys.setdefault((root, path), {})
-
-        class Key:
-            def __enter__(self):
-                return values
-
-            def __exit__(self, *exc):
-                return False
-
-        return Key()
-
-    def QueryValueEx(self, key, name):  # noqa: N802
-        if name not in key:
-            raise FileNotFoundError(name)
-        return key[name], self.REG_SZ
-
-    def SetValueEx(self, key, name, reserved, kind, value):  # noqa: N802
-        key[name] = value
-        self.writes.append(name)
-
-
-def test_notifications_are_headed_thetaide_with_the_logo():
-    registry = FakeRegistry()
-    assert app_icon.register_windows_app_identity(registry=registry) is True
-    values = registry.keys[("HKCU", rf"Software\Classes\AppUserModelId\{app_icon.WINDOWS_APP_ID}")]
-    assert values["DisplayName"] == "ThetaIDE"
-    assert values["IconUri"] == str(app_icon.ICON_PNG_PATH.resolve()) and app_icon.ICON_PNG_PATH.is_file()
-    registry.writes.clear()
-    app_icon.register_windows_app_identity(registry=registry)
-    assert registry.writes == []  # already in place: the next start writes nothing
-
-
-def test_the_notification_identity_is_skipped_elsewhere():
-    with mock.patch.object(app_icon.sys, "platform", "linux"):
-        assert app_icon.register_windows_app_identity() is False
-
-
 def test_desktop_entry_matches_the_app():
     text = app_icon.desktop_entry("/usr/bin/python3", "/home/me/Offline-BlendRL")
     lines = dict(line.split("=", 1) for line in text.splitlines()[1:])

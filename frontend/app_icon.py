@@ -1,9 +1,7 @@
 """The ThetaIDE logo as the application icon: title bars, the Windows taskbar, the macOS Dock and Linux launchers.
 
 - Windows groups taskbar buttons by AppUserModelID. Without one, ThetaIDE is grouped under python.exe and
-  shows Python's icon; with its own ID the taskbar shows the window icon (the logo). Notifications are
-  headed by that ID's registered display name and icon, which register_windows_app_identity() writes
-  (otherwise Windows shows the raw ID).
+  shows Python's icon; with its own ID the taskbar shows the window icon (the logo).
 - macOS: QApplication.setWindowIcon also sets the Dock icon while the app runs.
 - Linux: X11 window managers read the window icon. Wayland compositors (and launchers) look up the icon
   through a .desktop file named after the app's desktop-file name, which install_desktop_entry() writes.
@@ -13,10 +11,8 @@ import sys
 from pathlib import Path
 
 ICON_PATH = Path(__file__).resolve().parent / "icons" / "theta_bracket_icon.svg"
-ICON_PNG_PATH = ICON_PATH.with_suffix(".png")  # 256 px: Windows notifications can't use the SVG
 DESKTOP_FILE_NAME = "ThetaIDE"  # QApplication.setDesktopFileName; the Linux .desktop file must match it
 WINDOWS_APP_ID = "ThetaIDE.ResearchWorkspace"
-WINDOWS_APP_NAME = "ThetaIDE"  # the name notifications are headed with
 ICON_NAME = "thetaide"  # icon-theme name used by the .desktop entry
 
 
@@ -29,35 +25,6 @@ def set_windows_app_id(app_id=WINDOWS_APP_ID):
     try:
         return ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(ctypes.c_wchar_p(app_id)) == 0
     except (AttributeError, OSError):
-        return False
-
-
-def register_windows_app_identity(app_id=WINDOWS_APP_ID, name=WINDOWS_APP_NAME, icon=ICON_PNG_PATH, registry=None):
-    """Give `app_id` a display name and icon, so notifications read "ThetaIDE" with the logo.
-
-    Writes HKEY_CURRENT_USER\\Software\\Classes\\AppUserModelId\\<app_id> (DisplayName, IconUri): the current
-    user only, no admin rights. Values already in place are left alone, so most starts write nothing.
-    Returns True when the key holds them afterwards.
-    """
-    if sys.platform != "win32" and registry is None:
-        return False
-    if registry is None:
-        import winreg as registry
-    wanted = {"DisplayName": name}
-    if Path(icon).is_file():
-        wanted["IconUri"] = str(Path(icon).resolve())
-    try:
-        with registry.CreateKeyEx(registry.HKEY_CURRENT_USER, rf"Software\Classes\AppUserModelId\{app_id}", 0,
-                                  registry.KEY_READ | registry.KEY_WRITE) as key:
-            for value_name, value in wanted.items():
-                try:
-                    current, _ = registry.QueryValueEx(key, value_name)
-                except OSError:
-                    current = None
-                if current != value:
-                    registry.SetValueEx(key, value_name, 0, registry.REG_SZ, value)
-        return True
-    except OSError:
         return False
 
 
