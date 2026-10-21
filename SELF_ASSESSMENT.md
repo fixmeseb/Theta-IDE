@@ -31,7 +31,7 @@ files, 29% of Python lines in tests. Coverage is measured by CI.
 | Issues are being closed | **3** | [All 3 closed, none open](https://github.com/fixmeseb/Theta-IDE/issues?q=is%3Aissue+is%3Aclosed) |
 | Issues are discussed before they are closed | **3** | All 3 carry a closing summary: [#11](https://github.com/fixmeseb/Theta-IDE/issues/11), [#12](https://github.com/fixmeseb/Theta-IDE/issues/12), [#13](https://github.com/fixmeseb/Theta-IDE/issues/13). The rubric allows for this directly — "if the talk happened in chat, add a summary to the issue" — and each records the cause, the fixing commit and the tests |
 | A large share of issues relate to handling failing cases | **3** | All 3 are failing-test reports: [#11](https://github.com/fixmeseb/Theta-IDE/issues/11), [#12](https://github.com/fixmeseb/Theta-IDE/issues/12), [#13](https://github.com/fixmeseb/Theta-IDE/issues/13) — each opened on a failure and closed by a fix |
-| Chat channel exists and is active; poster QR points at it | **3** | [discord.gg/nvG22rsVDC](https://discord.gg/nvG22rsVDC) — the team's working channel, active daily, and the address the poster QR encodes |
+| Chat channel exists and is active; poster QR points at it | **3** | [discord.gg/nvG22rsVDC](https://discord.gg/nvG22rsVDC) — the team's working channel, active daily; the poster carries a QR for it with this URL printed beneath |
 
 ## Tests
 
