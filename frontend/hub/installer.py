@@ -416,6 +416,8 @@ class HubInstaller:
                 meta["installed_files"] = installed_files
             if hasattr(component, "extra") and isinstance(component.extra, dict) and "paradigms" in component.extra:
                 meta["paradigms"] = component.extra["paradigms"]
+            if hasattr(component, "suite") and component.suite:
+                meta["suite"] = component.suite
 
             if is_root_relative:
                 target_dir.mkdir(parents=True, exist_ok=True)
@@ -748,8 +750,11 @@ class HubInstaller:
                 backup_path = self.workspace_dir / backup_info.get("backup", "")
                 restore_to = backup_info.get("restore_to") or cfg_rel
 
-            modified = current.is_file() and expected is not None and actual != expected
-            if modified and backup_path and backup_path.is_file() and (restore_to == cfg_rel):
+            # If an install manifest is missing or predates config hashes, treat
+            # the file as user-edited. Preserve it outside the active config tree
+            # so uninstall still removes the component from the editor.
+            modified = current.is_file() and (expected is None or actual != expected)
+            if modified:
                 retained = self.data_dir / "retained_configs" / component_id / cfg_rel
                 try:
                     retained.parent.mkdir(parents=True, exist_ok=True)
@@ -763,7 +768,7 @@ class HubInstaller:
                 except OSError:
                     # If preserving the edited YAML fails, leave it in place and do not overwrite it.
                     continue
-            elif not modified and current.is_file():
+            elif current.is_file():
                 try:
                     current.unlink()
                     self._prune_empty_config_dirs(current)
@@ -845,10 +850,111 @@ class HubInstaller:
                 self._prune_empty_dirs(component_dir.parent, root)
                 return
 
+    def _installed_suite_children(self, component_id: str, parent_dir: Path) -> list[dict]:
+        """Find installed components whose manifest assigns them to this suite.
+
+        Some Hub suites install hidden provider components alongside their own
+        files. Those components are not always listed in the parent's
+        ``dependencies.components`` array, so relying only on that array leaves
+        their source and configs behind after uninstall.
+        """
+        scan_roots = [
+            self.workspace_dir / "in" / "envs",
+            self.workspace_dir / "src" / "usr",
+            self.workspace_dir / "plot",
+            self.workspace_dir / "plugins",
+            self.data_dir / "plugins",
+            self.workspace_dir / ".thetaide" / "suites",
+            self.workspace_dir / ".thetaide" / "experiments",
+            self.workspace_dir / "in" / "config" / "experiment",
+        ]
+        found: list[dict] = []
+        seen: set[Path] = set()
+        parent_dir = parent_dir.resolve()
+        for root in scan_roots:
+            if not root.is_dir():
+                continue
+            for manifest in sorted(list(root.rglob(".theta_component.json")) + list(root.rglob("plugin.json"))):
+                try:
+                    target_dir = manifest.parent.resolve()
+                    if target_dir in seen or target_dir == parent_dir:
+                        continue
+                    data = json.loads(manifest.read_text(encoding="utf-8"))
+                    if data.get("suite") != component_id:
+                        continue
+                    data["target_dir"] = target_dir
+                    found.append(data)
+                    seen.add(target_dir)
+                except (OSError, json.JSONDecodeError):
+                    continue
+        # Older package archives did not copy the registry's ``suite`` marker
+        # into their installed manifest. Use the Hub registry to identify those
+        # provider components, then recover their installed tracking metadata
+        # when available.
+        registry_components: dict[str, HubComponent] = {}
+        hub_dirs = [
+            self.workspace_dir.resolve().parent / "theta-hub",
+            Path(__file__).resolve().parents[3] / "theta-hub",
+        ]
+        for hub_dir in hub_dirs:
+            registry_root = hub_dir / "registry"
+            if registry_root.is_dir():
+                for registry_file in registry_root.rglob("*.json"):
+                    try:
+                        child = HubComponent.from_dict(json.loads(registry_file.read_text(encoding="utf-8")))
+                    except Exception:
+                        continue
+                    if child.suite == component_id:
+                        registry_components[child.id] = child
+            index_file = self.data_dir / "cache" / "hub" / "index.json"
+            if index_file.is_file():
+                try:
+                    for item in json.loads(index_file.read_text(encoding="utf-8")).get("components", []):
+                        child = HubComponent.from_dict(item)
+                        if child.suite == component_id:
+                            registry_components[child.id] = child
+                except Exception:
+                    pass
+
+        found_by_id = {str(item.get("id")): item for item in found}
+        for child_id, child in registry_components.items():
+            if child_id in found_by_id:
+                continue
+            child_dir = self.resolve_target_dir(child).resolve()
+            child_config = self.resolve_config_path(child)
+            if not child_dir.is_dir() and not (child_config and child_config.is_file()):
+                continue
+            metadata = {
+                "id": child.id,
+                "name": child.name,
+                "kind": child.kind,
+                "version": child.version,
+                "target_dir": child_dir,
+                "config_paths": child.extra.get("config_paths", []),
+                "config_path": child.extra.get("config_path"),
+                "dependencies": child.extra.get("dependencies", {}),
+            }
+            for filename in (".theta_component.json", "plugin.json"):
+                installed_manifest = child_dir / filename
+                if installed_manifest.is_file():
+                    try:
+                        installed = json.loads(installed_manifest.read_text(encoding="utf-8"))
+                        metadata.update(installed)
+                        metadata["target_dir"] = child_dir
+                    except (OSError, json.JSONDecodeError):
+                        pass
+                    break
+            found.append(metadata)
+        return found
+
     def uninstall_by_metadata(self, meta: Dict[str, Any], remove_configs: bool = True) -> bool:
         """Uninstall an installed component given its metadata dict."""
         target_dir = Path(meta["target_dir"])
         recorded_configs = meta.get("config_paths") or ([meta["config_path"]] if meta.get("config_path") else [])
+        component_id = str(meta.get("id") or target_dir.name)
+
+        # Capture suite-owned components before removing the parent's manifest.
+        suite_children = self._installed_suite_children(component_id, target_dir)
 
         if target_dir.exists():
             shutil.rmtree(target_dir, ignore_errors=True)
@@ -904,12 +1010,21 @@ class HubInstaller:
                 except Exception:
                     pass
 
+        for child_meta in suite_children:
+            if child_meta.get("id") == component_id:
+                continue
+            try:
+                self.uninstall_by_metadata(child_meta, remove_configs=remove_configs)
+            except Exception:
+                pass
+
         return True
 
     def uninstall(self, component: HubComponent, remove_configs: bool = True) -> bool:
         """Remove an installed component and optionally its packaged configuration from disk."""
         target_dir = self.resolve_target_dir(component)
         config_path = self.resolve_config_path(component)
+        suite_children = self._installed_suite_children(component.id, target_dir)
 
         # Check .theta_component.json for recorded config paths before removing target_dir
         recorded_configs = []
@@ -935,6 +1050,14 @@ class HubInstaller:
 
         if not recorded_installed_children and hasattr(component, "extra") and isinstance(component.extra, dict):
             recorded_installed_children.extend(component.extra.get("dependencies", {}).get("components", []))
+
+        # Root-relative packages such as suites deploy their configs outside the
+        # component directory. If an interrupted/legacy uninstall removed the
+        # tracking manifest first, recover those paths from the Hub registry.
+        if not recorded_configs and hasattr(component, "extra") and isinstance(component.extra, dict):
+            declared_configs = component.extra.get("config_paths", [])
+            if isinstance(declared_configs, list):
+                recorded_configs.extend(path for path in declared_configs if isinstance(path, str))
 
         config_rel_set = set(recorded_configs)
         recorded_installed_files = [p for p in recorded_installed_files if p not in config_rel_set]
@@ -974,6 +1097,14 @@ class HubInstaller:
                     self.uninstall(child_comp, remove_configs=remove_configs)
                 except Exception:
                     pass
+
+        for child_meta in suite_children:
+            if child_meta.get("id") == component.id:
+                continue
+            try:
+                self.uninstall_by_metadata(child_meta, remove_configs=remove_configs)
+            except Exception:
+                pass
 
         # Remove only pristine installed YAMLs; edited configs are retained and
         # pre-install files are restored from their tracked backups.
