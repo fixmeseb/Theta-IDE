@@ -3,6 +3,7 @@
 import sys
 import tempfile
 import time
+from unittest.mock import patch
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -270,7 +271,10 @@ def test_plugin_toggles_its_sidebar_tab():
     from frontend.app import Window
 
     with tempfile.TemporaryDirectory() as temp:
-        window = Window(Path(temp) / "runs")
+        # This test is about plugin tab registration. Selecting a default
+        # experiment from an empty temporary config tree can abort Qt offscreen.
+        with patch.object(Window, "init_default_experiment", lambda self: None):
+            window = Window(Path(temp) / "runs")
         try:
             manager = window.plugin_manager
             assert "arxiv_papers" in manager.manifests
