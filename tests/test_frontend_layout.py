@@ -240,6 +240,7 @@ class TestWindowLayoutAndSliders(unittest.TestCase):
         panes = list(self.window.pane_sliders)
         panes.remove("console")
         panes.append("console")
+        self.window.tabs.setCurrentWidget(self.window.tabs.tabs["console"]["widget"])
         for p in panes[:-1]:
             self.window.pane_sliders[p].setChecked(False)
 
