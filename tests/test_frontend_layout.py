@@ -125,6 +125,9 @@ BUILTIN_PANES = [
 DEFAULT_TAB_ORDER = [
     "components", "config", "workflows", "monitor", "results", "plots", "tensorboard",
     "queue", "terminal", "console",
+    # Registered after the panes settings.toml lists, so load_layout leaves it
+    # at the end rather than in the position app.py adds it.
+    "figures",
 ]
 
 

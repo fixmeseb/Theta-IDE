@@ -17,8 +17,9 @@ for p in [
     if os.path.isdir(p) and p not in sys.path:
         sys.path.insert(0, p)
 
+from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 import matplotlib
 
@@ -98,8 +99,27 @@ def deep_update(base: dict, update: dict) -> dict:
     return result
 
 
+@dataclass(frozen=True)
+class PanelSpec:
+    """One drawable panel a plotter can contribute to a composed figure.
+
+    `draw` takes an Axes the caller owns and returns whether anything was
+    drawn. Plotters that cannot draw into a supplied Axes report no panels,
+    and the Plots pane falls back to capturing the figures they make
+    themselves (see plot/capture.py).
+    """
+
+    key: str
+    label: str
+    draw: Callable[[Any], bool]
+
+
 class BasePlotter:
     name: str = "base"
+
+    # Set by plotters whose output is time-series metrics drawn through
+    # draw_metric(), which is what makes them composable into a shared figure.
+    draws_metric_series: bool = False
 
     def __init__(self, name: str):
         self.name = name
@@ -447,21 +467,232 @@ class BasePlotter:
         # Filter out empty method entries
         return {k: v for k, v in results.items() if v}
 
+    # ── Metric series: data, drawing, and the file-writing wrapper ────────
+    #
+    # Split three ways so the same series can go to a file or into an Axes the
+    # caller owns. The Plots pane composes several of these into one figure,
+    # and matplotlib refuses to move an Axes between figures, so a plotter has
+    # to be able to draw into one it is given rather than make its own.
+
+    def resolve_method_styles(self, active_methods: list, cfg: dict, group: str) -> dict:
+        """Per-method label, colour, linestyle and marker for one plot.
+
+        Colours are assigned per plot rather than globally so every method on
+        a given figure is visually distinct, even when two plots show
+        different subsets of methods.
+        """
+        method_styles: dict[str, dict] = {}
+        reserved_colors = set()
+        methods_cfg = cfg.get("methods", {}) if isinstance(cfg.get("methods"), dict) else {}
+
+        for m_name in active_methods:
+            style_dict = {}
+            m_entry = methods_cfg.get(m_name, {})
+            if isinstance(m_entry, dict):
+                if "style" in m_entry and isinstance(m_entry["style"], dict):
+                    style_dict.update(m_entry["style"])
+                for k in ("label", "color", "linestyle", "marker", "display_name"):
+                    if k in m_entry and m_entry[k] is not None:
+                        target_k = "label" if k == "display_name" else k
+                        style_dict[target_k] = m_entry[k]
+
+            if not style_dict:
+                from src.app.pipeline.config import find_group_method_config
+
+                gm_cfg = find_group_method_config(m_name, group=group)
+                if gm_cfg and isinstance(gm_cfg, dict):
+                    if "style" in gm_cfg and isinstance(gm_cfg["style"], dict):
+                        style_dict.update(gm_cfg["style"])
+                    for k in ("label", "color", "linestyle", "marker", "display_name"):
+                        if k in gm_cfg and gm_cfg[k] is not None:
+                            target_k = "label" if k == "display_name" else k
+                            style_dict[target_k] = gm_cfg[k]
+
+            if not style_dict.get("label"):
+                style_dict["label"] = m_name
+            if style_dict.get("color"):
+                reserved_colors.add(style_dict["color"])
+            method_styles[m_name] = style_dict
+
+        palette_idx = 0
+        for m_name in active_methods:
+            if not method_styles[m_name].get("color"):
+                while palette_idx < len(QUALITATIVE_PALETTE) and QUALITATIVE_PALETTE[palette_idx] in reserved_colors:
+                    palette_idx += 1
+                if palette_idx < len(QUALITATIVE_PALETTE):
+                    chosen_color = QUALITATIVE_PALETTE[palette_idx]
+                    palette_idx += 1
+                else:
+                    chosen_color = QUALITATIVE_PALETTE[palette_idx % len(QUALITATIVE_PALETTE)]
+                    palette_idx += 1
+                method_styles[m_name]["color"] = chosen_color
+                reserved_colors.add(chosen_color)
+
+            if not method_styles[m_name].get("linestyle"):
+                method_styles[m_name]["linestyle"] = "-"
+            if not method_styles[m_name].get("marker"):
+                method_styles[m_name]["marker"] = "o"
+        return method_styles
+
+    @staticmethod
+    def active_methods_for(runs_data: dict, metric: str) -> list:
+        """Methods with at least one non-empty version of *metric*."""
+        active = []
+        for method_name, versions in sorted(runs_data.items()):
+            for _v_name, df in versions.items():
+                if metric in df.columns and not df.dropna(subset=[metric]).empty:
+                    active.append(method_name)
+                    break
+        return active
+
+    def collect_metric_series(self, runs_data: dict, metric: str, cfg: dict) -> tuple[dict, str | None]:
+        """x/y arrays per method for *metric*, plus the x label they imply.
+
+        Returns {method: (x, y, sem_or_None)}. SEM is present only when a
+        method has several versions, which is what the shaded band shows.
+        """
+        x_axis_col = cfg.get("x_axis", "transitions")
+        window = cfg.get("smoothing_window", 10)
+        series: dict[str, tuple] = {}
+        used_xlabel = None
+
+        for method_name, versions in sorted(runs_data.items()):
+            all_x, all_y = [], []
+            for _v_name, df in versions.items():
+                if metric not in df.columns:
+                    continue
+                valid_df = df.dropna(subset=[metric])
+                if valid_df.empty:
+                    continue
+
+                x_vals = None
+                if x_axis_col in df.columns and df[x_axis_col].notna().any():
+                    full_x = df[x_axis_col].interpolate(method="linear").ffill().bfill()
+                    s_x = full_x.loc[valid_df.index]
+                    if not s_x.empty and s_x.nunique() > 1 and not s_x.isna().any():
+                        x_vals = s_x.values
+                        if used_xlabel is None:
+                            used_xlabel = cfg.get("xlabel", x_axis_col.replace("_", " ").title())
+                if x_vals is None:
+                    if "step" in valid_df.columns and valid_df["step"].nunique() > 1:
+                        x_vals = valid_df["step"].values
+                        if used_xlabel is None:
+                            used_xlabel = cfg.get("xlabel", "Training Steps")
+                    elif "epoch" in valid_df.columns and valid_df["epoch"].nunique() > 1:
+                        x_vals = valid_df["epoch"].values
+                        if used_xlabel is None:
+                            used_xlabel = cfg.get("xlabel", "Epoch")
+                    else:
+                        x_vals = valid_df.index.values
+                        if used_xlabel is None:
+                            used_xlabel = cfg.get("xlabel", "Index")
+                all_x.append(x_vals)
+                all_y.append(valid_df[metric].values)
+
+            if not all_y:
+                continue
+
+            if len(all_y) > 1:
+                min_len = min(len(y) for y in all_y)
+                trimmed = np.array([y[:min_len] for y in all_y])
+                y_mean = np.mean(trimmed, axis=0)
+                y_sem = np.std(trimmed, axis=0) / np.sqrt(len(all_y))
+                y_smoothed = moving_average(y_mean, window)
+                sem_smoothed = moving_average(y_sem, window)
+                series[method_name] = (all_x[0][: len(y_smoothed)], y_smoothed, sem_smoothed)
+            else:
+                y_smoothed = moving_average(all_y[0], window)
+                series[method_name] = (all_x[0][: len(y_smoothed)], y_smoothed, None)
+        return series, used_xlabel
+
+    @staticmethod
+    def resolve_labels(metric: str, exp_id: str, cfg: dict, used_xlabel: str | None) -> tuple[str, str, str]:
+        """The xlabel, ylabel and title this metric should carry."""
+        xlabel = cfg.get("xlabel") or used_xlabel or "Training Steps"
+
+        if isinstance(cfg.get("ylabel"), dict):
+            ylabel = cfg["ylabel"].get(metric, metric.replace("_", " ").title())
+        elif cfg.get("ylabel"):
+            ylabel = str(cfg["ylabel"])
+        else:
+            ylabel = metric.replace("_", " ").title()
+
+        clean_metric = metric.split("/")[-1].replace("_", " ").title()
+        if isinstance(cfg.get("title"), dict):
+            title = cfg["title"].get(metric, f"{exp_id.upper()}: {metric}")
+        elif cfg.get("title"):
+            try:
+                title = str(cfg["title"]).format(exp_id=exp_id.upper(), metric=metric, clean_metric=clean_metric)
+            except Exception:
+                title = str(cfg["title"])
+        else:
+            title = f"{exp_id.upper()}: {metric}"
+        return xlabel, ylabel, title
+
+    def draw_metric(self, ax, exp_id: str, group: str, metric: str, cfg: dict, runs_data: dict | None = None) -> bool:
+        """Draw one metric into *ax*. False when there is nothing to draw.
+
+        The Axes belongs to the caller, so this sets labels and a legend but
+        never creates, saves or closes a figure.
+        """
+        if runs_data is None:
+            runs_data = self.load_metrics(group, exp_id)
+        if not runs_data:
+            return False
+
+        active_methods = self.active_methods_for(runs_data, metric)
+        if not active_methods:
+            return False
+
+        method_styles = self.resolve_method_styles(active_methods, cfg, group)
+        series, used_xlabel = self.collect_metric_series(runs_data, metric, cfg)
+
+        style_cfg = cfg.get("style", {}) if isinstance(cfg.get("style"), dict) else {}
+        line_width = style_cfg.get("line_width", 2.0)
+
+        has_data = False
+        for method_name, (x_plot, y_plot, sem) in series.items():
+            if method_name not in method_styles:
+                continue
+            has_data = True
+            style = method_styles[method_name]
+            ax.plot(
+                x_plot,
+                y_plot,
+                label=style["label"],
+                color=style["color"],
+                linestyle=style["linestyle"],
+                linewidth=line_width,
+            )
+            if sem is not None:
+                ax.fill_between(x_plot, y_plot - sem, y_plot + sem, color=style["color"], alpha=0.15)
+
+        if not has_data:
+            return False
+
+        xlabel, ylabel, title = self.resolve_labels(metric, exp_id, cfg, used_xlabel)
+        ax.set_xlabel(xlabel)
+        ax.set_ylabel(ylabel)
+        ax.set_title(title)
+        ax.grid(style_cfg.get("grid", True), alpha=style_cfg.get("grid_alpha", 0.3))
+        ax.legend(bbox_to_anchor=(1.05, 1), loc="upper left")
+        return True
+
     def plot_metric_series(self, exp_id: str, group: str, output_dir: Path, metrics: list, cfg: dict):
         """Standard multi-method metric plotting with multi-version mean±SEM.
 
         Shared implementation used by ConvergencePlotter, LossesPlotter, and
         any future plotter that plots time-series metrics from metrics.csv.
+        Writes one PNG per metric; draw_metric() is the same drawing against
+        an Axes the caller supplies.
         """
         runs_data = self.load_metrics(group, exp_id)
         if not runs_data:
             print(f"No log data found for experiment '{exp_id}' in group '{group}'.")
             return
 
-        window = cfg.get("smoothing_window", 10)
         dpi = cfg.get("dpi", 300)
         figsize = tuple(cfg.get("figsize", [8, 5]))
-        x_axis_col = cfg.get("x_axis", "transitions")
         subdir = cfg.get("output_subdir", self.name)
         filename_prefix = cfg.get("filename_prefix", "")
 
@@ -471,179 +702,10 @@ class BasePlotter:
         print(f"=== Generating {self.name.title()} Plots for '{exp_id}' ===")
 
         for metric in metrics:
-            plt.figure(figsize=figsize)
-            has_data = False
-            used_xlabel = None
-
-            # 1. Determine active methods that have valid data for this metric
-            active_methods = []
-            for method_name, versions in sorted(runs_data.items()):
-                for v_name, df in versions.items():
-                    if metric in df.columns and not df.dropna(subset=[metric]).empty:
-                        active_methods.append(method_name)
-                        break
-
-            if not active_methods:
-                plt.close()
-                continue
-
-            # 2. Build per-graph style map to guarantee distinct colors for all methods on this plot
-            method_styles: dict[str, dict] = {}
-            reserved_colors = set()
-            methods_cfg = cfg.get("methods", {}) if isinstance(cfg.get("methods"), dict) else {}
-
-            for m_name in active_methods:
-                style_dict = {}
-                m_entry = methods_cfg.get(m_name, {})
-                if isinstance(m_entry, dict):
-                    if "style" in m_entry and isinstance(m_entry["style"], dict):
-                        style_dict.update(m_entry["style"])
-                    for k in ("label", "color", "linestyle", "marker", "display_name"):
-                        if k in m_entry and m_entry[k] is not None:
-                            target_k = "label" if k == "display_name" else k
-                            style_dict[target_k] = m_entry[k]
-
-                if not style_dict:
-                    from src.app.pipeline.config import find_group_method_config
-
-                    gm_cfg = find_group_method_config(m_name, group=group)
-                    if gm_cfg and isinstance(gm_cfg, dict):
-                        if "style" in gm_cfg and isinstance(gm_cfg["style"], dict):
-                            style_dict.update(gm_cfg["style"])
-                        for k in ("label", "color", "linestyle", "marker", "display_name"):
-                            if k in gm_cfg and gm_cfg[k] is not None:
-                                target_k = "label" if k == "display_name" else k
-                                style_dict[target_k] = gm_cfg[k]
-
-                # Fallback label: method_name
-                if not style_dict.get("label"):
-                    style_dict["label"] = m_name
-
-                # Reserve explicit color
-                if style_dict.get("color"):
-                    reserved_colors.add(style_dict["color"])
-
-                method_styles[m_name] = style_dict
-
-            # Assign distinct colors from QUALITATIVE_PALETTE to methods without explicit color
-            palette_idx = 0
-            for m_name in active_methods:
-                if not method_styles[m_name].get("color"):
-                    while (
-                        palette_idx < len(QUALITATIVE_PALETTE) and QUALITATIVE_PALETTE[palette_idx] in reserved_colors
-                    ):
-                        palette_idx += 1
-                    if palette_idx < len(QUALITATIVE_PALETTE):
-                        chosen_color = QUALITATIVE_PALETTE[palette_idx]
-                        palette_idx += 1
-                    else:
-                        chosen_color = QUALITATIVE_PALETTE[palette_idx % len(QUALITATIVE_PALETTE)]
-                        palette_idx += 1
-                    method_styles[m_name]["color"] = chosen_color
-                    reserved_colors.add(chosen_color)
-
-                if not method_styles[m_name].get("linestyle"):
-                    method_styles[m_name]["linestyle"] = "-"
-                if not method_styles[m_name].get("marker"):
-                    method_styles[m_name]["marker"] = "o"
-
-            for method_name, versions in sorted(runs_data.items()):
-                if method_name not in method_styles:
-                    continue
-                all_x = []
-                all_y = []
-
-                for v_name, df in versions.items():
-                    if metric in df.columns:
-                        valid_df = df.dropna(subset=[metric])
-                        if not valid_df.empty:
-                            x_vals = None
-                            if x_axis_col in df.columns and df[x_axis_col].notna().any():
-                                full_x = df[x_axis_col].interpolate(method="linear").ffill().bfill()
-                                s_x = full_x.loc[valid_df.index]
-                                if not s_x.empty and s_x.nunique() > 1 and not s_x.isna().any():
-                                    x_vals = s_x.values
-                                    if used_xlabel is None:
-                                        used_xlabel = cfg.get("xlabel", x_axis_col.replace("_", " ").title())
-                            if x_vals is None:
-                                if "step" in valid_df.columns and valid_df["step"].nunique() > 1:
-                                    x_vals = valid_df["step"].values
-                                    if used_xlabel is None:
-                                        used_xlabel = cfg.get("xlabel", "Training Steps")
-                                elif "epoch" in valid_df.columns and valid_df["epoch"].nunique() > 1:
-                                    x_vals = valid_df["epoch"].values
-                                    if used_xlabel is None:
-                                        used_xlabel = cfg.get("xlabel", "Epoch")
-                                else:
-                                    x_vals = valid_df.index.values
-                                    if used_xlabel is None:
-                                        used_xlabel = cfg.get("xlabel", "Index")
-                            y_vals = valid_df[metric].values
-                            all_x.append(x_vals)
-                            all_y.append(y_vals)
-
-                if all_y:
-                    has_data = True
-                    display_name = method_styles[method_name]["label"]
-                    color = method_styles[method_name]["color"]
-                    ls = method_styles[method_name]["linestyle"]
-                    marker = method_styles[method_name]["marker"]
-
-                    if len(all_y) > 1:
-                        # Multi-version: compute mean ± SEM across versions
-                        min_len = min(len(y) for y in all_y)
-                        trimmed = np.array([y[:min_len] for y in all_y])
-                        y_mean = np.mean(trimmed, axis=0)
-                        y_sem = np.std(trimmed, axis=0) / np.sqrt(len(all_y))
-                        y_smoothed = moving_average(y_mean, window)
-                        sem_smoothed = moving_average(y_sem, window)
-                        x_plot = all_x[0][: len(y_smoothed)]
-                        plt.plot(x_plot, y_smoothed, label=display_name, color=color, linestyle=ls, linewidth=2.0)
-                        plt.fill_between(
-                            x_plot, y_smoothed - sem_smoothed, y_smoothed + sem_smoothed, color=color, alpha=0.15
-                        )
-                    else:
-                        # Single version: simple moving average
-                        y_smoothed = moving_average(all_y[0], window)
-                        x_plot = all_x[0][: len(y_smoothed)]
-                        plt.plot(x_plot, y_smoothed, label=display_name, color=color, linestyle=ls, linewidth=2.0)
-
-            if has_data:
+            fig = plt.figure(figsize=figsize)
+            if self.draw_metric(fig.gca(), exp_id, group, metric, cfg, runs_data=runs_data):
                 out_dir.mkdir(parents=True, exist_ok=True)
-
-                # Resolve xlabel: explicit config > detected used_xlabel > fallback
-                xlabel = cfg.get("xlabel") or used_xlabel or "Training Steps"
-                plt.xlabel(xlabel)
-
-                # Resolve ylabel (dictionary per metric or string or fallback)
-                if isinstance(cfg.get("ylabel"), dict):
-                    ylabel = cfg["ylabel"].get(metric, metric.replace("_", " ").title())
-                elif cfg.get("ylabel"):
-                    ylabel = str(cfg["ylabel"])
-                else:
-                    ylabel = metric.replace("_", " ").title()
-                plt.ylabel(ylabel)
-
-                # Resolve title (dictionary per metric, string template, or default)
-                clean_metric = metric.split("/")[-1].replace("_", " ").title()
-                if isinstance(cfg.get("title"), dict):
-                    title = cfg["title"].get(metric, f"{exp_id.upper()}: {metric}")
-                elif cfg.get("title"):
-                    try:
-                        title = str(cfg["title"]).format(
-                            exp_id=exp_id.upper(),
-                            metric=metric,
-                            clean_metric=clean_metric,
-                        )
-                    except Exception:
-                        title = str(cfg["title"])
-                else:
-                    title = f"{exp_id.upper()}: {metric}"
-                plt.title(title)
-                plt.grid(True, alpha=0.3)
-                plt.legend(bbox_to_anchor=(1.05, 1), loc="upper left")
                 plt.tight_layout()
-
                 safe_metric_name = metric.replace("/", "_")
                 out_path = out_dir / f"{filename_prefix}{safe_metric_name}.png"
                 plt.savefig(out_path, dpi=dpi)
@@ -658,6 +720,49 @@ class BasePlotter:
                 out_dir.rmdir()
             except Exception:
                 pass
+
+    def panel_label(self, metric: str) -> str:
+        """A short, unambiguous name for one metric's panel.
+
+        The whole path rather than its last segment, because eval/reward and
+        train/reward are different plots that would otherwise both be offered
+        as "Reward". A leading segment that only repeats the plotter's own
+        name is dropped, so losses/total_loss reads "Total Loss" and not
+        "Losses Total Loss".
+        """
+        parts = [p for p in metric.split("/") if p]
+        if len(parts) > 1 and parts[0].lower() == self.name.lower():
+            parts = parts[1:]
+        return " ".join(parts).replace("_", " ").title()
+
+    def panels(self, exp_id: str, cli_overrides: dict | None = None) -> list:
+        """The panels this plotter can draw into Axes supplied by a caller.
+
+        Empty for plotters that build their own figures; the Plots pane
+        captures those instead of composing them.
+        """
+        if not self.draws_metric_series:
+            return []
+
+        cfg, group, _output_dir = self.get_effective_config(exp_id, cli_overrides)
+        metrics = cfg.get("metrics") or []
+        if not metrics:
+            return []
+
+        runs_data = self.load_metrics(group, exp_id)
+        if not runs_data:
+            return []
+
+        specs = []
+        for metric in metrics:
+            if not self.active_methods_for(runs_data, metric):
+                continue  # nothing logged this metric: no empty panel to offer
+
+            def draw(ax, _metric=metric):
+                return self.draw_metric(ax, exp_id, group, _metric, cfg, runs_data=runs_data)
+
+            specs.append(PanelSpec(key=f"{self.name}/{metric}", label=self.panel_label(metric), draw=draw))
+        return specs
 
     def run(self, exp_id: str, cli_overrides: dict | None = None):
         raise NotImplementedError("Subclasses must implement run()")

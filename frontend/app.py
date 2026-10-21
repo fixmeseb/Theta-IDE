@@ -377,6 +377,14 @@ class Window(QMainWindow):
         self.monitor.sidebar.compare_changed.connect(self.plot_ticked_runs)
         self.tabs.addTab(self.plot_viewer, "Plot Viewer", "plots", "Plots", tab_id="plots")
 
+        # 5b. Figure workspace: compose several plots into one figure for a paper.
+        # Separate from the Plot Viewer above, which views runs; this assembles
+        # and exports a finished figure.
+        from .figures.view import FigureWorkspace
+
+        self.figure_workspace = FigureWorkspace()
+        self.tabs.addTab(self.figure_workspace, "Figure workspace", "export", "Figures", tab_id="figures")
+
         # 6. Job Queue Panel
         self.queue_panel = QueuePanel(self.move_queued, self.remove_queued, self.open_job, self.set_queue_running,
                                       on_launch=self.launch_training, on_add=self.add_to_queue,
