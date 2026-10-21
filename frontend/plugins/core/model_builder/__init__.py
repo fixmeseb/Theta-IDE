@@ -60,7 +60,7 @@ class ModelBuilderPlugin(Plugin):
     def _open(self, row: dict) -> None:
         from .dialog import ModelBuilderDialog
 
-        window = self.context.window() if self.context else None
+        window = self.context.window if self.context else None
         tree = _config_tree()
         if tree is None:
             if self.context:

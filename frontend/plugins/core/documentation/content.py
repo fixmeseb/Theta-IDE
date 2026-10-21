@@ -1297,7 +1297,6 @@ python run_pipeline.py &lt;group&gt;/&lt;tuning_experiment&gt; dash_only=true</c
     <td>Keys</td>
   </tr>
   <tr><td><code>[appearance]</code></td><td><code>theme</code>, <code>zoom</code>, and the experiment panel's <code>show_resolved_defaults</code>, <code>show_method_agent_defaults</code>, <code>show_method_model_defaults</code>, <code>show_all_default_params</code></td></tr>
-  <tr><td><code>[editor]</code></td><td><code>visual_layer_editor</code> (edit <code>hidden_sizes</code> as a stack of layers)</td></tr>
   <tr><td><code>[sidebar]</code></td><td><code>order</code> and <code>visible</code> pane lists, <code>bins</code>, <code>auto_hide</code></td></tr>
   <tr><td><code>[plugins]</code></td><td><code>enabled</code> and <code>disabled</code> plugin IDs</td></tr>
   <tr><td><code>[components]</code></td><td><code>confirm_delete</code></td></tr>

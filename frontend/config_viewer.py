@@ -2201,7 +2201,7 @@ class ConfigViewer(QWidget):
             if tree:
                 for a in sorted(tree.agents):
                     common_universal.append(f"agent.{a}")
-                for m in sorted(tree.models):
+                for m in tree.model_names:
                     common_universal.append(f"model.{m}")
             cand_u = [u for u in common_universal if u not in curr_params]
             btn_add_u = _make_param_adder_button("Add shared parameter", cand_u, lambda pk: self._add_universal_param(pk), parent_widget=self)
@@ -2545,11 +2545,17 @@ class ConfigViewer(QWidget):
                     model_name = str(model_raw or "")
                     model_inner = {}
 
+                # Older configs may use a model's short-name lookup alias.
+                # Display and newly saved selections should use the unique
+                # path of the YAML that defines it.
+                if tree and model_name in tree.models:
+                    model_name = tree.models[model_name].name
+
                 if tree and tree.models:
                     txt_model = ComboBox()
                     txt_model.setMaximumWidth(TEXT_FIELD_WIDTH)
                     txt_model.setPlaceholderText("Select model...")
-                    known = sorted(tree.models)
+                    known = tree.model_names
                     txt_model.addItems(known)
                     if model_name:
                         if model_name not in known:
@@ -2713,7 +2719,7 @@ class ConfigViewer(QWidget):
                                     cur_type = s_val.get("type", "")
                                     sub_params = {k: v for k, v in s_val.items() if k not in ("type", "architecture", "reasoner")}
 
-                            choices = sorted(tree.models) if tree else []
+                            choices = tree.model_names if tree else []
 
                             sub_candidates = []
                             if tree and cur_type and cur_type in tree.models:
@@ -3181,7 +3187,7 @@ class ConfigViewer(QWidget):
                     p_txt_model.setEditable(True)
                     p_txt_model.setMaximumWidth(TEXT_FIELD_WIDTH)
                     p_txt_model.setPlaceholderText("Select or enter model...")
-                    p_txt_model.addItems(sorted(tree.models))
+                    p_txt_model.addItems(tree.model_names)
                     init_model = self._pending_new_method_spec.get("model")
                     if init_model:
                         p_txt_model.setCurrentText(str(init_model))
@@ -4076,7 +4082,7 @@ class ConfigViewer(QWidget):
         choices = schema.get("enum")
         if schema.get("x-theta-domain") == "model":
             tree = config_tree()
-            choices = sorted(tree.models) if tree else []
+            choices = tree.model_names if tree else []
         if not isinstance(choices, list) or not choices:
             return self._scalar_widget(value, write)
         combo = ComboBox()
@@ -4184,11 +4190,6 @@ class ConfigViewer(QWidget):
                     self._scalar_widget(value, lambda updated, p=value_path: self._on_generic_path_edited(p, updated)),
                 )
 
-    def _use_visual_layer_editor(self) -> bool:
-        if self.settings_manager:
-            return getattr(self.settings_manager, "visual_layer_editor", True)
-        return True
-
     def _render_generic_boxes(self):
         """Render clean boxes for modular YAML configs (agent/*.yaml, env/*.yaml, model/*.yaml, etc.)."""
         self.paradigm_badge.hide()
@@ -4294,7 +4295,7 @@ class ConfigViewer(QWidget):
                     )
                     tag_cloud.tagsChanged.connect(lambda tags, key=k: self._on_field_edited(key, tags))
                     row.addWidget(tag_cloud)
-                elif k in ("hidden_sizes", "hidden_dims", "latent_sizes") and self._use_visual_layer_editor() and isinstance(v, list):
+                elif k in ("hidden_sizes", "hidden_dims", "latent_sizes") and isinstance(v, list):
                     layer_stack = LayerStackWidget(layers=v)
                     layer_stack.layersChanged.connect(lambda layers, key=k: self._on_field_edited(key, layers))
                     row.addWidget(layer_stack)
@@ -4394,7 +4395,7 @@ class ConfigViewer(QWidget):
                     )
                     tag_cloud.tagsChanged.connect(lambda tags, p=path + (k,): self._on_generic_path_edited(p, tags))
                     row.addWidget(tag_cloud)
-                elif k in ("hidden_sizes", "hidden_dims", "latent_sizes") and self._use_visual_layer_editor() and isinstance(v, list):
+                elif k in ("hidden_sizes", "hidden_dims", "latent_sizes") and isinstance(v, list):
                     layer_stack = LayerStackWidget(layers=v)
                     layer_stack.layersChanged.connect(lambda layers, p=path + (k,): self._on_generic_path_edited(p, layers))
                     row.addWidget(layer_stack)
@@ -4464,7 +4465,7 @@ class ConfigViewer(QWidget):
         choices = schema.get("enum") if isinstance(schema, dict) else None
         if isinstance(schema, dict) and schema.get("x-theta-domain") == "model":
             tree = config_tree()
-            choices = sorted(tree.models) if tree else []
+            choices = tree.model_names if tree else []
         if isinstance(choices, list) and choices:
             labels = [str(value) for value in choices]
             selected, ok = QInputDialog.getItem(self, "Parameter Value", f"Value for '{key}':", labels, 0, False)

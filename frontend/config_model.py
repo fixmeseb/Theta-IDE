@@ -431,6 +431,10 @@ class ConfigTree:
             self.models[rel_name] = model_obj
             if m.stem not in self.models:
                 self.models[m.stem] = model_obj
+        # ``models`` keeps short-name aliases for backwards-compatible lookups
+        # (e.g. ``dnn`` for ``basics/dnn``). UI pickers should show each config
+        # file once, under its canonical path.
+        self.model_names = sorted({model.name for model in self.models.values()})
 
         env_dir = self.config_root / "env"
         self.environments = {}
