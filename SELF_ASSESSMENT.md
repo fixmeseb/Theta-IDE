@@ -16,8 +16,8 @@ Figures measured on commit `2a9802d`: 752 commits, 1365 tests, 70% line coverage
 |---|---|---|
 | Many commits (exemplar has 467) | **3** | [752 commits on main](https://github.com/fixmeseb/Theta-IDE/commits/main) — 61% above the exemplar |
 | Commits come from different people | **3** | [Contributors](https://github.com/fixmeseb/Theta-IDE/graphs/contributors) — 6 identities, 5 people |
-| Workload is spread over the whole team | **2** | Commits after merging duplicate identities: 563 / 72 / 59 / 58 (see table below). Four people contribute substantially and the other three are within 25% of each other, but the lead holds 74.9% — past the "3x more productive" the rubric allows, which is what keeps this off 3 |
-| Team members work across many parts, not one silo each | **3** | Share of each person's file-touches by area (see table below the rubric). Three of four people work substantially across frontend, engine and tests; no one is confined to a silo |
+| Workload is spread over the whole team | **2** | [Contributors](https://github.com/fixmeseb/Theta-IDE/graphs/contributors). Four people contribute substantially, three of them within 25% of each other, but one leads by more than the "3x more productive" the rubric allows. Note `kc` and `ccast44` are one person (same GitHub user id), so the graph splits one contributor in two |
+| Team members work across many parts, not one silo each | **3** | [Commit history](https://github.com/fixmeseb/Theta-IDE/commits/main) — three of the four work substantially across `frontend/`, `src/` and `tests/`; no one is confined to a single area |
 | Short release cycles: frequent small commits, merged promptly | **3** | [25 pull requests, all merged or closed, none open](https://github.com/fixmeseb/Theta-IDE/pulls?q=is%3Apr) |
 | Whole team uses the same tools: config files in repo, updated by many | **3** | [`pyproject.toml`](https://github.com/fixmeseb/Theta-IDE/blob/main/pyproject.toml) (`[tool.ruff]`, `[tool.mypy]`, `[tool.coverage]`), [`.pre-commit-config.yaml`](https://github.com/fixmeseb/Theta-IDE/blob/main/.pre-commit-config.yaml), [`ci.yml`](https://github.com/fixmeseb/Theta-IDE/blob/main/.github/workflows/ci.yml) |
 | Whole team can run the system on their own machine | **3** | Every member runs the IDE on their own machine; any of us can share a screen and demo it live |
@@ -69,40 +69,6 @@ Figures measured on commit `2a9802d`: 752 commits, 1365 tests, 70% line coverage
 | Repo holds no keys or passwords | **3** | Scanned for hardcoded credentials; none found. CI uses `secrets.CODECOV_TOKEN` |
 
 ---
-
-## Contribution breakdown
-
-Identities merged on GitHub user ID rather than display name: `Tacho2` and
-`CameronEgb` are one person, and `kc` and `ccast44` share ID `322238565`.
-Counting display names instead would undercount Carlos by 31 commits.
-
-| Person | Commits | Share | Lines + | Lines − |
-|---|---:|---:|---:|---:|
-| Cameron | 563 | 74.9% | 261,640 | 203,525 |
-| Carlos | 72 | 9.6% | 16,142 | 5,622 |
-| Karthik | 59 | 7.8% | 10,846 | 833 |
-| Sebastian | 58 | 7.7% | 16,498 | 3,147 |
-| **Total** | **752** | | **305,126** | **213,127** |
-
-Line counts flatter whoever performs large migrations: the deletions are
-mostly the modularization moving models, environments and plotters out to
-Theta-Hub. Commits are the fairer measure of distribution here.
-
-### Where each person worked
-
-Share of that person's file-touches, by area. This is the evidence for the
-"not one silo each" row.
-
-| Person | frontend | src (engine) | tests | plot | configs | docs |
-|---|---:|---:|---:|---:|---:|---:|
-| Cameron | 4% | 14% | 3% | 2% | 25% | 1% |
-| Carlos | 63% | 5% | 21% | 0% | 0% | 5% |
-| Karthik | 30% | 23% | 25% | 3% | 13% | 0% |
-| Sebastian | 36% | 36% | 20% | 1% | 0% | 0% |
-
-Three of the four work substantially across frontend, engine and tests.
-Carlos is frontend-weighted; Cameron sits mostly in configs and packaging,
-which is the Hub work. No one is confined to a single area.
 
 ## Subtotal
 
