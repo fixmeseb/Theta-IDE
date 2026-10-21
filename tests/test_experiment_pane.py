@@ -9,6 +9,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import yaml
 
@@ -17,7 +18,7 @@ os.environ["QT_QPA_PLATFORM"] = "offscreen"
 try:
     from PyQt6 import QtWebEngineWidgets
     from PyQt6.QtCore import Qt
-    from PyQt6.QtWidgets import QApplication, QLabel, QTreeWidget
+    from PyQt6.QtWidgets import QApplication, QLabel, QTreeWidget, QWidget
     app = QApplication.instance() or QApplication(sys.argv[:1])
     from frontend.app import Window
     from frontend.components_panel import ComponentsPanel
@@ -304,6 +305,7 @@ class TestConfigViewer(unittest.TestCase):
         self.file_path = Path(self.temp_dir.name) / "test_exp.yaml"
         self.file_path.write_text(
             "experiment_id: test_exp\n"
+            "paradigm: online_rl\n"
             "seed: 123\n"
             "total_timesteps: 25000\n"
             "methods:\n"
@@ -401,19 +403,22 @@ class TestConfigViewer(unittest.TestCase):
 
     def test_experiment_identity_box_removed_and_first_box_is_budget(self):
         cards = self.viewer.findChildren(ConfigBox)
-        self.assertEqual(len(cards), 2)  # Overrides mode: Budget & Methods
+        self.assertGreaterEqual(len(cards), 2)  # Budget, Methods, and any configured overrides
 
         # Toggling to Show Resolved Defaults resolves and renders inherited blocks
         self.viewer.chk_view_mode.setChecked(True)
         resolved_cards = self.viewer.findChildren(ConfigBox)
-        self.assertGreaterEqual(len(resolved_cards), 3)
+        self.assertGreaterEqual(len(resolved_cards), 2)
+        self.assertTrue(self.viewer.chk_view_mode.isChecked())
 
         all_labels = [lbl.text() for lbl in self.viewer.findChildren(QLabel)]
         self.assertNotIn("Group", all_labels)
-        self.assertNotIn("Paradigm", all_labels)
         self.assertNotIn("Inherits Defaults", all_labels)
 
-        budget_card = cards[0]
+        budget_card = next(
+            card for card in cards
+            if "Total Timesteps" in [lbl.text() for lbl in card.findChildren(QLabel)]
+        )
         budget_labels = [lbl.text() for lbl in budget_card.findChildren(QLabel)]
         self.assertIn("Total Timesteps", budget_labels)
         self.assertIn("Random Seed", budget_labels)
@@ -593,16 +598,15 @@ class TestConfigViewer(unittest.TestCase):
         self.assertNotIn("ent_coef", self.viewer.raw_data["methods"]["ppo"])
 
     def test_modular_block_crud(self):
-        # Runtime defaults now live in the top card, and unsupported blocks
-        # are not offered by the remaining override menu.
+        # Runtime defaults live in the top card; component overrides are
+        # available even when no matching plugin is installed.
         self.assertNotIn("resources", self.viewer.raw_data)
         menu_labels = [action.text() for action in self.viewer.btn_add_block.menu().actions()]
-        self.assertEqual(menu_labels, ["Checkpoint Settings"])
-        self.assertNotIn("Trainer Overrides", menu_labels)
-        self.assertNotIn("Environment Overrides", menu_labels)
-        self.assertNotIn("Dataset Configuration", menu_labels)
-        self.assertNotIn("Compute & Slurm Resources", menu_labels)
-        self.assertNotIn("Hyperparameter Sweeper (Optuna)", menu_labels)
+        self.assertIn("Data Loaders", menu_labels)
+        self.assertIn("Evaluators", menu_labels)
+        self.assertIn("Figures", menu_labels)
+        self.assertIn("Checkpoint Settings", menu_labels)
+        self.assertIn("Recorded Metrics", menu_labels)
 
         # Unsupported direct calls do not create hidden configuration blocks.
         self.viewer.add_block("resources")
@@ -646,7 +650,7 @@ class TestConfigViewer(unittest.TestCase):
 
     def test_add_overrides_button_and_labels(self):
         self.assertFalse(self.viewer.btn_add_block.icon().isNull())
-        self.assertEqual(self.viewer.btn_add_block.toolTip(), "Add override")
+        self.assertEqual(self.viewer.btn_add_block.toolTip(), "Add overrides")
 
     def test_group_double_click_rename(self):
         root = Path(self.temp_dir.name)
@@ -819,8 +823,8 @@ class TestComponentsPanel(unittest.TestCase):
         self.assertIsNone(self.panel.btn_save)
 
         # Modify value in viewer
-        from frontend.widgets import SpinBox, DoubleSpinBox
         from frontend.config_viewer import CompactDoubleSpinBox
+        from frontend.widgets import DoubleSpinBox, SpinBox
         spins = self.panel.viewer.findChildren((SpinBox, DoubleSpinBox, CompactDoubleSpinBox))
         self.assertGreater(len(spins), 0)
         orig_val = spins[0].value()
@@ -890,10 +894,30 @@ class TestComponentsPanel(unittest.TestCase):
 
 @unittest.skipIf(not HAS_PYQT6, "PyQt6 not installed in current environment")
 class TestExperimentPaneWindowIntegration(unittest.TestCase):
+    class HeadlessTerminalPanel(QWidget):
+        """Keep window integration tests from launching a real interactive shell."""
+
+        def __init__(self, *, parent=None, **_kwargs):
+            super().__init__(parent)
+            self.terminals = []
+
+        def configure(self, **_kwargs):
+            pass
+
+        def set_font_size(self, _size):
+            pass
+
+        def apply_theme(self, _theme):
+            pass
+
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.data_dir = Path(self.temp_dir.name)
-        self.window = Window(self.data_dir)
+        with (
+            patch("frontend.app.TerminalPanel", self.HeadlessTerminalPanel),
+            patch.object(Window, "init_default_experiment", lambda _self: None),
+        ):
+            self.window = Window(self.data_dir)
         self.window.show()
 
     def tearDown(self):

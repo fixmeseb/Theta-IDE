@@ -336,7 +336,7 @@ class TestHubClientAndInstaller(unittest.TestCase):
 
         # 3. HubDialog filtering for plugins mode
         plugin_dialog = HubDialog(self.client, mode="plugins")
-        self.assertTrue(plugin_dialog._matches_mode(thetalib))
+        self.assertFalse(plugin_dialog._matches_mode(thetalib))  # suites are installable components, not plugins
         self.assertTrue(plugin_dialog._matches_mode(plugin_comp))
         self.assertFalse(plugin_dialog._matches_mode(std_fig))
         self.assertFalse(plugin_dialog._matches_mode(img_data))

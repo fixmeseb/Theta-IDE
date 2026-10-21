@@ -3,9 +3,9 @@
 import sys
 import tempfile
 import time
-from unittest.mock import patch
 from pathlib import Path
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 
@@ -268,12 +268,47 @@ def test_copy_citation(panel):
 
 
 def test_plugin_toggles_its_sidebar_tab():
+    from PyQt6.QtWidgets import QWidget
+
     from frontend.app import Window
 
+    class HeadlessTerminalPanel(QWidget):
+        def __init__(self, *, parent=None, **_kwargs):
+            super().__init__(parent)
+            self.terminals = []
+
+        def configure(self, **_kwargs):
+            pass
+
+        def set_font_size(self, _size):
+            pass
+
+        def apply_theme(self, _theme):
+            pass
+
+    class InertBackend:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def config_schema(self, *_args, **_kwargs):
+            pass
+
+        def compose(self, *_args, **_kwargs):
+            pass
+
+        def list_runs(self, *_args, **_kwargs):
+            pass
+
+        def run_metrics(self, *_args, **_kwargs):
+            pass
+
     with tempfile.TemporaryDirectory() as temp:
-        # This test is about plugin tab registration. Selecting a default
-        # experiment from an empty temporary config tree can abort Qt offscreen.
-        with patch.object(Window, "init_default_experiment", lambda self: None):
+        # This test is about plugin tab registration, not shells or backend I/O.
+        with (
+            patch("frontend.app.TerminalPanel", HeadlessTerminalPanel),
+            patch("frontend.app.LocalBackend", InertBackend),
+            patch.object(Window, "init_default_experiment", lambda self: None),
+        ):
             window = Window(Path(temp) / "runs")
         try:
             manager = window.plugin_manager

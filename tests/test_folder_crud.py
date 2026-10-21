@@ -13,7 +13,7 @@ from PyQt6.QtWidgets import QApplication, QLabel
 app = QApplication.instance() or QApplication(sys.argv[:1])
 
 from frontend.config_model import ConfigTree, Experiment
-from frontend.config_tree import ConfigTreeWidget, TOOL_ICON_COLORS
+from frontend.config_tree import TOOL_ICON_COLORS, ConfigTreeWidget
 from frontend.sidetabs import svg_icon
 
 
@@ -214,7 +214,7 @@ class TestFolderCRUD(unittest.TestCase):
 
     def test_config_viewer_group_defaults_boxes_and_no_strip(self):
         """ConfigViewer displays Group Paradigm & Environment card on _base.yaml and preserves paradigm."""
-        from frontend.config_viewer import ConfigViewer, ConfigBox
+        from frontend.config_viewer import ConfigBox, ConfigViewer
         base_file = self.root / "experiment" / "cartpole" / "_base.yaml"
         base_file.write_text(
             "# @package _global_\ndefaults:\n  - override /env: cartpole\nparadigm: online_rl\nseed: 1\n",
@@ -243,7 +243,7 @@ class TestFolderCRUD(unittest.TestCase):
 
     def test_config_viewer_prompts_required_in_experiment(self):
         """Experiments with null paradigm and env show prompt controls in budget card."""
-        from frontend.config_viewer import ConfigViewer, ConfigBox
+        from frontend.config_viewer import ConfigBox, ConfigViewer
         exp_file = self.root / "experiment" / "cartpole" / "prompt_exp.yaml"
         exp_file.write_text(
             "experiment_id: prompt_exp\nparadigm: null\nenv: null\ntotal_timesteps: 5000\n",
@@ -257,7 +257,7 @@ class TestFolderCRUD(unittest.TestCase):
         budget_card = cards[0]
         labels = [lbl.text() for lbl in budget_card.findChildren(QLabel)]
         self.assertIn("Paradigm", labels)
-        self.assertIn("Environment", labels)
+        self.assertIn("Environment / Task", labels)
 
 
 if __name__ == "__main__":

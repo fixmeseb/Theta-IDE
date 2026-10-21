@@ -1,6 +1,9 @@
 """Tests for pipeline configuration utilities (src/pipeline/config.py)."""
 
+from pathlib import Path
+
 import pytest
+import yaml
 
 from src.app.pipeline.config import normalize_agent_name
 
@@ -245,7 +248,8 @@ class TestParseMethodsDict:
         m = res["cql_blendrl"]
         assert m["model"] == "blendrl"
         assert m["model_params"]["neural"]["architecture"] == "dnn"
-        assert m["model_params"]["neural"]["hidden_sizes"] == [256, 256]
+        dnn_profile = yaml.safe_load(Path("in/config/model/dnn.yaml").read_text(encoding="utf-8"))
+        assert m["model_params"]["neural"]["hidden_sizes"] == dnn_profile["hidden_sizes"]
         assert m["model_params"]["symbolic"]["type"] == "nsfr"
         assert m["model_params"]["symbolic"]["rules"] == "default"
         assert m["model_params"]["blender"]["mode"] == "neural"
@@ -583,6 +587,7 @@ class TestParseMethodsDict:
     def test_from_study_loads_best_params(self, tmp_path, monkeypatch):
         """from_study loads winning best_params.yaml into agent and model parameters."""
         import yaml
+
         from src.app.pipeline.config import parse_methods_dict
 
         study_dir = tmp_path / "results" / "checkpoints" / "mimic" / "tune_cql" / "cql_dnn"

@@ -30,36 +30,55 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from src.app.services import PROJECT_ROOT
+from src.app.services.config_service import LaunchError
+
 from . import wheel_guard
-from .model import (BASE_EXPERIMENT, FINAL_STATUSES, LIVE_STATUSES, Config, Store, disk_run, example_runs, metric_points,
-                    metric_points_from_api, new_run, sample)
-from .settings import SettingsManager
-from .theme import STYLE, ThemeManager, theme_color
-from .theme_builder import ThemeBuilder
-from .widgets import ToggleSlider, YamlHighlighter, label
 from .about import AboutDialog
-from .app_icon import (DESKTOP_FILE_NAME, ICON_PATH, app_icon, install_desktop_entry, register_windows_app_identity,
-                       set_windows_app_id)
+from .app_icon import (
+    DESKTOP_FILE_NAME,
+    ICON_PATH,
+    app_icon,
+    install_desktop_entry,
+    register_windows_app_identity,
+    set_windows_app_id,
+)
 from .components_panel import ComponentsPanel
-from .config_tree import ConfigTreeWidget
 from .config_model import config_fingerprint
-from .config_viewer import ConfigViewer
 from .config_tab_manager import ConfigTabManager
+from .config_tree import ConfigTreeWidget
+from .config_viewer import ConfigViewer
+from .export_dialog import ExportExperimentDialog
 from .hub import HubClient, HubDialog
 from .job_manager import JobManager
 from .live_run import LiveRun, LiveRunCache
-from .export_dialog import ExportExperimentDialog
-from src.app.services import PROJECT_ROOT
-from src.app.services.config_service import LaunchError
 from .local_backend import LocalBackend
+from .model import (
+    BASE_EXPERIMENT,
+    FINAL_STATUSES,
+    LIVE_STATUSES,
+    Config,
+    Store,
+    disk_run,
+    example_runs,
+    metric_points,
+    metric_points_from_api,
+    new_run,
+    sample,
+)
 from .monitor import MonitorPanel
-from .results.panel import ResultsPanel
 from .plots import PlotViewer
 from .plugins import CommandRegistry, ExtensionSlotRegistry, PluginManager
 from .queue_panel import QueuePanel
+from .results.panel import ResultsPanel
+from .run_notifier import RunNotifier
+from .settings import SettingsManager
 from .sidetabs import SideTabs, svg_icon
 from .terminal import TerminalPanel
+from .theme import STYLE, ThemeManager, theme_color
+from .theme_builder import ThemeBuilder
 from .titlebar import apply_title_bar
+from .widgets import ToggleSlider, YamlHighlighter, label
 from .workflows import WorkflowsPanel
 
 REPO_ROOT = Path(__file__).resolve().parent.parent  # holds venv/, in/, results/
@@ -170,6 +189,7 @@ class Window(QMainWindow):
         self.jobs.job_hardware.connect(self.on_job_hardware)
         self.jobs.queue_changed.connect(self.on_queue_changed)
         self.tray = None  # TrayController, set up by main(): closing while training hides to the tray
+        self.run_notifier = RunNotifier(self)  # toast or system notification and a chime when a run ends
         self._quitting = False  # an explicit Quit (menu, tray, reload) closes for real
         self._shutting_down = False  # set once closeEvent commits to closing
         self.schema = None

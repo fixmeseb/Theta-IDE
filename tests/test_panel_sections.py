@@ -1,14 +1,7 @@
-"""Tests for surfacing an experiment's paradigm-specific configuration.
-
-The panel's five fixed boxes are built around RL concepts, so a supervised
-experiment showed almost nothing: all six keep their real configuration under
-`early_prediction:` - 20 distinct settings - and the panel had no reference to
-that key at all. Saving preserved it, so nothing was lost, but none of it could
-be edited. _render_remaining_sections renders whatever the fixed boxes do not.
-"""
+"""Tests that generic experiment settings render and round-trip in the editor."""
 import os
-import shutil
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -19,7 +12,7 @@ os.environ["QT_QPA_PLATFORM"] = "offscreen"
 try:
     from PyQt6 import QtWebEngineWidgets  # noqa: F401
     from PyQt6.QtCore import Qt
-    from PyQt6.QtWidgets import QApplication, QCheckBox, QLabel, QLineEdit
+    from PyQt6.QtWidgets import QApplication, QLabel, QLineEdit
 
     QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
     app = QApplication.instance() or QApplication(sys.argv[:1])
@@ -30,8 +23,27 @@ try:
 except ImportError:
     HAS_PYQT6 = False
 
-CONFIG = Path("in/config")
-SUPERVISED = CONFIG / "experiment" / "early_prediction"
+def _write_sample(config_root):
+    path = Path(config_root) / "experiment" / "fixture_supervised" / "sample.yaml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(
+        "# @package _global_\n"
+        "paradigm: supervised\n"
+        "experiment_id: fixture_sample\n"
+        "custom_component:\n"
+        "  n_splits: 3\n"
+        "  use_feature: false\n"
+        "  horizons: [1, 6, 12]\n"
+        "  target_model: fixture_mlp\n"
+        "  nested_probe:\n"
+        "    encoder:\n"
+        "      width: 64\n"
+        "custom_list: [fixture_plot]\n"
+        "custom_flag: true\n"
+        "sweep: true\n",
+        encoding="utf-8",
+    )
+    return path
 
 
 # ---------------------------------------------------------------------------
@@ -45,7 +57,7 @@ class TestParseListField(unittest.TestCase):
         self.assertEqual(parse_list_field("ep_dl_sweep, ep_agreement"), ["ep_dl_sweep", "ep_agreement"])
 
     def test_numbers_stay_numbers(self):
-        """eval_protocol.horizons holds ints; quoting them would change the config."""
+        """Numeric list values must not become strings in the config."""
         self.assertEqual(parse_list_field("1, 6, 12"), [1, 6, 12])
         self.assertTrue(all(isinstance(v, int) for v in parse_list_field("1, 6, 12")))
 
@@ -75,7 +87,7 @@ class TestKeyPartition(unittest.TestCase):
 
     def test_paradigm_specific_keys_are_not_claimed(self):
         """These are exactly what used to be invisible."""
-        for key in ("early_prediction", "eval_protocol", "plots", "consolidate", "partition", "sweep"):
+        for key in ("custom_component", "eval_protocol", "plots", "consolidate", "partition", "sweep"):
             self.assertNotIn(key, FIXED_BOX_KEYS)
 
     def test_keys_the_panel_overhaul_owns_are_claimed(self):
@@ -90,8 +102,8 @@ def _headings(viewer):
     return [w.text() for w in viewer.findChildren(QLabel) if w.objectName() == "cardTitle"]
 
 
-def _open(path):
-    rel = str(path.relative_to(CONFIG))
+def _open(path, config_root):
+    rel = path.relative_to(config_root).as_posix()
     viewer = ConfigViewer()
     viewer.load_file(path, rel)
     return viewer
@@ -99,47 +111,56 @@ def _open(path):
 
 @unittest.skipIf(not HAS_PYQT6, "PyQt6 not installed in current environment")
 class TestSupervisedConfigurationIsVisible(unittest.TestCase):
-    def test_every_supervised_experiment_surfaces_its_block(self):
-        checked = 0
-        for path in sorted(SUPERVISED.glob("*.yaml")):
-            if path.name.startswith("_"):
-                continue
-            with self.subTest(experiment=path.name):
-                self.assertIn("early_prediction", _headings(_open(path)))
-            checked += 1
-        self.assertGreater(checked, 3, "expected several supervised experiments")
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.sample = _write_sample(self.root)
+
+    def test_custom_component_configuration_gets_a_heading(self):
+        viewer = _open(self.sample, self.root)
+        self.addCleanup(viewer.close)
+        self.assertIn("custom_component", _headings(viewer))
 
     def test_every_complex_section_outside_the_fixed_boxes_gets_a_heading(self):
-        path = SUPERVISED / "quick_test.yaml"
+        path = self.sample
         raw = yaml.safe_load(path.read_text())
         expected = {k for k, v in raw.items() if k not in FIXED_BOX_KEYS and isinstance(v, (dict, list))}
-        self.assertTrue(expected <= set(_headings(_open(path))))
+        viewer = _open(path, self.root)
+        self.addCleanup(viewer.close)
+        self.assertTrue(expected <= set(_headings(viewer)))
 
     def test_a_scalar_outside_the_fixed_boxes_gets_a_box_too(self):
-        """tune_early_pred.yaml sets a bare `sweep: true`."""
-        self.assertIn("Additional Settings", _headings(_open(SUPERVISED / "tune_early_pred.yaml")))
+        viewer = _open(self.sample, self.root)
+        self.addCleanup(viewer.close)
+        self.assertIn("Additional Settings", _headings(viewer))
 
     def test_the_settings_are_editable_not_just_displayed(self):
-        viewer = _open(SUPERVISED / "quick_test.yaml")
+        viewer = _open(self.sample, self.root)
+        self.addCleanup(viewer.close)
         texts = {w.text() for w in viewer.findChildren(QLineEdit)}
-        self.assertIn("lstm_no_v", texts, "target_model should be in an editable field")
+        self.assertIn("fixture_mlp", texts, "target_model should be in an editable field")
 
     def test_a_boolean_setting_renders_as_a_toggle_slider(self):
         """A spin box would write 0/1 back over true/false; booleans render as toggle sliders."""
-        viewer = _open(SUPERVISED / "quick_test.yaml")
+        viewer = _open(self.sample, self.root)
+        self.addCleanup(viewer.close)
         self.assertTrue(viewer.findChildren(ToggleSlider))
 
     def test_no_section_is_rendered_twice(self):
         """The fixed boxes and this pass must partition the keys between them."""
-        for name in ("cartpole/final_cartpole.yaml", "early_prediction/quick_test.yaml"):
-            with self.subTest(experiment=name):
-                headings = _headings(_open(CONFIG / "experiment" / name))
-                self.assertEqual(len(headings), len(set(headings)), f"duplicates in {headings}")
+        viewer = _open(self.sample, self.root)
+        self.addCleanup(viewer.close)
+        headings = _headings(viewer)
+        self.assertEqual(len(headings), len(set(headings)), f"duplicates in {headings}")
 
     def test_a_section_the_fixed_boxes_own_is_left_to_them(self):
-        """cartpole/final_cartpole.yaml carries hydra.sweeper, which the sweep
-        box already edits, so this pass must not add a second copy."""
-        headings = _headings(_open(CONFIG / "experiment" / "cartpole" / "final_cartpole.yaml"))
+        """Hydra-owned settings stay out of the generic section renderer."""
+        viewer = _open(self.sample, self.root)
+        self.addCleanup(viewer.close)
+        viewer.raw_data["hydra"] = {"sweeper": {"name": "fixture_sweeper"}}
+        viewer._render_boxes()
+        headings = _headings(viewer)
         self.assertNotIn("hydra", headings)
 
 
@@ -151,14 +172,13 @@ class TestSupervisedConfigurationIsVisible(unittest.TestCase):
 @unittest.skipIf(not HAS_PYQT6, "PyQt6 not installed in current environment")
 class TestRoundTrip(unittest.TestCase):
     def setUp(self):
-        self.source = SUPERVISED / "quick_test.yaml"
-        self.tmp = SUPERVISED / "_panel_sections_probe.yaml"
-        shutil.copy(self.source, self.tmp)
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp_dir.cleanup)
+        self.root = Path(self.temp_dir.name)
+        self.tmp = _write_sample(self.root)
         self.before = yaml.safe_load(self.tmp.read_text())
-        self.viewer = _open(self.tmp)
-
-    def tearDown(self):
-        self.tmp.unlink(missing_ok=True)
+        self.viewer = _open(self.tmp, self.root)
+        self.addCleanup(self.viewer.close)
 
     def _save_and_reload(self):
         self.viewer.save_to_disk()
@@ -166,62 +186,60 @@ class TestRoundTrip(unittest.TestCase):
 
     def test_an_integer_stays_an_integer(self):
         """A stringified tau_min or n_splits would reach the backend as text."""
-        self.viewer._on_nested_edited("early_prediction", "n_splits", 4)
-        value = self._save_and_reload()["early_prediction"]["n_splits"]
+        self.viewer._on_nested_edited("custom_component", "n_splits", 4)
+        value = self._save_and_reload()["custom_component"]["n_splits"]
         self.assertEqual(value, 4)
         self.assertIsInstance(value, int)
 
     def test_a_boolean_stays_a_boolean(self):
-        self.viewer._on_nested_edited("early_prediction", "use_volatility", True)
-        value = self._save_and_reload()["early_prediction"]["use_volatility"]
+        self.viewer._on_nested_edited("custom_component", "use_feature", True)
+        value = self._save_and_reload()["custom_component"]["use_feature"]
         self.assertIs(value, True)
 
     def test_a_list_of_numbers_stays_a_list_of_numbers(self):
-        self.viewer._on_nested_edited("eval_protocol", "horizons", [1, 6, 12])
-        value = self._save_and_reload()["eval_protocol"]["horizons"]
+        self.viewer._on_nested_edited("custom_component", "horizons", [1, 6, 12])
+        value = self._save_and_reload()["custom_component"]["horizons"]
         self.assertEqual(value, [1, 6, 12])
         self.assertTrue(all(isinstance(v, int) for v in value))
 
     def test_a_top_level_list_round_trips(self):
-        self.viewer._on_field_edited("plots", ["ep_dl_sweep", "ep_agreement"])
-        self.assertEqual(self._save_and_reload()["plots"], ["ep_dl_sweep", "ep_agreement"])
+        self.viewer._on_field_edited("custom_list", ["fixture_plot", "fixture_report"])
+        self.assertEqual(self._save_and_reload()["custom_list"], ["fixture_plot", "fixture_report"])
 
     def test_untouched_settings_are_preserved(self):
-        self.viewer._on_nested_edited("early_prediction", "n_splits", 4)
-        after = self._save_and_reload()["early_prediction"]
-        for key, value in self.before["early_prediction"].items():
+        self.viewer._on_nested_edited("custom_component", "n_splits", 4)
+        after = self._save_and_reload()["custom_component"]
+        for key, value in self.before["custom_component"].items():
             if key != "n_splits":
                 with self.subTest(setting=key):
                     self.assertEqual(after[key], value)
 
     def test_no_key_is_lost(self):
-        self.viewer._on_nested_edited("early_prediction", "n_splits", 4)
+        self.viewer._on_nested_edited("custom_component", "n_splits", 4)
         self.assertTrue(set(self.before) <= set(self._save_and_reload()))
 
     def test_the_package_directive_survives(self):
         """It is line 1 of all 67 configs and yaml.safe_dump does not keep comments."""
-        self.viewer._on_nested_edited("early_prediction", "n_splits", 4)
+        self.viewer._on_nested_edited("custom_component", "n_splits", 4)
         self.viewer.save_to_disk()
         self.assertTrue(self.tmp.read_text().startswith("# @package _global_"))
 
     def test_editing_a_list_through_its_widget_writes_a_list(self):
         """The widget holds text; what lands in the config must not be a string."""
-        fields = [w for w in self.viewer.findChildren(QLineEdit) if w.text() == "ep_dl_sweep"]
-        self.assertTrue(fields, "expected the plots list editor")
-        fields[0].setText("ep_dl_sweep, ep_agreement")
-        self.assertEqual(self._save_and_reload()["plots"], ["ep_dl_sweep", "ep_agreement"])
+        fields = [w for w in self.viewer.findChildren(QLineEdit) if w.text() == "fixture_plot"]
+        self.assertTrue(fields, "expected the custom list editor")
+        fields[0].setText("fixture_plot, fixture_report")
+        self.assertEqual(self._save_and_reload()["custom_list"], ["fixture_plot", "fixture_report"])
 
     def test_deeply_nested_experiment_setting_is_rendered_and_round_trips(self):
         """A component may put parameters below more than one grouping level."""
-        self.viewer.raw_data.setdefault("early_prediction", {})["nested_probe"] = {
-            "encoder": {"width": 64}
-        }
+        self.viewer.raw_data["custom_component"]["nested_probe"] = {"encoder": {"width": 64}}
         self.viewer._render_boxes()
         fields = [field for field in self.viewer.findChildren(QLineEdit) if field.text() == "64"]
-        self.assertTrue(fields, "expected a writable field for early_prediction.nested_probe.encoder.width")
+        self.assertTrue(fields, "expected a writable field for custom_component.nested_probe.encoder.width")
         fields[0].setText("128")
         saved = self._save_and_reload()
-        self.assertEqual(saved["early_prediction"]["nested_probe"]["encoder"]["width"], 128)
+        self.assertEqual(saved["custom_component"]["nested_probe"]["encoder"]["width"], 128)
 
 
 if __name__ == "__main__":
@@ -241,7 +259,8 @@ class TestParadigmChangeKeepsTheConfigValid(unittest.TestCase):
     which every non-RL paradigm rejects before training starts."""
 
     def setUp(self):
-        self.dir = CONFIG / "experiment" / "_ParadigmProbe"
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.dir = Path(self.temp_dir.name) / "experiment" / "_ParadigmProbe"
         self.dir.mkdir(parents=True, exist_ok=True)
         self.base = self.dir / "_base.yaml"
         self.base.write_text(
@@ -252,7 +271,8 @@ class TestParadigmChangeKeepsTheConfigValid(unittest.TestCase):
         self.viewer.load_file(self.base, "experiment/_ParadigmProbe/_base.yaml")
 
     def tearDown(self):
-        shutil.rmtree(self.dir, ignore_errors=True)
+        self.viewer.close()
+        self.temp_dir.cleanup()
 
     def _pick(self, paradigm):
         self.viewer._on_paradigm_changed(paradigm)
@@ -289,10 +309,10 @@ class TestParadigmChangeKeepsTheConfigValid(unittest.TestCase):
         self.assertEqual(data["eval_episodes"], 7)
 
     def test_a_group_pinned_this_way_satisfies_the_backend(self):
-        """The pins are exactly what the shipped offline and supervised bases use."""
+        """Non-online bases pin the values required by their paradigm rules."""
         data = self._pick("supervised")
-        reference = yaml.safe_load((CONFIG / "experiment" / "early_prediction" / "_base.yaml").read_text())
-        self.assertEqual(data["eval_episodes"], reference["eval_episodes"])
+        self.assertEqual(data["eval_episodes"], 0)
+        self.assertNotIn("intervals_count", data)
 
     def test_an_empty_methods_block_is_not_written(self):
         """`methods: {}` satisfies non_empty no better than having none, and an

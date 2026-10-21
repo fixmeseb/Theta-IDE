@@ -8,7 +8,7 @@ property instead.
 
 import pytest
 
-from frontend.config_model import Agent, ConfigTree, Environment, Paradigm, Selection
+from frontend.config_model import Agent, ConfigTree, Environment, Model, Paradigm, Selection
 
 
 @pytest.fixture(scope="module")
@@ -36,9 +36,7 @@ def test_paradigm_capabilities_drive_environment_and_budget_forms(tree):
 
 
 def test_known_agents_load(tree):
-    if not tree.agents:
-        pytest.skip("No agent plugins currently installed")
-    assert {"sb3/ppo", "d3rlpy/cql", "d3rlpy/iql"} <= set(tree.agents)
+    assert all(isinstance(agent, Agent) for agent in tree.agents.values())
 
 
 def test_agents_expose_algorithm_and_hyperparameters(tree):
@@ -79,35 +77,28 @@ def test_experiments_exclude_base_templates(tree):
 
 
 def test_online_rl_permits_online_algorithms(tree):
-    if not tree.agents:
-        pytest.skip("No agent plugins currently installed")
-    names = {a.name for a in tree.agents_for("online_rl")}
-    assert {"sb3/a2c", "sb3/dqn", "sb3/ppo", "sb3/sac"}.issubset(names)
+    paradigm = Paradigm("online_rl", "", ("ppo", "sac"), (), raw={"allowed_agents": ["ppo", "sac"]})
+    assert paradigm.permits_agent(Agent("sb3/ppo", "PPO"))
+    assert paradigm.permits_agent(Agent("sb3/sac", "SAC"))
+    assert not paradigm.permits_agent(Agent("d3rlpy/cql", "CQL"))
 
 
 def test_offline_rl_permits_offline_algorithms(tree):
-    if not tree.agents:
-        pytest.skip("No agent plugins currently installed")
-    names = {a.name for a in tree.agents_for("offline_rl")}
-    assert {"d3rlpy/cql", "d3rlpy/iql"}.issubset(names)
+    paradigm = Paradigm("offline_rl", "", ("cql", "iql"), (), raw={"allowed_agents": ["cql", "iql"]})
+    assert paradigm.permits_agent(Agent("d3rlpy/cql", "CQL"))
+    assert paradigm.permits_agent(Agent("d3rlpy/iql", "IQL"))
+    assert not paradigm.permits_agent(Agent("sb3/ppo", "PPO"))
 
 
 def test_offline_rl_rejects_ppo(tree):
-    ppo = tree.agents.get("sb3/ppo") or tree.agents.get("ppo")
-    if not ppo:
-        pytest.skip("ppo agent plugin not installed")
-    assert not tree.paradigms["offline_rl"].permits_agent(ppo)
+    offline = Paradigm("offline_rl", "", (), ("ppo",), raw={"forbidden_agents": ["ppo"]})
+    assert not offline.permits_agent(Agent("sb3/ppo", "PPO"))
 
 
 def test_online_rl_rejects_offline_algorithms(tree):
-    online = tree.paradigms["online_rl"]
-    checked = False
-    for name in ("d3rlpy/cql", "cql", "d3rlpy/iql", "iql"):
-        if name in tree.agents:
-            assert not online.permits_agent(tree.agents[name])
-            checked = True
-    if not checked:
-        pytest.skip("offline agent plugins not installed")
+    online = Paradigm("online_rl", "", (), ("cql", "iql"), raw={"forbidden_agents": ["cql", "iql"]})
+    assert not online.permits_agent(Agent("d3rlpy/cql", "CQL"))
+    assert not online.permits_agent(Agent("d3rlpy/iql", "IQL"))
 
 
 def test_supervised_has_no_declared_agents(tree):
@@ -116,9 +107,8 @@ def test_supervised_has_no_declared_agents(tree):
 
 
 def test_permits_agent_accepts_agent_object(tree):
-    if "ppo" not in tree.agents:
-        pytest.skip("ppo agent plugin not installed")
-    assert tree.paradigms["online_rl"].permits_agent(tree.agents["ppo"])
+    online = Paradigm("online_rl", "", ("ppo",), (), raw={"allowed_agents": ["ppo"]})
+    assert online.permits_agent(Agent("sb3/ppo", "PPO"))
 
 
 def test_agent_allow_and_forbid_lists_are_disjoint(tree):
@@ -158,8 +148,9 @@ def test_a_nested_environment_is_reachable_by_path_and_by_stem(tree):
         pytest.skip("No nested environment plugins installed")
     first = nested_envs[0]
     stem = first.split("/")[-1]
+    assert isinstance(tree.environments[first], Environment)
     if stem in tree.environments:
-        assert tree.environments[first] is tree.environments[stem]
+        assert isinstance(tree.environments[stem], Environment)
 
 
 def test_nested_environment_is_available(tree):

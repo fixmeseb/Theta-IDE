@@ -10,7 +10,7 @@ import pytest
 
 pytest.importorskip("PyQt6")
 from PyQt6.QtCore import Qt  # noqa: E402
-from PyQt6.QtWidgets import QApplication  # noqa: E402
+from PyQt6.QtWidgets import QApplication, QWidget  # noqa: E402
 
 QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)  # the window embeds WebEngine
 app = QApplication.instance() or QApplication(sys.argv[:1])  # WebEngine needs a program name
@@ -76,9 +76,42 @@ def test_lowering_the_limit_stops_nothing_that_is_running(manager):
 
 
 @pytest.fixture
-def window(tmp_path):
+def window(tmp_path, monkeypatch):
     from frontend.app import Window
 
+    class HeadlessTerminalPanel(QWidget):
+        def __init__(self, *, parent=None, **_kwargs):
+            super().__init__(parent)
+            self.terminals = []
+
+        def configure(self, **_kwargs):
+            pass
+
+        def set_font_size(self, _size):
+            pass
+
+        def apply_theme(self, _theme):
+            pass
+
+    class InertBackend:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        def config_schema(self, *_args, **_kwargs):
+            pass
+
+        def compose(self, *_args, **_kwargs):
+            pass
+
+        def list_runs(self, *_args, **_kwargs):
+            pass
+
+        def run_metrics(self, *_args, **_kwargs):
+            pass
+
+    monkeypatch.setattr("frontend.app.TerminalPanel", HeadlessTerminalPanel)
+    monkeypatch.setattr("frontend.app.LocalBackend", InertBackend)
+    monkeypatch.setattr(Window, "init_default_experiment", lambda _self: None)
     win = Window(tmp_path / "runs")
     yield win
     win._quitting = True

@@ -1,8 +1,9 @@
 """Component selections and parameters survive the panel, Hydra, and runtime."""
 
+from types import SimpleNamespace
+
 import pytest
 import yaml
-from types import SimpleNamespace
 from omegaconf import OmegaConf
 
 from src.app.pipeline.compose import compose_experiment
@@ -155,28 +156,43 @@ def test_panel_edits_component_parameters(qapp, tmp_path):
     path.write_text("# @package _global_\ndefaults:\n  - thetaide/_base\n", encoding="utf-8")
     viewer = ConfigViewer()
     viewer.load_file(path, "experiment/thetaide/example.yaml")
-    viewer._set_component_choice("data_module", "tabular_data")
+    viewer._set_component_choice("data_module", "fixture_data_module")
     viewer._add_component_parameter("data_module", "batch_size", 32)
-    viewer._set_component_choice("evaluator", "EpisodicRewardEvalProtocol")
+    viewer._set_component_choice("evaluator", "fixture_evaluator")
     viewer._add_plot_parameter("losses", "smoothing_window", 7)
     assert viewer.save_to_disk()
     saved = yaml.safe_load(path.read_text(encoding="utf-8"))
-    assert saved["data_module"] == {"name": "tabular_data", "params": {"batch_size": 32}}
-    assert saved["evaluator"] == {"name": "EpisodicRewardEvalProtocol"}
+    assert saved["data_module"] == {"name": "fixture_data_module", "params": {"batch_size": 32}}
+    assert saved["evaluator"] == {"name": "fixture_evaluator", "params": {}}
     assert saved["plot_overrides"]["losses"]["smoothing_window"] == 7
     assert path.read_text(encoding="utf-8").startswith("# @package _global_")
 
 
 def test_panel_filters_components_by_declared_paradigm(qapp, tmp_path):
+    from unittest.mock import patch
+
+    from frontend.config_model import ConfigTree
     from frontend.config_viewer import ConfigViewer
 
-    path = tmp_path / "unsupervised.yaml"
-    path.write_text("# @package _global_\ndefaults:\n  - representation/_base\n", encoding="utf-8")
+    root = tmp_path / "config"
+    (root / "paradigms").mkdir(parents=True)
+    (root / "paradigms" / "unsupervised.yaml").write_text(
+        "environment_source: static_dataset\nmethod: {algorithm: forbidden, model: required}\n",
+        encoding="utf-8",
+    )
+    (root / "data").mkdir()
+    (root / "data" / "table.yaml").write_text(
+        "data_module: fixture_table\ncompatible_paradigms: [unsupervised]\n", encoding="utf-8"
+    )
+    (root / "data" / "simulator.yaml").write_text(
+        "data_module: fixture_simulator\ncompatible_paradigms: [online_rl]\n", encoding="utf-8"
+    )
     viewer = ConfigViewer()
-    viewer.load_file(path, "experiment/representation/unsupervised.yaml")
-    choices = viewer._component_choices("data_module")
-    assert "tabular_data" in choices
-    assert "image_data" not in choices
+    viewer.raw_data["paradigm"] = "unsupervised"
+    with patch("frontend.config_viewer.config_tree", return_value=ConfigTree(root)):
+        choices = viewer._component_choices("data_module")
+    assert "fixture_table" in choices
+    assert "fixture_simulator" not in choices
 
 
 def test_inherited_figure_list_accepts_parameter_override(qapp, project_root):

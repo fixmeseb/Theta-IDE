@@ -7,7 +7,7 @@ os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
 try:
     from PyQt6.QtCore import Qt
-    from PyQt6.QtWidgets import QApplication
+    from PyQt6.QtWidgets import QApplication, QWidget
     QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
     app = QApplication.instance() or QApplication(sys.argv[:1])
     from frontend.queue_panel import QueuePanel, clock
@@ -154,14 +154,50 @@ class TestQueuePanelRunControls(unittest.TestCase):
 
 @unittest.skipUnless(HAS_PYQT6, "PyQt6 not available in current Python environment")
 class TestRunControlsInTheWindow(unittest.TestCase):
+    class HeadlessTerminalPanel(QWidget):
+        def __init__(self, *, parent=None, **_kwargs):
+            super().__init__(parent)
+            self.terminals = []
+
+        def configure(self, **_kwargs):
+            pass
+
+        def set_font_size(self, _size):
+            pass
+
+        def apply_theme(self, _theme):
+            pass
+
     def setUp(self):
         import tempfile
         from pathlib import Path
+        from unittest.mock import patch
 
         from frontend.app import Window
 
+        class InertBackend:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def config_schema(self, *_args, **_kwargs):
+                pass
+
+            def compose(self, *_args, **_kwargs):
+                pass
+
+            def list_runs(self, *_args, **_kwargs):
+                pass
+
+            def run_metrics(self, *_args, **_kwargs):
+                pass
+
         self.temp = tempfile.TemporaryDirectory()
-        self.win = Window(Path(self.temp.name) / "runs")
+        with (
+            patch("frontend.app.TerminalPanel", self.HeadlessTerminalPanel),
+            patch("frontend.app.LocalBackend", InertBackend),
+            patch.object(Window, "init_default_experiment", lambda _self: None),
+        ):
+            self.win = Window(Path(self.temp.name) / "runs")
 
     def tearDown(self):
         self.win._quitting = True

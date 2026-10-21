@@ -15,9 +15,9 @@ try:
     from PyQt6.QtWidgets import QApplication, QLabel, QWidget
     QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
     app = QApplication.instance() or QApplication(sys.argv[:1])
-    from frontend.widgets import ToggleSlider
-    from frontend.sidetabs import SideTabs
     from frontend.app import Window
+    from frontend.sidetabs import SideTabs
+    from frontend.widgets import ToggleSlider
     HAS_PYQT6 = True
 except ImportError:
     HAS_PYQT6 = False
@@ -134,6 +134,46 @@ DEFAULT_TAB_ORDER = [
 @unittest.skipIf(not HAS_PYQT6, "PyQt6 not installed in current environment")
 class TestWindowLayoutAndSliders(unittest.TestCase):
     def setUp(self):
+        from unittest.mock import patch
+
+        class HeadlessTerminalPanel(QWidget):
+            def __init__(self, *, parent=None, **_kwargs):
+                super().__init__(parent)
+                self.terminals = []
+
+            def configure(self, **_kwargs):
+                pass
+
+            def set_font_size(self, _size):
+                pass
+
+            def apply_theme(self, _theme):
+                pass
+
+        class InertBackend:
+            def __init__(self, *_args, **_kwargs):
+                pass
+
+            def config_schema(self, *_args, **_kwargs):
+                pass
+
+            def compose(self, *_args, **_kwargs):
+                pass
+
+            def list_runs(self, *_args, **_kwargs):
+                pass
+
+            def run_metrics(self, *_args, **_kwargs):
+                pass
+
+        for target, replacement in (
+            ("frontend.app.TerminalPanel", HeadlessTerminalPanel),
+            ("frontend.app.LocalBackend", InertBackend),
+            ("frontend.app.Window.init_default_experiment", lambda _self: None),
+        ):
+            patcher = patch(target, replacement)
+            patcher.start()
+            self.addCleanup(patcher.stop)
         self.temp_dir = tempfile.TemporaryDirectory()
         self.data_dir = Path(self.temp_dir.name)
         self.window = Window(self.data_dir)
