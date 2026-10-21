@@ -37,7 +37,9 @@ from .settings import SettingsManager
 from .theme import STYLE, ThemeManager, theme_color
 from .theme_builder import ThemeBuilder
 from .widgets import ToggleSlider, YamlHighlighter, label
-from .app_icon import DESKTOP_FILE_NAME, ICON_PATH, app_icon, install_desktop_entry, set_windows_app_id
+from .about import AboutDialog
+from .app_icon import (DESKTOP_FILE_NAME, ICON_PATH, app_icon, install_desktop_entry, register_windows_app_identity,
+                       set_windows_app_id)
 from .components_panel import ComponentsPanel
 from .config_tree import ConfigTreeWidget
 from .config_model import config_fingerprint
@@ -2295,6 +2297,7 @@ class Window(QMainWindow):
         if status == "failed":
             self.statusBar().showMessage("Training failed; the console shows the pipeline output.", 10000)
         self.active_runs = [r for r in self.active_runs if r is not run]
+        self.run_notifier.run_finished(run, status)
         self.update_launch_state()
         self.refresh_runs()
         if not run["simulated"] and self.backend_connected:

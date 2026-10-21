@@ -148,6 +148,7 @@ python -m frontend</code></pre>
 
 <h3>Stopping</h3>
 <p>Closing the window when nothing is training quits ThetaIDE. Closing it while a run is training (or the queue is running) hides ThetaIDE to the <b>system tray</b> instead, and training keeps going. The tray icon gets a green dot while a run is training (blue while the queue waits to start the next job), shows what is training, notifies you when runs finish or fail, and reopens the window when clicked; its menu also has <i>Stop all training</i>. To exit, use <i>File &rarr; Quit</i> (<code>Ctrl+Q</code>) or <i>Quit ThetaIDE</i> in the tray menu: if a run is still training ThetaIDE asks first, then stops it. Metrics written so far stay in <code>results/logs/</code>. Queued jobs are kept (in <code>results/jobs/jobs.db</code>) and wait for <i>Start queue</i> next time. TensorBoard stops with the app.</p>
+<p><b>Run notifications:</b> when a run completes, fails or is stopped, a toast appears in the window's bottom-right corner (&#10003; completed, &#10007; failed, &#9632; stopped, with how long it took) and a short chime plays, brighter for completed and lower for failed. <i>View results</i> on the toast plots the run in the Plot Viewer. If ThetaIDE isn't in front (minimised, in the tray, or another app has focus) the toast becomes a system notification instead. Switch the toast and the sound on or off in <i>Settings &rarr; Training pipeline &rarr; Run notifications</i>; <i>Try it</i> there shows a sample.</p>
 """,
     ),
     DocArticle(
