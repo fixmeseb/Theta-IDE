@@ -114,9 +114,10 @@ class TestUIAdjustments(unittest.TestCase):
         actions = target_btn.menu().actions()
         self.assertTrue(len(actions) >= 1)
         chosen_action = next((a for a in actions if a.text() and not a.text().startswith("+")), actions[0])
+        chosen_key = chosen_action.text()
         chosen_action.trigger()
         updated_keys = set(self.viewer.raw_data.get("methods", {}).get("ppo_dnn", {}).keys())
-        self.assertIn(chosen_action.text(), updated_keys)
+        self.assertIn(chosen_key, updated_keys)
 
     def test_item5_minimal_experiment_creation(self):
         """Creating an experiment should not write redundant seed/total_timesteps/eval_episodes."""
