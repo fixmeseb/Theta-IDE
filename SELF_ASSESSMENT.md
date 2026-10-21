@@ -67,7 +67,7 @@ files, 29% of Python lines in tests. Coverage is measured by CI.
 | DOI badge from Zenodo | **3** | [10.5281/zenodo.23537094](https://doi.org/10.5281/zenodo.23537094) — the concept DOI, which resolves to the newest release rather than going stale. Badged in the README |
 | THIRD_PARTY_LIBRARIES.md: every dependency with its licence | **3** | [`THIRD_PARTY_LIBRARIES.md`](https://github.com/fixmeseb/Theta-IDE/blob/main/THIRD_PARTY_LIBRARIES.md) — 45 dependencies, generated from installed metadata, and it surfaces that PyQt6 is GPL-3.0 in an MIT project |
 | AI use is visible and disclosed | **3** | The AI co-author is visible in the [contributors graph](https://github.com/fixmeseb/Theta-IDE/graphs/contributors) rather than hidden, because every AI-assisted commit carries a `Co-Authored-By` trailer. [`.agents/AGENTS.md`](https://github.com/fixmeseb/Theta-IDE/blob/main/.agents/AGENTS.md) commits the agent instructions the team works under, and human checking is evidenced on [25 pull requests](https://github.com/fixmeseb/Theta-IDE/pulls?q=is%3Apr), several carrying line-by-line review that changed the code before merge |
-| Repo holds no keys or passwords | **3** | Scanned for hardcoded credentials; none found. [CI](https://github.com/fixmeseb/Theta-IDE/blob/main/.github/workflows/ci.yml) keeps the one token in `secrets.CODECOV_TOKEN`, not in the repo |
+| Repo holds no keys or passwords | **3** | Scanned for hardcoded credentials; none found. [CI](https://github.com/fixmeseb/Theta-IDE/blob/main/.github/workflows/ci.yml) injects its one credential from a repository secret, so no token value is committed here |
 
 ---
 
