@@ -1,0 +1,31 @@
+cff-version: 1.2.0
+title: "ThetaIDE: a desktop IDE for neuro-symbolic reinforcement learning"
+message: "If you use this software, please cite it as below."
+type: software
+license: MIT
+repository-code: "https://github.com/fixmeseb/Theta-IDE"
+abstract: >-
+  ThetaIDE is a PyQt6 desktop IDE for the NeSyRL neuro-symbolic reinforcement
+  learning framework. It composes experiments from Hydra configuration, runs
+  them across four learning paradigms, monitors training live, and assembles
+  publication figures. Algorithms, models, environments, data modules,
+  evaluators and plotters are installable components rather than built-in code.
+keywords:
+  - reinforcement learning
+  - neuro-symbolic
+  - IDE
+  - PyQt6
+  - experiment management
+authors:
+  - family-names: Egbert
+    given-names: Cameron
+    affiliation: North Carolina State University
+  - family-names: Polge
+    given-names: Sebastian
+    affiliation: North Carolina State University
+  - family-names: Castilla Virelles
+    given-names: Carlos
+    affiliation: North Carolina State University
+  - family-names: Panicker
+    given-names: Karthik
+    affiliation: North Carolina State University

@@ -1,0 +1,21 @@
+{
+  "title": "ThetaIDE: a desktop IDE for neuro-symbolic reinforcement learning",
+  "description": "<p>ThetaIDE is a PyQt6 desktop IDE for the NeSyRL neuro-symbolic reinforcement learning framework. It composes experiments from Hydra configuration, runs them across four learning paradigms (online RL, offline RL, supervised and unsupervised), monitors training live, and assembles publication figures. Algorithms, models, environments, data modules, evaluators and plotters are installable components rather than built-in code.</p>",
+  "upload_type": "software",
+  "license": "MIT",
+  "access_right": "open",
+  "creators": [
+    {"name": "Egbert, Cameron", "affiliation": "North Carolina State University"},
+    {"name": "Polge, Sebastian", "affiliation": "North Carolina State University"},
+    {"name": "Castilla Virelles, Carlos", "affiliation": "North Carolina State University"},
+    {"name": "Panicker, Karthik", "affiliation": "North Carolina State University"}
+  ],
+  "keywords": [
+    "reinforcement learning",
+    "neuro-symbolic",
+    "IDE",
+    "PyQt6",
+    "machine learning tooling",
+    "experiment management"
+  ]
+}
