@@ -18,6 +18,7 @@ from lightning.pytorch.loggers.logger import Logger
 from lightning.pytorch.utilities.rank_zero import rank_zero_only
 
 from .run import Run
+from .selection import MetricSelection
 from .sinks import Sink
 from .system import DEFAULT_INTERVAL
 
@@ -35,8 +36,10 @@ class ThetaLogger(Logger):
         config: dict[str, Any] | None = None,
         meta: dict[str, Any] | None = None,
         system_interval: float = DEFAULT_INTERVAL,
+        metrics: MetricSelection | None = None,
     ):
         super().__init__()
+        self._metrics = metrics
         self._version_dir = version_dir
         self._sinks = sinks
         self._config = config
@@ -48,7 +51,9 @@ class ThetaLogger(Logger):
     def run(self) -> Run:
         """The telemetry run, started on first use (the CSVLogger's version folder is known by then)."""
         if self._run is None:
-            self._run = Run(self._version_dir(), self._sinks, self._config, self._meta, self._system_interval)
+            self._run = Run(
+                self._version_dir(), self._sinks, self._config, self._meta, self._system_interval, self._metrics
+            )
         return self._run
 
     @property

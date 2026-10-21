@@ -46,7 +46,9 @@ from .widgets import (
     ComboBox, DoubleSpinBox, SpinBox, label, SmoothScrollArea, ToggleSlider,
     TagCloudWidget, LayerStackWidget,
 )
-from src.app.services import PROJECT_ROOT
+from .metric_picker import MetricPicker, logged_metrics
+from src.app.services import LOGS_DIR, PROJECT_ROOT
+from src.app.telemetry.selection import SECTIONS as METRIC_SECTIONS
 
 # Forms stay readable on wide windows: the column of boxes stops growing past CONTENT_WIDTH,
 # and fields in label/field rows are capped by kind so a number doesn't get a 1,000px box.
@@ -429,6 +431,13 @@ class IndentedHierarchyBlock(QFrame):
             self.form_layout.addRow(label_or_widget, widget)
         else:
             self.form_layout.addRow(label_or_widget)
+
+
+def _recorded_metrics(data):
+    """The experiment's telemetry.metrics list, or None when it records every metric."""
+    telemetry = data.get("telemetry") if isinstance(data, dict) else None
+    metrics = telemetry.get("metrics") if isinstance(telemetry, dict) else None
+    return [str(m) for m in metrics] if isinstance(metrics, (list, tuple)) else None
 
 
 # Periodic checkpoints (src/app/core/checkpoints.py): an experiment sets one of these, not both.
@@ -3313,6 +3322,8 @@ class ConfigViewer(QWidget):
         self._render_remaining_sections()
 
         # --- ADD CONFIGURATION BLOCK DROPDOWN BUTTON ---
+        self._render_metrics_box(data, resolved)
+
         btn_add_block_row = QHBoxLayout()
         self.btn_add_block = _make_subtle_tool_button("plus", "Add overrides", size=26, icon_size=14)
         self.btn_add_block.setObjectName("addBlockButton")
@@ -3345,6 +3356,21 @@ class ConfigViewer(QWidget):
         act_ckpt.triggered.connect(lambda: self.add_block("checkpoint"))
         act_ckpt.setEnabled("checkpoint" not in data)
 
+        act_env = add_menu.addAction("Environment Overrides")
+        act_env.triggered.connect(lambda: self.add_block("env"))
+        act_env.setEnabled(not isinstance(data.get("env"), dict))
+
+        act_ds = add_menu.addAction("Dataset Configuration")
+        act_ds.triggered.connect(lambda: self.add_block("dataset"))
+        act_ds.setEnabled("dataset_path" not in data)
+
+        act_sw = add_menu.addAction("Hyperparameter Sweeper (Optuna)")
+        act_sw.triggered.connect(lambda: self.add_block("sweeper"))
+        act_sw.setEnabled(not has_sweeper)
+        act_metrics = add_menu.addAction("Recorded Metrics")
+        act_metrics.setToolTip("Record only some metrics (and skip the work behind the others) to train faster")
+        act_metrics.triggered.connect(lambda: self.add_block("metrics"))
+        act_metrics.setEnabled(_recorded_metrics(data) is None)
         self.btn_add_block.setMenu(add_menu)
         btn_add_block_row.addWidget(self.btn_add_block)
 
@@ -4090,8 +4116,16 @@ class ConfigViewer(QWidget):
         dictionaries are rendered recursively so every value round-trips from
         the panel, regardless of how a component structures its parameters.
         """
-        leftovers = {k: v for k, v in self.raw_data.items()
-                     if k not in FIXED_BOX_KEYS and k not in ("data_module", "evaluator", "plots", "plot_overrides")}
+        leftovers = {
+            k: v for k, v in self.raw_data.items()
+            if k not in FIXED_BOX_KEYS and k not in ("data_module", "evaluator", "plots", "plot_overrides")
+        }
+        if isinstance(leftovers.get("telemetry"), dict):  # telemetry.metrics has its own box (Recorded Metrics)
+            rest = {k: v for k, v in leftovers["telemetry"].items() if k != "metrics"}
+            if rest:
+                leftovers["telemetry"] = rest
+            else:
+                leftovers.pop("telemetry")
         if not leftovers:
             return
 
@@ -4802,8 +4836,46 @@ class ConfigViewer(QWidget):
         elif block_name == "plots":
             self.raw_data.pop("plots", None)
             self.raw_data.pop("plot_overrides", None)
+        elif block_name == "metrics":
+            telemetry = self.raw_data.get("telemetry")
+            if isinstance(telemetry, dict):
+                telemetry.pop("metrics", None)
+                if not telemetry:
+                    self.raw_data.pop("telemetry", None)
         self._mark_dirty()
         self._render_boxes()
+
+    def _render_metrics_box(self, data, resolved):
+        """Recorded metrics (telemetry.metrics): shown once the experiment sets the list."""
+        own = _recorded_metrics(data)
+        source = own if own is not None else (_recorded_metrics(resolved) if self.view_mode == "resolved" else None)
+        if source is None:
+            return
+        box = ConfigBox("Recorded Metrics", "Which metrics the run records")
+        header = QHBoxLayout()
+        header.addWidget(label("Recorded Metrics", "heading"))
+        header.addStretch()
+        if own is not None:
+            btn_rm = _make_subtle_tool_button("trash", "Record every metric again", size=24, icon_size=14)
+            btn_rm.clicked.connect(lambda: self.remove_block("metrics"))
+            header.addWidget(btn_rm)
+        else:
+            header.addWidget(label("(inherited defaults)", "muted"))
+        box.add_layout(header)
+        experiment = self.current_path.stem if self.current_path else ""
+        known = logged_metrics(LOGS_DIR, str(self._group_name() or ""), experiment)
+        known += [name for name in source if not name.endswith("/") and name not in known]  # listed, not yet seen
+        picker = MetricPicker(source, sorted(known))
+        picker.changed.connect(self._on_recorded_metrics_changed)
+        self.field_widgets["telemetry.metrics"] = picker
+        box.add_widget(picker)
+        self.boxes_layout.addWidget(box)
+
+    def _on_recorded_metrics_changed(self, metrics):
+        if self._block_updates:
+            return
+        self.raw_data.setdefault("telemetry", {})["metrics"] = list(metrics)
+        self._mark_dirty()
 
     def add_block(self, block_name: str):
         """Add an optional configuration block to the open experiment."""
@@ -4823,6 +4895,10 @@ class ConfigViewer(QWidget):
             self.raw_data["dataset_path"] = self._get_resolved_defaults().get("dataset_path") or f"in/datasets/{env_name}"
         elif block_name == "params":
             self.raw_data.setdefault("methods", {})["params"] = {"lr": 0.0003}
+        elif block_name == "metrics":
+            # Start from what the run records anyway: every section ticked, so nothing changes until unticked.
+            telemetry = self.raw_data.setdefault("telemetry", {})
+            telemetry["metrics"] = [f"{section}/" for section in METRIC_SECTIONS]
         self._mark_dirty()
         self._render_boxes()
 

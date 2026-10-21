@@ -55,6 +55,7 @@ class JobManager(QObject):
         self.jobs: dict[str, dict[str, Any]] = {}
         self.queue_order: list[str] = []
         self.queue_running = False  # queued jobs start only after start_queue(); it pauses itself when drained
+        self.max_parallel = 1  # how many jobs train at once (the Queue tab's "Run up to N at once")
         self._processes: dict[str, QProcess] = {}
         self._decoders: dict[str, Any] = {}
         self._partial: dict[str, str] = {}
@@ -103,6 +104,19 @@ class JobManager(QObject):
 
     def is_busy(self) -> bool:
         return any(j.get("status") in ACTIVE_STATUSES for j in self.jobs.values())
+
+    def running_count(self) -> int:
+        return sum(1 for j in self.jobs.values() if j.get("status") in ACTIVE_STATUSES)
+
+    def has_capacity(self) -> bool:
+        """Whether another job may start now (fewer than max_parallel are training)."""
+        return self.running_count() < self.max_parallel
+
+    def set_max_parallel(self, count: int):
+        """Train up to `count` jobs at once; a running queue starts more right away if there is room."""
+        self.max_parallel = max(1, int(count))
+        self._start_next_queued()
+        self._emit_queue()
 
     def queue_state(self) -> dict[str, Any]:
         """The active job(s), queued jobs in run order, and the ten most recent finished jobs."""
@@ -343,7 +357,7 @@ class JobManager(QObject):
         return self.public(job)
 
     def start_queue(self) -> dict[str, Any]:
-        """Start running queued jobs one at a time, in order. Starting an empty queue leaves it paused."""
+        """Start running queued jobs in order, up to max_parallel at once. Starting an empty queue leaves it paused."""
         self.queue_running = bool(self.queue_order)
         self._start_next_queued()
         self._emit_queue()
@@ -364,14 +378,13 @@ class JobManager(QObject):
         return self.queue_order.index(job_id)
 
     def _start_next_queued(self):
-        if not self.queue_running or self.is_busy():
-            return
-        if not self.queue_order:
-            self.queue_running = False  # drained: jobs added later wait for Start
-            return
-        job = self.jobs[self.queue_order.pop(0)]
-        job["status"] = "pending"
-        self._start(job)
+        """Start queued jobs, in order, while the queue runs and fewer than max_parallel are training."""
+        while self.queue_running and self.queue_order and self.has_capacity():
+            job = self.jobs[self.queue_order.pop(0)]
+            job["status"] = "pending"
+            self._start(job)
+        if self.queue_running and not self.queue_order and not self.running_count():
+            self.queue_running = False  # drained and the last job finished: jobs added later wait for Start
 
     def shutdown(self):
         """Stop every running job (the app is closing; QProcess children end with it)."""

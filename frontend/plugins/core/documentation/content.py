@@ -235,6 +235,7 @@ python -m frontend</code></pre>
 <p>Real-time telemetry and telemetry replay for live and finished training runs:</p>
 <ul>
   <li>The monitor is for the run training now: it shows that run, or the most recent one when nothing is training. Past runs are viewed in the <b>Plot Viewer</b> (see below).</li>
+  <li><b>Several runs training at once:</b> a <b>TRAINING NOW</b> row of chips appears above the status row, one per running experiment with how far along it is. Click a chip to show that run; Stop stops the run shown.</li>
   <li><b>Status row:</b> the run's status, name, paradigm and seed, then elapsed time, training speed (steps per second, eased so it does not jitter) and time left. A running job that goes quiet for two minutes shows <b>STALLED</b> and when it last reported; a finished run shows when it last wrote. Hover the name for the environment, methods and where the run's files are.</li>
   <li><b>System &middot; Logs &middot; Feed &middot; Files:</b> buttons at the end of the status row. Each opens that view in place of the charts; click it again to go back. The System button shows the training process's CPU use while it runs.</li>
   <li><b>Pipeline strip:</b> the run's methods in training order, one segment each (done, training with its progress, or waiting), with checkpoints &#9670;, the latest new best &#9733; and warnings &#9888; marked under it. Click a segment to show only that method's curves; click it again to show them all.</li>
@@ -253,7 +254,7 @@ python -m frontend</code></pre>
 <ul>
   <li>The top row names the experiment open in the Experiment tab. <b>Launch now</b> (<code>F5</code>) trains it straight away, <b>Stop</b> (<code>Shift+F5</code>) ends the active run, and <b>Start simulated demo</b> (<code>Ctrl+F5</code>) runs a simulated one that needs no training environment.</li>
   <li>Add the open experiment with <b>Add to queue</b> (<code>Ctrl+Shift+Q</code>). Adding does not start it.</li>
-  <li><b>Start queue</b> (<code>Ctrl+Shift+R</code>) trains queued experiments one at a time, in order. The Training Monitor switches to each one as it starts.</li>
+  <li><b>Start queue</b> (<code>Ctrl+Shift+R</code>) trains queued experiments in order. <b>Run up to N at once</b> (beside it, remembered between sessions) sets how many train at the same time: the queue starts the next one whenever one finishes, and Launch now works while there is room. The Training Monitor switches to each one as it starts.</li>
   <li><b>Pause queue</b> stops the next job from starting; a job already training keeps running. The queue also pauses itself when it runs out of jobs.</li>
   <li>The list shows running, queued and recent jobs. Select a job to <b>Move up</b>, <b>Move down</b> or <b>Remove from queue</b>; double-click it (or <b>Open in Plot Viewer</b>) to plot its run in the Plot Viewer.</li>
   <li>Jobs are saved in <code>results/jobs/jobs.db</code>, so queued jobs survive a restart and wait for <b>Start queue</b>. Training runs inside Theta-IDE: closing the window while something trains keeps it going in the system tray (see <a href="launching">Installing &amp; Launching</a>).</li>
@@ -1011,6 +1012,10 @@ total_timesteps: 100000
 eval_episodes: 20
 num_checkpoints: 10              # or checkpoint_every_steps: 10000 (one or the other)</code></pre>
 <p><b>Checkpoints</b> (online RL): set <code>checkpoint_every_steps</code> to save a checkpoint each time training passes another N timesteps, or <code>num_checkpoints</code> to save that many, spread evenly over <code>total_timesteps</code>. The last one always falls at the end of the run. They are saved as <code>step_&lt;timesteps&gt;.ckpt</code> (<code>.zip</code> for Stable-Baselines3) next to <code>best_model</code>. Setting both is an error. In the experiment editor, <b>+ &rarr; Checkpoints</b> adds the row; its menu switches between the two.</p>
+<p><b>Recorded metrics</b>: list the metrics a run records, by name or by whole section, and the work behind the others is skipped, so the run is faster:</p>
+<pre><code>telemetry:
+  metrics: [eval/reward, losses/]   # a name, or a section ending in /</code></pre>
+<p>Only the listed metrics reach <code>metrics.csv</code>, the live feed and TensorBoard; step, epoch and transitions are always kept. With no <code>eval/</code> entry, no evaluation episodes run (and no best-by-reward checkpoint is kept; the final model is still saved); with no <code>system/</code> entry, CPU and memory are not sampled. Leaving the list out records everything. A sweep must keep the metric it optimises. In the experiment editor, <b>+ &rarr; Recorded Metrics</b> adds a box of checkboxes: a section's own box records all of it, and the metrics under it are the ones this experiment's newest earlier run logged.</p>
 
 <hr style="border: 0; border-top: 1px solid rgba(255,255,255,0.1); margin: 20px 0;" />
 

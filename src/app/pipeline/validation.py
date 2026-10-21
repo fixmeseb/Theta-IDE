@@ -20,6 +20,7 @@ from src.app.core.checkpoints import checkpoint_errors
 from src.app.pipeline.config import normalize_agent_name, parse_methods_dict, resolve_experiment_config_name
 from src.app.pipeline.datasets import resolve_dataset_path
 from src.app.pipeline.exceptions import ConfigurationError
+from src.app.telemetry.selection import selection_errors
 
 # ---------------------------------------------------------------------------
 # Paradigm registry loading
@@ -256,6 +257,13 @@ def validate_experiment_config(cfg: Any, experiment_name: str, is_sweep: bool = 
 
     # --- Periodic checkpoints: checkpoint_every_steps or num_checkpoints ---
     for problem in checkpoint_errors(cfg):
+        raise ConfigurationError(f"[ConfigurationError] Experiment '{experiment_name}': {problem}")
+
+    # --- Recorded metrics: telemetry.metrics ---
+    env = cfg.get("env") if hasattr(cfg, "get") else None
+    env_monitor = env.get("monitor_metric") if env is not None and hasattr(env, "get") else None
+    monitor = paradigm_def.get("monitor_metric") or env_monitor
+    for problem in selection_errors(cfg, monitor):
         raise ConfigurationError(f"[ConfigurationError] Experiment '{experiment_name}': {problem}")
 
     # --- Paradigm-Method/Agent Validation ---

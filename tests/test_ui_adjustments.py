@@ -10,6 +10,7 @@ import os
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 from pathlib import Path
 
 import yaml
@@ -156,6 +157,8 @@ class TestUIAdjustments(unittest.TestCase):
 
         app_mock = MagicMock(spec=Window)
         app_mock.active = None
+        app_mock.active_runs = []
+        app_mock.jobs = SimpleNamespace(max_parallel=1)
         app_mock.start_button = QToolButton()
         app_mock.queue_button = None
         app_mock.stop_button = None
@@ -178,8 +181,17 @@ class TestUIAdjustments(unittest.TestCase):
         self.assertIn("Validation error: agent ppo forbids offline_rl", app_mock.start_button.toolTip())
 
         app_mock.active = {"status": "running", "simulated": False, "backend": {"experiment_id": "cartpole/cp_test"}}
+        app_mock.active_runs = [app_mock.active]
         Window.update_launch_state(app_mock)
         self.assertIn("A run is currently active", app_mock.start_button.toolTip())
+
+        app_mock.jobs.max_parallel = 2  # room for one more: launching is offered again
+        app_mock.compose_error, app_mock.compose_valid = None, True
+        Window.update_launch_state(app_mock)
+        self.assertNotIn("Cannot run", app_mock.start_button.toolTip())
+        app_mock.active_runs = [app_mock.active, dict(app_mock.active)]
+        Window.update_launch_state(app_mock)
+        self.assertIn("2 runs are training, the most at once", app_mock.start_button.toolTip())
 
     def test_single_click_title_editing(self):
         """Single click triggers inline editing for experiment title, group badge, and method title."""

@@ -389,7 +389,7 @@ def _window_stub(run, active=True):
         _persisted_at={},
         jobs=types.SimpleNamespace(job=lambda job_id: {"effective_timesteps": 3072}),
         run_for_job=lambda job_id: run,
-        active=run if active else None,
+        active_runs=[run] if active else [],  # the runs training now
         selected=None,
         log=logged.append,
         persist=lambda r: saved.append(len(r["metrics"])) or True,
@@ -412,7 +412,7 @@ def test_the_app_keeps_a_live_run_per_agent_and_echoes_the_active_runs_events():
     live = Window.live_runs_for_job(stub, "job1")["ppo"]
     assert live.budget == 3072 and live.latest("eval/reward") == 9.0
     assert logged == ["◆ ppo: New best eval/reward 9 (was 5)", "⚠ ppo: losses/x is nan at step 2"]
-    stub.active = None  # a run that is not followed keeps its LiveRun but stays out of the console
+    stub.active_runs = []  # a run that is not training keeps its LiveRun but stays out of the console
     Window.on_job_records(stub, "job1", "ppo", [record("event", kind="stage", message="x")], False)
     assert len(logged) == 2 and len(live.events) == 3
 
