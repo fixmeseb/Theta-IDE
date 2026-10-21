@@ -51,7 +51,7 @@ files, 29% of Python lines in tests. Coverage is measured by CI.
 | Docs, the HOW: mini-tutorials with worked examples | **3** | [23 in-app articles](https://github.com/fixmeseb/Theta-IDE/blob/main/frontend/plugins/core/documentation/content.py) (1490 lines), plus [`COMPONENT_PLUGIN_GUIDE.md`](https://github.com/fixmeseb/Theta-IDE/blob/main/docs/COMPONENT_PLUGIN_GUIDE.md) and [`WORKFLOW_GUIDE.md`](https://github.com/fixmeseb/Theta-IDE/blob/main/docs/WORKFLOW_GUIDE.md) |
 | Docs, the WHY: the docs tell a story | **3** | [`documentation/content.py`](https://github.com/fixmeseb/Theta-IDE/blob/main/frontend/plugins/core/documentation/content.py) — the in-app docs open with "Welcome & Architecture Overview" and "System Architecture", which set out what the IDE is for and why it is built in layers, before any API detail |
 | Teaser video (12–30 s) at the TOP of README | **3** | [Embedded directly under the badges](https://github.com/fixmeseb/Theta-IDE#readme) |
-| Feature walk-through video (2–5 min), linked in README | **3** | Linked in the [README](https://github.com/fixmeseb/Theta-IDE#readme) beneath the teaser |
+| Feature walk-through video (2–5 min), linked in README | **3** | [Linked in the README](https://github.com/fixmeseb/Theta-IDE#readme) beneath the teaser, pointing at [`demo video.mp4`](https://github.com/fixmeseb/Theta-IDE/blob/main/demo%20video.mp4) in the repo. GitHub cannot preview a 16 MB file, so the link downloads it |
 
 ## Standard files and bling
 

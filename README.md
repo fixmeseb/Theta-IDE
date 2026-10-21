@@ -15,6 +15,8 @@
 
 https://github.com/user-attachments/assets/3469954e-a74a-4427-808d-d8af654cc8cb
 
+**[Feature walk-through (full demo)](https://github.com/fixmeseb/Theta-IDE/blob/main/demo%20video.mp4)** — every major feature, shown working. GitHub cannot preview a file this large, so the link downloads it.
+
 ThetaIDE is a desktop IDE and experiment pipeline for reinforcement learning and deep learning research. You
 compose experiments from Hydra configs, launch training on your machine, watch metrics stream in live, and
 compare runs side by side. The pipeline is built on PyTorch Lightning and Hydra.
