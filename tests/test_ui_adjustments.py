@@ -89,8 +89,8 @@ class TestUIAdjustments(unittest.TestCase):
         labels = [lbl.text() for lbl in self.viewer.findChildren(QLabel)]
         self.assertIn("Paradigm", labels)
         self.assertNotIn("Paradigm (Required)", labels)
-        self.assertIn("Environment", labels)
-        self.assertNotIn("Environment (Required)", labels)
+        self.assertIn("Environment / Task", labels)
+        self.assertNotIn("Environment / Task (Required)", labels)
 
     def test_item3_method_card_bottom_actions_pinned(self):
         """Method card uses QVBoxLayout with stretch pinning duplicate and add buttons to bottom."""
@@ -120,7 +120,6 @@ class TestUIAdjustments(unittest.TestCase):
         chosen_action = next((a for a in actions if a.text() and not a.text().startswith("+")), actions[0])
         chosen_key = chosen_action.text()
         chosen_action.trigger()
-        app.processEvents()
         updated_keys = set(self.viewer.raw_data.get("methods", {}).get("ppo_dnn", {}).keys())
         self.assertIn(chosen_key, updated_keys)
 
@@ -214,7 +213,7 @@ class TestUIAdjustments(unittest.TestCase):
     def test_group_defaults_one_default_method_and_inheritance(self):
         """Group defaults allow at most 1 method, and experiments inherit from it."""
         # Create a group base with a default method
-        group_dir = self.tmp_root / "experiment" / "cartpole"
+        group_dir = self.mock_tree.config_root / "experiment" / "cartpole"
         group_dir.mkdir(parents=True, exist_ok=True)
         base_file = group_dir / "_base.yaml"
         base_file.write_text(
