@@ -6,7 +6,8 @@ Scale: **0** none · **1** a little · **2** somewhat · **3** a lot.
 Every row carries a link as evidence. The tutor spot-checks five rows at the demo,
 so each score below is one a reviewer can verify from the repository.
 
-Figures measured on commit `2a9802d`: 752 commits, 1365 tests, 70% line coverage.
+Figures measured on commit `4c6d6af`: 769 commits, 1354 test functions across 106
+files, 29% of Python lines in tests. Coverage is measured by CI.
 
 ---
 
@@ -14,7 +15,7 @@ Figures measured on commit `2a9802d`: 752 commits, 1365 tests, 70% line coverage
 
 | Criterion | Score | Evidence |
 |---|---|---|
-| Many commits (exemplar has 467) | **3** | [752 commits on main](https://github.com/fixmeseb/Theta-IDE/commits/main) — 61% above the exemplar |
+| Many commits (exemplar has 467) | **3** | [769 commits on main](https://github.com/fixmeseb/Theta-IDE/commits/main) — 65% above the exemplar |
 | Commits come from different people | **3** | [Contributors](https://github.com/fixmeseb/Theta-IDE/graphs/contributors) — 6 identities, 5 people |
 | Workload is spread over the whole team | **2** | [Contributors](https://github.com/fixmeseb/Theta-IDE/graphs/contributors). Four people contribute substantially, three of them within 25% of each other, but one leads by more than the "3x more productive" the rubric allows. Note `kc` and `ccast44` are one person (same GitHub user id), so the graph splits one contributor in two |
 | Team members work across many parts, not one silo each | **3** | [Commit history](https://github.com/fixmeseb/Theta-IDE/commits/main) — three of the four work substantially across `frontend/`, `src/` and `tests/`; no one is confined to a single area |
@@ -36,8 +37,8 @@ Figures measured on commit `2a9802d`: 752 commits, 1365 tests, 70% line coverage
 
 | Criterion | Score | Evidence |
 |---|---|---|
-| Tests exist: 50 is good, 100 is better | **3** | [1365 tests](https://github.com/fixmeseb/Theta-IDE/tree/main/tests) across 107 files, expected and failure cases both |
-| Tests are a serious share of the code base (~30%) | **3** | [`tests/`](https://github.com/fixmeseb/Theta-IDE/tree/main/tests) — 24,817 of 85,758 Python lines are tests, **28%** |
+| Tests exist: 50 is good, 100 is better | **3** | [1354 test functions](https://github.com/fixmeseb/Theta-IDE/tree/main/tests) across 106 files, expected and failure cases both |
+| Tests are a serious share of the code base (~30%) | **3** | [`tests/`](https://github.com/fixmeseb/Theta-IDE/tree/main/tests) — 24,091 of 81,952 Python lines are tests, **29%** |
 | Tests run automatically on every commit | **3** | [CI badge](https://github.com/fixmeseb/Theta-IDE/actions/workflows/ci.yml) — lint, test and typecheck on push and PR |
 | Coverage is measured; the badge shows the number | **3** | **70%** line coverage measured by `pytest-cov`, configured in [`pyproject.toml`](https://github.com/fixmeseb/Theta-IDE/blob/main/pyproject.toml) and run by [CI](https://github.com/fixmeseb/Theta-IDE/blob/main/.github/workflows/ci.yml); the badge shows that number |
 
@@ -46,7 +47,7 @@ Figures measured on commit `2a9802d`: 752 commits, 1365 tests, 70% line coverage
 | Criterion | Score | Evidence |
 |---|---|---|
 | Docs are generated, and not ugly | **2** | [`documentation/content.py`](https://github.com/fixmeseb/Theta-IDE/blob/main/frontend/plugins/core/documentation/content.py) — 23 styled HTML articles rendered in an in-app documentation browser with search and navigation, plus Markdown guides. Not auto-generated from docstrings, which is what holds this short of 3 |
-| Docs, the WHAT: per class/function descriptions | **2** | [`src/`](https://github.com/fixmeseb/Theta-IDE/tree/main/src) — 1091 of 2242 public classes and functions carry docstrings, **48%** |
+| Docs, the WHAT: per class/function descriptions | **2** | [`src/`](https://github.com/fixmeseb/Theta-IDE/tree/main/src) — 1,061 of 1,916 public classes and functions carry docstrings, **55%** |
 | Docs, the HOW: mini-tutorials with worked examples | **3** | [21 in-app articles](https://github.com/fixmeseb/Theta-IDE/blob/main/frontend/plugins/core/documentation/content.py) (1490 lines), plus [`COMPONENT_PLUGIN_GUIDE.md`](https://github.com/fixmeseb/Theta-IDE/blob/main/docs/COMPONENT_PLUGIN_GUIDE.md) and [`WORKFLOW_GUIDE.md`](https://github.com/fixmeseb/Theta-IDE/blob/main/docs/WORKFLOW_GUIDE.md) |
 | Docs, the WHY: the docs tell a story | **3** | [`documentation/content.py`](https://github.com/fixmeseb/Theta-IDE/blob/main/frontend/plugins/core/documentation/content.py) — the in-app docs open with "Welcome & Architecture Overview" and "System Architecture", which set out what the IDE is for and why it is built in layers, before any API detail |
 | Teaser video (12–30 s) at the TOP of README | **3** | [Embedded directly under the badges](https://github.com/fixmeseb/Theta-IDE#readme) |
