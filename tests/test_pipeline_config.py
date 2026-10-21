@@ -323,9 +323,8 @@ class TestParseMethodsDict:
         m_cew = res["cql_blendrl_cew_dueling_resnet"]
         assert m_cew["agent"] == "cql"
         assert (m_cew["model"] == "blendrl" or m_cew["model"]["name"] == "blendrl")
-        assert m_cew["model_params"]["neural"]["architecture"] == "dueling_resnet"
-        assert m_cew["model_params"]["symbolic"]["type"] == "cew"
-        assert m_cew["model_params"]["symbolic"]["ecm_dthr"] == 0.03
+        assert m_cew["model_params"]["neural"] == "dueling_resnet"
+        assert m_cew["model_params"]["symbolic"] == {"cew": {"ecm_dthr": 0.03}}
         assert "style" in m_cew
         assert m_cew["style"]["label"] == "BlendRL CEW+ResNet"
 
@@ -374,8 +373,8 @@ class TestParseMethodsDict:
         }
         res = parse_methods_dict(cfg)
         m = res["cql_blendrl_cew_dueling_resnet"]
-        assert m["model_params"]["symbolic"]["ecm_dthr"] == 0.09
-        assert m["model_params"]["neural"]["architecture"] == "dueling_resnet"
+        assert m["model_params"]["symbolic"]["cew"]["ecm_dthr"] == 0.09
+        assert m["model_params"]["neural"] == "dueling_resnet"
         assert m["style"]["label"] == "BlendRL CEW+ResNet"
 
     def test_group_method_base_decoupling(self, monkeypatch):

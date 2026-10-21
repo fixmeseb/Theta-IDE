@@ -194,7 +194,7 @@ hidden_sizes: [64, 64]
             "type": "object",
             "properties": {
                 "hidden_sizes": {"type": "array", "items": {"type": "integer"}, "default": [64, 64]},
-            }
+            },
         }
         meta_file = target_dir / ".theta_component.json"
         meta_file.write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")

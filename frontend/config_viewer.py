@@ -4454,6 +4454,41 @@ class ConfigViewer(QWidget):
         m_spec[param_key] = parsed_val
         self._mark_dirty()
 
+    def _on_method_nested_param_edited(self, method_name: str, parent_key: str, child_key: str, value: Any):
+        """Update a nested method parameter, including parameters inside a model config."""
+        if self._block_updates:
+            return
+        m_spec = self.raw_data.setdefault("methods", {}).setdefault(method_name, {})
+        parsed_val = _parse_yaml_value(value) if isinstance(value, str) else value
+        model_spec = m_spec.get("model")
+        if isinstance(model_spec, dict):
+            for model_config in model_spec.values():
+                if isinstance(model_config, dict) and isinstance(model_config.get(parent_key), dict):
+                    model_config[parent_key][child_key] = parsed_val
+                    self._mark_dirty()
+                    return
+        nested = m_spec.setdefault(parent_key, {})
+        if not isinstance(nested, dict):
+            nested = m_spec[parent_key] = {}
+        nested[child_key] = parsed_val
+        self._mark_dirty()
+
+    def _remove_method_nested_param(self, method_name: str, parent_key: str, child_key: str):
+        """Remove a nested method parameter, including parameters inside a model config."""
+        methods = self.raw_data.get("methods", {})
+        m_spec = methods.get(method_name, {}) if isinstance(methods, dict) else {}
+        if isinstance(m_spec, dict):
+            model_spec = m_spec.get("model")
+            if isinstance(model_spec, dict):
+                for model_config in model_spec.values():
+                    if isinstance(model_config, dict) and isinstance(model_config.get(parent_key), dict):
+                        model_config[parent_key].pop(child_key, None)
+            nested = m_spec.get(parent_key)
+            if isinstance(nested, dict):
+                nested.pop(child_key, None)
+        self._mark_dirty()
+        self._render_boxes()
+
     def _method_model_parameter_root(self, method_name: str, model_name: str, create: bool = False) -> dict:
         methods = self.raw_data.setdefault("methods", {})
         m_spec = methods.setdefault(method_name, {})
