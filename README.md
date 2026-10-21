@@ -30,8 +30,8 @@ such as BlendRL, NSFR and NEUMANN. You can also write your own: see the
 Python 3.10–3.13 is required. Python 3.14 is not supported yet: Hydra 1.3 fails on it at startup.
 
 ```bash
-git clone https://github.com/CameronEgb/Offline-BlendRL.git
-cd Offline-BlendRL
+git clone https://github.com/fixmeseb/Theta-IDE.git
+cd Theta-IDE
 python3 -m venv venv
 source venv/bin/activate          # Windows: .\venv\Scripts\Activate.ps1
 pip install -e ".[dev,gui]"

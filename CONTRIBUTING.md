@@ -8,8 +8,8 @@ pass, and where to start for the most common kinds of contribution.
 Follow [INSTALL.md](INSTALL.md), cloning your fork instead of the main repository, then install the git hooks:
 
 ```bash
-git clone https://github.com/<your-username>/Offline-BlendRL.git
-cd Offline-BlendRL
+git clone https://github.com/<your-username>/Theta-IDE.git
+cd Theta-IDE
 python3 -m venv venv                      # Python 3.10–3.13
 source venv/bin/activate
 pip install -e ".[dev,gui]"

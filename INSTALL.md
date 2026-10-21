@@ -29,8 +29,8 @@ both work. For a tour of the IDE once it is running, press **F1** inside it.
 ### With venv and pip
 
 ```bash
-git clone https://github.com/CameronEgb/Offline-BlendRL.git
-cd Offline-BlendRL
+git clone https://github.com/fixmeseb/Theta-IDE.git
+cd Theta-IDE
 python3 -m venv venv
 source venv/bin/activate
 pip install --upgrade pip
@@ -52,8 +52,8 @@ pip install -e ".[dev,gui]"
 Python is 3.14:
 
 ```bash
-git clone https://github.com/CameronEgb/Offline-BlendRL.git
-cd Offline-BlendRL
+git clone https://github.com/fixmeseb/Theta-IDE.git
+cd Theta-IDE
 uv venv --python 3.12 venv
 source venv/bin/activate
 uv pip install -e ".[dev,gui]"

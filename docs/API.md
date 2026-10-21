@@ -10,8 +10,8 @@ This document describes how **ThetaIDE** drives the **NeSyRL** training pipeline
 
 ```bash
 # 1. Clone repository
-git clone https://github.com/CameronEgb/Offline-BlendRL.git
-cd Offline-BlendRL
+git clone https://github.com/fixmeseb/Theta-IDE.git
+cd Theta-IDE
 
 # 2. Virtual environment setup
 python3 -m venv venv
