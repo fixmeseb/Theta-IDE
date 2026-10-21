@@ -8,6 +8,7 @@
 [![pre-commit](https://img.shields.io/badge/pre--commit-enabled-FAB040?logo=pre-commit)](./.pre-commit-config.yaml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE.md)
 [![Python 3.10–3.13](https://img.shields.io/badge/python-3.10--3.13-blue.svg)](https://www.python.org/downloads/)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23537094.svg)](https://doi.org/10.5281/zenodo.23537094)
 
 
 https://github.com/user-attachments/assets/3469954e-a74a-4427-808d-d8af654cc8cb

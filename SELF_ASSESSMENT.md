@@ -63,7 +63,7 @@ Figures measured on commit `2a9802d`: 752 commits, 1365 tests, 70% line coverage
 | CODE-OF-CONDUCT.md | **3** | [`CODE-OF-CONDUCT.md`](https://github.com/fixmeseb/Theta-IDE/blob/main/CODE-OF-CONDUCT.md) |
 | CONTRIBUTING.md | **3** | [`CONTRIBUTING.md`](https://github.com/fixmeseb/Theta-IDE/blob/main/CONTRIBUTING.md) |
 | Style checker, formatter, syntax checker: configs + badges | **3** | Ruff and mypy configured in [`pyproject.toml`](https://github.com/fixmeseb/Theta-IDE/blob/main/pyproject.toml), enforced by [CI](https://github.com/fixmeseb/Theta-IDE/blob/main/.github/workflows/ci.yml), badged in the README |
-| DOI badge from Zenodo | **0** | Not yet minted — see Known Gaps |
+| DOI badge from Zenodo | **3** | [10.5281/zenodo.23537094](https://doi.org/10.5281/zenodo.23537094) — the concept DOI, which resolves to the newest release rather than going stale. Badged in the README |
 | THIRD_PARTY_LIBRARIES.md: every dependency with its licence | **3** | [`THIRD_PARTY_LIBRARIES.md`](https://github.com/fixmeseb/Theta-IDE/blob/main/THIRD_PARTY_LIBRARIES.md) — 38 dependencies, generated from installed metadata, and it surfaces that PyQt6 is GPL-3.0 in an MIT project |
 | AI use is visible and disclosed | **3** | [`.agents/AGENTS.md`](https://github.com/fixmeseb/Theta-IDE/blob/main/.agents/AGENTS.md), 252 lines of agent instructions committed to the repo. Human checking is evidenced on [25 pull requests](https://github.com/fixmeseb/Theta-IDE/pulls?q=is%3Apr), several carrying line-by-line review that changed the code before merge |
 | Repo holds no keys or passwords | **3** | Scanned for hardcoded credentials; none found. CI uses `secrets.CODECOV_TOKEN` |
@@ -108,7 +108,7 @@ which is the Hub work. No one is confined to a single area.
 
 All **33 rows scored**.
 
-**Total: 91 / 99** (91%).
+**Total: 94 / 99** (94%).
 
 Scores are set at the highest value the evidence in this repo will support
 under a spot-check. Where a row is marked below 3, it is because a reviewer
@@ -117,7 +117,7 @@ undervalued. The remaining gaps are listed at the end.
 
 ## Known gaps, and what closes them
 
-Five rows sit below 3. For each, what a reviewer would see and what would lift it.
+Four rows sit below 3. For each, what a reviewer would see and what would lift it.
 
 | Row | Score | What a spot-check shows | What lifts it |
 |---|---:|---|---|
@@ -125,7 +125,6 @@ Five rows sit below 3. For each, what a reviewer would see and what would lift i
 | Issue reports: many | 1 | 3 issues against 25 pull requests | Filing more, with discussion. Not worth doing hours before a deadline |
 | Docs are generated | 2 | Styled in-app docs, but written by hand | pdoc or MkDocs over the existing 48% docstring coverage |
 | Docs, the WHAT | 2 | 1091 of 2242 public symbols documented (48%) | Docstrings on the remaining half |
-| Zenodo DOI | 0 | No DOI badge | Link Zenodo to the repo, cut a release |
 
-The Zenodo DOI is the cheapest point left: about ten minutes of account work,
-worth 3 of the 8 points missing.
+The four remaining are records of how the term went rather than things that
+can be changed before submission.
