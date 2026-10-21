@@ -16,8 +16,8 @@ files, 29% of Python lines in tests. Coverage is measured by CI.
 | Criterion | Score | Evidence |
 |---|---|---|
 | Many commits (exemplar has 467) | **3** | [769 commits on main](https://github.com/fixmeseb/Theta-IDE/commits/main) — 65% above the exemplar |
-| Commits come from different people | **3** | [Contributors](https://github.com/fixmeseb/Theta-IDE/graphs/contributors) — 6 identities, 5 people |
-| Workload is spread over the whole team | **2** | [Contributors](https://github.com/fixmeseb/Theta-IDE/graphs/contributors). Four people contribute substantially, three of them within 25% of each other, but one leads by more than the "3x more productive" the rubric allows. Note `kc` and `ccast44` are one person (same GitHub user id), so the graph splits one contributor in two |
+| Commits come from different people | **3** | [Contributors](https://github.com/fixmeseb/Theta-IDE/graphs/contributors) — 4 contributors; git records 8 name/email pairs, which GitHub collapses into these 4 accounts |
+| Workload is spread over the whole team | **2** | [Contributors](https://github.com/fixmeseb/Theta-IDE/graphs/contributors). All four contribute, and the three behind the lead sit within 25% of each other (74, 72 and 58 commits). The lead holds 567, which is 7.7x the next person and past the "3x more productive" the rubric allows. `kc` and `ccast44` are one person, recorded as two authors in git and collapsed into one account by GitHub |
 | Team members work across many parts, not one silo each | **3** | [Commit history](https://github.com/fixmeseb/Theta-IDE/commits/main) — three of the four work substantially across `frontend/`, `src/` and `tests/`; no one is confined to a single area |
 | Short release cycles: frequent small commits, merged promptly | **3** | [25 pull requests, all merged or closed, none open](https://github.com/fixmeseb/Theta-IDE/pulls?q=is%3Apr) |
 | Whole team uses the same tools: config files in repo, updated by many | **3** | [`pyproject.toml`](https://github.com/fixmeseb/Theta-IDE/blob/main/pyproject.toml) (`[tool.ruff]`, `[tool.mypy]`, `[tool.coverage]`), [`.pre-commit-config.yaml`](https://github.com/fixmeseb/Theta-IDE/blob/main/.pre-commit-config.yaml), [`ci.yml`](https://github.com/fixmeseb/Theta-IDE/blob/main/.github/workflows/ci.yml) |
@@ -57,7 +57,7 @@ files, 29% of Python lines in tests. Coverage is measured by CI.
 
 | Criterion | Score | Evidence |
 |---|---|---|
-| README.md: all badges above, all working | **3** | [README](https://github.com/fixmeseb/Theta-IDE#readme) — 8 badges: build, tests, coverage, style, types, pre-commit, licence, Python. Every URL fetched and returning 200; none is dead |
+| README.md: all badges above, all working | **3** | [README](https://github.com/fixmeseb/Theta-IDE#readme) — 9 badges: build, tests, coverage, style, types, pre-commit, licence, Python, DOI. Every URL fetched and returning 200; none is dead |
 | .gitignore | **3** | [`.gitignore`](https://github.com/fixmeseb/Theta-IDE/blob/main/.gitignore) |
 | INSTALL.md | **3** | [`INSTALL.md`](https://github.com/fixmeseb/Theta-IDE/blob/main/INSTALL.md) |
 | LICENSE.md | **3** | [`LICENSE.md`](https://github.com/fixmeseb/Theta-IDE/blob/main/LICENSE.md) — MIT |
@@ -66,7 +66,7 @@ files, 29% of Python lines in tests. Coverage is measured by CI.
 | Style checker, formatter, syntax checker: configs + badges | **3** | Ruff and mypy configured in [`pyproject.toml`](https://github.com/fixmeseb/Theta-IDE/blob/main/pyproject.toml), enforced by [CI](https://github.com/fixmeseb/Theta-IDE/blob/main/.github/workflows/ci.yml), badged in the README |
 | DOI badge from Zenodo | **3** | [10.5281/zenodo.23537094](https://doi.org/10.5281/zenodo.23537094) — the concept DOI, which resolves to the newest release rather than going stale. Badged in the README |
 | THIRD_PARTY_LIBRARIES.md: every dependency with its licence | **3** | [`THIRD_PARTY_LIBRARIES.md`](https://github.com/fixmeseb/Theta-IDE/blob/main/THIRD_PARTY_LIBRARIES.md) — 45 dependencies, generated from installed metadata, and it surfaces that PyQt6 is GPL-3.0 in an MIT project |
-| AI use is visible and disclosed | **3** | [`.agents/AGENTS.md`](https://github.com/fixmeseb/Theta-IDE/blob/main/.agents/AGENTS.md), 252 lines of agent instructions committed to the repo. Human checking is evidenced on [25 pull requests](https://github.com/fixmeseb/Theta-IDE/pulls?q=is%3Apr), several carrying line-by-line review that changed the code before merge |
+| AI use is visible and disclosed | **3** | [`.agents/AGENTS.md`](https://github.com/fixmeseb/Theta-IDE/blob/main/.agents/AGENTS.md) commits the agent instructions the team works under, cut to 13 lines when the core was decoupled. Human checking is evidenced on [25 pull requests](https://github.com/fixmeseb/Theta-IDE/pulls?q=is%3Apr), several carrying line-by-line review that changed the code before merge |
 | Repo holds no keys or passwords | **3** | Scanned for hardcoded credentials; none found. [CI](https://github.com/fixmeseb/Theta-IDE/blob/main/.github/workflows/ci.yml) keeps the one token in `secrets.CODECOV_TOKEN`, not in the repo |
 
 ---
