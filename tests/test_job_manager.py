@@ -98,7 +98,10 @@ class Harness:
         self.statuses[job["job_id"]] = job["status"]
 
     def launch(self, name, queue=False):
-        return self.manager.launch(BASE_EXPERIMENT, Config(name=name).overrides(), queue=queue)
+        # The workspace fixture supplies these profiles; the test no longer
+        # relies on locally installed component configs being present.
+        config = Config(name=name, method_name="ppo", agent="ppo", model="dnn")
+        return self.manager.launch(BASE_EXPERIMENT, config.overrides(), queue=queue)
 
     def release(self, job, code=0):
         (self.control / job["experiment_id"]).write_text(str(code), encoding="utf-8")

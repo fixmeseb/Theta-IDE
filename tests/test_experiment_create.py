@@ -307,7 +307,8 @@ class TestAgentlessParadigms(unittest.TestCase):
         self.assertEqual(default_method_model(group, self.tree.models), "fixture_model")
 
     def test_group_with_no_methods_has_no_model_default(self):
-        chosen = default_method_model(self.tree.group("thetaide"), self.tree.models)
+        empty_group = ExperimentGroup(name="empty", base_methods={})
+        chosen = default_method_model(empty_group, self.tree.models)
         self.assertIsNone(chosen)
 
     def test_unknown_group_has_no_model_default(self):

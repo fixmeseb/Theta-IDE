@@ -154,49 +154,8 @@ class TestBuildMethodOverrides:
         assert "++agent.batch_size=1024" not in overrides
         assert "++agent.lr=0.0003" in overrides
 
-    def test_blendrl_human_dueling_resnet_rigid_overrides(self):
-        """cql_blendrl_human_dueling_resnet_rigid should generate clean neural and symbolic overrides."""
-        cfg_dict = {
-            "experiment_name": "mimic/final",
-            "paradigm": "offline_rl",
-            "methods": {
-                "params": {
-                    "agent": {
-                        "cql": {
-                            "lr": 3e-4,
-                        }
-                    },
-                    "model": {
-                        "blendrl": {
-                            "blend_q_values": True,
-                        }
-                    },
-                },
-                "cql_blendrl_human_dueling_resnet_rigid": {
-                    "agent": "cql",
-                    "model": "blendrl",
-                    "neural": "dueling_resnet",
-                    "symbolic": {"rules": "rigid"},
-                },
-            },
-        }
-        methods = parse_methods_dict(cfg_dict)
-        overrides = build_method_overrides(
-            method_name="cql_blendrl_human_dueling_resnet_rigid",
-            method_cfg=methods["cql_blendrl_human_dueling_resnet_rigid"],
-            cfg=cfg_dict,
-        )
-
-        assert "agent=cql" in overrides
-        assert "model=blendrl" in overrides
-        assert "++model.blend_q_values=true" in overrides
-        assert "++model.neural.architecture=dueling_resnet" in overrides
-        assert "++model.neural.hidden_sizes=[512,512,256,128]" in overrides
-        assert "++model.symbolic.rules=rigid" in overrides
-        assert "++model.symbolic.type=nsfr" in overrides
-
-    def test_blendrl_cew_dueling_resnet_overrides(self):
-        """cql_blendrl_cew_dueling_resnet should generate clean CEW and neural overrides."""
+    def test_nested_component_parameters_are_forwarded_without_installed_model_defaults(self):
+        """Nested parameters travel through the generic builder without plugin defaults."""
         cfg_dict = {
             "experiment_name": "mimic/final",
             "paradigm": "offline_rl",
@@ -208,48 +167,81 @@ class TestBuildMethodOverrides:
                         }
                     },
                 },
-                "cql_blendrl_cew_dueling_resnet": {
+                "cql_composite_fixture": {
                     "agent": "cql",
-                    "model": "blendrl",
-                    "neural": "dueling_resnet",
-                    "symbolic": {
-                        "name": "cew",
-                        "ecm_dthr": 0.03,
+                    "model": "composite_fixture",
+                    "model_params": {
+                        "encoder": {"architecture": "fixture_encoder", "hidden_sizes": [512, 256]},
+                        "reasoner": {"type": "fixture_reasoner", "rules": "rigid"},
                     },
                 },
             },
         }
         methods = parse_methods_dict(cfg_dict)
         overrides = build_method_overrides(
-            method_name="cql_blendrl_cew_dueling_resnet",
-            method_cfg=methods["cql_blendrl_cew_dueling_resnet"],
+            method_name="cql_composite_fixture",
+            method_cfg=methods["cql_composite_fixture"],
             cfg=cfg_dict,
         )
 
         assert "agent=cql" in overrides
-        assert "model=blendrl" in overrides
-        assert "++model.neural.architecture=dueling_resnet" in overrides
-        assert "++model.neural.hidden_sizes=[512,512,256,128]" in overrides
-        assert "++model.symbolic.type=cew" in overrides
-        assert "++model.symbolic.ecm_dthr=0.03" in overrides
-        assert "++model.symbolic.fyd=false" in overrides
+        assert "model=composite_fixture" in overrides
+        assert "++model.encoder.architecture=fixture_encoder" in overrides
+        assert "++model.encoder.hidden_sizes=[512,256]" in overrides
+        assert "++model.reasoner.type=fixture_reasoner" in overrides
+        assert "++model.reasoner.rules=rigid" in overrides
 
-    def test_fully_hierarchical_blendrl_overrides(self):
-        """model.blendrl.neural and model.blendrl.symbolic.cew hierarchical override generation."""
+    def test_nested_component_parameters_preserve_explicit_values(self):
+        """The command builder forwards explicitly declared nested component values."""
         cfg_dict = {
             "experiment_name": "mimic/final",
             "paradigm": "offline_rl",
             "methods": {
-                "cql_blendrl_hierarchical": {
+                "params": {
+                    "agent": {
+                        "cql": {
+                            "lr": 3e-4,
+                        }
+                    },
+                },
+                "cql_composite_fixture": {
+                    "agent": "cql",
+                    "model": "composite_fixture",
+                    "model_params": {
+                        "encoder": {"architecture": "fixture_encoder"},
+                        "reasoner": {
+                            "type": "fixture_reasoner",
+                            "threshold": 0.03,
+                        },
+                    },
+                },
+            },
+        }
+        methods = parse_methods_dict(cfg_dict)
+        overrides = build_method_overrides(
+            method_name="cql_composite_fixture",
+            method_cfg=methods["cql_composite_fixture"],
+            cfg=cfg_dict,
+        )
+
+        assert "agent=cql" in overrides
+        assert "model=composite_fixture" in overrides
+        assert "++model.encoder.architecture=fixture_encoder" in overrides
+        assert "++model.reasoner.type=fixture_reasoner" in overrides
+        assert "++model.reasoner.threshold=0.03" in overrides
+
+    def test_fully_hierarchical_model_overrides(self):
+        """A nested model declaration is flattened without knowledge of its plugin type."""
+        cfg_dict = {
+            "experiment_name": "mimic/final",
+            "paradigm": "offline_rl",
+            "methods": {
+                "cql_composite_hierarchical": {
                     "agent": "cql",
                     "model": {
-                        "blendrl": {
-                            "neural": "dueling_resnet",
-                            "symbolic": {
-                                "cew": {
-                                    "ecm_dthr": 0.03
-                                }
-                            }
+                        "composite_fixture": {
+                            "encoder": {"architecture": "fixture_encoder", "hidden_sizes": [256, 128]},
+                            "reasoner": {"type": "fixture_reasoner", "threshold": 0.03},
                         }
                     }
                 }
@@ -257,17 +249,16 @@ class TestBuildMethodOverrides:
         }
         methods = parse_methods_dict(cfg_dict)
         overrides = build_method_overrides(
-            method_name="cql_blendrl_hierarchical",
-            method_cfg=methods["cql_blendrl_hierarchical"],
+            method_name="cql_composite_hierarchical",
+            method_cfg=methods["cql_composite_hierarchical"],
             cfg=cfg_dict,
         )
         assert "agent=cql" in overrides
-        assert "model=blendrl" in overrides
-        assert "++model.neural.architecture=dueling_resnet" in overrides
-        assert "++model.neural.hidden_sizes=[512,512,256,128]" in overrides
-        assert "++model.symbolic.type=cew" in overrides
-        assert "++model.symbolic.ecm_dthr=0.03" in overrides
-        assert "++model.symbolic.fyd=false" in overrides
+        assert "model=composite_fixture" in overrides
+        assert "++model.encoder.architecture=fixture_encoder" in overrides
+        assert "++model.encoder.hidden_sizes=[256,128]" in overrides
+        assert "++model.reasoner.type=fixture_reasoner" in overrides
+        assert "++model.reasoner.threshold=0.03" in overrides
 
     def test_untuned_method_produces_no_multirun_or_sweeper(self):
         """Untuned methods must NOT receive --multirun or hydra/sweeper overrides."""

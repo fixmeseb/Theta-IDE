@@ -1,6 +1,5 @@
 """Training monitor panel."""
 from .panel import (
-    ENV_MAX_REWARD,
     SECOND_METRICS,
     MonitorPanel,
     headline_metric,
@@ -11,7 +10,6 @@ from .panel import (
 )
 
 __all__ = [
-    "ENV_MAX_REWARD",
     "SECOND_METRICS",
     "MonitorPanel",
     "headline_metric",

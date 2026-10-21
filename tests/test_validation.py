@@ -285,8 +285,8 @@ def test_agent_supported_paradigms_from_installed_manifest(tmp_path, monkeypatch
     assert paradigms == ["offline_rl"]
 
 
-def test_find_missing_components_detects_uninstalled():
-    """find_missing_components identifies uninstalled agents, models, submodels, and environments."""
+def test_find_missing_components_detects_uninstalled_components():
+    """Core validation checks declared component IDs without parsing plugin schemas."""
     from src.app.pipeline.validation import find_missing_components
 
     spec = {
@@ -296,8 +296,7 @@ def test_find_missing_components_detects_uninstalled():
                 "agent": "nonexistent_agent_abc",
                 "model": {
                     "nonexistent_composite_model": {
-                        "symbolic": "nsfr",
-                        "neural": "dueling_resnet",
+                        "encoder": "fixture_encoder",
                     }
                 }
             }
@@ -307,7 +306,7 @@ def test_find_missing_components_detects_uninstalled():
     assert any("environment: nonexistent_env_xyz" in m for m in missing)
     assert any("agent: nonexistent_agent_abc" in m for m in missing)
     assert any("model: nonexistent_composite_model" in m for m in missing)
-    assert any("symbolic: nsfr" in m for m in missing)
+    assert not any("fixture_encoder" in m for m in missing)
 
 
 @patch("src.app.pipeline.validation._load_raw_experiment_yaml", return_value={})

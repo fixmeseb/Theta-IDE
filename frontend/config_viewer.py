@@ -4282,7 +4282,11 @@ class ConfigViewer(QWidget):
                     )
                     tag_cloud.tagsChanged.connect(lambda tags, key=k: self._on_field_edited(key, tags))
                     row.addWidget(tag_cloud)
-                elif k in ("hidden_sizes", "hidden_dims", "latent_sizes") and isinstance(v, list):
+                elif (
+                    k in ("hidden_sizes", "hidden_dims", "latent_sizes")
+                    and isinstance(v, list)
+                    and getattr(self.settings_manager, "visual_layer_editor", True)
+                ):
                     layer_stack = LayerStackWidget(layers=v)
                     layer_stack.layersChanged.connect(lambda layers, key=k: self._on_field_edited(key, layers))
                     row.addWidget(layer_stack)
@@ -4382,7 +4386,11 @@ class ConfigViewer(QWidget):
                     )
                     tag_cloud.tagsChanged.connect(lambda tags, p=path + (k,): self._on_generic_path_edited(p, tags))
                     row.addWidget(tag_cloud)
-                elif k in ("hidden_sizes", "hidden_dims", "latent_sizes") and isinstance(v, list):
+                elif (
+                    k in ("hidden_sizes", "hidden_dims", "latent_sizes")
+                    and isinstance(v, list)
+                    and getattr(self.settings_manager, "visual_layer_editor", True)
+                ):
                     layer_stack = LayerStackWidget(layers=v)
                     layer_stack.layersChanged.connect(lambda layers, p=path + (k,): self._on_generic_path_edited(p, layers))
                     row.addWidget(layer_stack)

@@ -18,22 +18,40 @@ def kill_process_tree(pid: int) -> None:
     if psutil is not None:
         try:
             parent = psutil.Process(pid)
+        except psutil.NoSuchProcess:
+            return
+
+        # Process enumeration can be denied on managed macOS hosts even when
+        # the IDE is allowed to signal its own child process. Keep cancellation
+        # working by terminating the known runner when its descendants cannot
+        # be enumerated.
+        try:
             children = parent.children(recursive=True)
-            for child in children:
-                try:
-                    child.terminate()
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
-                    pass
+        except (psutil.AccessDenied, PermissionError, OSError):
+            children = []
+
+        for child in children:
+            try:
+                child.terminate()
+            except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
+                pass
+        try:
             parent.terminate()
+        except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except (ProcessLookupError, PermissionError):
+                return
+        try:
             _, alive = psutil.wait_procs(children + [parent], timeout=2.0)
-            for proc in alive:
-                try:
-                    proc.kill()
-                except (psutil.NoSuchProcess, psutil.AccessDenied):
-                    pass
-            return
-        except (psutil.NoSuchProcess, psutil.AccessDenied):
-            return
+        except (psutil.AccessDenied, PermissionError, OSError):
+            alive = []
+        for proc in alive:
+            try:
+                proc.kill()
+            except (psutil.NoSuchProcess, psutil.AccessDenied, OSError):
+                pass
+        return
     if sys.platform == "win32":
         subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], capture_output=True)
     else:

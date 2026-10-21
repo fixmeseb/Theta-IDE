@@ -5,10 +5,6 @@ The ThetaIDE experiment builder expresses a config as Hydra overrides on a base 
 config as hand-written recipes, and that the builder's exported recipe round-trips.
 """
 
-import os
-import subprocess
-import sys
-
 import pytest
 
 from frontend.model import BASE_EXPERIMENT, Config
@@ -16,10 +12,13 @@ from src.app.pipeline.compose import comparable_config, compose_experiment, vali
 
 REFERENCE = "thetaide/cartpole_ppo_reference"
 
+TEST_COMPONENT_CONFIG = {"method_name": "ppo", "agent": "ppo", "model": "dnn"}
 CASES = [
-    Config(),
-    Config(name="seed_study-7", seed=7, total_timesteps=25000, lr=1e-6, batch_size=256, gamma=0.9),
-    Config(name="123", seed=0, total_timesteps=1000, lr=0.5, batch_size=32, gamma=1.0, tensorboard=False),
+    Config(name="cartpole_ppo_baseline", **TEST_COMPONENT_CONFIG),
+    Config(name="seed_study-7", seed=7, total_timesteps=25000, lr=1e-6, batch_size=256, gamma=0.9,
+           **TEST_COMPONENT_CONFIG),
+    Config(name="123", seed=0, total_timesteps=1000, lr=0.5, batch_size=32, gamma=1.0, tensorboard=False,
+           **TEST_COMPONENT_CONFIG),
 ]
 
 
@@ -42,21 +41,28 @@ def export_recipe(project_root):
         path.unlink(missing_ok=True)
 
 
-def test_builder_command_passes_pipeline_dry_run(project_root):
-    command = ["run_pipeline.py", BASE_EXPERIMENT, *Config().overrides(), "dry_run=true"]
-    env = {**os.environ, "OMP_NUM_THREADS": "1", "KMP_USE_SHM": "0"}
-    result = subprocess.run(
-        [sys.executable, *command], cwd=project_root, capture_output=True, text=True, timeout=300, env=env
-    )
-    assert result.returncode == 0, result.stdout + result.stderr
-    assert "Validation Success" in result.stdout
+def test_builder_command_is_a_valid_pipeline_invocation():
+    config = CASES[0]
+    command = config.command()
+    assert command.startswith(f"python run_pipeline.py {BASE_EXPERIMENT} ")
+    assert f"++methods.{config.method_name}.model={config.model}" in command
+    # Validate through the same in-process pipeline service used by the IDE.
+    validate_composed(gui_compose(config))
 
 
 def test_default_builder_matches_hand_written_reference():
-    gui = gui_compose(Config())
+    # The clean IDE has no algorithm/model defaults. Supply test-only profiles
+    # here so the integration test exercises composition without installed plugins.
+    gui = gui_compose(CASES[0])
     reference = compose_experiment(REFERENCE)
     assert comparable_config(gui.cfg) == comparable_config(reference.cfg)
     validate_composed(gui)
+
+
+def test_builder_defaults_do_not_select_an_installed_component():
+    config = Config()
+    assert config.env == config.agent == config.model == ""
+    assert config.method_name == "method"
 
 
 @pytest.mark.parametrize("config", CASES, ids=lambda c: c.name)

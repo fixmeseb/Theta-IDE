@@ -672,6 +672,10 @@ class ExperimentExporter:
                     arch = val.get("architecture") or val.get("name") or val.get("type") or val.get("base")
                     if arch and isinstance(arch, str):
                         extracted_models.append(arch)
+                    elif len(val) == 1:
+                        component_name, component_cfg = next(iter(val.items()))
+                        if isinstance(component_cfg, dict):
+                            extracted_models.append(str(component_name))
                     for k, sub in val.items():
                         if k in ("architecture", "name", "type", "base", "slots", "rules", "mode", "lr"):
                             continue

@@ -161,6 +161,7 @@ def test_the_module_is_resolvable_as_a_component():
     assert get_component("mlp_classifier_training") is not None
 
 
+@needs_mlp
 def test_an_unknown_architecture_is_rejected():
     with pytest.raises(ValueError, match="Unknown supervised architecture"):
         _module(architecture_name="not_an_architecture")

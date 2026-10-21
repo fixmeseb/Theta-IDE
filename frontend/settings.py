@@ -423,6 +423,14 @@ class SettingsManager(QObject):
         self.set("appearance", "show_resolved_defaults", bool(val))
 
     @property
+    def visual_layer_editor(self) -> bool:
+        return bool(self.get("appearance", "visual_layer_editor", default=True))
+
+    @visual_layer_editor.setter
+    def visual_layer_editor(self, val: bool) -> None:
+        self.set("appearance", "visual_layer_editor", bool(val))
+
+    @property
     def show_method_agent_defaults(self) -> bool:
         return bool(self.get("appearance", "show_method_agent_defaults", default=False))
 

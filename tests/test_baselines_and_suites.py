@@ -210,32 +210,40 @@ def test_missing_component_run_guard(tmp_path):
     assert "Missing component" in mock_btn.setText.call_args[0][0]
 
 
-def test_component_run_guard_uses_composed_inherited_environment(tmp_path):
+def test_component_run_guard_uses_composed_inherited_environment(tmp_path, monkeypatch):
     """A child recipe must be checked after its _base.yaml is composed."""
     from unittest.mock import MagicMock
     from frontend.app import Window
 
     win = MagicMock()
-    win.current_experiment = "theta_validation/online_smoke"
+    monkeypatch.chdir(tmp_path)
+    config_root = tmp_path / "in" / "config"
+    for group in ("agent", "model", "env"):
+        (config_root / group).mkdir(parents=True)
+    (config_root / "agent" / "fixture_agent.yaml").write_text("algorithm: fixture_agent\n", encoding="utf-8")
+    (config_root / "model" / "fixture_model.yaml").write_text("architecture: fixture_model\n", encoding="utf-8")
+    (config_root / "env" / "fixture_env.yaml").write_text("env_id: CartPole-v1\n", encoding="utf-8")
+
+    win.current_experiment = "fixtures/online_smoke"
     win.compose_error = ""
     viewer = MagicMock()
     viewer._get_explicit_env.return_value = None
-    viewer._get_base_env.return_value = "gym_classic_control/cartpole"
+    viewer._get_base_env.return_value = "fixture_env"
     viewer.raw_data = {
-        "methods": {"smoke": {"agent": "sb3/ppo", "model": "basics/dnn"}},
+        "methods": {"smoke": {"agent": "fixture_agent", "model": "fixture_model"}},
     }
     win.config_viewer = viewer
 
     tree = MagicMock()
     tree.config_root = tmp_path
-    tree.environments = {"gym_classic_control/cartpole": MagicMock()}
-    tree.agents = {"sb3/ppo": MagicMock()}
-    tree.models = {"basics/dnn": MagicMock()}
+    tree.environments = {"fixture_env": MagicMock()}
+    tree.agents = {"fixture_agent": MagicMock()}
+    tree.models = {"fixture_model": MagicMock()}
     win.config_tree = MagicMock(tree_model=tree)
     win.composed_config = {
         "paradigm": "online_rl",
-        "env": {"name": "gym_classic_control/cartpole", "env_id": "CartPole-v1"},
-        "methods": {"smoke": {"agent": "sb3/ppo", "model": "basics/dnn"}},
+        "env": {"name": "fixture_env", "env_id": "CartPole-v1"},
+        "methods": {"smoke": {"agent": "fixture_agent", "model": "fixture_model"}},
     }
 
     assert Window.check_missing_components(win) == []
