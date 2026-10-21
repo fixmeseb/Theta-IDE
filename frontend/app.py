@@ -2251,6 +2251,12 @@ class Window(QMainWindow):
         self.monitor.sidebar.tick(run["id"])
         self.tabs.setCurrentWidget(self.plot_viewer)
 
+    def view_run(self, run):
+        """Open a run from its completion toast in the Plot Viewer."""
+        if run["id"] not in self.monitor.sidebar.compared:
+            self.monitor.sidebar.tick(run["id"])
+        self.tabs.setCurrentWidget(self.plot_viewer)
+
     def latest_run(self):
         """The run the Training monitor shows: the one training now, else the most recent one."""
         return self.active or (self.runs[0] if self.runs else None)
