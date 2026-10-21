@@ -10,8 +10,8 @@ import os
 import sys
 import tempfile
 import unittest
-from types import SimpleNamespace
 from pathlib import Path
+from types import SimpleNamespace
 
 import yaml
 
@@ -20,9 +20,10 @@ os.environ["QT_QPA_PLATFORM"] = "offscreen"
 try:
     from PyQt6.QtCore import Qt
     from PyQt6.QtWidgets import QApplication, QLabel, QToolButton, QVBoxLayout
-    from frontend.config_viewer import ConfigViewer
+
     from frontend.config_tree import ConfigTreeWidget
-    from frontend.widgets import ToggleSlider, ComboBox
+    from frontend.config_viewer import ConfigViewer
+    from frontend.widgets import ComboBox, ToggleSlider
     HAS_PYQT6 = True
     app = QApplication.instance() or QApplication(sys.argv[:1])
 except ImportError:
@@ -153,6 +154,7 @@ class TestUIAdjustments(unittest.TestCase):
     def test_item6_update_launch_state_tooltip_messages(self):
         """update_launch_state sets specific 'Cannot run:' tooltip reasons."""
         from unittest.mock import MagicMock
+
         from frontend.app import Window
 
         app_mock = MagicMock(spec=Window)
@@ -212,7 +214,7 @@ class TestUIAdjustments(unittest.TestCase):
         self.viewer._cancel_group_edit()
 
         # 3. Method card title
-        from frontend.config_viewer import TitleLabel, InlineTitleEditor
+        from frontend.config_viewer import InlineTitleEditor, TitleLabel
         m_titles = [w for w in self.viewer.findChildren(TitleLabel) if w.objectName() == "cardTitle"]
         self.assertTrue(len(m_titles) >= 1)
         m_title = m_titles[0]
@@ -241,6 +243,7 @@ class TestUIAdjustments(unittest.TestCase):
             "    lr: 0.0003\n",
             encoding="utf-8"
         )
+        self.mock_tree.refresh_groups()
         base_viewer = ConfigViewer()
         base_viewer.load_file(base_file, "experiment/cartpole/_base.yaml")
         # In base, duplicate and add-new buttons are not shown on method cards
@@ -298,8 +301,9 @@ class TestUIAdjustments(unittest.TestCase):
     def test_blendrl_param_adder_fixed_next_to_model(self):
         """Add blendrl parameter button stays anchored next to Model: blendrl when params are added or removed."""
         from PyQt6.QtWidgets import QFormLayout, QHBoxLayout
-        from frontend.config_viewer import IndentedHierarchyBlock, set_config_tree
+
         from frontend.config_model import ConfigTree
+        from frontend.config_viewer import IndentedHierarchyBlock, set_config_tree
 
         config_dir = self.tmp_root / "config"
         model_dir = config_dir / "model"

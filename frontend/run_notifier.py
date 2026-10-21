@@ -109,7 +109,7 @@ class RunNotifier(QObject):
             path = SOUNDS_DIR / SOUNDS.get(kind, SOUNDS["completed"])
             try:
                 from PyQt6.QtMultimedia import QSoundEffect
-            except ImportError:
+            except (ImportError, OSError):
                 QSoundEffect = None
             if QSoundEffect is not None and path.is_file():
                 effect = QSoundEffect(self)

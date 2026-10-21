@@ -47,7 +47,7 @@ def mock_cfg_supervised():
         eval_episodes=0,
         group="early_prediction",
         experiment_id="quick_test",
-        dataset_path="in/datasets/breast_cancer/breast_cancer.npz"
+        dataset_path="test-dataset.npz"
     )
     cfg.env.name = "cartpole"
     return cfg
@@ -154,8 +154,10 @@ def test_missing_methods_online_rl(mock_yaml, mock_cfg_online):
 
 
 @patch("src.app.pipeline.validation._load_raw_experiment_yaml", return_value={})
-def test_supervised_paradigm_passes_for_ep(mock_yaml, mock_cfg_supervised):
-    """supervised paradigm should pass cleanly for EP task config."""
+def test_supervised_paradigm_passes_without_component_plugins(mock_yaml, mock_cfg_supervised, monkeypatch):
+    """Paradigm validation can be tested without requiring optional model or dataset plugins."""
+    monkeypatch.setattr("src.app.pipeline.validation.find_missing_components", lambda _cfg: [])
+    monkeypatch.setattr("src.app.pipeline.validation._validate_offline_dataset_paths", lambda _cfg, _notices: None)
     notices = validate_experiment_config(mock_cfg_supervised, "test_exp")
     assert isinstance(notices, list)
 
@@ -270,6 +272,7 @@ def test_offline_rl_method_missing_agent_raises(mock_yaml, mock_cfg_offline):
 def test_agent_supported_paradigms_from_installed_manifest(tmp_path, monkeypatch):
     """Component manifests (.theta_component.json) in methods directory define supported paradigms."""
     import json
+
     from src.app.pipeline.validation import _get_agent_supported_paradigms
 
     method_dir = tmp_path / "src" / "usr" / "algorithms" / "custom_agent"

@@ -201,7 +201,10 @@ def test_a_toast_dismisses_itself_unless_the_pointer_is_on_it(window):
 
 
 def test_the_chimes_load_with_qt_multimedia(window):
-    pytest.importorskip("PyQt6.QtMultimedia")
+    try:
+        from PyQt6.QtMultimedia import QSoundEffect  # noqa: F401
+    except (ImportError, OSError) as exc:
+        pytest.skip(f"Qt Multimedia is unavailable: {exc}")
     notifier = RunNotifier(window)
     for kind in ("completed", "failed", "stopped"):
         effect = notifier._effect(kind)
