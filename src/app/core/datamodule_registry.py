@@ -168,6 +168,7 @@ def _register_builtins() -> None:
     except Exception:
         pass
 
+
 def list_registered_datamodules() -> List[str]:
     """Return sorted list of registered data module names."""
     auto_discover_datamodules()

@@ -40,6 +40,7 @@ class DatasetWriter:
 
     def add(self, obs, action, reward, next_obs, done):
         """Add one standard observation/action/reward transition."""
+
         def to_cpu(x, is_obs=False):
             if isinstance(x, torch.Tensor):
                 x = x.detach().cpu().numpy()

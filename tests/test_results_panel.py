@@ -239,7 +239,7 @@ def test_plots_menu_lists_every_metric_with_its_visibility():
     panel._fill_plots_menu()
     actions = {a.text(): a for a in panel.plots_menu.actions() if a.isCheckable()}
     assert actions["Episode reward  ·  eval/reward"].isChecked() is False
-    assert actions["Value loss (SB3)  ·  losses/train/value_loss"].isChecked() is True
+    assert actions["Value loss  ·  losses/train/value_loss"].isChecked() is True
     actions["Episode reward  ·  eval/reward"].setChecked(True)  # show it again from the menu
     assert "eval/reward" in panel.grid.cards
 
@@ -642,7 +642,11 @@ def test_window_loads_results_runs_into_the_builder_only_when_it_has_their_confi
         window = Window(Path(data_dir))
         try:
             assert "No builder config" in window.load_results_config("cartpole/unknown_run")
-            run = window.runs[0]  # an example run, given a backend identity as if the app had launched it
+            from frontend.model import Config, new_run
+
+            run = new_run(Config(name="synthetic_run"), simulated=False)
+            window.runs.append(run)
+            window.refresh_runs()
             run.update(simulated=False, backend={"group": "thetaide", "experiment_id": "exp_1", "job_id": "j"})
             assert window.load_results_config("thetaide/exp_1") is None
             assert window.tabs.currentWidget() is window.config_panel

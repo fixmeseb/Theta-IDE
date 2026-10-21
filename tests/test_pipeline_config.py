@@ -1,8 +1,5 @@
 """Tests for pipeline configuration utilities (src/pipeline/config.py)."""
 
-from pathlib import Path
-
-import pytest
 import yaml
 
 from src.app.pipeline.config import normalize_agent_name
@@ -232,176 +229,64 @@ class TestParseMethodsDict:
         assert res["cql_custom"]["batch_size"] == 256
         assert res["cql_custom"]["hidden_sizes"] == [1024, 512, 256]
 
-    def test_blendrl_inherits_neural_and_symbolic_defaults(self):
-        """BlendRL without submodel overrides must inherit default dnn and nsfr configs."""
-        from src.app.pipeline.config import parse_methods_dict
-
-        cfg = {
-            "methods": {
-                "cql_blendrl": {
-                    "agent": "cql",
-                    "model": "blendrl",
-                }
-            }
-        }
-        res = parse_methods_dict(cfg)
-        m = res["cql_blendrl"]
-        assert m["model"] == "blendrl"
-        assert m["model_params"]["neural"]["architecture"] == "dnn"
-        dnn_profile = yaml.safe_load(Path("in/config/model/dnn.yaml").read_text(encoding="utf-8"))
-        assert m["model_params"]["neural"]["hidden_sizes"] == dnn_profile["hidden_sizes"]
-        assert m["model_params"]["symbolic"]["type"] == "nsfr"
-        assert m["model_params"]["symbolic"]["rules"] == "default"
-        assert m["model_params"]["blender"]["mode"] == "neural"
-        assert m["model_params"]["blender"]["blend_function"] == "softmax"
-
-    def test_blendrl_neural_overwrite_inherits_base_config(self):
-        """Specifying neural: dueling_resnet must automatically inherit its hidden_sizes from dueling_resnet.yaml."""
-        from src.app.pipeline.config import parse_methods_dict
-
-        cfg = {
-            "methods": {
-                "cql_blendrl_resnet": {
-                    "agent": "cql",
-                    "model": "blendrl",
-                    "neural": "dueling_resnet",
-                    "symbolic": {"rules": "rigid"},
-                }
-            }
-        }
-        res = parse_methods_dict(cfg)
-        m = res["cql_blendrl_resnet"]
-        # Neural actor inherited dueling_resnet.yaml defaults!
-        assert m["model_params"]["neural"]["architecture"] == "dueling_resnet"
-        assert m["model_params"]["neural"]["hidden_sizes"] == [512, 512, 256, 128]
-        # Symbolic actor inherited nsfr.yaml defaults with rules: rigid
-        assert m["model_params"]["symbolic"]["type"] == "nsfr"
-        assert m["model_params"]["symbolic"]["rules"] == "rigid"
-
-    def test_blendrl_symbolic_cew_inherits_cew_defaults(self):
-        """Specifying symbolic: { name: cew, ecm_dthr: 0.03 } must inherit fyd and fyd_top_k from cew.yaml."""
-        from src.app.pipeline.config import parse_methods_dict
-
-        cfg = {
-            "methods": {
-                "cql_blendrl_cew": {
-                    "agent": "cql",
-                    "model": "blendrl",
-                    "neural": "dueling_resnet",
-                    "symbolic": {
-                        "name": "cew",
-                        "ecm_dthr": 0.03,
-                    },
-                }
-            }
-        }
-        res = parse_methods_dict(cfg)
-        m = res["cql_blendrl_cew"]
-        sym = m["model_params"]["symbolic"]
-        assert sym["type"] == "cew"
-        assert sym["ecm_dthr"] == 0.03
-        assert sym["fyd"] is False
-        assert sym["fyd_top_k"] == 50
-
-    def test_blendrl_universal_overrides_in_params(self):
-        """Universal params.model.blendrl overrides should apply to all BlendRL methods."""
+    def test_custom_composite_model_resolves_explicit_submodel_params(self):
+        """Composite parsing uses the supplied config values and needs no installed model defaults."""
         from src.app.pipeline.config import parse_methods_dict
 
         cfg = {
             "methods": {
                 "params": {
                     "model": {
-                        "blendrl": {
-                            "blend_q_values": True,
-                            "neural": "dueling_resnet",
-                        }
+                        "dense_encoder": {"hidden_sizes": [256, 128], "dropout": 0.1},
+                        "rule_engine": {"rules": "fixture_rules", "threshold": 0.7},
                     }
                 },
-                "method_a": {
-                    "agent": "cql",
-                    "model": "blendrl",
-                    "symbolic": {"rules": "rigid"},
-                },
-                "method_b": {
-                    "agent": "cql",
-                    "model": "blendrl",
-                    "symbolic": {"name": "cew", "ecm_dthr": 0.05},
+                "custom_method": {
+                    "agent": "test_agent",
+                    "model": {
+                        "custom_composite": {
+                            "encoder": "dense_encoder",
+                            "reasoner": {"rule_engine": {"threshold": 0.9}},
+                        }
+                    },
                 },
             }
         }
-        res = parse_methods_dict(cfg)
-        for m_name in ("method_a", "method_b"):
-            m = res[m_name]
-            assert m["model_params"]["blend_q_values"] is True
-            assert m["model_params"]["neural"]["architecture"] == "dueling_resnet"
-            assert m["model_params"]["neural"]["hidden_sizes"] == [512, 512, 256, 128]
+        resolved = parse_methods_dict(cfg)["custom_method"]
+        assert resolved["model"]["name"] == "custom_composite"
+        assert resolved["model_params"]["encoder"]["architecture"] == "dense_encoder"
+        assert resolved["model_params"]["encoder"]["hidden_sizes"] == [256, 128]
+        assert resolved["model_params"]["encoder"]["dropout"] == 0.1
+        assert resolved["model_params"]["reasoner"]["type"] == "rule_engine"
+        assert resolved["model_params"]["reasoner"]["rules"] == "fixture_rules"
+        assert resolved["model_params"]["reasoner"]["threshold"] == 0.9
 
-        assert res["method_a"]["model_params"]["symbolic"]["rules"] == "rigid"
-        assert res["method_b"]["model_params"]["symbolic"]["type"] == "cew"
-        assert res["method_b"]["model_params"]["symbolic"]["ecm_dthr"] == 0.05
-
-    def test_blendrl_fully_hierarchical_nesting(self):
-        """Hierarchical specification: model.blendrl.neural and model.blendrl.symbolic.cew."""
+    def test_custom_composite_methods_merge_shared_slot_defaults(self):
+        """Shared custom parameters apply to multiple methods and local overrides win."""
         from src.app.pipeline.config import parse_methods_dict
 
         cfg = {
             "methods": {
-                "cql_blendrl_hierarchical": {
-                    "agent": "cql",
+                "params": {
                     "model": {
-                        "blendrl": {
-                            "neural": "dueling_resnet",
-                            "symbolic": {
-                                "cew": {
-                                    "ecm_dthr": 0.03
-                                }
-                            }
-                        }
+                        "custom_composite": {"blend_mode_index": 1},
+                        "encoder": {"widths": [128, 64]},
                     }
-                }
+                },
+                "first": {
+                    "agent": "runner_a",
+                    "model": {"custom_composite": {"encoder": {"encoder": {}}}},
+                },
+                "second": {
+                    "agent": "runner_b",
+                    "model": {"custom_composite": {"encoder": {"encoder": {"widths": [32]}}}},
+                },
             }
         }
-        res = parse_methods_dict(cfg)
-        m = res["cql_blendrl_hierarchical"]
-        assert m["model"]["name"] == "blendrl"
-        assert m["model_params"]["neural"]["architecture"] == "dueling_resnet"
-        assert m["model_params"]["neural"]["hidden_sizes"] == [512, 512, 256, 128]
-        assert m["model_params"]["symbolic"]["type"] == "cew"
-        assert m["model_params"]["symbolic"]["ecm_dthr"] == 0.03
-        assert m["model_params"]["symbolic"]["fyd"] is False
-        assert m["model_params"]["symbolic"]["fyd_top_k"] == 50
-
-    def test_blendrl_fully_hierarchical_neural_and_symbolic_params(self):
-        """Hierarchical specification: neural.dueling_resnet and symbolic.nsfr."""
-        from src.app.pipeline.config import parse_methods_dict
-
-        cfg = {
-            "methods": {
-                "cql_blendrl_custom": {
-                    "agent": "cql",
-                    "model": {
-                        "blendrl": {
-                            "neural": {
-                                "dueling_resnet": {
-                                    "hidden_sizes": [256, 128]
-                                }
-                            },
-                            "symbolic": {
-                                "nsfr": {
-                                    "rules": "rigid"
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        res = parse_methods_dict(cfg)
-        m = res["cql_blendrl_custom"]
-        assert m["model_params"]["neural"]["architecture"] == "dueling_resnet"
-        assert m["model_params"]["neural"]["hidden_sizes"] == [256, 128]
-        assert m["model_params"]["symbolic"]["type"] == "nsfr"
-        assert m["model_params"]["symbolic"]["rules"] == "rigid"
+        resolved = parse_methods_dict(cfg)
+        assert resolved["first"]["model_params"]["blend_mode_index"] == 1
+        assert resolved["first"]["model_params"]["encoder"]["widths"] == [128, 64]
+        assert resolved["second"]["model_params"]["encoder"]["widths"] == [32]
 
     def test_group_method_resolution(self, monkeypatch):
         """Methods defined in in/config/experiment/<group>/methods/ should resolve automatically."""

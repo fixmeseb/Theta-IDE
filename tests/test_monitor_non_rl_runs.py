@@ -182,12 +182,11 @@ def test_a_run_missing_its_details_degrades_rather_than_raising():
 # ---------------------------------------------------------------------------
 
 
-def test_the_builder_default_is_what_mislabelled_every_run():
-    """Config() is a CartPole PPO recipe. An experiment launched from the tree
-    never fills it in, which is why a breast-cancer run said CartPole."""
+def test_builder_config_does_not_assume_an_installed_environment():
+    """A fresh IDE workspace has no environment component to use as a default."""
     from frontend.model import Config
 
-    assert (Config().env, Config().total_timesteps) == ("cartpole", 10000)
+    assert (Config().env, Config().total_timesteps) == ("", 10000)
 
 
 def test_composed_facts_replace_the_defaults():

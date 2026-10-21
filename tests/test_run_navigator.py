@@ -24,6 +24,14 @@ class TestRunNavigator(unittest.TestCase):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.data_dir = Path(self.temp_dir.name)
         self.window = Window(self.data_dir)
+        initial = new_run(Config(name="initial_run", env="test_env"))
+        initial["metrics"] = [
+            {"step": 0, "reward": 10.0, "entropy": 0.69},
+            {"step": 100, "reward": 50.0, "entropy": 0.50},
+        ]
+        self.window.runs.append(initial)
+        self.window.refresh_runs()
+        self.window.select_run(initial)
 
     def tearDown(self):
         self.window.close()
@@ -107,13 +115,13 @@ class TestRunNavigator(unittest.TestCase):
         self.assertIn("jobs.db", self.window.run_title.toolTip())
 
     def test_job_signals_update_monitor(self):
-        """Job signals (output, metrics, hardware) from ppo_blendrl_human_neural update the monitor."""
+        """Generic job signals (output, metrics, hardware) update the monitor."""
         run = new_run(Config(name="tests_cartpole", seed=42), simulated=False)
         run["backend"] = {
             "job_id": "test-job-123",
             "group": "tests",
             "experiment_id": "cartpole_test",
-            "agents": ["ppo_blendrl_human_neural"],
+            "agents": ["test_method"],
             "total_timesteps": 640,
         }
         self.window.runs.insert(0, run)
@@ -125,7 +133,7 @@ class TestRunNavigator(unittest.TestCase):
             {"losses/total_loss": 32.1, "losses/entropy": 0.61, "step": 0.0, "transitions": 512.0},
         ]
         self.window.on_job_output("test-job-123", ["Training in progress..."])
-        self.window.on_job_metrics("test-job-123", "ppo_blendrl_human_neural", rows, False)
+        self.window.on_job_metrics("test-job-123", "test_method", rows, False)
         self.window.on_job_hardware("test-job-123", {"cpu_percent": 15.2, "memory_mb": 210.5})
         self.assertIn("Training in progress...", self.window.console.toPlainText())
         self.assertEqual(len(run["metrics"]), 2)

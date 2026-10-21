@@ -129,7 +129,7 @@ def gui_compose(config):
 
 
 def test_compose_report_matches_direct_composition():
-    config = Config(name="seed_study-7", seed=7, total_timesteps=25000, lr=1e-6, batch_size=256, gamma=0.9)
+    config = Config(name="seed_study-7", method_name="ppo", seed=7, total_timesteps=25000, lr=1e-6, batch_size=256, gamma=0.9)
     body = config_service.compose_report(BASE_EXPERIMENT, config.overrides())
     assert body["valid"], body["errors"]
     assert body["argv"] == ["python", "run_pipeline.py", BASE_EXPERIMENT, *config.overrides()]
@@ -173,7 +173,7 @@ def test_compose_report_does_not_infer_an_algorithm_specific_budget():
 
 
 def test_prepare_launch_describes_the_job():
-    plan = config_service.prepare_launch(BASE_EXPERIMENT, Config(name="pytest_plan_only", total_timesteps=3000).overrides())
+    plan = config_service.prepare_launch(BASE_EXPERIMENT, Config(name="pytest_plan_only", method_name="ppo", total_timesteps=3000).overrides())
     assert (plan["group"], plan["experiment_id"], plan["agents"]) == ("thetaide", "pytest_plan_only", ["ppo"])
     assert plan["effective_timesteps"] == 3000
 
@@ -181,7 +181,7 @@ def test_prepare_launch_describes_the_job():
 def test_prepare_launch_refuses_a_clash_with_an_active_job():
     active = [{"job_id": "j1", "status": "running", "group": "thetaide", "experiment_id": "pytest_clash"}]
     with pytest.raises(config_service.LaunchError) as error:
-        config_service.prepare_launch(BASE_EXPERIMENT, Config(name="pytest_clash").overrides(), active_jobs=active)
+        config_service.prepare_launch(BASE_EXPERIMENT, Config(name="pytest_clash", method_name="ppo").overrides(), active_jobs=active)
     assert error.value.conflict
 
 

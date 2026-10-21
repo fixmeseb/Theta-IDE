@@ -51,7 +51,7 @@ def test_second_metric_choices_offer_every_logged_metric():
 def test_second_metric_text_uses_the_catalog_for_unknown_keys():
     assert second_metric_text("loss")[1] == "Total loss"
     card, chart, _, fmt = second_metric_text("losses/train/value_loss")
-    assert (card, chart, fmt) == ("VALUE LOSS (SB3)", "Value loss (SB3)", ".3f")
+    assert (card, chart, fmt) == ("VALUE LOSS", "Value loss", ".4g")
     assert second_metric_text("custom/success_rate")[1] == "Success rate"
 
 
@@ -71,7 +71,7 @@ class TestMonitorPanel(unittest.TestCase):
         for name in MonitorPanel.EXPOSED:
             self.assertIs(getattr(self.window, name), getattr(monitor, name), name)
 
-    def test_sb3_run_shows_its_own_losses(self):
+    def test_runner_metrics_use_generic_catalog_labels(self):
         run = sb3_run()
         self.window.runs.insert(0, run)
         self.window.refresh_runs()
@@ -82,5 +82,5 @@ class TestMonitorPanel(unittest.TestCase):
         self.assertEqual(monitor.reward_card.value.text(), "82.0")
         # Pick the value loss: the card follows it.
         monitor.metric_select.setCurrentIndex(choices.index("losses/train/value_loss"))
-        self.assertEqual(monitor.loss_card.title.text(), "VALUE LOSS (SB3)")
-        self.assertEqual(monitor.loss_card.value.text(), "10.000")
+        self.assertEqual(monitor.loss_card.title.text(), "VALUE LOSS")
+        self.assertEqual(monitor.loss_card.value.text(), "10")

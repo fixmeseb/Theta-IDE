@@ -98,6 +98,7 @@ def auto_discover():
         except Exception as e:
             print(f"[Warning] Failed to auto-discover algorithm module '{module_info.name}': {e}")
 
+
 def list_registered_agents():
     """Return sorted list of registered algorithm prefixes."""
     auto_discover()

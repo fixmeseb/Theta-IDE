@@ -67,8 +67,8 @@ class VectorizedBaseEnv(ABC):
         Entry points must be callables that accept the environment name when
         needed and return an object implementing the vector environment API.
         """
-        import os
         import inspect
+        import os
 
         from src.app.core.plugin_discovery import ENVIRONMENT_REGISTRY, discover_entry_points
 
@@ -90,9 +90,7 @@ class VectorizedBaseEnv(ABC):
                     accepted["name"] = name
                 env = provider(**accepted)
             if env is None or not all(callable(getattr(env, method, None)) for method in ("reset", "step")):
-                raise TypeError(
-                    f"Environment provider '{name}' must return an object implementing reset() and step()."
-                )
+                raise TypeError(f"Environment provider '{name}' must return an object implementing reset() and step().")
             return env
 
         env_path = f"in/envs/{name}/env_vectorized.py"
