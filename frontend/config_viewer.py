@@ -3364,6 +3364,10 @@ class ConfigViewer(QWidget):
         act_ds.triggered.connect(lambda: self.add_block("dataset"))
         act_ds.setEnabled("dataset_path" not in data)
 
+        has_sweeper = (
+            (isinstance(data.get("hydra"), dict) and "sweeper" in data["hydra"])
+            or "sweeper" in data
+        )
         act_sw = add_menu.addAction("Hyperparameter Sweeper (Optuna)")
         act_sw.triggered.connect(lambda: self.add_block("sweeper"))
         act_sw.setEnabled(not has_sweeper)

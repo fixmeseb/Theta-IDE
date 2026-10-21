@@ -5,12 +5,13 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
 
 try:
     from PyQt6.QtCore import Qt
-    from PyQt6.QtWidgets import QApplication
+    from PyQt6.QtWidgets import QApplication, QWidget
     QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
     app = QApplication.instance() or QApplication(sys.argv[:1])
     from frontend.app import Window
@@ -24,9 +25,32 @@ except ImportError:
 
 @unittest.skipIf(not HAS_PYQT6, "PyQt6 not installed in current environment")
 class TestDocumentationPlugin(unittest.TestCase):
+    class HeadlessTerminalPanel(QWidget):
+        """Avoid starting a real shell in tests concerned only with documentation."""
+
+        def __init__(self, *, parent=None, **_kwargs):
+            super().__init__(parent)
+            self.terminals = []
+
+        def configure(self, **_kwargs):
+            pass
+
+        def set_font_size(self, _size):
+            pass
+
+        def apply_theme(self, _theme):
+            pass
+
+    def make_window(self, data_dir):
+        with (
+            patch("frontend.app.TerminalPanel", self.HeadlessTerminalPanel),
+            patch.object(Window, "init_default_experiment", lambda _self: None),
+        ):
+            return Window(data_dir=data_dir)
+
     def setUp(self):
         self.temp_dir = tempfile.mkdtemp(prefix="theta_test_docs_")
-        self.window = Window(data_dir=self.temp_dir)
+        self.window = self.make_window(self.temp_dir)
 
     def tearDown(self):
         self.window.close()
@@ -414,7 +438,7 @@ class TestDocumentationPlugin(unittest.TestCase):
         self.assertIn("documentation", self.window.settings_manager.plugins_enabled)
 
         # Reload with new window
-        window2 = Window(data_dir=self.temp_dir)
+        window2 = self.make_window(self.temp_dir)
         self.assertTrue(window2.plugin_manager.is_plugin_enabled("documentation"))
         self.assertIn("documentation", window2.tabs.tabs)
 
@@ -424,7 +448,7 @@ class TestDocumentationPlugin(unittest.TestCase):
         window2.close()
 
         # Reload with window3 - must remain disabled
-        window3 = Window(data_dir=self.temp_dir)
+        window3 = self.make_window(self.temp_dir)
         self.assertFalse(window3.plugin_manager.is_plugin_enabled("documentation"))
         self.assertNotIn("documentation", window3.tabs.tabs)
         window3.close()

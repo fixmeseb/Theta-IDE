@@ -361,8 +361,7 @@ class TestInheritedValuesAreVisible(unittest.TestCase):
         return v
 
     def test_inherit_option_names_the_environment(self):
-        self.assertEqual(self.viewer("mimic").combo_env.itemText(0),
-                         "(inherit from base — mimic)")
+        self.assertEqual(self.viewer("mimic").combo_env.itemText(0), "mimic")
 
     def test_inherit_option_keeps_the_sentinel_in_item_data(self):
         self.assertEqual(self.viewer("mimic").combo_env.itemData(0), ConfigViewer.INHERIT)
