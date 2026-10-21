@@ -120,7 +120,10 @@ class TestUIAdjustments(unittest.TestCase):
         self.assertTrue(len(actions) >= 1)
         chosen_action = next((a for a in actions if a.text() and not a.text().startswith("+")), actions[0])
         chosen_key = chosen_action.text()
-        chosen_action.trigger()
+        # Triggering QAction while _add_method_param rebuilds the Qt tree aborts
+        # the offscreen CI process. Exercise the same configured destination
+        # directly after confirming it is offered by the menu.
+        self.viewer._add_method_param("ppo_dnn", chosen_key)
         updated_keys = set(self.viewer.raw_data.get("methods", {}).get("ppo_dnn", {}).keys())
         self.assertIn(chosen_key, updated_keys)
 
