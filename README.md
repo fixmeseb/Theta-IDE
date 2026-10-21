@@ -7,7 +7,7 @@
 [![Python 3.10–3.13](https://img.shields.io/badge/python-3.10--3.13-blue.svg)](https://www.python.org/downloads/)
 
 
-https://github.com/user-attachments/assets/7f299be7-f488-401f-ae5a-c6d82364d114
+https://github.com/user-attachments/assets/3469954e-a74a-4427-808d-d8af654cc8cb
 
 ThetaIDE is a desktop IDE and experiment pipeline for reinforcement learning and deep learning research. You
 compose experiments from Hydra configs, launch training on your machine, watch metrics stream in live, and
@@ -127,7 +127,7 @@ python plot/manager.py thetaide/cartpole_ppo_baseline --wipe
 
 ## Documentation
 
-- **In the IDE:** press **F1**.
+- **In the IDE:** press **F1** or Help→Documentation.
 - [INSTALL.md](INSTALL.md): setup, extras and verifying the install.
 - [CONTRIBUTING.md](CONTRIBUTING.md): development workflow, tests and code style.
 - [Component Plugin Authoring Guide](docs/COMPONENT_PLUGIN_GUIDE.md): writing algorithms, models,
