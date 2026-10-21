@@ -432,7 +432,7 @@ class ConfigTree:
             if m.stem not in self.models:
                 self.models[m.stem] = model_obj
         # ``models`` keeps short-name aliases for backwards-compatible lookups
-        # (e.g. ``dnn`` for ``basics/dnn``). UI pickers should show each config
+        # (e.g. ``profile`` for ``package/profile``). UI pickers should show each config
         # file once, under its canonical path.
         self.model_names = sorted({model.name for model in self.models.values()})
 
@@ -559,7 +559,7 @@ class ConfigTree:
 
         # Associate manifest schemas with the matching profile-backed components.
         # The component ID for an algorithm/model can be its config path (e.g.
-        # ``sb3/ppo``), while a package manifest may describe several profiles.
+        # ``package/profile``), while a package manifest may describe several profiles.
         for config_path, schema in self.component_parameter_schemas.items():
             rel_path = config_path[len("in/config/"):] if config_path.startswith("in/config/") else config_path
             parts = Path(rel_path).parts
@@ -812,19 +812,16 @@ class ExperimentGroup:
 def default_method_model(
     group: ExperimentGroup | None,
     known: Any = (),
-    fallback: str = "dnn",
+    fallback: str | None = None,
     paradigm: Paradigm | None = None,
-) -> str:
-    """The architecture a new agent-less method should name.
+) -> str | None:
+    """Return a declared model default, or no selection when none is declared.
 
-    A group whose base already declares methods has settled on an architecture
-    (early_prediction uses lstm and transformer), so follow that rather than
-    impose a default on a group that has already chosen.
+    A group whose base already declares methods has settled on an architecture,
+    so follow that rather than impose a default on a group that has already chosen.
 
-    Failing that, the paradigm's own `default_model`. This matters because the
-    bare fallback is `dnn`, which is MLPQNetwork - an RL Q-network built around
-    n_actions. Offering it for a supervised or unsupervised group points at the
-    one model whose training is certain to fail.
+    Failing that, use the paradigm's own declared default, then an explicitly
+    requested fallback if it is among the installed models. Never guess a model.
     """
     for spec in (group.base_methods if group else {}).values():
         if isinstance(spec, dict) and isinstance(spec.get("model"), str):
@@ -837,9 +834,9 @@ def default_method_model(
         # missing dependency instead of silently substituting an incompatible
         # architecture.
         return declared
-    if not names or fallback in names:
+    if fallback is not None and fallback in names:
         return fallback
-    return sorted(names)[0]
+    return None
 
 
 def group_base_yaml(env: str | None, paradigm: str, rules: Paradigm | None = None, seed: int = 1) -> str:
@@ -893,11 +890,11 @@ def experiment_yaml(
     # A paradigm with no agents still needs a method, so a model on its own is
     # enough to write one: supervised groups name methods for the architecture.
     if agent or model:
-        model = model or "dnn"
         lines += ["", "methods:", f"  {unique_method_name((), agent, model)}:"]
         if agent:
             lines.append(f"    agent: {agent}")
-        lines.append(f"    model: {model}")
+        if model:
+            lines.append(f"    model: {model}")
     return "\n".join(lines) + "\n"
 
 
@@ -968,13 +965,10 @@ class Selection:
         return shlex.join(self.command(**kwargs))
 
 
-def unique_method_name(existing: Any, agent: str | None, model: str) -> str:
+def unique_method_name(existing: Any, agent: str | None, model: str | None) -> str:
     """A method name free in `existing`, following the <agent>_<model> convention.
 
-    The RL configs name methods after the agent they run, sometimes with a
-    suffix (ppo_dnn, ppo_blendrl, iql_blendrl_arch1), so a collision gets a
-    numeric suffix rather than a new scheme. Supervised methods have no agent
-    at all (ep_lstm, ep_transformer), so they are named for the model.
+    Method names combine whichever algorithm and model identifiers are present.
     """
     base = f"{agent}_{model}" if agent and model else (agent or model or "method")
     taken = set(existing or ())
@@ -998,10 +992,13 @@ def add_method(
     no policy to choose actions with, so its methods name an architecture only.
     """
     if model is None:
-        model = (paradigm.raw.get("default_model") if paradigm else None) or "dnn"
+        model = paradigm.raw.get("default_model") if paradigm else None
     methods = data.setdefault("methods", {})
     name = unique_method_name(methods, agent, model)
-    methods[name] = {"agent": agent, "model": model} if agent else {"model": model}
+    spec = {"agent": agent} if agent else {}
+    if model:
+        spec["model"] = model
+    methods[name] = spec
     return name
 
 

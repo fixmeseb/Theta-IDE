@@ -1,4 +1,4 @@
-"""Builtin workflow presets matching standard NeSyRL multi-stage compositions."""
+"""Built-in workflow templates for multi-stage experiments."""
 
 from __future__ import annotations
 

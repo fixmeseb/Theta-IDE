@@ -90,12 +90,9 @@ class TestEngineResolution:
         script2, _ = resolve_engine(method_cfg={"runner": "custom/runner.py"})
         assert script2 == "custom/runner.py"
 
-    def test_known_engine_mapping(self):
-        script_sb3, _ = resolve_engine(method_cfg={"engine": "sb3"})
-        assert script_sb3 == "src/usr/algorithms/sb3_runner.py"
-
-        script_cleanrl, _ = resolve_engine(method_cfg={"engine": "cleanrl"})
-        assert script_cleanrl == "src/usr/algorithms/cleanrl_runner.py"
+    def test_profile_declared_runner(self):
+        script, _ = resolve_engine(method_cfg={"entrypoint": "src/usr/methods/example/example_runner.py"})
+        assert script == "src/usr/methods/example/example_runner.py"
 
         script_torch, _ = resolve_engine(method_cfg={"engine": "pytorch"})
         assert script_torch == DEFAULT_ENGINE_SCRIPT
@@ -107,14 +104,14 @@ class TestEngineResolution:
         py_bin = bin_dir / "python3"
         py_bin.touch()
 
-        script, resolved_py = resolve_engine(method_cfg={"engine": "sb3", "venv": str(fake_venv)})
-        assert script == "src/usr/algorithms/sb3_runner.py"
+        script, resolved_py = resolve_engine(method_cfg={"entrypoint": "custom/runner.py", "venv": str(fake_venv)})
+        assert script == "custom/runner.py"
         assert resolved_py == str(py_bin)
 
     def test_resolve_from_cfg_agent(self):
         class FakeCfg:
-            agent = {"engine": "sb3"}
+            agent = {"entrypoint": "src/usr/methods/example/example_runner.py"}
 
         script, py_bin = resolve_engine(method_cfg={}, cfg=FakeCfg())
-        assert script == "src/usr/algorithms/sb3_runner.py"
+        assert script == "src/usr/methods/example/example_runner.py"
         assert py_bin is None

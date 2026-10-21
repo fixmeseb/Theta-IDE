@@ -1,6 +1,6 @@
-"""NeSyRL root package.
+"""Theta-IDE root package.
 
 Separation:
 - app: Core framework modules (core, pipeline, data, api, train, dataset_utils)
-- usr: User domain components (methods, models, environments, eval)
+- usr: Installed or locally authored components (methods, models, environments, evaluators)
 """

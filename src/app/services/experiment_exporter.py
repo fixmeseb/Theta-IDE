@@ -90,7 +90,7 @@ class ExperimentExporter:
         """Export an experiment and its full dependency closure to a .zip archive.
 
         Args:
-            experiment_id_or_path: e.g. "cartpole/quick_test", "cartpole/quick_test.yaml",
+            experiment_id_or_path: e.g. "group/experiment", "group/experiment.yaml",
                 or absolute Path to the YAML recipe.
             options: Export configuration options.
 
@@ -293,7 +293,7 @@ class ExperimentExporter:
         if "env" in cfg and isinstance(cfg["env"], str):
             return cfg["env"]
 
-        # Check defaults list (e.g. override /env: cartpole)
+        # Check defaults list for an environment selection.
         defaults = cfg.get("defaults", [])
         if isinstance(defaults, list):
             for item in defaults:
@@ -662,8 +662,6 @@ class ExperimentExporter:
                         "false",
                         "identity",
                         "neural",
-                        "symbolic",
-                        "blender",
                         "learned",
                         "heuristic",
                         "linear",
@@ -686,17 +684,11 @@ class ExperimentExporter:
                                     extracted_models.append(first_k)
                                     _collect_models(sub[first_k])
                                     continue
-                            if k not in ("symbolic", "neural", "blender", "encoder", "decoder", "head"):
-                                extracted_models.append(k)
                             _collect_models(sub)
                         elif isinstance(sub, str):
                             _collect_models(sub)
 
             _collect_models(m_cfg.get("model"))
-            for slot in ("neural", "symbolic", "blender", "encoder", "decoder", "head"):
-                if slot in m_cfg:
-                    _collect_models(m_cfg[slot])
-
             for m in sorted(set(extracted_models)):
                 models_found.add(m)
                 # in/config/model/<m>.yaml (direct or recursive)
@@ -763,7 +755,6 @@ class ExperimentExporter:
             "environment": env_name,
             "agents": agents,
             "models": models,
-            "dependencies": {"components": ["thetalib"]},
             "package_contents": files,
         }
         if not is_group_bundle:

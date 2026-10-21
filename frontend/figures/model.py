@@ -39,8 +39,8 @@ class PanelRef:
     plotter: str
     label: str
     title: str | None = None
-    # Keyed by the series' legend label, because a panel comparing PPO against
-    # DQN needs them to stay different colours. One colour for the whole panel
+    # Keyed by the series' legend label, so methods in the same panel keep
+    # different colours. One colour for the whole panel
     # would merge them, which is the opposite of what the panel is for.
     colors: dict[str, str] = field(default_factory=dict)
     line_width: float | None = None

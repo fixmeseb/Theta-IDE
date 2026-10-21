@@ -35,14 +35,12 @@ if TYPE_CHECKING:
 # Second-chart metrics with hand-written text: (card title, chart title, card subtitle, number format).
 # Any other metric a run logged is offered too, described by the metrics catalog.
 SECOND_METRICS = {
-    "loss": ("TRAINING LOSS", "Total loss", "policy + 0.5 × value − 0.01 × entropy", ".4f"),
+    "loss": ("TRAINING LOSS", "Total loss", "Combined training objective", ".4f"),
     "value_loss": ("VALUE LOSS", "Value loss", "value-function error · critic MSE loss", ".3f"),
-    "policy_loss": ("POLICY LOSS", "Policy loss", "PPO clipped surrogate objective", ".4f"),
+    "policy_loss": ("POLICY LOSS", "Policy loss", "Policy optimization objective", ".4f"),
     "entropy": ("POLICY ENTROPY", "Policy entropy", "how random actions are · ln 2 ≈ 0.693 is uniform", ".3f"),
     "approx_kl": ("APPROX. KL", "Approximate KL per update", "size of each policy update", ".5f"),
 }
-# Highest possible evaluation reward per environment, drawn as the reward chart's ceiling.
-ENV_MAX_REWARD = {"cartpole": 500}
 OVERVIEW_REWARD_HEIGHT = 300  # px: the Overview's charts never shrink below these; the tab scrolls instead
 SECTION_COLUMNS = {"losses": 4}  # losses are small multiples, four to a row; other sections have two
 SIDEBAR_MIN_WIDTH = 250
@@ -114,14 +112,10 @@ def measures_environment_steps(run):
 def run_setup_label(run, config):
     """The "environment / methods" half of a run's caption.
 
-    Derived from the run itself. This used to be hardcoded to "CartPole-v1 / PPO"
-    for anything launched from the app, so a run on another environment was
-    mislabelled, and so was every agent-less one, whose methods name a model
-    rather than an algorithm. Only the simulated demo run keeps the literal,
-    because that run really is cartpole with PPO.
+    Derived from the run itself. Simulated runs have no environment or method.
     """
     if run.get("simulated"):
-        return "CartPole-v1  /  PPO"
+        return "Simulated run"
     env = (config or {}).get("env") or "?"
     methods = (run.get("backend") or {}).get("agents") or ["?"]
     return f"{env}  /  {' + '.join(methods).upper()}"
@@ -221,7 +215,7 @@ class MonitorPanel(QWidget):
             row.addWidget(card, 1)  # equal widths, whatever the second card's selector needs
         self.metric_select = QComboBox()
         self.metric_select.setToolTip("Metric shown in this card")
-        # Re-measure when the choices change: other engines' metric names are longer than PPO's.
+        # Re-measure when the choices change: metric names vary by engine.
         self.metric_select.setSizeAdjustPolicy(QComboBox.SizeAdjustPolicy.AdjustToContents)
         self.metric_select.currentIndexChanged.connect(self.second_metric_changed)
         title_row = QHBoxLayout()
@@ -441,8 +435,7 @@ class MonitorPanel(QWidget):
         second_value = latest(run, second)
         step = max((m["step"] for m in metrics), default=0)
         requested = config["total_timesteps"]
-        # PPO trains whole rollouts, so the real budget can exceed the requested one (10,000 -> 10,240).
-        # Records from before the backend reported it fall back to the steps actually run.
+        # Records from older runs may not include an effective budget; use the steps actually run.
         budget = (run["backend"].get("effective_timesteps") or max(step, requested)) if live else requested
         head_key, head_info = headline_metric(run, config)
         head_value = latest(run, head_key)
@@ -469,7 +462,7 @@ class MonitorPanel(QWidget):
             self.reward_card.subtitle.setText(
                 "evaluation / mean episode reward" if head_key == "reward" else head_info.name
             )
-            rounding = f"\n{requested:,} requested, rounded up to whole PPO rollouts" if budget != requested else ""
+            rounding = f"\n{requested:,} requested, effective budget {budget:,}" if budget != requested else ""
             self.steps_card.subtitle.setText(
                 f"of {budget:,} environment steps{rounding}" if env_steps
                 else "optimizer steps · this paradigm trains by epochs"
@@ -505,10 +498,7 @@ class MonitorPanel(QWidget):
         self.reward_chart.hold_y = training
         self.reward_chart.show_future = training and xmax is not None
         self.reward_chart.live_series = {title} if training else set()
-        # The ceiling is the environment's best possible return, which means nothing
-        # for a loss: let the chart fit what the run actually logged.
-        ceiling = ENV_MAX_REWARD.get(config["env"]) if head_key == "reward" else None
-        self.reward_chart.set_series([(title, metrics, "#b8bb26")], xmax, ceiling)
+        self.reward_chart.set_series([(title, metrics, "#b8bb26")], xmax)
 
         # Baseline overlay
         if baseline and baseline is not run:

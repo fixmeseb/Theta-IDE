@@ -628,8 +628,8 @@ class ComponentExporter:
                 [
                     "methods:",
                     "  my_run:",
-                    "    agent: ppo",
                     f"    model: {comp_id}",
+                    "    # Add an installed algorithm component if this paradigm requires one.",
                 ]
             )
         elif kind == "agent":
@@ -638,7 +638,7 @@ class ComponentExporter:
                     "methods:",
                     "  my_run:",
                     f"    agent: {comp_id}",
-                    "    model: dnn",
+                    "    model: <installed-model-component>",
                 ]
             )
         elif kind == "env":
@@ -647,7 +647,8 @@ class ComponentExporter:
                     f"env: {comp_id}",
                     "methods:",
                     "  my_run:",
-                    "    agent: ppo",
+                    "    agent: <installed-algorithm-component>",
+                    "    model: <installed-model-component>",
                 ]
             )
         else:

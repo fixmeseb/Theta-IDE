@@ -1,5 +1,7 @@
 # Handoff Guide 1: Single BlendRL Model Deployment & Verification
 
+> **Archived project handoff.** This document describes a former NeSyRL/BlendRL deployment to Pyrenees ITS. It is retained as historical context and does not describe components shipped with Theta-IDE.
+
 ## Executive Summary
 This document provides the exact technical specification and execution steps to deploy our currently trained **NeSyRL BlendRL checkpoint** into **Pyrenees ITS** (`Pyrenees-python`) under condition **`26140`**.
 

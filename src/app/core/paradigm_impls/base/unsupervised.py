@@ -8,7 +8,7 @@ unlabeled data:
 - UnsupervisedRunner: the standard PyTorch Lightning loop.
 
 The distinction from `supervised` is the training signal, not the data: both
-read a static dataset, but nothing here consults `y`, so the same MIMIC-style
+read a static dataset, but nothing here consults `y`, so the same trajectory-style
 loaders serve an autoencoder without a labeled target.
 """
 
@@ -17,10 +17,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-import lightning as L
 import numpy as np
 import torch
-import torch.nn as nn
 from torch.utils.data import DataLoader
 
 from src.app.core.interfaces import BaseEvalProtocol
@@ -39,8 +37,8 @@ log = logging.getLogger(__name__)
 class UnsupervisedDataModule(SupervisedDataModule):
     """Loads the same static datasets as `supervised`, without using the labels.
 
-    Subclassing rather than reimplementing keeps one copy of the delegation to
-    the domain data modules (EPSepsisDataModule and anything else registered).
+    Subclassing rather than reimplementing keeps one copy of delegation to
+    domain data modules discovered through the component registry.
     Batches still carry `y` because the loaders are shared; the unsupervised
     model and eval protocol simply never read it.
     """
@@ -220,95 +218,3 @@ class UnsupervisedRunner(SupervisedRunner):
             device_str=device_str,
             enable_checkpointing=enable_checkpointing,
         )
-
-
-# ---------------------------------------------------------------------------
-# 4. Autoencoder LightningModule
-# ---------------------------------------------------------------------------
-
-
-@register_component("AutoencoderLightningModule", "UnsupervisedLightningModule")
-class AutoencoderLightningModule(L.LightningModule):
-    """Wraps a registered autoencoder architecture in a reconstruction loop.
-
-    The constructor signature matches the supervised one train.py already calls
-    (architecture_name, input_dim, lr, **kwargs), so an unsupervised experiment
-    needs no special case there - only `lightning_module` in its model config.
-
-    It logs `val/loss`, which is the metric build_trainer monitors by default,
-    so checkpointing selects the best reconstruction without extra wiring.
-    """
-
-    def __init__(self, architecture_name: str = "autoencoder", input_dim: int = 64, lr: float = 1e-3, **kwargs: Any):
-        super().__init__()
-        self.save_hyperparameters()
-        self.architecture_name = architecture_name
-        self.lr = lr
-
-        from src.app.core.model_registry import MODEL_REGISTRY, auto_discover_models
-
-        auto_discover_models()
-        arch = MODEL_REGISTRY.get(str(architecture_name).lower())
-        if arch is None:
-            raise ValueError(
-                f"Unknown unsupervised architecture '{architecture_name}'. "
-                f"Registered: {sorted(k for k in MODEL_REGISTRY if 'autoencoder' in k)}"
-            )
-
-        accepted = ("hidden_dim", "latent_dim", "num_layers", "dropout", "bidirectional")
-        arch_kwargs = {k: kwargs[k] for k in accepted if k in kwargs and kwargs[k] is not None}
-        self.model = arch(input_dim=input_dim, **arch_kwargs)
-        self.loss_fn = nn.MSELoss(reduction="none")
-
-    def encode(self, x: torch.Tensor, **kwargs: Any) -> torch.Tensor:
-        return self.model.encode(x, **kwargs)
-
-    def forward(self, x: torch.Tensor, lengths: Any = None, padding_mask: Any = None):
-        import inspect
-
-        sig = inspect.signature(self.model.forward)
-        kwargs = {"lengths": lengths, "padding_mask": padding_mask}
-        kwargs = {k: v for k, v in kwargs.items() if k in sig.parameters and v is not None}
-        return self.model(x, **kwargs)
-
-    def _step(self, batch: Any, stage: str) -> torch.Tensor:
-        x, lengths, padding_mask = self._unpack(batch)
-        out = self(x, lengths=lengths, padding_mask=padding_mask)
-        recon = out[0] if isinstance(out, (tuple, list)) else out
-
-        per_element = self.loss_fn(recon, x)
-        if padding_mask is not None:
-            # Averaging over padded steps would reward a model for predicting
-            # zeros, so only real timesteps contribute.
-            keep = (~padding_mask).unsqueeze(-1).to(per_element.dtype)
-            denom = keep.sum() * x.size(-1)
-            loss = (per_element * keep).sum() / denom.clamp(min=1)
-        else:
-            loss = per_element.mean()
-
-        self.log(f"{stage}/loss", loss, on_step=False, on_epoch=True, prog_bar=True)
-        self.log(f"{stage}/recon_loss", loss, on_step=False, on_epoch=True)
-        return loss
-
-    def training_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
-        return self._step(batch, "train")
-
-    def validation_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
-        return self._step(batch, "val")
-
-    @staticmethod
-    def _unpack(batch: Any):
-        """Pull inputs and masks out of a batch, ignoring any label it carries."""
-        lengths = padding_mask = None
-        if isinstance(batch, (tuple, list)):
-            if len(batch) >= 4:
-                x, _, lengths, padding_mask = batch[:4]
-            else:
-                x = batch[0]
-        else:
-            x = batch
-        return x, lengths, padding_mask
-
-    def configure_optimizers(self):
-        weight_decay = self.hparams.get("weight_decay", 1e-4) or 1e-4
-        return torch.optim.AdamW(self.parameters(), lr=self.lr, weight_decay=weight_decay)

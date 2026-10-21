@@ -155,9 +155,9 @@ class TestExperimentYaml(unittest.TestCase):
         data = parse(experiment_yaml("mimic", "demo", self.offline, agent="cql", model="blendrl"))
         self.assertIn("cql_blendrl", data["methods"])
 
-    def test_model_defaults_to_dnn(self):
+    def test_model_is_not_guessed_when_no_component_is_selected(self):
         data = parse(experiment_yaml("cartpole", "demo", self.online, agent="ppo"))
-        self.assertEqual(data["methods"]["ppo_dnn"]["model"], "dnn")
+        self.assertEqual(data["methods"]["ppo"], {"agent": "ppo"})
 
     def test_no_methods_block_without_an_agent(self):
         self.assertNotIn("methods", parse(experiment_yaml("cartpole", "demo", self.online)))
@@ -306,16 +306,16 @@ class TestAgentlessParadigms(unittest.TestCase):
         group = ExperimentGroup(name="fixture", base_methods={"chosen": {"model": "fixture_model"}})
         self.assertEqual(default_method_model(group, self.tree.models), "fixture_model")
 
-    def test_default_model_falls_back_for_a_group_with_no_methods(self):
+    def test_group_with_no_methods_has_no_model_default(self):
         chosen = default_method_model(self.tree.group("thetaide"), self.tree.models)
-        self.assertIn(chosen, {"dnn", "autoencoder", "mlp", "basics/autoencoder"})
+        self.assertIsNone(chosen)
 
-    def test_default_model_tolerates_an_unknown_group(self):
+    def test_unknown_group_has_no_model_default(self):
         chosen = default_method_model(None, self.tree.models)
-        self.assertIn(chosen, {"dnn", "autoencoder", "mlp", "basics/autoencoder"})
+        self.assertIsNone(chosen)
 
-    def test_default_model_picks_a_known_model_when_the_fallback_is_absent(self):
-        self.assertEqual(default_method_model(None, {"transformer"}), "transformer")
+    def test_explicit_installed_fallback_is_used(self):
+        self.assertEqual(default_method_model(None, {"transformer"}, fallback="transformer"), "transformer")
 
     def test_a_generated_supervised_experiment_satisfies_non_empty_methods(self):
         """The constraint the paradigm declares is the one this must not break."""

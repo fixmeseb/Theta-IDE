@@ -12,7 +12,7 @@ import sys
 import pytest
 
 from frontend.model import BASE_EXPERIMENT, Config
-from src.app.pipeline.compose import comparable_config, compose_experiment, method_plans, validate_composed
+from src.app.pipeline.compose import comparable_config, compose_experiment, validate_composed
 
 REFERENCE = "thetaide/cartpole_ppo_reference"
 
@@ -76,14 +76,3 @@ def test_builder_values_reach_the_method_config(config):
     assert (method.lr, method.batch_size, method.gamma) == (config.lr, config.batch_size, config.gamma)
     assert isinstance(method.lr, float) and isinstance(method.gamma, float)
     assert cfg.tensorboard is config.tensorboard
-
-
-@pytest.mark.parametrize("total, extra, expected", [
-    (10000, [], {"size": 512, "rollouts": 20, "timesteps": 10240}),
-    (10240, [], {"size": 512, "rollouts": 20, "timesteps": 10240}),
-    (1000, [], {"size": 512, "rollouts": 2, "timesteps": 1024}),
-    (10000, ["++methods.ppo.num_envs=2"], {"size": 256, "rollouts": 40, "timesteps": 10240}),
-])
-def test_ppo_budget_rounds_up_to_whole_rollouts(total, extra, expected):
-    rollout = method_plans(compose_experiment(BASE_EXPERIMENT, Config(total_timesteps=total).overrides() + extra))
-    assert {k: rollout["ppo"]["rollout"][k] for k in expected} == expected

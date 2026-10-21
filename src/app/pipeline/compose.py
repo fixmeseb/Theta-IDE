@@ -95,7 +95,7 @@ def validate_composed(composed: ComposedExperiment) -> list[str]:
 def method_plans(composed: ComposedExperiment) -> dict[str, dict[str, Any]]:
     """Per-method settings after tier merging, plus the exact overrides each training subprocess receives.
 
-    Method-level values (e.g. methods.ppo.lr) only reach agent.* here, so this, not the top-level
+    Method-level values (e.g. methods.<method>.lr) only reach agent.* here, so this, not the top-level
     agent block, is what a method actually trains with. Offline dataset paths are not resolved.
     """
     from src.app.pipeline.commands import build_method_overrides
@@ -108,35 +108,8 @@ def method_plans(composed: ComposedExperiment) -> dict[str, dict[str, Any]]:
             "train_overrides": build_method_overrides(
                 method_name=name, method_cfg=settings, extra_args=composed.launch_args, cfg=composed.cfg
             ),
-            "rollout": ppo_rollout(composed.cfg, settings),
         }
     return plans
-
-
-def ppo_rollout(cfg: DictConfig, settings: dict[str, Any]) -> dict[str, int] | None:
-    """How many environment steps an online PPO method really trains for.
-
-    PPO collects num_envs x num_steps transitions per update and never stops mid-rollout, so
-    training runs ceil(total_timesteps / rollout) rollouts (see lightning_builder max_epochs).
-    Method settings override the agent defaults, as they do at launch.
-    """
-    if settings.get("agent") != "ppo" or cfg.get("paradigm") != "online_rl":
-        return None
-    agent_cfg = getattr(cfg, "agent", None) if hasattr(cfg, "agent") else cfg.get("agent", None)
-    defaults: Any = (
-        agent_cfg if isinstance(agent_cfg, (dict, DictConfig)) and agent_cfg.get("algorithm") == "ppo" else {}
-    )
-    num_envs = int(settings.get("num_envs", defaults.get("num_envs", 4)))
-    num_steps = int(settings.get("num_steps", defaults.get("num_steps", 128)))
-    size = num_envs * num_steps
-    rollouts = max(1, -(-int(cfg.total_timesteps) // size))
-    return {
-        "num_envs": num_envs,
-        "num_steps": num_steps,
-        "size": size,
-        "rollouts": rollouts,
-        "timesteps": rollouts * size,
-    }
 
 
 def effective_config(cfg: DictConfig) -> dict[str, Any]:

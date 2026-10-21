@@ -7,7 +7,7 @@ import numpy as np
 import torch
 
 from src.app.core.checkpoints import CheckpointSchedule, checkpoint_name
-from src.app.core.env_vectorized import VectorizedNudgeBaseEnv
+from src.app.core.env_vectorized import VectorizedBaseEnv
 
 
 class EnvironmentEvaluatorCallback(L.Callback):
@@ -93,8 +93,8 @@ class EnvironmentEvaluatorCallback(L.Callback):
         """The step Lightning itself uses for this epoch's logs, so evaluation lines up with losses.
 
         Lightning logs against fit_loop.epoch_loop._batches_that_stepped (one per training batch)
-        and writes end-of-epoch metrics one below it; global_step counts optimizer steps instead,
-        which PPO takes several of per batch. The attribute is private, hence the fallbacks.
+        and writes end-of-epoch metrics one below it; global_step may count optimizer steps instead.
+        The attribute is private, hence the fallbacks.
         """
         epoch_loop = getattr(getattr(trainer, "fit_loop", None), "epoch_loop", None)
         batches = getattr(epoch_loop, "_batches_that_stepped", None)
@@ -106,29 +106,12 @@ class EnvironmentEvaluatorCallback(L.Callback):
         cfg = self.cfg
         pl_module.eval()
 
-        def get_algo_name_robust(acfg):
-            from omegaconf import DictConfig
-
-            if isinstance(acfg, (dict, DictConfig)):
-                if "algorithm" in acfg:
-                    return acfg.algorithm
-                if "agent" in acfg:
-                    res = get_algo_name_robust(acfg.agent)
-                    if res:
-                        return res
-                if "name" in acfg:
-                    return acfg.name
-            return None
-
-        base_algo_name = get_algo_name_robust(cfg.agent)
-
         if self.eval_env is None:
             eval_n_envs = cfg.env.get("eval_n_envs", 20) if hasattr(cfg.env, "get") else 20
             target_n_envs = min(cfg.eval_episodes, eval_n_envs)
-            self.eval_env = VectorizedNudgeBaseEnv.from_name(
+            self.eval_env = VectorizedBaseEnv.from_name(
                 cfg.env.name,
                 n_envs=target_n_envs,
-                mode=base_algo_name if base_algo_name else cfg.env.name,
                 seed=cfg.seed + 100,
             )
 

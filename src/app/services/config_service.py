@@ -93,23 +93,11 @@ class LaunchError(Exception):
         self.conflict = conflict
 
 
-def rollout_notices(plans: dict[str, dict], total_timesteps) -> list[str]:
-    notices = []
-    for name, plan in plans.items():
-        rollout = plan.get("rollout")
-        if rollout and rollout["timesteps"] != total_timesteps:
-            notices.append(
-                f"Method '{name}' trains {rollout['timesteps']:,} steps, not {total_timesteps:,}: PPO collects whole "
-                f"rollouts of {rollout['size']} steps ({rollout['num_envs']} envs × {rollout['num_steps']} steps), "
-                f"so it runs {rollout['rollouts']} rollouts."
-            )
-    return notices
-
-
 def effective_timesteps(plans: dict[str, dict], total_timesteps):
-    """Environment steps training will actually run: the largest method's rounded-up PPO budget."""
-    rollouts = [plan["rollout"]["timesteps"] for plan in plans.values() if plan.get("rollout")]
-    return max(rollouts, default=total_timesteps)
+    """Return an engine-reported effective step budget, or the configured budget."""
+    budgets = [plan.get("effective_timesteps") for plan in plans.values()]
+    budgets = [int(value) for value in budgets if value is not None]
+    return max(budgets, default=total_timesteps)
 
 
 @_cached_on_inputs
@@ -117,7 +105,7 @@ def config_schema() -> dict[str, Any]:
     """Describe one real workspace recipe for a backend-health check.
 
     The experiment editor owns its schema and reads paradigm/component metadata
-    directly.  This service intentionally does not synthesize a PPO/DNN form:
+    directly.  This service intentionally does not synthesize an algorithm/model form:
     doing so made a health check quietly dictate an unrelated experiment.
     """
     exp_dir = CONFIG_DIR / "experiment"
@@ -187,7 +175,6 @@ def compose_report(experiment: str, overrides: list[str] | None = None) -> dict[
         errors.append({"stage": "validation", "message": str(e).strip()})
     try:
         methods = method_plans(composed)
-        notices.extend(rollout_notices(methods, composed.cfg.get("total_timesteps")))
     except Exception as e:
         errors.append({"stage": "methods", "message": str(e).strip()})
     config = effective_config(composed.cfg)

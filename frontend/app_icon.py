@@ -74,7 +74,7 @@ def desktop_entry(python, repo_root):
         "[Desktop Entry]\n"
         "Type=Application\n"
         "Name=ThetaIDE\n"
-        "Comment=IDE for reinforcement learning and deep learning experiments\n"
+        "Comment=General-purpose machine-learning research IDE\n"
         f'Exec="{python}" -m frontend\n'
         f"Path={repo_root}\n"
         f"Icon={ICON_NAME}\n"

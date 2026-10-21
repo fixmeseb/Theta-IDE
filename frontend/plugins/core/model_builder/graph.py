@@ -320,8 +320,7 @@ def model_config_yaml(
     ]
     if lightning_module:
         lines += [
-            "# Resolved through paradigm_loader's component registry. Without this the",
-            "# paradigm falls back to its default module, which expects a different batch.",
+            "# Resolved through the component registry. The model package exports this module.",
             f"lightning_module: {lightning_module}",
         ]
     # Only a non-flat input needs stating: a flat width arrives as input_dim.

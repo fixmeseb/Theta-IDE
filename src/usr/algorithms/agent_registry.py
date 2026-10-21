@@ -40,7 +40,7 @@ def get_agent_class(algo_name: str):
     """Resolve an algorithm name to its registered agent class using longest-prefix matching.
 
     Args:
-        algo_name: Algorithm identifier (e.g., "iql_cp_tuned", "blendrl_cql_human_cew").
+        algo_name: Algorithm identifier (e.g., "iql_cp_tuned", "offline_custom_variant").
 
     Returns:
         The registered agent class.
@@ -71,7 +71,7 @@ def get_agent_class(algo_name: str):
 
 
 def auto_discover():
-    """Import all modules in src/usr/algorithms/ (and src/usr/methods/) to trigger @register_agent decorators.
+    """Import modules in src/usr/algorithms/ to trigger @register_agent decorators.
 
     Called once at startup (e.g., in train.py) to ensure all agents are registered
     before get_agent_class() is used.
@@ -82,9 +82,7 @@ def auto_discover():
     usr_dir = os.path.dirname(algorithms_dir)
     src_dir = os.path.dirname(usr_dir)
     project_root = os.path.dirname(src_dir)
-    methods_dir = os.path.join(usr_dir, "methods")
-
-    for p in (project_root, src_dir, usr_dir, algorithms_dir, methods_dir):
+    for p in (project_root, src_dir, usr_dir, algorithms_dir):
         if os.path.isdir(p) and p not in sys.path:
             sys.path.insert(0, p)
 
@@ -99,20 +97,6 @@ def auto_discover():
             importlib.import_module(f"src.usr.algorithms.{module_info.name}")
         except Exception as e:
             print(f"[Warning] Failed to auto-discover algorithm module '{module_info.name}': {e}")
-
-    # Discover in src/usr/methods (legacy fallback if directory exists)
-    if os.path.isdir(methods_dir):
-        for module_info in pkgutil.iter_modules([methods_dir]):
-            if module_info.name.startswith("_") or module_info.name in (
-                "agent_registry",
-                "base_agent",
-            ):
-                continue
-            try:
-                importlib.import_module(f"src.usr.methods.{module_info.name}")
-            except Exception as e:
-                print(f"[Warning] Failed to auto-discover legacy agent module '{module_info.name}': {e}")
-
 
 def list_registered_agents():
     """Return sorted list of registered algorithm prefixes."""

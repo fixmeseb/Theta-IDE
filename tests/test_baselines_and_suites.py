@@ -15,17 +15,13 @@ from frontend.hub.models import AuthorInfo, HubComponent, ReleaseInfo
 
 
 def test_benchmark_engine_resolution():
-    """Verify that decoupled benchmark engines (sb3, d3rlpy) resolve correctly."""
-    # SB3 Engine resolution
-    script, _ = resolve_engine({"engine": "sb3"})
-    assert "sb3_runner.py" in script
-
-    script_sb3_long, _ = resolve_engine({"engine": "stable_baselines3"})
-    assert "sb3_runner.py" in script_sb3_long
-
-    # d3rlpy Engine resolution
-    script_d3rlpy, _ = resolve_engine({"engine": "d3rlpy"})
-    assert "d3rlpy_runner.py" in script_d3rlpy
+    """Runner selection is data driven by each method profile's entrypoint."""
+    for path in (
+        "src/usr/algorithms/sb3-suite/sb3_runner.py",
+        "src/usr/algorithms/d3rlpy-suite/d3rlpy_runner.py",
+    ):
+        script, _ = resolve_engine({"entrypoint": path})
+        assert script == path
 
 
 def test_gym_classic_control_environments():

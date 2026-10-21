@@ -163,19 +163,19 @@ def test_schema_health_check_composes_a_real_workspace_experiment():
     assert config_service.compose_report(schema["base_experiment"])["valid"]
 
 
-def test_compose_report_explains_a_rounded_budget():
+def test_compose_report_does_not_infer_an_algorithm_specific_budget():
     def notices(total):
         body = config_service.compose_report(BASE_EXPERIMENT, Config(total_timesteps=total).overrides())
         return [n for n in body["notices"] if "rollouts" in n]
 
-    assert "trains 10,240 steps, not 10,000" in notices(10000)[0]
+    assert notices(10000) == []
     assert notices(10240) == []
 
 
 def test_prepare_launch_describes_the_job():
     plan = config_service.prepare_launch(BASE_EXPERIMENT, Config(name="pytest_plan_only", total_timesteps=3000).overrides())
     assert (plan["group"], plan["experiment_id"], plan["agents"]) == ("thetaide", "pytest_plan_only", ["ppo"])
-    assert plan["effective_timesteps"] == 3072  # 3,000 requested, rounded up to 6 PPO rollouts of 512
+    assert plan["effective_timesteps"] == 3000
 
 
 def test_prepare_launch_refuses_a_clash_with_an_active_job():

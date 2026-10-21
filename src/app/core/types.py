@@ -1,4 +1,4 @@
-"""Core data types and contracts for NeSyRL."""
+"""Core data types and contracts for Theta-IDE."""
 
 from typing import Any
 

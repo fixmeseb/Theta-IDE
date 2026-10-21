@@ -221,9 +221,9 @@ def test_from_layers_skips_entries_it_cannot_place():
 
 
 def test_yaml_declares_the_spec_architecture():
-    text = model_config_yaml([{"type": "relu"}], "TabularClassifierLightningModule")
+    text = model_config_yaml([{"type": "relu"}], "example_package.ClassifierModule")
     assert "architecture: sequential_spec" in text
-    assert "lightning_module: TabularClassifierLightningModule" in text
+    assert "lightning_module: example_package.ClassifierModule" in text
 
 
 def test_yaml_states_input_shape_only_when_unflattened():
@@ -309,6 +309,7 @@ class TestModelBuilderDialog:
         chain(dialog.graph, *DENSE)
         dialog.canvas.rebuild()
         dialog.txt_name.setText("saved_net")
+        dialog.txt_module.setText("example_package.TrainingModule")
         dialog._on_save()
         assert dialog.saved_name == "saved_net"
         assert "architecture: sequential_spec" in (self.tmp / "saved_net.yaml").read_text()
@@ -318,6 +319,7 @@ class TestModelBuilderDialog:
         chain(dialog.graph, *DENSE)
         dialog.canvas.rebuild()
         dialog.txt_name.setText("bad name/slash")
+        dialog.txt_module.setText("example_package.TrainingModule")
         dialog._on_save()
         assert dialog.saved_name is None
 
@@ -346,6 +348,7 @@ class TestModelBuilderDialog:
         moved = dialog.graph.chain().nodes[0]
         moved.x, moved.y = 320.0, 480.0
         dialog.txt_name.setText("placed")
+        dialog.txt_module.setText("example_package.TrainingModule")
         dialog._on_save()
         saved = yaml.safe_load((self.tmp / "placed.yaml").read_text())
         assert [320, 480] in saved["builder_layout"]

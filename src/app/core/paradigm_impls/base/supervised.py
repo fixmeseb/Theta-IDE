@@ -95,22 +95,10 @@ class SupervisedDataModule(L.LightningDataModule, BaseDataModule):
                     self.input_dim = getattr(self._delegate, "input_dim", 64)
                     return
 
-            if hasattr(self._cfg, "get") and self._cfg.get("early_prediction"):
-                try:
-                    from src.usr.eval.early_prediction.data_module import EPSepsisDataModule
-
-                    self._delegate = EPSepsisDataModule(self._cfg)
-                    self.input_dim = getattr(self._delegate, "input_dim", 64)
-                    return
-                except ImportError:
-                    pass
-
-            # Any other offline dataset: a labelled .npz. Resolved here rather
-            # than demanded as a `data_module` key, because that key cannot be
-            # set from the configuration panel - requiring it would mean
-            # supervised still only worked for MIMIC as far as the UI is
-            # concerned. Staying undelegated is fine: the loaders may have been
-            # supplied directly instead.
+            # Generic fallback for an offline dataset: a labelled .npz. Resolve it
+            # here rather than requiring a data_module key that the config panel
+            # cannot set. Staying undelegated is fine when loaders were supplied
+            # directly instead.
             try:
                 from src.app.core.paradigm_loader import get_component
 

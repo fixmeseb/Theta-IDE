@@ -1,4 +1,6 @@
-# BlendRL Workflow & Command Reference Guide
+# Archived: BlendRL Workflow & Command Reference Guide
+
+> Historical notes for the former Offline-BlendRL project. The configurations, commands, and paths below describe that project and are not current Theta-IDE defaults or shipped components. Current generic workflow templates live under `in/config/workflow/`.
 
 This document contains reference guides, CLI command syntax, plot style specifications, and workflow tutorials for the BlendRL repository.
 

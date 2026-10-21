@@ -241,7 +241,7 @@ class PluginContext:
     # ── Experiment State & Event Subscriptions ───────────────────────────────
 
     def get_current_experiment(self) -> Optional[str]:
-        """Return the currently selected experiment name, e.g. 'cartpole/quick_test'."""
+        """Return the currently selected experiment name, e.g. 'group/experiment'."""
         return getattr(self._window, "current_experiment", None)
 
     def get_active_config_path(self) -> Optional[Path]:

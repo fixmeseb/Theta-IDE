@@ -81,7 +81,6 @@ def test_categorical_choices_and_component_kinds():
     """Verify categorical choices and component kind mappings."""
     assert "relu" in CATEGORICAL_CHOICES["activation"]
     assert "adam" in CATEGORICAL_CHOICES["optimizer"]
-    assert "sb3" in CATEGORICAL_CHOICES["engine"]
     assert "min" in CATEGORICAL_CHOICES["mode"]
 
     assert _get_component_kind("agent/ppo.yaml")[0] == "Algorithm"

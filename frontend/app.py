@@ -1,4 +1,4 @@
-"""Spyder-inspired research workspace for deep learning and reinforcement learning experimentation."""
+"""Spyder-inspired workspace for configuring and analyzing machine-learning experiments."""
 import argparse
 import os
 import sys
@@ -60,7 +60,6 @@ from .model import (
     Config,
     Store,
     disk_run,
-    example_runs,
     metric_points,
     metric_points_from_api,
     new_run,
@@ -164,7 +163,7 @@ class Window(QMainWindow):
         )
         step("Loading run history…", 0.06)
         saved, errors = self.store.load()
-        self.runs = saved or example_runs()
+        self.runs = saved
         # catalog.list_runs() entries by (group, experiment_id): every results/logs folder, however it was launched.
         self.disk_entries = {}
         self.backend_connected = False  # True once the training pipeline imports and composes in-process
@@ -440,21 +439,13 @@ class Window(QMainWindow):
 
     def init_default_experiment(self):
         default_exp = None
-        for pref in [
-            "experiment/thetaide/cartpole_ppo_reference.yaml",
-            "experiment/cartpole/quick_test.yaml",
-        ]:
-            if (self.config_tree.root_dir / pref).exists():
-                default_exp = pref
-                break
-        if not default_exp:
-            exp_dir = self.config_tree.root_dir / "experiment"
-            candidates = sorted(
-                p for p in exp_dir.rglob("*.yaml")
-                if not p.name.startswith("_") and p.is_file() and "/methods/" not in p.as_posix()
-            ) if exp_dir.is_dir() else []
-            if candidates:
-                default_exp = str(candidates[0].relative_to(self.config_tree.root_dir))
+        exp_dir = self.config_tree.root_dir / "experiment"
+        candidates = sorted(
+            p for p in exp_dir.rglob("*.yaml")
+            if not p.name.startswith("_") and p.is_file() and "/methods/" not in p.as_posix()
+        ) if exp_dir.is_dir() else []
+        if candidates:
+            default_exp = str(candidates[0].relative_to(self.config_tree.root_dir))
         if default_exp:
             self.config_tree.select_file(default_exp)
 
@@ -1511,11 +1502,14 @@ class Window(QMainWindow):
             steps = int(d.get("total_timesteps") or 10000)
             tb = bool(d.get("tensorboard", False))
             methods = d.get("methods", {})
-            ppo_spec = methods.get("ppo", {}) if isinstance(methods, dict) else {}
-            lr = float(ppo_spec.get("lr") or 0.0003)
-            batch = int(ppo_spec.get("batch_size") or 64)
-            gamma = float(ppo_spec.get("gamma") or 0.99)
-            return Config(name=str(exp_id), seed=seed, total_timesteps=steps, lr=lr, batch_size=batch, gamma=gamma, tensorboard=tb)
+            method_name, method = next(iter(methods.items()), ("method", {})) if isinstance(methods, dict) else ("method", {})
+            method = method if isinstance(method, dict) else {}
+            lr = float(method.get("lr") or 0.0003)
+            batch = int(method.get("batch_size") or 64)
+            gamma = float(method.get("gamma") or 0.99)
+            return Config(name=str(exp_id), method_name=str(method_name), agent=str(method.get("agent") or ""),
+                          model=str(method.get("model") or ""), seed=seed, total_timesteps=steps, lr=lr,
+                          batch_size=batch, gamma=gamma, tensorboard=tb)
         return Config()
 
     def update_config(self, *_):
@@ -1572,8 +1566,8 @@ class Window(QMainWindow):
         self.preview.setPlainText("\n\n".join(sections))
         self.compose_valid = bool(data.get("valid", False))
         # The launched run is described by the experiment, not by the builder. Without
-        # this the run record keeps Config's defaults - env "cartpole", 10,000 steps -
-        # so every experiment launched from the tree was labelled as CartPole.
+        # this the run record keeps generic placeholder values instead of the
+        # environment and method declared by the composed experiment.
         self.composed_config = data.get("config") if isinstance(data.get("config"), dict) else None
         if self.composed_config is not None:
             composed = self.composed_config
@@ -1589,12 +1583,7 @@ class Window(QMainWindow):
             self.preview_status.setText("Resolved config • ✓ valid for the training pipeline")
             self.preview_errors.hide()
             self.builder_status.setObjectName("configOk")
-            rollouts = [plan["rollout"] for plan in data.get("methods", {}).values() if plan.get("rollout")]
-            detail = ""
-            if rollouts and rollouts[0]["timesteps"] != config.total_timesteps:
-                r = rollouts[0]
-                detail = f" · trains {r['timesteps']:,} steps ({r['rollouts']} PPO rollouts × {r['size']})"
-            self.builder_status.setText("✓ Config validated by the training pipeline" + detail)
+            self.builder_status.setText("✓ Config validated by the training pipeline")
         else:
             messages = [f"[{e['stage']}] {e['message']}" for e in data["errors"]]
             self.compose_error = messages[0].splitlines()[0] if messages else "Configuration validation failed"
@@ -1656,15 +1645,16 @@ class Window(QMainWindow):
                 d["total_timesteps"] = getattr(config, "total_timesteps", 10000)
                 d["tensorboard"] = getattr(config, "tensorboard", False)
                 methods = d.setdefault("methods", {})
-                if isinstance(methods, dict) and ("ppo" in methods or not methods):
-                    ppo_spec = methods.setdefault("ppo", {})
-                    if isinstance(ppo_spec, dict):
-                        if hasattr(config, "lr"):
-                            ppo_spec["lr"] = config.lr
-                        if hasattr(config, "batch_size"):
-                            ppo_spec["batch_size"] = config.batch_size
-                        if hasattr(config, "gamma"):
-                            ppo_spec["gamma"] = config.gamma
+                if isinstance(methods, dict):
+                    method_name = getattr(config, "method_name", "method")
+                    method = next(iter(methods.values()), None)
+                    if not methods:
+                        method = methods.setdefault(method_name, {})
+                    if isinstance(method, dict):
+                        for field in ("agent", "model", "lr", "batch_size", "gamma"):
+                            value = getattr(config, field, None)
+                            if value not in (None, ""):
+                                method[field] = value
             self.config_viewer._render_boxes()
         self.update_config()
 
@@ -1672,7 +1662,7 @@ class Window(QMainWindow):
         if hasattr(self, "config_tree"):
             self.config_tree.prompt_new_in_group()
         else:
-            self.set_config(Config(name="cartpole_ppo_experiment"))
+            self.set_config(Config())
             self.tabs.setCurrentWidget(self.config_panel)
 
     def persist(self, run):
@@ -1860,7 +1850,7 @@ class Window(QMainWindow):
         for button in launch_buttons(self):
             button.setToolTip(tip)
         # Only the experiment tree's button says why in its text; the Queue tab's stays "Launch now"
-        # (a reason such as "Missing component: nsfr" does not fit it) and says why in its tooltip.
+        # (a missing-component reason does not fit it) and says why in its tooltip.
         if self.start_button is not None and hasattr(self.start_button, "setText"):
             self.start_button.setText(btn_text)
         if hasattr(self, "queue_panel"):
@@ -1937,9 +1927,8 @@ class Window(QMainWindow):
     def config_for_run(self, config):
         """`config` with whatever the composed experiment actually declares.
 
-        self.config() is the experiment builder's record, and its defaults are a
-        CartPole PPO recipe. An experiment launched from the tree never fills it
-        in, so the run was described by those defaults rather than by itself.
+        self.config() is the experiment builder's record. An experiment launched
+        from the tree may not have populated it, so use facts from composition.
         """
         from dataclasses import replace
 
@@ -2360,7 +2349,10 @@ class Window(QMainWindow):
         if not run["metrics"] or any("entropy" in m for m in run["metrics"]):
             return
         backend = run["backend"]
-        agent = (backend.get("agents") or ["ppo"])[0]
+        agents = backend.get("agents") or []
+        if not agents:
+            return
+        agent = agents[0]
         self.backend.run_metrics(backend["group"], backend["experiment_id"], agent,
                                  lambda data, error: self.backfill_received(run, data, error))
 

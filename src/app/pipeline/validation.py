@@ -10,7 +10,6 @@ requires only a new YAML file — no changes to this module.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -301,7 +300,7 @@ def _validate_methods_for_paradigm(cfg: Any, paradigm_name: str, paradigm_def: d
     """Validate that methods declared in config match the paradigm's agent and model requirements.
 
     Raises:
-        ConfigurationError: If any method is incompatible with the paradigm (e.g. CQL in supervised).
+        ConfigurationError: If any method is incompatible with the selected paradigm.
     """
     methods = parse_methods_dict(cfg)
     if not methods:
@@ -332,7 +331,7 @@ def _validate_methods_for_paradigm(cfg: Any, paradigm_name: str, paradigm_def: d
         if not model_arch:
             raise ConfigurationError(
                 f"[ConfigurationError] Method '{method_name}' is missing required key 'model'. "
-                f"Every method must specify a model architecture (e.g. 'model: dnn', 'model: blendrl')."
+                f"Every method must specify a model architecture (for example, 'model: package/model')."
             )
 
         # The method contract, not the paradigm's name, decides whether a
@@ -444,7 +443,7 @@ def _get_agent_supported_paradigms(agent_algo: str) -> list[str] | None:
                 except Exception:
                     pass
 
-        # Glob match for nested paths like in/config/agent/sb3/ppo.yaml
+        # Glob match for nested package profiles like in/config/agent/<package>/<profile>.yaml
         for y in agent_dir.rglob("*.yaml"):
             if y.stem.lower() in (clean_algo, agent_algo.lower()):
                 try:
@@ -459,36 +458,36 @@ def _get_agent_supported_paradigms(agent_algo: str) -> list[str] | None:
                 except Exception:
                     pass
 
-    # Search installed component manifests in src/usr/algorithms/ and src/usr/methods/
-    for base_dir in [Path("src/usr/algorithms"), Path("src/usr/methods")]:
-        if base_dir.exists():
-            candidates = [
-                base_dir / agent_algo,
-                base_dir / clean_algo,
-                base_dir / (agent_algo.split("/")[0] if "/" in agent_algo else agent_algo),
-                base_dir / (clean_algo.split("_")[0] if "_" in clean_algo else clean_algo),
-            ]
-            for candidate_dir in candidates:
-                if candidate_dir.is_dir():
-                    for meta_file in [candidate_dir / ".theta_component.json", candidate_dir / "plugin.json"]:
-                        if meta_file.is_file():
-                            try:
-                                import json
+    # Search installed component manifests in the algorithm component directory.
+    base_dir = Path("src/usr/algorithms")
+    if base_dir.exists():
+        candidates = [
+            base_dir / agent_algo,
+            base_dir / clean_algo,
+            base_dir / (agent_algo.split("/")[0] if "/" in agent_algo else agent_algo),
+            base_dir / (clean_algo.split("_")[0] if "_" in clean_algo else clean_algo),
+        ]
+        for candidate_dir in candidates:
+            if candidate_dir.is_dir():
+                for meta_file in [candidate_dir / ".theta_component.json", candidate_dir / "plugin.json"]:
+                    if meta_file.is_file():
+                        try:
+                            import json
 
-                                meta = json.loads(meta_file.read_text(encoding="utf-8"))
-                                paradigms = meta.get("paradigms") or meta.get("compatible_paradigms")
-                                if paradigms:
-                                    if isinstance(paradigms, list):
-                                        return [str(x).lower() for x in paradigms]
-                                    return [str(paradigms).lower()]
-                            except Exception:
-                                pass
+                            meta = json.loads(meta_file.read_text(encoding="utf-8"))
+                            paradigms = meta.get("paradigms") or meta.get("compatible_paradigms")
+                            if paradigms:
+                                if isinstance(paradigms, list):
+                                    return [str(x).lower() for x in paradigms]
+                                return [str(paradigms).lower()]
+                        except Exception:
+                            pass
 
     return None
 
 
 def _agent_exists(agent_algo: str) -> bool:
-    """Check whether an agent is known to the registry, has a config file, or maps to an engine runner."""
+    """Check whether an agent is registered or has an installed agent profile."""
     if not agent_algo:
         return False
     clean_algo = str(agent_algo).lower().replace("-", "_")
@@ -502,36 +501,12 @@ def _agent_exists(agent_algo: str) -> bool:
     except Exception:
         pass
 
-    # Check if this algorithm maps to an installed runner engine (e.g. sb3_runner)
-    try:
-        from src.app.pipeline.engine import ENGINE_SCRIPT_MAP
-
-        sb3_algos = {"ppo", "dqn", "a2c", "sac"}
-        if clean_algo in sb3_algos:
-            script = ENGINE_SCRIPT_MAP.get(clean_algo)
-            if script and Path(script).is_file():
-                return True
-        if "/" in str(agent_algo):
-            pfx, sub = str(agent_algo).split("/", 1)
-            pfx = pfx.lower()
-            clean_sub = sub.lower().replace("-", "_")
-            if pfx in ("sb3", "stable_baselines3") and clean_sub in sb3_algos:
-                script = ENGINE_SCRIPT_MAP.get("sb3")
-                if script and Path(script).is_file():
-                    return True
-            script = ENGINE_SCRIPT_MAP.get(pfx)
-            if script and Path(script).is_file() and pfx not in ("sb3", "stable_baselines3"):
-                return True
-    except Exception:
-        pass
-
     prefix = str(agent_algo).split("/")[0].lower()
 
-    for methods_dir in [Path("src/usr/methods"), Path("src/usr/algorithms")]:
-        if methods_dir.is_dir():
-            for d in [methods_dir / agent_algo, methods_dir / clean_algo, methods_dir / prefix]:
-                if d.is_dir():
-                    return True
+    algorithms_dir = Path("src/usr/algorithms")
+    for d in [algorithms_dir / agent_algo, algorithms_dir / clean_algo, algorithms_dir / prefix]:
+        if d.is_dir():
+            return True
 
     agent_dir = Path("in/config/agent")
     if agent_dir.exists():
@@ -733,7 +708,6 @@ def find_missing_components(cfg_or_dict: Any) -> list[str]:
             # Check model
             mo = m_spec.get("model")
             mo_str = None
-            nested_dict = {}
             if isinstance(mo, str):
                 mo_str = mo
             elif isinstance(mo, dict) or hasattr(mo, "get"):
@@ -742,52 +716,8 @@ def find_missing_components(cfg_or_dict: Any) -> list[str]:
                     first_k = next(iter(mo))
                     mo_str = first_k
                     val = mo[first_k]
-                    if isinstance(val, dict) or hasattr(val, "get"):
-                        nested_dict = val
             if mo_str and not _model_exists(mo_str):
                 missing.append(f"model: {mo_str}")
-
-            # Check composite submodels (symbolic, neural, blender, encoder, decoder)
-            for container in (m_spec, nested_dict):
-                if not container:
-                    continue
-                for slot in ("symbolic", "neural", "blender", "encoder", "decoder"):
-                    slot_val = container.get(slot) if hasattr(container, "get") else None
-                    if isinstance(slot_val, Mapping):
-                        st = (
-                            slot_val.get("type")
-                            or slot_val.get("architecture")
-                            or slot_val.get("model")
-                            or slot_val.get("name")
-                        )
-                        if not st and len(slot_val) == 1:
-                            cand = next(iter(slot_val))
-                            if cand not in (
-                                "mode",
-                                "blend_function",
-                                "ecm_dthr",
-                                "rules",
-                                "lr",
-                                "hidden_sizes",
-                                "activation",
-                                "dim",
-                                "layers",
-                                "depth",
-                                "width",
-                            ) and isinstance(slot_val[cand], Mapping):
-                                st = cand
-                        if st and not _model_exists(str(st)):
-                            missing.append(f"{slot}: {st}")
-                    elif isinstance(slot_val, str) and slot_val.lower() not in (
-                        "neural",
-                        "learned",
-                        "heuristic",
-                        "default",
-                        "none",
-                        "identity",
-                    ):
-                        if not _model_exists(slot_val):
-                            missing.append(f"{slot}: {slot_val}")
 
     return list(dict.fromkeys(missing))
 

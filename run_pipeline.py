@@ -1,6 +1,6 @@
-"""Unified experiment pipeline orchestrator for NeSyRL.
+"""Unified experiment pipeline orchestrator for Theta-IDE.
 
-Coordinates online and offline RL methods, Optuna sweeps, and Slurm cluster submissions.
+Coordinates experiment methods, parameter sweeps, plotting, and cluster submissions.
 """
 
 import argparse

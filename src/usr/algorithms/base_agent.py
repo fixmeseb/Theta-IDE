@@ -1,5 +1,5 @@
 """
-Base agent classes — shared interface and utilities for all RL agents.
+Base agent classes — shared interface and utilities for policy-learning algorithms.
 
 Hierarchy:
     BaseAgent (ABC)
@@ -18,7 +18,7 @@ from omegaconf import DictConfig
 
 
 class BaseAgent(L.LightningModule, ABC):
-    """Abstract base class for all RL agents in the BlendRL framework.
+    """Abstract base class for all RL agents in Theta-IDE.
 
     Provides:
         - Unified config traversal (get_cfg)
@@ -43,8 +43,8 @@ class BaseAgent(L.LightningModule, ABC):
     def get_cfg(self, key, default=None):
         """Unified config traversal — searches agent, env, then top-level config.
 
-        Handles Hydra's nested DictConfig structures, dotted keys (e.g. 'cql.cql_alpha'),
-        and sub-dictionaries (e.g., cfg.agent.cew, cfg.agent.cql, cfg.agent.blendrl).
+        Handles Hydra's nested DictConfig structures, dotted component parameter keys,
+        and sub-dictionaries (e.g., cfg.agent.custom_agent, cfg.agent.offline_rl).
         """
         cfg = self.cfg
 
@@ -74,7 +74,7 @@ class BaseAgent(L.LightningModule, ABC):
                 val, found = _get_nested(cfg.agent.agent, key)
                 if found:
                     return val
-            # Search sub-dictionaries in cfg.agent (e.g., cfg.agent.cew, cfg.agent.cql, cfg.agent.blendrl)
+            # Search sub-dictionaries in cfg.agent for agent-specific settings.
             for sub_k, sub_v in cfg.agent.items():
                 if isinstance(sub_v, (dict, DictConfig)):
                     val, found = _get_nested(sub_v, key)
@@ -106,101 +106,6 @@ class BaseAgent(L.LightningModule, ABC):
 
         return default
 
-    def is_hybrid_configured(self) -> bool:
-        """Determine whether a hybrid / symbolic-neural BlendRL policy is configured.
-
-        Checks:
-        1. Explicit actor_mode ('hybrid', 'logic')
-        2. Configured modules list
-        3. Model specification is 'blendrl', 'blender', or 'hybrid'
-        4. Algorithm or agent name contains 'blendrl'
-        """
-        if self.get_cfg("actor_mode", "neural") in ("hybrid", "logic"):
-            return True
-        if bool(self.get_cfg("modules", [])):
-            return True
-
-        model_cfg = getattr(self.cfg, "model", None)
-        if isinstance(model_cfg, str) and model_cfg.strip().lower() in ("blendrl", "blender", "hybrid"):
-            return True
-
-        # Check model architecture
-        model_name = self.resolve_model_name("")
-        if model_name:
-            try:
-                from src.app.core.model_registry import get_model_class
-
-                cls = get_model_class(model_name)
-                if hasattr(cls, "get_model_slots"):
-                    return True
-            except Exception:
-                pass
-            if model_name.lower() in ("blendrl", "blender", "hybrid"):
-                return True
-
-        model_cfg = getattr(self.cfg, "model", None)
-        if isinstance(model_cfg, (dict, DictConfig)):
-            if "blendrl" in model_cfg or "blender" in model_cfg:
-                return True
-            name = model_cfg.get("name") or model_cfg.get("architecture") or model_cfg.get("type")
-            if name and str(name).strip().lower() in ("blendrl", "blender", "hybrid"):
-                return True
-
-        algo = self.get_cfg("algorithm", self.get_cfg("name", ""))
-        if "blendrl" in str(algo).lower():
-            return True
-        agent_cfg = getattr(self.cfg, "agent", None)
-        if isinstance(agent_cfg, str) and "blendrl" in agent_cfg.lower():
-            return True
-
-        return False
-
-    def resolve_model_name(self, default: str = "mlp") -> str:
-        """Resolve the model architecture name from config across all paradigms."""
-        model_cfg = getattr(self.cfg, "model", None)
-        if isinstance(model_cfg, str) and model_cfg.strip():
-            name = model_cfg.strip()
-            if name.lower() in ("blendrl", "blender", "hybrid"):
-                arch = self.get_cfg("architecture", None)
-                if arch and isinstance(arch, str) and arch.strip().lower() not in ("blendrl", "blender", "hybrid"):
-                    return arch.strip()
-                return default
-            return name
-
-        if isinstance(model_cfg, (dict, DictConfig)):
-            # Check for composite model subcomponents (e.g. neural slot)
-            for comp_key in ("blendrl", "blender", "composite"):
-                comp_cfg = model_cfg.get(comp_key, None)
-                if isinstance(comp_cfg, (dict, DictConfig)):
-                    neural_arch = comp_cfg.get("neural", comp_cfg.get("actor", None))
-                    if neural_arch:
-                        if isinstance(neural_arch, (dict, DictConfig)):
-                            keys = [k for k in neural_arch.keys() if not str(k).startswith("_")]
-                            if keys:
-                                return str(keys[0]).strip()
-                        return str(neural_arch).strip()
-
-            name = model_cfg.get("architecture") or model_cfg.get("name") or model_cfg.get("type")
-            if name:
-                name_str = str(name).strip()
-                if name_str.lower() in ("blendrl", "blender", "hybrid"):
-                    return default
-                return name_str
-
-            keys = [k for k in model_cfg.keys() if not str(k).startswith("_")]
-            if len(keys) == 1 and isinstance(model_cfg[keys[0]], (dict, DictConfig)):
-                k = str(keys[0]).strip()
-                if k.lower() in ("blendrl", "blender", "hybrid"):
-                    return default
-                return k
-
-        arch = self.get_cfg("architecture", None)
-        if arch and isinstance(arch, str):
-            arch_str = arch.strip()
-            if arch_str.lower() not in ("blendrl", "blender", "hybrid"):
-                return arch_str
-        return default
-
     # ──────────────────────────────────────────────
     # Network Utilities
     # ──────────────────────────────────────────────
@@ -229,7 +134,7 @@ class BaseAgent(L.LightningModule, ABC):
         from src.app.core.env_vectorized import VectorizedBaseEnv
 
         if n_envs is None:
-            n_envs = self.get_cfg("num_envs", 4)
+            n_envs = self.get_cfg("num_envs", 1)
 
         env_cfg = getattr(self.cfg, "env", None)
         env_name = self.get_cfg("env.name", None) or (
@@ -237,10 +142,8 @@ class BaseAgent(L.LightningModule, ABC):
         )
         if not env_name:
             raise ValueError("No environment specified in configuration ('env.name' or 'env').")
-        algorithm = self.get_cfg("algorithm", self.get_cfg("name", env_name))
-
         self.env = VectorizedBaseEnv.from_name(
-            env_name, n_envs=n_envs, mode=algorithm, seed=self.get_cfg("seed", getattr(self.cfg, "seed", 1))
+            env_name, n_envs=n_envs, seed=self.get_cfg("seed", getattr(self.cfg, "seed", 1))
         )
 
         obs = self.env.reset()
@@ -256,7 +159,7 @@ class BaseAgent(L.LightningModule, ABC):
     # ──────────────────────────────────────────────
 
     @abstractmethod
-    def get_action_and_value(self, obs, logic_obs=None, action=None):
+    def get_action_and_value(self, obs, action=None):
         """Compute action, log probability, entropy, and value for given observations.
 
         Returns:
@@ -265,11 +168,11 @@ class BaseAgent(L.LightningModule, ABC):
         ...
 
     @abstractmethod
-    def get_value(self, obs, logic_obs=None):
+    def get_value(self, obs):
         """Compute value estimate for given observations."""
         ...
 
-    def get_action_probs(self, obs, logic_obs=None):
+    def get_action_probs(self, obs):
         """Compute action probabilities according to the agent's policy paradigm.
 
         Subclasses should override this method to define their canonical policy distribution.
@@ -278,26 +181,14 @@ class BaseAgent(L.LightningModule, ABC):
             return self.actor.get_action_probs(obs)
         raise NotImplementedError(f"{self.__class__.__name__} must implement get_action_probs.")
 
-    def get_action(self, obs, logic_obs=None):
+    def get_action(self, obs):
         """Select discrete action for given observation (default: argmax of action probs)."""
-        probs = self.get_action_probs(obs, logic_obs)
+        probs = self.get_action_probs(obs)
         return torch.argmax(probs, dim=-1)
-
-    def get_blending_weights(self, obs: torch.Tensor, logic_obs: torch.Tensor | None = None) -> torch.Tensor | None:
-        """Return blending weights for hybrid/modular architectures if applicable, else None."""
-        if (
-            hasattr(self, "model")
-            and hasattr(self.model, "actor")
-            and hasattr(self.model.actor, "to_blender_policy_distribution")
-        ):
-            if getattr(self, "is_modular", False) and hasattr(self, "_prepare_logic_obs"):
-                logic_obs = self._prepare_logic_obs(obs, logic_obs)
-            return self.model.actor.to_blender_policy_distribution(obs, logic_obs)
-        return None
 
 
 class OnlineAgentBase(BaseAgent):
-    """Base class for all online RL agents (PPO, etc.)."""
+    """Base class for online policy-learning agents."""
 
     @classmethod
     def get_supported_paradigms(cls) -> list[str]:
@@ -305,7 +196,7 @@ class OnlineAgentBase(BaseAgent):
 
 
 class OfflineAgentBase(BaseAgent):
-    """Base class for all offline RL agents (IQL, CQL, CEW, and their BlendRL variants).
+    """Base class for offline RL agents.
 
     Provides:
         - Device transfer for train and validation readers
@@ -330,7 +221,7 @@ class OfflineAgentBase(BaseAgent):
         """Attach model-registered callbacks to the trainer.
 
         Discovers and instantiates callbacks requested by any model or sub-module
-        implementing HasModelCallbacks (e.g. CEWModel or BlenderActorCritic).
+        implementing HasModelCallbacks.
         """
         from src.app.core.protocols import HasModelCallbacks, walk_model_modules
 
@@ -413,21 +304,6 @@ class OfflineAgentBase(BaseAgent):
                     src.clone_topology_to(tgt)
                 elif hasattr(tgt, "clone_topology_from"):
                     tgt.clone_topology_from(src)
-
-        # Sync any constituent target modules (e.g. inside BlenderActorCritic)
-        src_blender = getattr(self, "model", None)
-        tgt_blender = getattr(self, "target_model", None)
-        if src_blender is not None and tgt_blender is not None and src_blender is not tgt_blender:
-            if hasattr(src_blender, "clone_topology_to"):
-                src_blender.clone_topology_to(tgt_blender)
-            else:
-                src_modules = list(getattr(src_blender, "policy_modules", None) or [])
-                tgt_modules = list(getattr(tgt_blender, "policy_modules", None) or [])
-                for s, t in zip(src_modules, tgt_modules):
-                    if hasattr(s, "clone_topology_to"):
-                        s.clone_topology_to(t)
-                    elif hasattr(t, "clone_topology_from"):
-                        t.clone_topology_from(s)
 
         # Rebind optimizer
         try:

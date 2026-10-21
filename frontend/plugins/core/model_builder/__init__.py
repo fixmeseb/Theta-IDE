@@ -75,11 +75,7 @@ class ModelBuilderPlugin(Plugin):
 
         declared = params.get("lightning_module")
         if not isinstance(declared, str):
-            declared = (
-                "AutoencoderLightningModule"
-                if row.get("paradigm") == "unsupervised"
-                else "TabularClassifierLightningModule"
-            )
+            declared = None
 
         dialog = ModelBuilderDialog(
             model_dir=tree.config_root / "model",

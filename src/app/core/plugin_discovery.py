@@ -32,6 +32,18 @@ THETA_ENTRY_POINTS = {
 
 _DISCOVERY_CACHE: Dict[str, Dict[str, Any]] = {}
 _DISCOVERY_PERFORMED: bool = False
+ENVIRONMENT_REGISTRY: Dict[str, Any] = {}
+
+
+def register_environment(*names: str):
+    """Register environment classes or factories provided by installed packages."""
+
+    def decorator(factory):
+        for name in names:
+            ENVIRONMENT_REGISTRY[name.lower()] = factory
+        return factory
+
+    return decorator
 
 
 def discover_entry_points(group: str, force_reload: bool = False) -> Dict[str, Any]:
@@ -71,6 +83,7 @@ def load_all_plugins(force_reload: bool = False) -> Dict[str, Dict[str, Any]]:
       - Model registry (@register_model)
       - Agent registry (@register_agent)
       - Paradigm component registry (@register_component)
+      - Environment registry (for VectorizedBaseEnv.from_name())
     """
     global _DISCOVERY_PERFORMED
     results: Dict[str, Dict[str, Any]] = {}
@@ -102,6 +115,10 @@ def load_all_plugins(force_reload: bool = False) -> Dict[str, Dict[str, Any]]:
     for name, comp_cls in results.get("components", {}).items():
         if isinstance(comp_cls, type):
             register_component(name)(comp_cls)
+
+    # 4. Register environment classes and factories for VectorizedBaseEnv.from_name().
+    for name, env_factory in results.get("environments", {}).items():
+        register_environment(name)(env_factory)
 
     _DISCOVERY_PERFORMED = True
     return results

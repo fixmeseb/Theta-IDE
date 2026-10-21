@@ -38,29 +38,8 @@ class DatasetWriter:
         else:
             self.chunk_idx = 0
 
-    def add(self, *args, **kwargs):
-        """Add a single transition to the buffer.
-
-        Supports both modern 5-param clean RL:
-            add(obs, action, reward, next_obs, done, logic_obs=None, next_logic_obs=None)
-        and legacy 7-param:
-            add(obs, logic_obs, action, reward, next_obs, next_logic_obs, done)
-        """
-        if len(args) == 7:
-            obs, logic_obs, action, reward, next_obs, next_logic_obs, done = args
-        elif len(args) == 5:
-            obs, action, reward, next_obs, done = args
-            logic_obs = kwargs.get("logic_obs", None)
-            next_logic_obs = kwargs.get("next_logic_obs", None)
-        else:
-            obs = kwargs["obs"]
-            action = kwargs["action"]
-            reward = kwargs["reward"]
-            next_obs = kwargs["next_obs"]
-            done = kwargs["done"]
-            logic_obs = kwargs.get("logic_obs", None)
-            next_logic_obs = kwargs.get("next_logic_obs", None)
-
+    def add(self, obs, action, reward, next_obs, done):
+        """Add one standard observation/action/reward transition."""
         def to_cpu(x, is_obs=False):
             if isinstance(x, torch.Tensor):
                 x = x.detach().cpu().numpy()
@@ -77,49 +56,19 @@ class DatasetWriter:
             "next_obs": to_cpu(next_obs, is_obs=True),
             "done": to_cpu(done),
         }
-        if logic_obs is not None:
-            transition["logic_obs"] = to_cpu(logic_obs)
-        if next_logic_obs is not None:
-            transition["next_logic_obs"] = to_cpu(next_logic_obs)
-
         self.buffer.append(transition)
         if len(self.buffer) >= self.chunk_size:
             self.flush()
 
-    def batch_add(self, *args, **kwargs):
-        """Add a batch of transitions to the buffer."""
-        if len(args) == 7:
-            obs, logic_obs, action, reward, next_obs, next_logic_obs, done = args
-        elif len(args) == 5:
-            obs, action, reward, next_obs, done = args
-            logic_obs = kwargs.get("logic_obs", None)
-            next_logic_obs = kwargs.get("next_logic_obs", None)
-        else:
-            obs = kwargs["obs"]
-            action = kwargs["action"]
-            reward = kwargs["reward"]
-            next_obs = kwargs["next_obs"]
-            done = kwargs["done"]
-            logic_obs = kwargs.get("logic_obs", None)
-            next_logic_obs = kwargs.get("next_logic_obs", None)
-
+    def batch_add(self, obs, action, reward, next_obs, done):
+        """Add a batch of standard transitions to the buffer."""
         # Ensure input is batch-like (at least 1D)
         if len(obs.shape) == 1:
             batch_size = 1
             obs = obs.unsqueeze(0) if isinstance(obs, torch.Tensor) else np.expand_dims(obs, 0)
-            if logic_obs is not None:
-                logic_obs = (
-                    logic_obs.unsqueeze(0) if isinstance(logic_obs, torch.Tensor) else np.expand_dims(logic_obs, 0)
-                )
             action = action.unsqueeze(0) if isinstance(action, torch.Tensor) else np.expand_dims(action, 0)
             reward = torch.tensor([reward]) if not isinstance(reward, torch.Tensor) else reward.unsqueeze(0)
             next_obs = next_obs.unsqueeze(0) if isinstance(next_obs, torch.Tensor) else np.expand_dims(next_obs, 0)
-            if next_logic_obs is not None:
-                next_logic_obs = (
-                    next_logic_obs.unsqueeze(0)
-                    if isinstance(next_logic_obs, torch.Tensor)
-                    else np.expand_dims(next_logic_obs, 0)
-                )
             done = torch.tensor([done]) if not isinstance(done, torch.Tensor) else done.unsqueeze(0)
         else:
             batch_size = len(obs)
@@ -134,11 +83,9 @@ class DatasetWriter:
             return x
 
         obs_cpu = to_cpu(obs, is_obs=True)
-        logic_obs_cpu = to_cpu(logic_obs) if logic_obs is not None else None
         action_cpu = to_cpu(action)
         reward_cpu = to_cpu(reward)
         next_obs_cpu = to_cpu(next_obs, is_obs=True)
-        next_logic_obs_cpu = to_cpu(next_logic_obs) if next_logic_obs is not None else None
         done_cpu = to_cpu(done)
 
         for i in range(batch_size):
@@ -149,16 +96,12 @@ class DatasetWriter:
                 "next_obs": next_obs_cpu[i],
                 "done": done_cpu[i],
             }
-            if logic_obs_cpu is not None:
-                transition["logic_obs"] = logic_obs_cpu[i]
-            if next_logic_obs_cpu is not None:
-                transition["next_logic_obs"] = next_logic_obs_cpu[i]
             self.buffer.append(transition)
 
         if len(self.buffer) >= self.chunk_size:
             self.flush()
 
-    def write(self, obs, action, reward, next_obs, done, logic_obs=None, next_logic_obs=None):
+    def write(self, obs, action, reward, next_obs, done):
         """Standard keyword-based write interface for online RL agents."""
         if hasattr(obs, "shape") and len(obs.shape) > 1 and not (len(obs.shape) == 3 and obs.shape[0] in [1, 3, 4]):
             self.batch_add(
@@ -167,8 +110,6 @@ class DatasetWriter:
                 reward=reward,
                 next_obs=next_obs,
                 done=done,
-                logic_obs=logic_obs,
-                next_logic_obs=next_logic_obs,
             )
         else:
             self.add(
@@ -177,8 +118,6 @@ class DatasetWriter:
                 reward=reward,
                 next_obs=next_obs,
                 done=done,
-                logic_obs=logic_obs,
-                next_logic_obs=next_logic_obs,
             )
 
     def flush(self):
@@ -274,9 +213,8 @@ class DatasetReader:
         import numpy as np
         import torch
 
-        obs_list, logic_obs_list, actions_list = [], [], []
-        rewards_list, next_obs_list, next_logic_obs_list, dones_list = [], [], [], []
-        has_logic = False
+        obs_list, actions_list = [], []
+        rewards_list, next_obs_list, dones_list = [], [], []
 
         for f in self.files:
             try:
@@ -288,17 +226,10 @@ class DatasetReader:
 
             if not data:
                 continue
-            if not has_logic and data[0].get("logic_obs") is not None:
-                has_logic = True
-
             obs_list.append(np.asarray([t["obs"] for t in data]))
-            if has_logic:
-                logic_obs_list.append(np.asarray([t["logic_obs"] for t in data]))
             actions_list.append(np.asarray([t["action"] for t in data]))
             rewards_list.append(np.asarray([t["reward"] for t in data]))
             next_obs_list.append(np.asarray([t["next_obs"] for t in data]))
-            if has_logic:
-                next_logic_obs_list.append(np.asarray([t["next_logic_obs"] for t in data]))
             dones_list.append(np.asarray([t["done"] for t in data]))
             del data
 
@@ -311,21 +242,12 @@ class DatasetReader:
             self.dones = torch.from_numpy(np.concatenate(dones_list, axis=0))
             del obs_list, actions_list, rewards_list, next_obs_list, dones_list
 
-            if has_logic:
-                self.logic_obs = torch.from_numpy(np.concatenate(logic_obs_list, axis=0))
-                self.next_logic_obs = torch.from_numpy(np.concatenate(next_logic_obs_list, axis=0))
-                del logic_obs_list, next_logic_obs_list
-            else:
-                self.logic_obs = None
-                self.next_logic_obs = None
         else:
             self.obs = torch.empty(0)
             self.actions = torch.empty(0)
             self.rewards = torch.empty(0)
             self.next_obs = torch.empty(0)
             self.dones = torch.empty(0)
-            self.logic_obs = None
-            self.next_logic_obs = None
 
         self.limit = len(self.obs)
 
@@ -350,10 +272,6 @@ class DatasetReader:
                 self.rewards = self.rewards.to(dev, dtype=torch.float32)
                 self.next_obs = self.next_obs.to(dev, dtype=torch.float32)
                 self.dones = self.dones.to(dev, dtype=torch.float32)
-                if self.logic_obs is not None:
-                    self.logic_obs = self.logic_obs.to(dev, dtype=torch.float32)
-                if self.next_logic_obs is not None:
-                    self.next_logic_obs = self.next_logic_obs.to(dev, dtype=torch.float32)
             except Exception as e:
                 print(f"Notice: Could not preload dataset to device {dev}: {e}")
 
@@ -386,13 +304,6 @@ class DatasetReader:
             "done": self.dones[idxs].to(self.device, dtype=torch.float32, non_blocking=True),
         }
 
-        if self.logic_obs is not None:
-            batch["logic_obs"] = self.logic_obs[idxs].to(self.device, dtype=torch.float32, non_blocking=True)
-            batch["next_logic_obs"] = self.next_logic_obs[idxs].to(self.device, dtype=torch.float32, non_blocking=True)
-        else:
-            batch["logic_obs"] = None
-            batch["next_logic_obs"] = None
-
         return batch
 
     def get_batch(self, idxs, device=None):
@@ -415,12 +326,6 @@ class DatasetReader:
             "done": self.dones[idxs].to(device, dtype=torch.float32, non_blocking=True),
         }
 
-        if self.logic_obs is not None:
-            batch["logic_obs"] = self.logic_obs[idxs].to(device, dtype=torch.float32, non_blocking=True)
-            batch["next_logic_obs"] = self.next_logic_obs[idxs].to(device, dtype=torch.float32, non_blocking=True)
-        else:
-            batch["logic_obs"] = None
-            batch["next_logic_obs"] = None
         return batch
 
     def split(self, val_ratio=0.1, seed=42):
@@ -466,8 +371,6 @@ class DatasetReader:
         train_reader.rewards = self.rewards[train_indices]
         train_reader.next_obs = self.next_obs[train_indices]
         train_reader.dones = self.dones[train_indices]
-        train_reader.logic_obs = self.logic_obs[train_indices] if self.logic_obs is not None else None
-        train_reader.next_logic_obs = self.next_logic_obs[train_indices] if self.next_logic_obs is not None else None
         train_reader.limit = len(train_reader.obs)
 
         val_reader = DatasetReader.__new__(DatasetReader)
@@ -478,8 +381,6 @@ class DatasetReader:
         val_reader.rewards = self.rewards[val_indices]
         val_reader.next_obs = self.next_obs[val_indices]
         val_reader.dones = self.dones[val_indices]
-        val_reader.logic_obs = self.logic_obs[val_indices] if self.logic_obs is not None else None
-        val_reader.next_logic_obs = self.next_logic_obs[val_indices] if self.next_logic_obs is not None else None
         val_reader.limit = len(val_reader.obs)
 
         print(
@@ -490,84 +391,3 @@ class DatasetReader:
     def __len__(self):
         """Return the total number of transitions in the dataset."""
         return len(self.obs)
-
-
-def convert_mimic_npz_to_transitions(
-    npz_path: str | Path,
-    out_dir: str | Path | None = None,
-    chunk_size: int = 200000,
-) -> int:
-    """Convert a MIMIC trajectory NPZ file into chunked transition PKL files.
-
-    Args:
-        npz_path: Path to the input MIMIC .npz trajectory file.
-        out_dir: Directory where chunks should be written. If None, defaults to a directory
-                 named after the NPZ stem alongside the file.
-        chunk_size: Maximum transitions per chunk file.
-
-    Returns:
-        Total number of transitions written.
-    """
-    npz_path = Path(npz_path)
-    if not npz_path.exists():
-        raise FileNotFoundError(f"NPZ dataset not found at {npz_path}")
-
-    npz_stem = npz_path.stem
-    if out_dir is None:
-        out_dir = npz_path.parent / npz_stem
-    else:
-        out_dir = Path(out_dir)
-
-    print(f"Loading NPZ dataset from {npz_path}...")
-    data = np.load(npz_path, allow_pickle=True)
-    X = data["X"]  # (N, 240, 49)
-    y = data["y"]  # (N, 1)
-    mask = data["mask"]  # (N, 240, 1)
-
-    writer = DatasetWriter(save_dir=out_dir, chunk_size=chunk_size, env_name=npz_stem)
-
-    print("Converting trajectories to transitions...")
-    total_transitions = 0
-
-    for i in range(len(X)):
-        mask_patient = mask[i].squeeze()
-        active_steps = np.where(mask_patient != -1)[0]
-        if len(active_steps) == 0:
-            continue
-
-        T = len(active_steps)
-        outcome = y[i, 0]
-
-        for t_idx, t in enumerate(active_steps):
-            obs = X[i, t, :46]
-            logic_obs = np.stack([obs, obs], axis=0)
-
-            action = int(X[i, t, 47])
-            reward = (1.0 / T) if action == int(X[i, t, 47]) else 0.0
-            if outcome != 0:
-                reward = -reward
-
-            if t_idx == len(active_steps) - 1:
-                next_obs = obs.copy()
-                next_logic_obs = logic_obs.copy()
-                done = True
-            else:
-                t_next = active_steps[t_idx + 1]
-                next_obs = X[i, t_next, :46]
-                next_logic_obs = np.stack([next_obs, next_obs], axis=0)
-                done = False
-
-            writer.add(
-                obs=obs,
-                logic_obs=logic_obs,
-                action=action,
-                reward=reward,
-                next_obs=next_obs,
-                next_logic_obs=next_logic_obs,
-                done=done,
-            )
-            total_transitions += 1
-
-    writer.close()
-    print(f"Successfully converted {len(X)} patients and saved {total_transitions} transitions to {out_dir}")
-    return total_transitions

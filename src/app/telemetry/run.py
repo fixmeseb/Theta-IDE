@@ -1,6 +1,6 @@
 """The run: what training code talks to. It turns calls into records and hands each to every sink.
 
-    run = telemetry.init("csc510", "sample_seed1", "ppo", config=cfg)
+    run = telemetry.init("group", "experiment", "method", config=cfg)
     run.log({"eval/reward": 187.3}, step=1200, transitions=24576)
     run.event("checkpoint", "saved best_model.ckpt")
     run.finish()

@@ -1,5 +1,7 @@
 # Theta-IDE Modularization & Zero-Bloat Architecture Roadmap
 
+> **Historical architecture roadmap.** This records a migration plan and an earlier inventory of plugin packages. It is not a current inventory of IDE dependencies, shipped code, or available Hub components.
+
 ## 1. Executive Summary & The North Star
 
 **The Core Goal:**

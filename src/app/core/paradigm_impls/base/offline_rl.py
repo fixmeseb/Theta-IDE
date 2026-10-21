@@ -1,7 +1,7 @@
 """Offline RL paradigm components.
 
-Wraps the existing LightningBuilder infrastructure for CQL/IQL training
-on static transition datasets.
+Provides the shared offline policy-learning runner, data module, and evaluation
+protocol for training on static transition datasets.
 """
 
 from __future__ import annotations

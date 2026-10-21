@@ -18,35 +18,18 @@ def test_writer_init_creates_dir(tmp_path):
     assert (tmp_path / "new_dataset").exists()
 
 
-def test_writer_add_5_param(writer):
+def test_writer_add_standard_transition(writer):
     obs = torch.zeros((4,))
     action = torch.tensor(1)
     reward = torch.tensor(1.0)
     next_obs = torch.ones((4,))
     done = torch.tensor(False)
 
-    writer.add(obs, action, reward, next_obs, done, logic_obs=np.array([1, 0]), next_logic_obs=np.array([0, 1]))
+    writer.add(obs, action, reward, next_obs, done)
     assert len(writer.buffer) == 1
     t = writer.buffer[0]
     assert "obs" in t
-    assert "logic_obs" in t
-    assert np.array_equal(t["logic_obs"], np.array([1, 0]))
-
-
-def test_writer_add_7_param(writer):
-    obs = np.zeros((4,))
-    logic_obs = np.zeros((2,))
-    action = 1
-    reward = 1.0
-    next_obs = np.ones((4,))
-    next_logic_obs = np.ones((2,))
-    done = False
-
-    writer.add(obs, logic_obs, action, reward, next_obs, next_logic_obs, done)
-    assert len(writer.buffer) == 1
-    t = writer.buffer[0]
-    assert np.array_equal(t["obs"], obs)
-    assert np.array_equal(t["logic_obs"], logic_obs)
+    assert set(t) == {"obs", "action", "reward", "next_obs", "done"}
 
 
 def test_writer_flush_writes_pickle(writer, tmp_path):
@@ -91,28 +74,6 @@ def test_writer_empty_flush(writer, tmp_path):
     assert len(list((tmp_path / "dataset").glob("*.pkl"))) == 0
 
 
-def test_convert_mimic_npz_to_transitions(tmp_path):
-    from src.app.dataset_utils import convert_mimic_npz_to_transitions
-
-    npz_file = tmp_path / "mock_mimic.npz"
-    # Create mock MIMIC dataset with 2 patients, 5 timesteps each
-    N, T, D = 2, 5, 49
-    X = np.random.randn(N, T, D).astype(np.float32)
-    # Action columns (47: antibiotics)
-    X[:, :, 47] = 1.0
-    y = np.array([[0], [1]], dtype=np.int64)
-    mask = np.ones((N, T, 1), dtype=np.float32)
-
-    np.savez(npz_file, X=X, y=y, mask=mask)
-
-    out_dir = tmp_path / "mock_out"
-    total = convert_mimic_npz_to_transitions(npz_file, out_dir=out_dir, chunk_size=100)
-
-    assert total == N * T
-    pkl_files = list(out_dir.glob("*.pkl"))
-    assert (out_dir / "dataset_manifest.json").exists()
-
-
 def test_rl_data_module_dataloaders(tmp_path):
     from omegaconf import OmegaConf
     from src.app.data.rl_data_module import RLDataModule
@@ -131,7 +92,7 @@ def test_rl_data_module_dataloaders(tmp_path):
     dataset_dir = tmp_path / "offline_ds"
     writer = DatasetWriter(save_dir=dataset_dir, chunk_size=10)
     for _ in range(5):
-        writer.add(np.zeros(4), np.zeros(2), 0, 1.0, np.zeros(4), np.zeros(2), False)
+        writer.add(np.zeros(4), 0, 1.0, np.zeros(4), False)
     writer.flush()
     writer.close()
 

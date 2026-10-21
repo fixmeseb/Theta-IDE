@@ -37,7 +37,7 @@ class ContractLogger:
 
         Args:
             log_dir: Direct path to log directory. If provided, overrides group/exp/method.
-            group: Experiment group name (e.g. 'csc510', 'mimic').
+            group: Experiment group name.
             experiment_id: Unique experiment name.
             method_name: Algorithm/Agent identifier.
             base_dir: Root logs directory (defaults to 'results/logs').
@@ -235,7 +235,7 @@ class ContractLogger:
         training_time_seconds: float | None = None,
         extra: Dict[str, Any] | None = None,
     ) -> Path:
-        """Save runtime.json metadata compliant with NeSyRL/Theta-IDE conventions."""
+        """Save runtime.json metadata using the Theta-IDE run contract."""
         return write_runtime_metadata(
             self.version_dir, self._start_time, self._step_counter, config, training_time_seconds, extra
         )

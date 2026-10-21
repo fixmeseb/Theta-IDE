@@ -1,5 +1,5 @@
 """Results browser data logic (frontend/model.py): rows, sort keys, filters and command-line run records."""
-from frontend.model import (RESULT_COLUMNS, Config, disk_run, disk_run_id, example_runs, format_duration,
+from frontend.model import (RESULT_COLUMNS, Config, disk_run, disk_run_id, format_duration,
                             matches_filters, metric_points_from_api, new_run, result_row, run_source)
 
 
@@ -24,8 +24,9 @@ def test_disk_run_record():
     run = disk_run(entry())
     assert run["id"] == "cli-sweeps-cli_run" and run["origin"] == "cli" and run["transient"]
     assert run["status"] == "completed" and run["metrics"] == [] and not run["simulated"]
-    assert run["config"] == {"name": "cli_run", "env": "cartpole", "seed": 7, "total_timesteps": 10000, "lr": 0.001,
-                             "batch_size": 128, "gamma": 0.95, "tensorboard": False}
+    assert run["config"] == {"name": "cli_run", "env": "cartpole", "method_name": "ppo", "agent": "ppo", "model": "dnn",
+                             "seed": 7, "total_timesteps": 10000, "lr": 0.001, "batch_size": 128,
+                             "gamma": 0.95, "tensorboard": False}
     assert Config(**run["config"])  # loadable by the run store and the experiment builder
     assert run["backend"] == {"group": "sweeps", "experiment_id": "cli_run", "agents": ["ppo"], "total_timesteps": 10000}
     assert run["builder_compatible"]
@@ -53,7 +54,7 @@ def test_row_for_command_line_run_before_and_after_metrics_load():
     assert cells(run, disk) == before  # loading the curve does not change the row
 
 
-def test_row_for_app_and_example_runs():
+def test_row_for_app_and_queued_runs():
     trained = new_run(Config(name="mine"), simulated=False)
     trained.update(status="completed", backend={"group": "thetaide", "experiment_id": "mine_20261002-104250"},
                    metrics=[{"step": 100, "reward": 5.0}, {"step": 200, "reward": 9.0}, {"step": 300, "reward": 7.0}])
@@ -62,8 +63,6 @@ def test_row_for_app_and_example_runs():
     assert (row["Best reward"][0], row["Latest reward"][0], row["Timesteps"][0]) == ("9.0", "7.0", "300")
     assert row["Duration"] == ("—", None)  # known only once the backend lists its folder
     assert cells(trained, entry())["Duration"][0] == "1 min 15 s"
-    example = example_runs()[0]
-    assert cells(example)["Source"][0] == "Example" and run_source(example) == "example"
     queued = new_run(Config(), simulated=False)
     queued.update(status="queued", backend={"group": "g", "experiment_id": "q"})
     assert cells(queued)["Best reward"] == ("—", None) and cells(queued)["Timesteps"] == ("—", None)
@@ -74,15 +73,13 @@ def test_format_duration():
 
 
 def test_filters():
-    example = example_runs()[0]
     cli = disk_run(entry())
     unfinished = disk_run(entry(finished=False))
     app_run = new_run(Config(), simulated=False)
     app_run.update(status="running", backend={"group": "g", "experiment_id": "e"})
-    assert not matches_filters(example, show_examples=False) and matches_filters(example)
-    assert [matches_filters(r, source="real") for r in (example, cli, app_run)] == [False, True, True]
+    assert [matches_filters(r, source="real") for r in (cli, app_run)] == [True, True]
     assert [matches_filters(r, source="cli") for r in (cli, app_run)] == [True, False]
-    assert matches_filters(example, source="simulated") and not matches_filters(cli, source="simulated")
+    assert not matches_filters(cli, source="simulated")
     assert [matches_filters(r, status="stopped") for r in (cli, unfinished)] == [False, True]
     assert matches_filters(app_run, status="active") and not matches_filters(app_run, status="completed")
 

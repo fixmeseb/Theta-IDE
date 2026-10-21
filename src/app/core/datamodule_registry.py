@@ -2,12 +2,12 @@
 
 Data modules manage data ingestion, preprocessing, augmentation, and dataloader emission.
 They self-register using the @register_datamodule decorator:
-    @register_datamodule("atari_preprocessed")
-    class AtariPreprocessedDataModule(L.LightningDataModule):
+    @register_datamodule("my_data_module")
+    class MyDataModule(L.LightningDataModule):
         ...
 
 The pipeline resolves data modules via get_datamodule_class():
-    DataModuleClass = get_datamodule_class("atari_preprocessed")
+    DataModuleClass = get_datamodule_class("my_data_module")
 """
 
 import importlib
@@ -45,7 +45,7 @@ def get_datamodule_class(dm_name: str) -> Type[Any] | None:
     """Resolve a data module name to its registered class.
 
     Args:
-        dm_name: Identifier of the data module (e.g., 'SimulatorDataModule', 'atari_frames').
+        dm_name: Identifier of the data module (e.g., 'SimulatorDataModule').
 
     Returns:
         The registered class or None if not found.
@@ -167,14 +167,6 @@ def _register_builtins() -> None:
         register_datamodule("UnsupervisedDataModule")(UnsupervisedDataModule)
     except Exception:
         pass
-
-    try:
-        from src.usr.eval.early_prediction.data_module import EPSepsisDataModule
-
-        register_datamodule("EPSepsisDataModule", "SepsisDataModule")(EPSepsisDataModule)
-    except Exception:
-        pass
-
 
 def list_registered_datamodules() -> List[str]:
     """Return sorted list of registered data module names."""

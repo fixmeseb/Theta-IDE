@@ -25,7 +25,7 @@ TOOL_ICON_COLORS = {
 
 
 def group_heading_font(base: QFont) -> QFont:
-    """The bold, larger font of a group heading (cartpole, mimic, ...)."""
+    """The bold, larger font of a group heading."""
     font = QFont(base)
     font.setPointSize(max(base.pointSize() + 1, 13) if base.pointSize() > 0 else 13)
     font.setBold(True)

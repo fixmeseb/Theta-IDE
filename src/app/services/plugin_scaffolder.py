@@ -139,14 +139,12 @@ class {class_name}(nn.Module):
             ModelSlot(
                 name="encoder",
                 required=True,
-                default="dnn",
                 tags=["neural", "encoder"],
                 description="Representation feature extractor",
             ),
             ModelSlot(
                 name="head",
                 required=True,
-                default="dnn",
                 tags=["actor", "head"],
                 description="Policy or Q-value prediction head",
             ),
@@ -244,10 +242,8 @@ type: {name}
 paradigms:
 {paradigms_yaml}
 encoder:
-  type: dnn
   hidden_sizes: [128, 128]
 head:
-  type: dnn
   hidden_sizes: [64]
 """
         else:
@@ -327,14 +323,14 @@ dependencies = ["torch>=2.0.0"]
         created: list[Path] = []
 
         class_name = "".join(part.capitalize() for part in name.split("_")) + "Agent"
-        desc = opts.description or f"Custom {name} RL algorithm for Theta-IDE."
+        desc = opts.description or f"Custom {name} algorithm component for Theta-IDE."
 
         paradigms = opts.paradigms or ["online_rl"]
         paradigms_yaml = "\n".join(f"  - {p}" for p in paradigms)
 
         # 1. Python agent implementation
         code_file = target_dir / f"{name}_agent.py"
-        code_content = f'''"""Custom {class_name} reinforcement learning algorithm."""
+        code_content = f'''"""Custom {class_name} algorithm component."""
 from typing import Any, Dict, List
 import lightning as L
 import torch
@@ -347,7 +343,7 @@ from src.usr.algorithms.agent_registry import register_agent, register_algorithm
 
 @register_algorithm("{name}")
 class {class_name}(L.LightningModule):
-    """Pluggable RL agent extending PyTorch Lightning."""
+    """Pluggable algorithm component extending PyTorch Lightning."""
 
     @classmethod
     def get_supported_paradigms(cls) -> List[str]:
@@ -362,7 +358,9 @@ class {class_name}(L.LightningModule):
         self.lr = float(getattr(cfg, "lr", 0.0003))
 
         # Model is decoupled and instantiated dynamically via build_model
-        model_spec = getattr(cfg, "model", "dnn")
+        model_spec = getattr(cfg, "model", None)
+        if not model_spec:
+            raise ValueError("This algorithm requires a model component; set model in its agent profile.")
         self.model = build_model(model_spec, env=env)
 
     def training_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
@@ -533,8 +531,7 @@ env:
 {paradigms_yaml}
   monitor_metric: "eval/reward"
   preprocess_on_load: false
-  num_envs: 4
-  num_steps: 128
+  num_envs: 1
   default_plots:
     - convergence
     - losses

@@ -6,7 +6,7 @@ import yaml
 
 def normalize_agent_name(agent_config: str) -> str:
     """Convert hierarchical agent config paths and dataset IDs to filesystem-safe and Hydra-safe names.
-    e.g. 'blendrl_cql/human_cew' -> 'blendrl_cql_human_cew'
+    e.g. 'offline_custom/human_variant' -> 'offline_custom_human_variant'
          'ex132(w)' -> 'ex132_w'
     This must match agent.name as set in the Hydra overrides."""
     return agent_config.replace("/", "_").replace("(", "_").replace(")", "").replace("__", "_").rstrip("_")
@@ -189,16 +189,16 @@ def find_group_method_config(method_name: str, group: str | None = None) -> dict
 
 def _extract_name_and_subparams(
     val,
-    name_keys=("name", "algorithm", "type", "algo", "architecture", "reasoner", "base"),
+    name_keys=("name", "algorithm", "type", "algo", "architecture", "base"),
     known_names=None,
 ):
     """Extract string identifier and subparameters from a string or dict value.
 
     Supports:
-      1. String value: 'cql' -> ('cql', {})
-      2. Dict with explicit name key: {'name': 'cql', 'lr': 3e-4} -> ('cql', {'lr': 3e-4})
-      3. Dict with algorithm/model as key: {'blendrl': {...}} -> ('blendrl', {...})
-      4. Nested module dict: {'cew': {'ecm_dthr': 0.03}} -> ('cew', {'ecm_dthr': 0.03})
+      1. String value: 'package/algorithm' -> ('package/algorithm', {})
+      2. Dict with explicit name key: {'name': 'package/algorithm', 'lr': 3e-4} -> ('package/algorithm', {'lr': 3e-4})
+      3. Dict with algorithm/model as key: {'my_model': {...}} -> ('my_model', {...})
+      4. Nested module dict: {'custom_module': {'setting': 0.03}} -> ('custom_module', {...})
     """
     if isinstance(val, dict):
         for nk in name_keys:
@@ -235,20 +235,6 @@ def _extract_name_and_subparams(
         return val, {}
 
     return None, {}
-
-
-_BUILTIN_MODEL_DEFAULTS: dict[str, dict[str, Any]] = {
-    "dnn": {"architecture": "dnn", "hidden_sizes": [256, 256], "activation": "relu"},
-    "dueling_resnet": {"architecture": "dueling_resnet", "hidden_sizes": [512, 512, 256, 128]},
-    "nsfr": {"type": "nsfr", "rules": "default"},
-    "cew": {"type": "cew", "fyd": False, "fyd_top_k": 50, "ecm_dthr": 0.03},
-    "blendrl": {
-        "slots": ["neural", "symbolic", "blender"],
-        "neural": {"type": "dnn", "architecture": "dnn", "hidden_sizes": [256, 256]},
-        "symbolic": {"type": "nsfr", "rules": "default"},
-        "blender": {"mode": "neural", "blend_function": "softmax"},
-    },
-}
 
 
 def load_model_base_config(model_name: str, config_dir=None) -> dict:
@@ -309,7 +295,7 @@ def load_model_base_config(model_name: str, config_dir=None) -> dict:
                     except Exception:
                         pass
 
-    return dict(_BUILTIN_MODEL_DEFAULTS.get(model_name, {}))
+    return {}
 
 
 def resolve_composite_submodel(
@@ -318,7 +304,7 @@ def resolve_composite_submodel(
     shared_model_params: dict | None = None,
     shared_params: dict | None = None,
 ) -> dict:
-    """Resolve a constituent sub-model of a composite model (e.g. neural or symbolic actor in BlendRL).
+    """Resolve a constituent sub-model of a composite model.
 
     Loads base YAML configuration from in/config/model/<type>.yaml, merges shared
     hyperparameters from methods.params, and applies method-level sub_spec overrides.
@@ -331,13 +317,13 @@ def resolve_composite_submodel(
     elif isinstance(sub_spec, dict):
         ident, sub_overrides = _extract_name_and_subparams(
             sub_spec,
-            name_keys=("name", "type", "architecture", "reasoner", "algo", "base"),
+            name_keys=("name", "type", "architecture", "algo", "base"),
         )
     elif sub_spec is not None and hasattr(sub_spec, "items"):
         sub_dict = dict(sub_spec)
         ident, sub_overrides = _extract_name_and_subparams(
             sub_dict,
-            name_keys=("name", "type", "architecture", "reasoner", "algo", "base"),
+            name_keys=("name", "type", "architecture", "algo", "base"),
         )
 
     resolved_type = ident or default_type
@@ -355,14 +341,11 @@ def resolve_composite_submodel(
     result = dict(base_cfg)
     result["type"] = resolved_type
 
-    # Ensure canonical architecture/reasoner keys are preserved
+    # Ensure the canonical architecture key is preserved.
     if "architecture" in base_cfg and "architecture" not in result:
         result["architecture"] = base_cfg["architecture"]
     if "architecture" not in result and resolved_type:
         result["architecture"] = resolved_type
-    if "reasoner" in base_cfg and "reasoner" not in result:
-        result["reasoner"] = base_cfg["reasoner"]
-
     # Merge shared params: methods.params.model.<arch> or methods.params.<arch>
     if (
         shared_model_params
@@ -384,14 +367,14 @@ def parse_methods_dict(cfg) -> dict[str, dict]:
     Supports hierarchical parameter specification:
       1. Tier 2: Universal Experiment Method Parameters:
          - Top-level shared scalars/dicts in `methods.params` (e.g. epochs, gamma).
-         - Hierarchically grouped agent-specific overrides (`params.agent.<algo>`, e.g. `params.agent.cql`).
-         - Hierarchically grouped model-specific overrides (`params.model.<arch>`, e.g. `params.model.dnn`).
-         - Direct algorithm/architecture blocks (e.g. `params.cql`, `params.dnn`).
+         - Hierarchically grouped agent-specific overrides (`params.agent.<component>`).
+         - Hierarchically grouped model-specific overrides (`params.model.<component>`).
+         - Direct algorithm/architecture blocks (`params.<component>`).
       2. Tier 3: Method-Level Declarations & Specific Overrides:
          - Declared inside `methods.<method_name>`.
          - Individual method configurations override shared parameters.
-      3. Composite Models (BlendRL):
-         - Cleanly resolves constituent neural, symbolic, and blender sub-models from in/config/model/.
+      3. Composite Models:
+         - Resolves declared sub-models from in/config/model/.
          - Inherits sub-model base defaults without manual parameter repetition.
 
     Returns:
@@ -599,7 +582,7 @@ def parse_methods_dict(cfg) -> dict[str, dict]:
 
             if isinstance(m_model_sub, dict):
                 for k, v in m_model_sub.items():
-                    if k not in slot_names and (isinstance(v, dict) or k in ("neural", "symbolic", "blender")):
+                    if k not in slot_names and isinstance(v, (dict, str)):
                         from src.app.core.protocols import ModelSlot
 
                         def_t = v.get("type", k) if isinstance(v, dict) else (str(v) if v else k)
@@ -608,7 +591,7 @@ def parse_methods_dict(cfg) -> dict[str, dict]:
 
             if isinstance(model_params, dict):
                 for k, v in model_params.items():
-                    if k not in slot_names and (isinstance(v, dict) or k in ("neural", "symbolic", "blender")):
+                    if k not in slot_names and isinstance(v, (dict, str)):
                         from src.app.core.protocols import ModelSlot
 
                         def_t = v.get("type", k) if isinstance(v, dict) else (str(v) if v else k)
@@ -754,7 +737,7 @@ def parse_methods_dict(cfg) -> dict[str, dict]:
 
 
 def resolve_experiment_config_name(exp_input: str) -> str:
-    """Resolve an experiment name (e.g. 'mimic_cql' or 'mimic/mimic_cql')
+    """Resolve an experiment name (e.g. 'group_run' or 'group/run')
     to its relative Hydra config path inside in/config/experiment/."""
     from pathlib import Path
 

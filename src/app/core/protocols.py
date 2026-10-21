@@ -1,4 +1,4 @@
-"""Component and Model Protocols for NeSyRL.
+"""Generic component and model protocols for Theta-IDE.
 
 Defines protocol interfaces and discovery helpers for extensible models, agents,
 and environments. Models implement these protocols to declare runtime capabilities
@@ -15,7 +15,7 @@ import torch.nn as nn
 
 @runtime_checkable
 class DynamicTopologyProtocol(Protocol):
-    """Protocol for models with mutable parameter topologies (e.g. neuro-fuzzy or neuro-evolutionary models).
+    """Protocol for models with mutable or evolvable parameter topologies.
 
     When a model reorganizes its architecture (adding/removing parameters or changing shapes),
     it signals this change so that the agent can rebind optimizers and synchronize target networks.
@@ -32,7 +32,7 @@ class DynamicTopologyProtocol(Protocol):
 
 @runtime_checkable
 class ExtraStateProtocol(Protocol):
-    """Protocol for models that require saving non-parameter state into checkpoints (e.g. fuzzy rules)."""
+    """Protocol for models that save non-parameter state alongside checkpoint weights."""
 
     def extra_state(self) -> dict[str, Any]:
         """Return a dictionary of state to be saved in checkpoints."""
@@ -95,7 +95,7 @@ class CompositeModelProtocol(Protocol):
 
 @runtime_checkable
 class EnvironmentWrapperProtocol(Protocol):
-    """Protocol for plugins requiring specialized environment wrappers (e.g. logic predicates)."""
+    """Protocol for plugins that require environment wrappers or observation adapters."""
 
     @classmethod
     def get_env_wrappers(cls, env: Any, cfg: dict[str, Any]) -> list[Any]:
@@ -268,9 +268,7 @@ class EvaluationHookProtocol(Protocol):
 
 
 class StandardModelActorCriticWrapper(nn.Module):
-    """Transparent adapter allowing standard PyTorch models (with only forward())
-    to operate seamlessly with Actor-Critic algorithms like PPO without forcing models
-    to hardcode RL-specific protocol methods."""
+    """Adapter that gives a standard PyTorch model an actor-critic interface."""
 
     def __init__(self, backbone: nn.Module, obs_dim: int = 4, n_actions: int = 2):
         super().__init__()

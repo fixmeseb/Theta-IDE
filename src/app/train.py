@@ -44,7 +44,6 @@ except Exception as e:
     logger.debug("Unexpected error registering safe globals: %s", e)
 
 from src.app.core.lightning_builder import build_trainer, finalize_training
-from src.app.data.rl_data_module import RLDataModule
 from src.usr.algorithms.agent_registry import auto_discover, get_agent_class
 
 
@@ -64,16 +63,6 @@ def main(cfg: DictConfig):
             logger.debug("Could not infer experiment_id from Hydra task overrides: %s", e)
 
     print(OmegaConf.to_yaml(cfg))
-
-    # === OS ENVIRON BRIDGE PATTERN ===
-    # We copy certain Hydra config values into os.environ to pass them down to nested components
-    # (like gym environments or legacy hooks) that cannot easily receive the `cfg` object directly.
-    if "env" in cfg and hasattr(cfg.env, "get") and cfg.env.get("reward_type"):
-        os.environ["REWARD_TYPE"] = str(cfg.env.reward_type)
-        env_name = str(cfg.env.get("name", getattr(cfg.env, "id", "env"))).upper()
-        os.environ[f"{env_name}_REWARD_TYPE"] = str(cfg.env.reward_type)
-        # Retain for backward compatibility with external plugins
-        os.environ["MIMIC_REWARD_TYPE"] = str(cfg.env.reward_type)
 
     paradigm_name = cfg.get("paradigm", "online_rl")
     from src.app.core.paradigm_loader import get_component, load_paradigm_definition
@@ -106,7 +95,11 @@ def main(cfg: DictConfig):
             except KeyError as exc:
                 raise ValueError(f"Data module '{dm_name}' is not registered") from exc
     else:
-        DataModuleCls = paradigm_def.data_module_cls or RLDataModule
+        DataModuleCls = paradigm_def.data_module_cls
+        if DataModuleCls is None:
+            raise ValueError(
+                f"Paradigm '{paradigm_name}' does not declare a data module; configure one with 'data_module'."
+            )
 
     supported = getattr(DataModuleCls, "get_supported_paradigms", None)
     if dm_name and callable(supported) and paradigm_name not in supported():
@@ -131,34 +124,27 @@ def main(cfg: DictConfig):
         if not arch_name and hasattr(model_cfg, "get"):
             arch_name = model_cfg.get("architecture") or model_cfg.get("type") or model_cfg.get("arch")
         if not arch_name:
-            arch_name = model_cfg.get("name", "lstm")
+            raise ValueError("The selected model component must declare an architecture name.")
         arch_name = str(arch_name).lower()
         lr = float(model_cfg.get("lr", cfg.get("lr", 1e-3)))
 
-        # Check if an explicit LightningModule component was registered for this architecture
+        # Model components select their own training module; the IDE does not
+        # infer one from architecture names or training paradigm labels.
         target_module_name = model_cfg.get("lightning_module") or model_cfg.get("module")
-        SupervisedModelCls = None
         if target_module_name:
             try:
-                SupervisedModelCls = get_component(target_module_name)
-            except KeyError:
-                SupervisedModelCls = None
-        if SupervisedModelCls is None:
-            if paradigm_name == "unsupervised" or "autoencoder" in arch_name:
-                from src.app.core.paradigm_impls.base.unsupervised import AutoencoderLightningModule
-
-                SupervisedModelCls = AutoencoderLightningModule
-            elif "classif" in arch_name or "mlp" in arch_name:
-                from src.app.core.paradigm_impls.base.tabular import TabularClassifierLightningModule
-
-                SupervisedModelCls = TabularClassifierLightningModule
-            else:
-                try:
-                    SupervisedModelCls = get_component(arch_name)
-                except KeyError:
-                    from src.app.core.paradigm_impls.base.tabular import TabularClassifierLightningModule
-
-                    SupervisedModelCls = TabularClassifierLightningModule
+                model_cls = get_component(target_module_name)
+            except KeyError as exc:
+                raise ValueError(
+                    f"Model component '{arch_name}' declares unavailable Lightning module '{target_module_name}'."
+                ) from exc
+        else:
+            try:
+                model_cls = get_component(arch_name)
+            except KeyError as exc:
+                raise ValueError(
+                    f"Model component '{arch_name}' must register a training module or declare 'lightning_module'."
+                ) from exc
 
         kwargs = {}
         if hasattr(model_cfg, "items"):
@@ -197,10 +183,10 @@ def main(cfg: DictConfig):
                 kwargs[k] = cfg.get(k)
 
         print(
-            f"{paradigm_name} paradigm: constructing {SupervisedModelCls.__name__} "
+            f"{paradigm_name} paradigm: constructing {model_cls.__name__} "
             f"({arch_name.upper()}, input_dim={input_dim}, lr={lr})"
         )
-        model = SupervisedModelCls(architecture_name=arch_name, input_dim=input_dim, lr=lr, **kwargs)
+        model = model_cls(architecture_name=arch_name, input_dim=input_dim, lr=lr, **kwargs)
     else:
         auto_discover()
         agent_cfg = cfg.agent

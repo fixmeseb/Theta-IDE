@@ -123,7 +123,7 @@ class SplashScreen(QSplashScreen):
         painter.setFont(subtitle)
         painter.setPen(c["muted"])
         painter.drawText(QRectF(109, 214, WIDTH - 140, 22), Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
-                         "An IDE for reinforcement learning and deep learning experiments")
+                         "A general-purpose workspace for machine-learning research")
 
         # status line and the phase circles along the bottom
         status = QFont(base_font)

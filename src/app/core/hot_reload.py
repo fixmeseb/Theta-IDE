@@ -19,7 +19,7 @@ def reload_component_modules(target_prefix: str | None = None) -> List[str]:
     """Reload active research modules in sys.modules and refresh component registries.
 
     Args:
-        target_prefix: Optional module name prefix to reload (e.g. 'src.usr.models.cew').
+        target_prefix: Optional module name prefix to reload (e.g. 'src.usr.models.custom_model').
             If None, reloads all active user research modules ('src.usr.' and 'in.envs.').
 
     Returns:

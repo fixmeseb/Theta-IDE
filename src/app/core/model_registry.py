@@ -1,12 +1,8 @@
 """Model Registry and Factory — Single source of truth for policy and Q-network models.
 
 Models self-register using the @register_model decorator:
-    @register_model("cew")
-    class CEWModel(nn.Module):
-        ...
-
-    @register_model("blendrl")
-    class BlenderActorCritic(nn.Module):
+    @register_model("my_model")
+    class MyModel(nn.Module):
         ...
 
 The pipeline resolves and instantiates models via build_model():
@@ -35,12 +31,8 @@ def register_model(*names: str):
     """Decorator to register a model class or factory function under one or more names.
 
     Usage:
-        @register_model("cew")
-        class CEWModel(nn.Module):
-            ...
-
-        @register_model("blendrl", "blender")
-        class BlenderActorCritic(nn.Module):
+        @register_model("my_model")
+        class MyModel(nn.Module):
             ...
     """
 
@@ -154,7 +146,7 @@ def build_model(
                 else "mlp"
             )
         )
-        # If wrapped under model name (e.g. {blendrl: {...}})
+        # If wrapped under model name (e.g. {my_model: {...}})
         if model_name in cfg_dict and isinstance(cfg_dict[model_name], dict):
             model_params = cfg_dict[model_name]
         else:

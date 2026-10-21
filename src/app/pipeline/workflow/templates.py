@@ -1,4 +1,4 @@
-"""Pre-configured node templates for NeSyRL paradigms and composite tasks."""
+"""Pre-configured node templates for learning paradigms and composite tasks."""
 
 from __future__ import annotations
 

@@ -1,5 +1,7 @@
 # Handoff Guide 2: Multi-Model (11-Problem) BlendRL Training & Deployment Pipeline
 
+> **Archived project handoff.** This document describes a former NeSyRL/BlendRL deployment to Pyrenees ITS. It is retained as historical context and does not describe components shipped with Theta-IDE.
+
 ## Executive Summary
 This document provides the complete technical specification to train **11 separate, specialized BlendRL models** in the NeSyRL project root (1 problem-level model + 10 exercise-level step models) and export them as drop-in replacements into `Pyrenees-python/app/models/policies/Blend-RL/`.
 

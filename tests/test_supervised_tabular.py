@@ -15,7 +15,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import numpy as np
-import importlib.util
+from importlib.metadata import entry_points
 
 import pytest
 import torch
@@ -23,12 +23,11 @@ from torch.utils.data import DataLoader, TensorDataset
 
 from src.app.core.paradigm_loader import get_component, load_paradigm_definition
 
-# The classifier and dnn come from the Hub's `neural` model component
-needs_neural = pytest.mark.skipif(
-    importlib.util.find_spec("src.usr.models.neural") is None  # checked first: a missing parent raises
-    or importlib.util.find_spec("src.usr.models.neural.classifier") is None,
-    reason="the 'neural' model component is not installed",
+MLP_INSTALLED = any(
+    point.name == "mlp_classifier_training"
+    for point in entry_points().select(group="theta.components")
 )
+needs_mlp = pytest.mark.skipif(not MLP_INSTALLED, reason="the MLP model component is not installed")
 
 CONFIG = Path("in/config")
 
@@ -55,7 +54,7 @@ def _write_npz(path: Path, n=120, dim=8, separable=True):
 # ---------------------------------------------------------------------------
 
 
-@needs_neural
+@needs_mlp
 def test_the_rl_dnn_is_not_a_classifier():
     """`dnn` is an action/value model, so supervised uses a classifier instead."""
     from src.app.core.model_registry import MODEL_REGISTRY, auto_discover_models
@@ -66,7 +65,7 @@ def test_the_rl_dnn_is_not_a_classifier():
     assert hasattr(dnn, "get_q_values")
 
 
-@needs_neural
+@needs_mlp
 def test_the_classifier_is_registered():
     from src.app.core.model_registry import MODEL_REGISTRY, auto_discover_models
 
@@ -74,17 +73,17 @@ def test_the_classifier_is_registered():
     assert "mlp_classifier" in MODEL_REGISTRY
 
 
-@needs_neural
+@needs_mlp
 def test_a_binary_classifier_emits_one_logit_per_sample():
     """ClassificationEvalProtocol takes the sigmoid of a 1-D output."""
-    from src.usr.models.neural.classifier import MLPClassifier
+    from src.usr.models.mlp.mlp_model import MLPClassifier
 
     assert MLPClassifier(input_dim=8)(torch.randn(5, 8)).shape == (5,)
 
 
-@needs_neural
+@needs_mlp
 def test_a_multiclass_classifier_emits_one_logit_per_class():
-    from src.usr.models.neural.classifier import MLPClassifier
+    from src.usr.models.mlp.mlp_model import MLPClassifier
 
     assert MLPClassifier(input_dim=8, n_classes=4)(torch.randn(5, 8)).shape == (5, 4)
 
@@ -153,12 +152,13 @@ def _module(**kwargs):
     kwargs.setdefault("architecture_name", "mlp_classifier")
     kwargs.setdefault("input_dim", 8)
     kwargs.setdefault("lr", 1e-3)
-    return get_component("TabularClassifierLightningModule")(**kwargs)
+    return get_component("mlp_classifier_training")(**kwargs)
 
 
+@needs_mlp
 def test_the_module_is_resolvable_as_a_component():
     """train.py finds it through model.lightning_module."""
-    assert get_component("TabularClassifierLightningModule") is not None
+    assert get_component("mlp_classifier_training") is not None
 
 
 def test_an_unknown_architecture_is_rejected():
@@ -166,7 +166,7 @@ def test_an_unknown_architecture_is_rejected():
         _module(architecture_name="not_an_architecture")
 
 
-@needs_neural
+@needs_mlp
 def test_it_logs_the_metric_build_trainer_monitors():
     module = _module()
     logged = []
@@ -176,12 +176,12 @@ def test_it_logs_the_metric_build_trainer_monitors():
     assert "val/loss" in logged
 
 
-@needs_neural
+@needs_mlp
 def test_a_binary_task_uses_a_binary_loss():
     assert type(_module().loss_fn).__name__ == "BCEWithLogitsLoss"
 
 
-@needs_neural
+@needs_mlp
 def test_a_multiclass_task_uses_cross_entropy():
     assert type(_module(n_classes=3).loss_fn).__name__ == "CrossEntropyLoss"
 
@@ -191,7 +191,7 @@ def test_a_multiclass_task_uses_cross_entropy():
 # ---------------------------------------------------------------------------
 
 
-@needs_neural
+@needs_mlp
 def test_the_supervised_runner_trains_a_classifier():
     """Drives the shipped supervised runner and eval protocol, unchanged."""
     import tempfile
@@ -252,14 +252,14 @@ def test_the_model_config_names_a_resolvable_lightning_module():
     import yaml
 
     cfg_candidates = list((CONFIG / "model").rglob("mlp_classifier.yaml"))
-    if not cfg_candidates:
+    if not cfg_candidates or not MLP_INSTALLED:
         pytest.skip("mlp_classifier.yaml not in config tree")
     model_cfg = yaml.safe_load(cfg_candidates[0].read_text())
-    assert get_component(model_cfg.get("lightning_module", "TabularClassifierLightningModule")) is not None
+    assert get_component(model_cfg.get("lightning_module")) is not None
     assert model_cfg.get("architecture") == "mlp_classifier" or model_cfg.get("type") == "mlp_classifier"
 
 
-@needs_neural
+@needs_mlp
 def test_scoring_does_not_leave_the_model_in_eval_mode():
     """The classifier has dropout, so evaluating a checkpoint and then resuming
     training would quietly train without it."""
@@ -273,7 +273,7 @@ def test_scoring_does_not_leave_the_model_in_eval_mode():
         assert module.training is True
 
 
-@needs_neural
+@needs_mlp
 def test_scoring_leaves_eval_mode_alone_when_it_started_there():
     import tempfile
 
@@ -338,25 +338,21 @@ def test_the_environment_does_not_choose_the_loader():
         assert "data_module" not in env, f"{name}.yaml should leave the loader to the paradigm"
 
 
-def test_a_paradigm_declares_the_model_its_runner_can_build():
-    """The bare fallback is dnn, which is MLPQNetwork and cannot train here."""
-    import yaml
-
+def test_paradigms_do_not_choose_an_installed_model_for_the_user():
     from frontend.config_model import ConfigTree, default_method_model
 
     tree = ConfigTree.discover()
-    for paradigm, expected in (("supervised", "mlp_classifier"), ("unsupervised", "dense_autoencoder")):
-        declared = yaml.safe_load((CONFIG / "paradigms" / f"{paradigm}.yaml").read_text())["default_model"]
-        assert declared == expected
-        assert default_method_model(None, tree.models, paradigm=tree.paradigms[paradigm]) == expected
+    for paradigm in ("supervised", "unsupervised"):
+        assert "default_model" not in tree.paradigms[paradigm].raw
+        assert default_method_model(None, tree.models, paradigm=tree.paradigms[paradigm]) is None
 
 
-def test_an_existing_group_still_wins_over_the_paradigm_default():
-    """A group that already names an architecture keeps it.
+def test_an_existing_group_supplies_its_own_model_default():
+    """A group may declare its own architecture without a paradigm default.
 
     Built here rather than read from a shipped group: early_prediction used to
-    provide one, and experiment groups are Hub components now, so depending on
-    one made this a test of what ships rather than of the rule.
+    provide one, and experiment groups are optional components, so this test
+    defines its own group rather than depending on an installed example.
     """
     from frontend.config_model import ConfigTree, ExperimentGroup, default_method_model
 
@@ -371,17 +367,13 @@ def test_an_existing_group_still_wins_over_the_paradigm_default():
     assert chosen == "lstm", "a group that has settled on an architecture should not be overridden"
 
 
-def test_rl_paradigms_keep_the_dnn_default():
+def test_rl_paradigms_do_not_choose_a_model_plugin_by_default():
     from frontend.config_model import ConfigTree, default_method_model
 
     tree = ConfigTree.discover()
     for paradigm in ("online_rl", "offline_rl"):
-        expected = (
-            "dnn"
-            if "dnn" in tree.models
-            else default_method_model(None, tree.models, paradigm=tree.paradigms[paradigm])
-        )
-        assert default_method_model(None, tree.models, paradigm=tree.paradigms[paradigm]) == expected
+        assert "default_model" not in tree.paradigms[paradigm].raw
+        assert default_method_model(None, tree.models, paradigm=tree.paradigms[paradigm]) is None
 
 
 def test_a_named_dataset_that_is_missing_is_reported(tmp_path, monkeypatch, caplog):

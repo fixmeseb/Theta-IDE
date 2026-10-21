@@ -4,19 +4,19 @@ Script to erase experiment results from the workspace and track deleted items.
 
 Usage:
   # Erase a specific experiment across all result directories:
-  python scripts/erase_experiment.py -e mimic_test
+  python scripts/erase_experiment.py -e experiment_id
 
   # Erase multiple experiments:
   python scripts/erase_experiment.py -e exp1 exp2 exp3
 
   # Erase all experiments in a group except specified ones to keep:
-  python scripts/erase_experiment.py -g early_prediction -k weighted_pr
+  python scripts/erase_experiment.py -g experiment_group -k experiment_to_keep
 
   # Also delete the YAML config in in/config/experiment/:
-  python scripts/erase_experiment.py -e mimic_test --delete-config
+  python scripts/erase_experiment.py -e experiment_id --delete-config
 
   # Dry run to preview what would be deleted without deleting anything:
-  python scripts/erase_experiment.py -e mimic_test --dry-run
+  python scripts/erase_experiment.py -e experiment_id --dry-run
 """
 
 import argparse
@@ -51,7 +51,7 @@ def parse_args():
     parser.add_argument(
         "-g",
         "--group",
-        help="Group name (e.g. early_prediction, cartpole, mimic, tuning, quick_tests).",
+        help="Experiment group name.",
     )
     parser.add_argument(
         "-k",

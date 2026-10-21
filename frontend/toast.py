@@ -1,7 +1,7 @@
 """In-app toasts: short notices that slide up from the window's bottom-right corner and dismiss themselves.
 
     ┌──────────────────────────┐
-    │ ✓  cartpole_demo finished│
+    │ ✓  experiment finished   │
     │    Completed · 2m 14s    │
     │    [View results]     ✕  │
     └──────────────────────────┘

@@ -44,9 +44,6 @@ def _column(graph: ModelGraph) -> list[list[int]]:
     return column
 
 
-LIGHTNING_MODULES = ("TabularClassifierLightningModule", "AutoencoderLightningModule")
-
-
 def _parse_scalar(text: str) -> Any:
     """Read a field back as a number, a pair, a bool, or None when blank."""
     raw = text.strip()
@@ -151,7 +148,8 @@ class ModelBuilderDialog(QDialog):
 
         shape_row.addSpacing(16)
         shape_row.addWidget(QLabel("Trainer module:"))
-        self.txt_module = QLineEdit(lightning_module or LIGHTNING_MODULES[0])
+        self.txt_module = QLineEdit(lightning_module or "")
+        self.txt_module.setPlaceholderText("package.TrainingModule")
         self.txt_module.setMaximumWidth(280)
         self.txt_module.setToolTip("The Lightning module the paradigm should wrap this model in.")
         shape_row.addWidget(self.txt_module)
@@ -313,6 +311,10 @@ class ModelBuilderDialog(QDialog):
             self._show_refusal("the name becomes a file name, so use letters, numbers, dashes and underscores")
             self.txt_name.setFocus()
             return
+        if not self.txt_module.text().strip():
+            self._show_refusal("enter the Lightning module exported by the model component")
+            self.txt_module.setFocus()
+            return
         if self.graph.problems():
             self._refresh_status()
             return
@@ -331,7 +333,7 @@ class ModelBuilderDialog(QDialog):
 
         text = model_config_yaml(
             self.graph.layers(),
-            self.txt_module.text().strip() or None,
+            self.txt_module.text().strip(),
             self.graph.input_shape,
             self.graph.layout(),
         )

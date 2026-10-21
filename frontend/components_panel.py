@@ -137,17 +137,12 @@ class ComponentsPanel(QWidget):
 
     def init_default_component(self):
         """Select a default component config if available."""
-        preferred_defaults = [
-            "agent/ppo.yaml",
-            "env/cartpole.yaml",
-            "model/dueling_resnet.yaml",
-            "config.yaml",
-        ]
-        for rel in preferred_defaults:
-            target = self.components_tree.root_dir / rel
-            if target.exists() and target.is_file():
-                if self.components_tree.select_file(rel):
-                    return
+        for path in sorted(self.components_tree.root_dir.rglob("*.yaml")):
+            if path.name.startswith("_"):
+                continue
+            rel = path.relative_to(self.components_tree.root_dir).as_posix()
+            if self.components_tree.select_file(rel):
+                return
 
     def on_component_selected(self, file_path, rel_path):
         """Handle component file selection from the tree."""

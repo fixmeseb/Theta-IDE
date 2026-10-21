@@ -69,7 +69,7 @@
   <text x="702" y="167" font-family="sans-serif" font-size="12" fill="{{muted}}" text-anchor="start">compose → validate → dispatch</text>
   <rect x="690" y="200" width="276" height="48" rx="7" fill="{{surface}}" stroke="{{border}}" stroke-width="1.2"/>
   <text x="702" y="220" font-family="sans-serif" font-size="14" fill="{{text}}" text-anchor="start" font-weight="bold">engine script</text>
-  <text x="702" y="237" font-family="sans-serif" font-size="12" fill="{{muted}}" text-anchor="start">Lightning · SB3 · d3rlpy runners</text>
+  <text x="702" y="237" font-family="sans-serif" font-size="12" fill="{{muted}}" text-anchor="start">Lightning · plugin runners</text>
   <rect x="690" y="270" width="276" height="48" rx="7" fill="{{surface}}" stroke="{{border}}" stroke-width="1.2"/>
   <text x="702" y="290" font-family="sans-serif" font-size="14" fill="{{text}}" text-anchor="start" font-weight="bold">src.app.telemetry</text>
   <text x="702" y="307" font-family="sans-serif" font-size="12" fill="{{muted}}" text-anchor="start">run.log() → csv + stream sinks</text>

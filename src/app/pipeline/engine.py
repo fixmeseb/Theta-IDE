@@ -1,12 +1,11 @@
-"""Engine and execution entrypoint resolution for NeSyRL pipeline.
+"""Engine and execution entrypoint resolution for the experiment pipeline.
 
-Dispatches training to the appropriate script (defaults to src/app/train.py)
-and handles framework engines (pytorch/lightning, sb3, cleanrl, custom scripts).
+Dispatches training to an explicitly configured runner, defaulting to the
+generic PyTorch training script.
 """
 
 from __future__ import annotations
 
-import os
 from pathlib import Path
 from typing import Any, Dict, Tuple
 
@@ -15,14 +14,6 @@ DEFAULT_ENGINE_SCRIPT = "src/app/train.py"
 ENGINE_SCRIPT_MAP = {
     "pytorch": "src/app/train.py",
     "lightning": "src/app/train.py",
-    "sb3": "src/usr/algorithms/sb3_runner.py",
-    "stable_baselines3": "src/usr/algorithms/sb3_runner.py",
-    "ppo": "src/usr/algorithms/sb3_runner.py",
-    "dqn": "src/usr/algorithms/sb3_runner.py",
-    "a2c": "src/usr/algorithms/sb3_runner.py",
-    "sac": "src/usr/algorithms/sb3_runner.py",
-    "cleanrl": "src/usr/algorithms/cleanrl_runner.py",
-    "d3rlpy": "src/usr/algorithms/d3rlpy/d3rlpy_runner.py",
 }
 
 
@@ -35,8 +26,9 @@ def resolve_engine(
     Resolution order for script:
       1. method_cfg['entrypoint'] or method_cfg['runner'] or method_cfg['script']
       2. cfg.agent.entrypoint or cfg.agent.runner (if present)
-      3. method_cfg['engine'] or cfg.agent.engine -> mapped via ENGINE_SCRIPT_MAP
-      4. Fallback: "src/app/train.py"
+      3. The selected agent profile's ``entrypoint`` or ``runner`` field
+      4. method_cfg['engine'] or cfg.agent.engine -> a built-in engine or script path
+      5. Fallback: "src/app/train.py"
 
     Resolution order for python interpreter:
       1. method_cfg['python'] or method_cfg['venv_python']
@@ -64,7 +56,7 @@ def resolve_engine(
                 script = str(val)
                 break
 
-    # Check engine name (e.g. 'sb3', 'cleanrl', 'pytorch')
+    # Resolve the generic built-in engine or use an explicit plugin script path.
     if not script:
         engine_name = m_cfg.get("engine")
         if not engine_name:
@@ -74,11 +66,7 @@ def resolve_engine(
             else:
                 agent_str = str(agent_val or "").lower()
 
-            if "/" in agent_str:
-                prefix = agent_str.split("/")[0]
-                if prefix in ENGINE_SCRIPT_MAP:
-                    engine_name = prefix
-            elif agent_str in ENGINE_SCRIPT_MAP:
+            if agent_str in ENGINE_SCRIPT_MAP:
                 engine_name = agent_str
 
             if not engine_name and agent_str:
@@ -88,8 +76,12 @@ def resolve_engine(
                         import yaml
 
                         adata = yaml.safe_load(agent_yaml.read_text(encoding="utf-8"))
-                        if isinstance(adata, dict) and "engine" in adata:
-                            engine_name = adata["engine"]
+                        if isinstance(adata, dict):
+                            script = adata.get("entrypoint") or adata.get("runner") or adata.get("script")
+                            if script:
+                                script = str(script)
+                            elif "engine" in adata:
+                                engine_name = adata["engine"]
                     except Exception:
                         pass
 
@@ -98,21 +90,9 @@ def resolve_engine(
                 getattr(cfg.agent, "engine", None) if not hasattr(cfg.agent, "get") else cfg.agent.get("engine")
             )
 
-        if engine_name:
+        if not script and engine_name:
             clean_engine = str(engine_name).lower().strip()
             script = ENGINE_SCRIPT_MAP.get(clean_engine, clean_engine)
-            if clean_engine in ("sb3", "stable_baselines3") and not Path(script).exists():
-                alt = Path("src/usr/algorithms/sb3/sb3_runner.py")
-                if not alt.exists():
-                    alt = Path("src/usr/methods/sb3/sb3_runner.py")
-                if alt.exists():
-                    script = str(alt)
-            elif clean_engine == "d3rlpy" and not Path(script).exists():
-                alt = Path("src/usr/algorithms/d3rlpy_runner.py")
-                if not alt.exists():
-                    alt = Path("src/usr/methods/d3rlpy_runner.py")
-                if alt.exists():
-                    script = str(alt)
 
     # Fallback to standard PyTorch Lightning engine
     if not script:

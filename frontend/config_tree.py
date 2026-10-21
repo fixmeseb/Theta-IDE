@@ -1131,7 +1131,7 @@ class ConfigTreeWidget(TreeHeaderActions, QWidget):
             self._add_file_node(node, f)
 
         for sub in subdirs:
-            # Under experiment, expand group folders like cartpole, mimic
+            # Under experiment, expand dataset or benchmark group folders.
             sub_expand = (name == "experiment")
             self._add_dir_node(node, sub, expand=sub_expand, expanded_set=expanded_set, has_previous_state=has_previous_state)
 
@@ -1605,7 +1605,8 @@ class ConfigTreeWidget(TreeHeaderActions, QWidget):
                 lines += ["", "methods:", f"  {m_name}:"]
                 if agent:
                     lines.append(f"    agent: {agent}")
-                lines.append(f"    model: {model}")
+                if model:
+                    lines.append(f"    model: {model}")
 
         content = "\n".join(lines) + "\n"
         try:

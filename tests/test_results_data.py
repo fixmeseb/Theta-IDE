@@ -30,7 +30,7 @@ LIGHTNING_ROWS = [
     {"epoch": "1", "eval/reward": "", "eval/reward_std": "", "losses/total_loss": "0.25", "transitions": "2000.0"},
 ]
 
-# What src/usr/methods/sb3/sb3_runner.py writes through ContractLogger: SB3 logger keys under losses/.
+# Plugin runner metrics are retained as generic columns under losses/.
 SB3_ROWS = [
     {
         "step": "1000",

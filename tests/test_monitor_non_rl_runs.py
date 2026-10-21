@@ -26,7 +26,7 @@ RL_ROWS = [
     {"time/train": 0.3, "transitions": 600.0},
 ]
 
-# A supervised run, as TabularClassifierLightningModule logs it.
+# A supervised run, as MLP component training module logs it.
 SUPERVISED_ROWS = [
     {"epoch": 0.0, "step": 12.0, "train/loss": 0.60, "val/loss": 0.47},
     {"epoch": 1.0, "step": 24.0, "train/loss": 0.31, "val/loss": 0.22},
@@ -167,10 +167,10 @@ def test_several_methods_are_joined():
     assert run_setup_label(run, config) == "breast_cancer  /  CLF + CLF_DEEP"
 
 
-def test_the_simulated_demo_run_keeps_the_literal():
-    """That run really is cartpole with PPO, and has no config of its own."""
+def test_the_simulated_demo_run_has_a_generic_label():
+    """A simulated run has no environment or method to display."""
     run, _ = _run(simulated=True)
-    assert run_setup_label(run, {}) == "CartPole-v1  /  PPO"
+    assert run_setup_label(run, {}) == "Simulated run"
 
 
 def test_a_run_missing_its_details_degrades_rather_than_raising():

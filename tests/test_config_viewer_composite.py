@@ -276,8 +276,8 @@ def test_add_new_method_flow_empty_and_invalid(qapp, tmp_path):
     assert len(editors) == 1
     new_editor = editors[0]
     assert new_editor.text() == ""
-    # Suggests a name: the group's default method when it has one, else ppo_baseline.
-    assert new_editor.placeholderText() == "Method name (e.g. ppo_baseline)..."
+    # The placeholder stays generic when the group has no default method.
+    assert new_editor.placeholderText() == "Method name..."
 
     # Validate name rules:
     existing_keys = set(viewer.raw_data["methods"].keys())

@@ -111,13 +111,9 @@ class TestAlgorithmConfigurationAdherence:
         script1, py1 = resolve_engine({"runner": "src/usr/algorithms/my_custom_runner.py"})
         assert script1 == "src/usr/algorithms/my_custom_runner.py"
 
-        # 2. SB3 runner engine
-        script2, _ = resolve_engine({"engine": "sb3"})
-        assert "sb3_runner.py" in script2
-
-        # 3. CleanRL runner engine
-        script3, _ = resolve_engine({"engine": "cleanrl"})
-        assert "cleanrl_runner.py" in script3
+        # 2. Method plugins select framework-specific runners by profile entrypoint.
+        script2, _ = resolve_engine({"entrypoint": "src/usr/algorithms/sb3-suite/sb3_runner.py"})
+        assert script2 == "src/usr/algorithms/sb3-suite/sb3_runner.py"
 
 
 # ==============================================================================

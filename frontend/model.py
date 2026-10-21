@@ -1,4 +1,4 @@
-"""Portable demo records. This module does not import the training backend."""
+"""Portable run records. This module does not import the training backend."""
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 import json
@@ -10,7 +10,7 @@ from uuid import uuid4
 
 # Backend experiment every builder config is composed from (in/config/experiment/thetaide/_base.yaml).
 BASE_EXPERIMENT = "thetaide/_base"
-METHOD, AGENT, MODEL = "ppo", "ppo", "dnn"
+METHOD = "method"
 
 
 def _num(value):
@@ -24,8 +24,11 @@ def _num(value):
 
 @dataclass
 class Config:
-    name: str = "cartpole_ppo_baseline"
-    env: str = "cartpole"
+    name: str = "experiment"
+    env: str = ""
+    method_name: str = METHOD
+    agent: str = ""
+    model: str = ""
     seed: int = 42
     total_timesteps: int = 10000
     lr: float = 0.0003
@@ -35,11 +38,15 @@ class Config:
 
     def overrides(self):
         """Hydra overrides applied to BASE_EXPERIMENT, exactly as typed after `run_pipeline.py`."""
-        method = f"++methods.{METHOD}"
-        return [f"++experiment_id='{self.name}'", f"seed={self.seed}", f"total_timesteps={self.total_timesteps}",
-                f"{method}.agent={AGENT}", f"{method}.model={MODEL}", f"{method}.lr={_num(self.lr)}",
-                f"{method}.batch_size={self.batch_size}", f"{method}.gamma={_num(self.gamma)}",
-                f"tensorboard={str(self.tensorboard).lower()}"]
+        method = f"++methods.{self.method_name}"
+        overrides = [f"++experiment_id='{self.name}'", f"seed={self.seed}", f"total_timesteps={self.total_timesteps}"]
+        if self.agent:
+            overrides.append(f"{method}.agent={self.agent}")
+        if self.model:
+            overrides.append(f"{method}.model={self.model}")
+        overrides.extend([f"{method}.lr={_num(self.lr)}", f"{method}.batch_size={self.batch_size}",
+                          f"{method}.gamma={_num(self.gamma)}", f"tensorboard={str(self.tensorboard).lower()}"])
+        return overrides
 
     def command(self):
         return " ".join(["python", "run_pipeline.py", BASE_EXPERIMENT, *self.overrides()])
@@ -54,15 +61,17 @@ class Config:
             f"experiment_id: {json.dumps(self.name)}\n"
             f"seed: {self.seed}\ntotal_timesteps: {self.total_timesteps}\n"
             f"tensorboard: {str(self.tensorboard).lower()}\n\n"
-            f"methods:\n  {METHOD}:\n    agent: {AGENT}\n    model: {MODEL}\n"
-            f"    lr: {_num(self.lr)}\n    batch_size: {self.batch_size}\n    gamma: {_num(self.gamma)}\n"
+            f"methods:\n  {self.method_name}:\n"
+            + (f"    agent: {self.agent}\n" if self.agent else "")
+            + (f"    model: {self.model}\n" if self.model else "")
+            + f"    lr: {_num(self.lr)}\n    batch_size: {self.batch_size}\n    gamma: {_num(self.gamma)}\n"
         )
 
 
 def sample(config, index):
     rng = random.Random(config.seed * 101 + index)
     progress = index / 60
-    reward = max(0, min(500, 20 + 475 * (1 - math.exp(-3.6 * progress)) + rng.uniform(-18, 18)))
+    reward = max(0, 1 - math.exp(-3.6 * progress) + rng.uniform(-0.04, 0.04))
     return {"step": round(config.total_timesteps * progress),
             "reward": round(reward, 2),
             "loss": round(0.8 * math.exp(-4 * progress) + rng.uniform(0.015, 0.055), 4)}
@@ -121,9 +130,8 @@ def position_column(rows):
 def metric_points(rows):
     """Convert metrics.csv rows into chart points keyed by the run's position column.
 
-    Every numeric column is kept, whatever engine logged it: the METRIC_COLUMNS under their
-    short run-record keys (which saved runs and the demo use), and any other column under its
-    own metrics.csv name (e.g. SB3's "losses/train/value_loss"). Evaluation rows carry eval/*
+    Every numeric column is kept, whatever runtime logged it: the METRIC_COLUMNS under their
+    short run-record keys, and any other column under its own metrics.csv name. Evaluation rows carry eval/*
     and training rows carry losses/*; a point keeps None for the short keys its row does not
     report and simply lacks other columns it does not report.
     """
@@ -217,9 +225,13 @@ def disk_run(entry):
     """
     cfg = entry.get("config") or {}
     methods = cfg.get("methods") or {}
-    method = next(iter(methods.values()), {})
     default = Config()
+    method_name, method = next(iter(methods.items()), (METHOD, {}))
+    if not isinstance(method, dict):
+        method = {}
     config = Config(name=entry["experiment_id"], env=_value(cfg.get("env"), str, default.env),
+                    method_name=str(method_name), agent=str(method.get("agent") or ""),
+                    model=str(method.get("model") or ""),
                     seed=_value(cfg.get("seed"), int, default.seed),
                     total_timesteps=_value(cfg.get("total_timesteps"), int, default.total_timesteps),
                     lr=_value(method.get("lr"), float, default.lr),
@@ -231,8 +243,7 @@ def disk_run(entry):
         "created": (agents[0].get("started") if agents else None) or "",
         "config": asdict(config), "status": "completed" if entry.get("finished") else "incomplete",
         "simulated": False, "metrics": [], "notes": "", "origin": "cli", "transient": True,
-        # The experiment builder only edits single-method CartPole/PPO recipes.
-        "builder_compatible": cfg.get("env") == "cartpole" and len(methods) == 1 and method.get("agent") == AGENT,
+        "builder_compatible": len(methods) == 1,
         "backend": {"group": entry["group"], "experiment_id": entry["experiment_id"],
                     "agents": [agent["name"] for agent in agents], "total_timesteps": cfg.get("total_timesteps")},
     }
@@ -274,8 +285,8 @@ def result_row(run, disk=None):
     started = primary.get("started") if source == "cli" else run.get("created")
     duration = primary.get("training_time_seconds")
     methods = ((disk or {}).get("config") or {}).get("methods") or {}
-    method = (" + ".join(f"{m.get('agent')} / {m.get('model')}" for m in methods.values()) if methods
-              else f"{AGENT} / {MODEL}")
+    method = (" + ".join(" / ".join(str(m.get(key)) for key in ("agent", "model") if m.get(key)) or "—"
+                          for m in methods.values()) if methods else "—")
     stamp = _timestamp(started)
     name, env, seed = run_name(run), run["config"]["env"], run["config"]["seed"]
     reward_text = lambda value: "—" if value is None else f"{value:.1f}"
@@ -341,16 +352,3 @@ class Store:
             except (OSError, ValueError, TypeError, KeyError) as exc:
                 errors.append(f"Could not load {path}: {exc}")
         return sorted(runs, key=lambda r: r["created"], reverse=True), errors
-
-
-def example_runs():
-    runs = []
-    for seed, name in ((42, "cartpole_ppo_baseline"), (7, "cartpole_seed_study")):
-        config = Config(name=name, seed=seed)
-        run = new_run(config)
-        run.update(id=f"example-{seed}", status="example", metrics=[sample(config, i) for i in range(1, 61)],
-                   notes="## Hypothesis\nA small learning rate should produce stable improvement.\n\n"
-                         "## Next iteration\nCompare a second seed before changing the policy.\n\n"
-                         "These are synthetic example metrics, not training results.")
-        runs.append(run)
-    return runs

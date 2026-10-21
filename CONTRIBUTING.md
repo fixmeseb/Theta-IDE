@@ -16,8 +16,8 @@ pip install -e ".[dev,gui]"
 pre-commit install
 ```
 
-Install **ThetaIDE Basics** from the Hub (see INSTALL.md, step 4) before running the tests: many of them build
-the default experiment, which needs its components.
+Hub components are optional for core development. Install a component only when working on an integration that
+requires it.
 
 ## Workflow
 
@@ -80,8 +80,9 @@ plot/                    # Plotting framework; built-in plotters in plot/standar
 tests/                   # pytest suite
 ```
 
-Most of `src/usr/`, `in/config/agent/`, `in/config/model/` and `in/config/env/` comes from the Theta Hub and is
-gitignored, so new components are published as Hub packages rather than committed here.
+Most runtime files under `src/usr/`, `in/config/agent/`, `in/config/model/` and `in/config/env/` are installed
+from the Theta Hub and gitignored. Component authors can develop packages separately and publish them to the
+Hub.
 
 ## Common contributions
 
@@ -101,7 +102,7 @@ Plotters are discovered automatically from modules in `plot/` and its subfolders
 2. Implement `run(self, exp_id, cli_overrides=None)`. Call `self.get_effective_config(exp_id, cli_overrides)`
    to get the merged settings, the experiment's group and the output folder.
 3. Put the default settings in `in/config/plot/<library>/my_plot.yaml`, like the built-in
-   `in/config/plot/thetalib/losses.yaml`.
+   `in/config/plot/<package>/losses.yaml`.
 4. Experiments request the plotter by name under their `plots:` section, which can also override its settings.
 
 ### An IDE feature or plugin

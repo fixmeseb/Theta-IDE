@@ -81,17 +81,12 @@ def resolve_dataset_path(
             candidates.append(Path("in/datasets") / group / experiment_id / aid_clean)
             candidates.append(Path("in/datasets") / group / experiment_id / aid)
         if group:
-            candidates.append(Path("in/datasets") / group / "per_problem" / aid / "cql")
-            candidates.append(Path("in/datasets") / group / "per_problem" / aid_clean / "cql")
             candidates.append(Path("in/datasets") / group / "per_problem" / aid)
             candidates.append(Path("in/datasets") / group / "per_problem" / aid_clean)
-            candidates.append(Path("in/datasets") / group / aid / "cql")
-            candidates.append(Path("in/datasets") / group / aid_clean / "cql")
             candidates.append(Path("in/datasets") / group / aid_clean)
             candidates.append(Path("in/datasets") / group / aid)
         candidates.extend(
             [
-                Path("in/datasets") / "per_problem" / aid / "cql",
                 Path("in/datasets") / aid_clean,
                 Path("in/datasets") / aid,
             ]
@@ -102,8 +97,6 @@ def resolve_dataset_path(
     for cand in candidates:
         if cand.exists() and any(cand.glob("*.pkl")):
             return cand
-        if cand.exists() and (cand / "cql").exists() and any((cand / "cql").glob("*.pkl")):
-            return cand / "cql"
         if cand.exists() and cand.is_file():
             return cand
         if cand.with_suffix(".npz").exists():
@@ -155,51 +148,6 @@ def resolve_dataset_for_method(method_name: str, method_cfg: dict, cfg: Any) -> 
         f"Cannot resolve dataset for method '{method_name}'. "
         f"No dataset_name in env config and no datasets found at {ds_root}."
     )
-
-
-def resolve_mimic_npz_path(filename_or_path: str | None = None, site_cfg=None) -> Path:
-    """Robustly resolve the filesystem path for a MIMIC NPZ dataset file.
-
-    Uses site_cfg.dataset_search_dirs for cluster-specific paths instead of
-    hardcoding personal directories.
-
-    Raises FileNotFoundError if the file cannot be located.
-    """
-    from src.app.pipeline.runtime import PROJECT_ROOT
-
-    if filename_or_path:
-        p = Path(filename_or_path)
-        if p.exists() and p.is_file():
-            return p.resolve()
-        filename = p.name
-    else:
-        filename = os.environ.get("MIMIC_DATASET_NAME", "")
-        if not filename:
-            raise ValueError(
-                "No MIMIC dataset specified to resolve_mimic_npz_path. "
-                "Please pass a dataset path or set env.dataset_name in the experiment configuration."
-            )
-
-    candidate_dirs: list[Path] = [
-        Path(os.environ.get("MIMIC_DATASET_DIR", "")),
-        PROJECT_ROOT / "in/datasets/mimic",
-        PROJECT_ROOT / "in/datasets",
-    ]
-    # Add site-specific search dirs from site config
-    if site_cfg:
-        for d in getattr(site_cfg, "dataset_search_dirs", []) or []:
-            candidate_dirs.append(Path(str(d)))
-    clean_candidate_dirs = [d.resolve() for d in candidate_dirs if str(d).strip() and str(d) != "."]
-
-    for c_dir in clean_candidate_dirs:
-        if not c_dir.exists():
-            continue
-        cand = c_dir / filename
-        if cand.exists() and cand.is_file():
-            return cand.resolve()
-
-    searched = [str(d) for d in candidate_dirs if d.exists()]
-    raise FileNotFoundError(f"MIMIC dataset '{filename}' not found. Searched existing directories: {searched}")
 
 
 def run_experiment(

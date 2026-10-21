@@ -10,6 +10,7 @@ did for the paradigms that already shipped.
 from __future__ import annotations
 
 import importlib.util
+from importlib.metadata import entry_points
 
 import pytest
 import torch
@@ -24,11 +25,14 @@ from src.app.pipeline.validation import (
     paradigm_uses_static_dataset,
 )
 
-# The autoencoders come from the Hub's `neural` model component
-needs_neural = pytest.mark.skipif(
-    importlib.util.find_spec("src.usr.models.neural") is None  # checked first: a missing parent raises
-    or importlib.util.find_spec("src.usr.models.neural.autoencoder") is None,
-    reason="the 'neural' model component is not installed",
+# Plugin-specific checks run only when the component exports its training module.
+AUTOENCODER_INSTALLED = any(
+    point.name == "autoencoder_training"
+    for point in entry_points().select(group="theta.components")
+)
+needs_autoencoder = pytest.mark.skipif(
+    not AUTOENCODER_INSTALLED,
+    reason="the autoencoder model component is not installed",
 )
 
 PARADIGM = "unsupervised"
@@ -179,7 +183,7 @@ def test_overrides_match_supervised_for_the_same_method():
 # ---------------------------------------------------------------------------
 
 
-@needs_neural
+@needs_autoencoder
 def test_architectures_are_registered():
     from src.app.core.model_registry import MODEL_REGISTRY, auto_discover_models
 
@@ -188,9 +192,9 @@ def test_architectures_are_registered():
     assert "dense_autoencoder" in MODEL_REGISTRY
 
 
-@needs_neural
+@needs_autoencoder
 def test_sequence_autoencoder_reconstructs_its_input_shape():
-    from src.usr.models.neural.autoencoder import SequenceAutoencoder
+    from src.usr.models.autoencoder.autoencoder_model import SequenceAutoencoder
 
     model = SequenceAutoencoder(input_dim=7, hidden_dim=16, latent_dim=8)
     x = torch.randn(4, 12, 7)
@@ -199,10 +203,10 @@ def test_sequence_autoencoder_reconstructs_its_input_shape():
     assert latent.shape == (4, 8)
 
 
-@needs_neural
+@needs_autoencoder
 def test_sequence_encoder_reads_the_last_real_step_not_the_padding():
     """A padded tail must not change the representation of a shorter sequence."""
-    from src.usr.models.neural.autoencoder import SequenceAutoencoder
+    from src.usr.models.autoencoder.autoencoder_model import SequenceAutoencoder
 
     torch.manual_seed(0)
     model = SequenceAutoencoder(input_dim=3, hidden_dim=8, latent_dim=4).eval()
@@ -215,9 +219,9 @@ def test_sequence_encoder_reads_the_last_real_step_not_the_padding():
     assert torch.allclose(a, b, atol=1e-5)
 
 
-@needs_neural
+@needs_autoencoder
 def test_dense_autoencoder_round_trips_flat_features():
-    from src.usr.models.neural.autoencoder import DenseAutoencoder
+    from src.usr.models.autoencoder.autoencoder_model import DenseAutoencoder
 
     model = DenseAutoencoder(input_dim=9, hidden_dim=8, latent_dim=4)
     x = torch.randn(5, 9)
@@ -232,7 +236,7 @@ def test_dense_autoencoder_round_trips_flat_features():
 
 
 def _module(architecture="autoencoder", input_dim=7, **kwargs):
-    cls = get_component("AutoencoderLightningModule")
+    cls = get_component("autoencoder_training")
     return cls(architecture_name=architecture, input_dim=input_dim, lr=1e-3, **kwargs)
 
 
@@ -246,17 +250,19 @@ def _labeled_loader(n=40, length=12, dim=7, pad_from=None):
     return DataLoader(TensorDataset(x, y, lengths, mask), batch_size=8)
 
 
+@needs_autoencoder
 def test_module_is_resolvable_as_a_component():
     """train.py finds it through model.lightning_module, so it must be registered."""
-    assert get_component("AutoencoderLightningModule") is not None
+    assert get_component("autoencoder_training") is not None
 
 
+@needs_autoencoder
 def test_unknown_architecture_is_rejected_with_the_registered_names():
     with pytest.raises(ValueError, match="Unknown unsupervised architecture"):
         _module(architecture="not_an_architecture")
 
 
-@needs_neural
+@needs_autoencoder
 def test_training_step_needs_no_labels():
     """The batch carries y because the loaders are shared; the loss must ignore it."""
     module = _module()
@@ -265,7 +271,7 @@ def test_training_step_needs_no_labels():
     assert float(loss.detach()) > 0
 
 
-@needs_neural
+@needs_autoencoder
 def test_padding_does_not_contribute_to_the_loss():
     """Averaging over padded steps would reward predicting zeros."""
     torch.manual_seed(0)
@@ -279,7 +285,7 @@ def test_padding_does_not_contribute_to_the_loss():
         assert torch.allclose(module._step(short, "val"), module._step(padded, "val"), atol=1e-5)
 
 
-@needs_neural
+@needs_autoencoder
 def test_module_logs_the_metric_build_trainer_monitors():
     """build_trainer defaults to monitoring val/loss with mode min."""
     module = _module()
@@ -289,7 +295,7 @@ def test_module_logs_the_metric_build_trainer_monitors():
     assert "val/loss" in logged
 
 
-@needs_neural
+@needs_autoencoder
 def test_declared_monitor_metric_is_one_the_module_logs():
     monitor = load_paradigm(PARADIGM).get("monitor_metric")
     module = _module()
@@ -308,14 +314,14 @@ def _protocol():
     return get_component("ReconstructionEvalProtocol")()
 
 
-@needs_neural
+@needs_autoencoder
 def test_evaluate_reports_reconstruction_error():
     metrics = _protocol().evaluate(_module(), _labeled_loader())
     assert metrics["recon_mse"] > 0
     assert metrics["recon_mae"] > 0
 
 
-@needs_neural
+@needs_autoencoder
 def test_evaluate_reports_latent_clustering_quality():
     """With no labels, internal cluster scores stand in for accuracy."""
     metrics = _protocol().evaluate(_module(), _labeled_loader(), n_clusters=3)
@@ -324,7 +330,7 @@ def test_evaluate_reports_latent_clustering_quality():
     assert metrics["n_clusters"] == 3
 
 
-@needs_neural
+@needs_autoencoder
 def test_clustering_metrics_are_omitted_rather_than_faked_when_too_small():
     """Two samples cannot support three clusters, and a made-up score is worse than none."""
     metrics = _protocol().evaluate(_module(), _labeled_loader(n=2), n_clusters=3)
@@ -332,14 +338,14 @@ def test_clustering_metrics_are_omitted_rather_than_faked_when_too_small():
     assert "silhouette" not in metrics
 
 
-@needs_neural
+@needs_autoencoder
 def test_evaluate_accepts_unlabeled_batches():
     loader = DataLoader(TensorDataset(torch.randn(30, 9)), batch_size=10)
     metrics = _protocol().evaluate(_module(architecture="dense_autoencoder", input_dim=9), loader)
     assert metrics["recon_mse"] > 0
 
 
-@needs_neural
+@needs_autoencoder
 def test_evaluate_on_an_empty_loader_returns_zeroed_metrics():
     empty = DataLoader(TensorDataset(torch.zeros(0, 12, 7)), batch_size=4)
     assert _protocol().evaluate(_module(), empty) == {"recon_mse": 0.0, "recon_mae": 0.0}
@@ -350,7 +356,7 @@ def test_evaluate_on_an_empty_loader_returns_zeroed_metrics():
 # ---------------------------------------------------------------------------
 
 
-@needs_neural
+@needs_autoencoder
 def test_the_runner_actually_trains_the_autoencoder():
     """Drives the real runner through a real Lightning Trainer.
 
@@ -379,7 +385,7 @@ def test_the_runner_actually_trains_the_autoencoder():
     assert after < before, f"reconstruction did not improve: {before:.4f} -> {after:.4f}"
 
 
-@needs_neural
+@needs_autoencoder
 def test_evaluating_does_not_leave_the_model_in_eval_mode():
     """Scoring a checkpoint and then resuming training must not lose dropout."""
     module = _module()
@@ -388,7 +394,7 @@ def test_evaluating_does_not_leave_the_model_in_eval_mode():
     assert module.training is True
 
 
-@needs_neural
+@needs_autoencoder
 def test_evaluating_restores_eval_mode_when_that_is_where_it_started():
     module = _module()
     module.eval()
@@ -485,7 +491,7 @@ def _breast_cancer_split(seed=0):
     )
 
 
-@needs_neural
+@needs_autoencoder
 def test_autoencoder_learns_real_clinical_data():
     """Trains on real features with the labels withheld, then uses them only to
     score whether the latent space recovered the real benign/malignant split.
@@ -520,7 +526,7 @@ def test_autoencoder_learns_real_clinical_data():
     assert score > 0.3, f"latent space carries no real class structure (ARI={score:.3f})"
 
 
-@needs_neural
+@needs_autoencoder
 def test_reconstruction_quality_and_cluster_quality_are_not_the_same_thing():
     """A wider latent reconstructs better while clustering worse, which is why
     monitor_metric: val/loss selects for reconstruction rather than for a

@@ -9,6 +9,7 @@ their own .npz, and the prepare tests build into a temporary directory.
 from __future__ import annotations
 
 import importlib.util
+from importlib.metadata import entry_points
 from pathlib import Path
 
 import numpy as np
@@ -17,11 +18,13 @@ import torch
 
 from src.app.core.paradigm_loader import get_component
 
-# The autoencoders come from the Hub's `neural` model component
-needs_neural = pytest.mark.skipif(
-    importlib.util.find_spec("src.usr.models.neural") is None  # checked first: a missing parent raises
-    or importlib.util.find_spec("src.usr.models.neural.autoencoder") is None,
-    reason="the 'neural' model component is not installed",
+AUTOENCODER_INSTALLED = any(
+    point.name == "autoencoder_training"
+    for point in entry_points().select(group="theta.components")
+)
+needs_autoencoder = pytest.mark.skipif(
+    not AUTOENCODER_INSTALLED,
+    reason="the autoencoder model component is not installed",
 )
 
 PREPARE = Path("in/datasets/prepare_tabular.py")
@@ -134,13 +137,13 @@ def test_a_missing_dataset_says_how_to_build_it(tmp_path):
         get_component("TabularNpzDataModule")(cfg)
 
 
-@needs_neural
+@needs_autoencoder
 def test_the_module_feeds_the_autoencoder(tmp_path):
     """End of the chain: a file on disk trains the paradigm's own model."""
     from src.app.core.paradigm_loader import load_paradigm_definition
 
     dm = get_component("TabularNpzDataModule")(_cfg(_write_npz(tmp_path / "d.npz", n=64, dim=6)))
-    module = get_component("AutoencoderLightningModule")(
+    module = get_component("autoencoder_training")(
         architecture_name="dense_autoencoder", input_dim=dm.input_dim, lr=1e-3, hidden_dim=16, latent_dim=4
     )
     definition = load_paradigm_definition("unsupervised")

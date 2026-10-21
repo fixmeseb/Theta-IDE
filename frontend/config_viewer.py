@@ -62,12 +62,8 @@ CATEGORICAL_CHOICES = {
     "act_fn": ["relu", "gelu", "tanh", "elu", "silu", "sigmoid", "leaky_relu", "identity"],
     "optimizer": ["adam", "adamw", "sgd", "rmsprop"],
     "opt": ["adam", "adamw", "sgd", "rmsprop"],
-    "engine": ["sb3", "d3rlpy", "cleanrl", "custom"],
-    "runner": ["sb3", "d3rlpy", "cleanrl", "custom"],
     "mode": ["min", "max"],
     "direction": ["min", "max"],
-    "blender_mode": ["gate", "threshold", "hierarchical", "fixed"],
-    "blender": ["gate", "threshold", "hierarchical", "fixed"],
 }
 
 
@@ -444,10 +440,9 @@ def _recorded_metrics(data):
 CHECKPOINT_KEYS = ("checkpoint_every_steps", "num_checkpoints")
 DEFAULT_CHECKPOINTS = 10
 
-# Top-level experiment keys the five fixed boxes already render. Everything else
-# goes through _render_remaining_sections, so a paradigm's own settings are
-# editable rather than invisible: every supervised experiment keeps its real
-# configuration under `early_prediction:`, and none of it used to appear at all.
+# Top-level experiment keys the fixed boxes already render. Everything else
+# goes through _render_remaining_sections, so paradigm- and component-specific
+# settings remain editable rather than being silently hidden.
 FIXED_BOX_KEYS = frozenset(
     {
         "defaults",
@@ -1208,7 +1203,7 @@ class ConfigViewer(QWidget):
                 or "methods" in self.raw_data
                 or any("_base" in str(d) for d in self.raw_data.get("defaults", []))
             )
-            for key in ("algorithm", "name", "architecture", "reasoner", "id"):
+            for key in ("algorithm", "name", "architecture", "id"):
                 if key in self.raw_data:
                     self.raw_data[key] = new_title
 
@@ -1220,10 +1215,7 @@ class ConfigViewer(QWidget):
             elif old_rel and old_rel.startswith("env/"):
                 self.raw_data["name"] = new_title
             elif old_rel and old_rel.startswith("model/"):
-                if "reasoner" in self.raw_data:
-                    self.raw_data["reasoner"] = new_title
-                else:
-                    self.raw_data["architecture"] = new_title
+                self.raw_data["architecture"] = new_title
 
 
             # Check if methods dict has a method named after old_title
@@ -2197,7 +2189,7 @@ class ConfigViewer(QWidget):
 
             curr_params = methods_dict.get("params", {}) if has_params else resolved_params
 
-            common_universal = ["lr", "gamma", "epochs", "eval_every_n_epochs", "cql_alpha", "weight_decay", "batch_size", "ent_coef"]
+            common_universal = ["lr", "gamma", "epochs", "eval_every_n_epochs", "weight_decay", "batch_size", "ent_coef"]
             if tree:
                 for a in sorted(tree.agents):
                     common_universal.append(f"agent.{a}")
@@ -2710,14 +2702,14 @@ class ConfigViewer(QWidget):
                             if isinstance(s_val, str):
                                 cur_type = s_val
                             elif isinstance(s_val, dict):
-                                # Detect if submodel is nested under a model name key (e.g. {nsfr: {rules: default}})
+                                # Detect if a submodel is nested under its configured model key.
                                 nested_model_key = next((k for k in s_val if (tree and k in tree.models)), None)
                                 if nested_model_key:
                                     cur_type = nested_model_key
                                     sub_params = s_val[nested_model_key] if isinstance(s_val[nested_model_key], dict) else {}
                                 else:
                                     cur_type = s_val.get("type", "")
-                                    sub_params = {k: v for k, v in s_val.items() if k not in ("type", "architecture", "reasoner")}
+                                    sub_params = {k: v for k, v in s_val.items() if k not in ("type", "architecture")}
 
                             choices = tree.model_names if tree else []
 
@@ -2808,7 +2800,7 @@ class ConfigViewer(QWidget):
                                     if isinstance(slot_template, dict):
                                         def_sub_dict = dict(slot_template)
                                 for dp_k, dp_v in def_sub_dict.items():
-                                    if dp_k not in sub_params and dp_k not in ("architecture", "type", "reasoner", "mode"):
+                                    if dp_k not in sub_params and dp_k not in ("architecture", "type", "mode"):
                                         dp_row = QHBoxLayout()
                                         dp_line = QLineEdit(str(dp_v if dp_v is not None else ""))
                                         dp_line.setMaximumWidth(TEXT_FIELD_WIDTH)
@@ -3140,7 +3132,7 @@ class ConfigViewer(QWidget):
                 if def_name:
                     p_edit.setPlaceholderText(f"Method name (e.g. {def_name})...")
                 else:
-                    p_edit.setPlaceholderText("Method name (e.g. ppo_baseline)...")
+                    p_edit.setPlaceholderText("Method name...")
                 p_edit.setStyleSheet("font-size: 16px; font-weight: 600; padding: 2px 6px; border-radius: 4px;")
                 p_title_row.addWidget(p_edit)
                 p_title_row.addStretch()
@@ -3172,7 +3164,7 @@ class ConfigViewer(QWidget):
                     elif p_rules.allows_algorithm:
                         p_txt_agent = QLineEdit()
                         p_txt_agent.setMaximumWidth(TEXT_FIELD_WIDTH)
-                        p_txt_agent.setPlaceholderText("Algorithm (e.g. ppo, cql)...")
+                        p_txt_agent.setPlaceholderText("Algorithm component ID...")
                         init_agent = self._pending_new_method_spec.get("agent")
                         if init_agent:
                             p_txt_agent.setText(str(init_agent))
@@ -3200,7 +3192,7 @@ class ConfigViewer(QWidget):
                 else:
                     p_txt_model = QLineEdit()
                     p_txt_model.setMaximumWidth(TEXT_FIELD_WIDTH)
-                    p_txt_model.setPlaceholderText("Model architecture (e.g. dnn)...")
+                    p_txt_model.setPlaceholderText("Model component ID...")
                     init_model = self._pending_new_method_spec.get("model")
                     if init_model:
                         p_txt_model.setText(str(init_model))
@@ -3756,8 +3748,6 @@ class ConfigViewer(QWidget):
         paradigm = data.get("paradigm") or self._inherited_paradigm()
         rules = tree.paradigms.get(paradigm) if tree and paradigm else None
         context_candidates = [
-            ("env.num_envs", "Parallel Envs", None),
-            ("env.num_steps", "Steps per Env", None),
             ("trainer.accelerator", "Accelerator", None),
             ("trainer.max_epochs", "Max Epochs", None),
         ]
@@ -3852,14 +3842,14 @@ class ConfigViewer(QWidget):
         context_rows = []
         env_data = data.get("env") if isinstance(data.get("env"), dict) else {}
         trainer_data = data.get("trainer") if isinstance(data.get("trainer"), dict) else {}
-        if "num_envs" in env_data or is_base:
+        if "num_envs" in env_data:
             spin = SpinBox()
             spin.setMaximumWidth(NUMBER_FIELD_WIDTH)
             spin.setRange(1, 1024)
             spin.setValue(int(env_data.get("num_envs", 4)))
             spin.valueChanged.connect(lambda value: self._on_nested_edited("env", "num_envs", value))
             context_rows.append(("Parallel Envs", "env.num_envs", spin))
-        if "num_steps" in env_data or is_base:
+        if "num_steps" in env_data:
             spin = SpinBox()
             spin.setMaximumWidth(NUMBER_FIELD_WIDTH)
             spin.setRange(1, 100000)
@@ -3919,8 +3909,6 @@ class ConfigViewer(QWidget):
             return
         if default_value is None:
             default_value = {
-                "env.num_envs": 4,
-                "env.num_steps": 128,
                 "trainer.accelerator": "cpu",
                 "trainer.max_epochs": 25,
             }.get(path)
@@ -4120,9 +4108,8 @@ class ConfigViewer(QWidget):
     def _render_remaining_sections(self):
         """Surface every top-level key the fixed boxes do not cover.
 
-        Without this an experiment's paradigm-specific configuration is simply
-        absent from the panel - 20 settings for supervised, which keeps all of
-        it under `early_prediction:` - even though saving preserves it. Nested
+        Without this an experiment's paradigm- or component-specific configuration
+        is absent from the panel even though saving preserves it. Nested
         dictionaries are rendered recursively so every value round-trips from
         the panel, regardless of how a component structures its parameters.
         """
@@ -4253,7 +4240,7 @@ class ConfigViewer(QWidget):
         nested_sections = {}
 
         for k, v in data.items():
-            if k in ("name", "algorithm", "architecture", "reasoner", "experiment_id", "id", "description"):
+            if k in ("name", "algorithm", "architecture", "experiment_id", "id", "description"):
                 continue
             if k in ("type", "env_id") and str(v).lower() == stem.lower():
                 continue
@@ -4638,7 +4625,6 @@ class ConfigViewer(QWidget):
         default_model = (
             (def_spec.get("model") if def_spec else None)
             or (p_obj.raw.get("default_model") if p_obj else None)
-            or (next(iter(tree.models)) if tree and tree.models else "")
         )
 
         methods = self.raw_data.setdefault("methods", {})
@@ -4889,7 +4875,7 @@ class ConfigViewer(QWidget):
         elif block_name == "checkpoint":
             self.raw_data["checkpoint"] = {"monitor": "val/loss", "mode": "min", "save_top_k": 1, "every_n_epochs": 1}
         elif block_name == "env":
-            self.raw_data["env"] = {"num_envs": 4, "num_steps": 128}
+            self.raw_data["env"] = {}
         elif block_name == "dataset":
             tree = config_tree()
             paradigm = self.raw_data.get("paradigm") or self._inherited_paradigm()
@@ -5054,7 +5040,7 @@ class ConfigViewer(QWidget):
         if not sub_dict and isinstance(m_spec.get(subcomp_name), dict):
             sub_dict = m_spec[subcomp_name]
 
-        sub_type = sub_dict.get("type") or sub_dict.get("architecture") or sub_dict.get("reasoner")
+        sub_type = sub_dict.get("type") or sub_dict.get("architecture")
         if not sub_type:
             if isinstance(m_spec.get(subcomp_name), str):
                 sub_type = m_spec[subcomp_name]
@@ -5072,26 +5058,16 @@ class ConfigViewer(QWidget):
             if param_key in model_params:
                 return model_params[param_key]
 
-        fallbacks = {
-            "hidden_sizes": [256, 256],
-            "activation": "relu",
-            "ecm_dthr": 0.03,
-            "rules": "default",
-            "logic_lr": 0.001,
-            "valuation": "default",
-            "fyd": True,
-            "fyd_top_k": 3,
-            "mode": "neural",
-            "blend_function": "softmax",
-        }
-        return fallbacks.get(param_key, 0.0)
+        return None
 
     def _add_method_subcomponent(self, method_name: str, subcomp_name: str):
         methods = self.raw_data.setdefault("methods", {})
         m_spec = methods.setdefault(method_name, {})
         tree = config_tree()
         model_val = m_spec.get("model")
-        model_name = next(iter(model_val)) if isinstance(model_val, dict) else str(model_val or (tree.models[0] if tree and tree.models else ""))
+        model_name = next(iter(model_val)) if isinstance(model_val, dict) else str(model_val or "")
+        if not model_name:
+            return
 
         tree = config_tree()
         subcomps = tree.model_subcomponents(model_name) if tree else {}

@@ -76,16 +76,16 @@ def test_component_contracts_verify_nested_and_list_capabilities(tmp_path):
     manifest["test_suite"]["components"] = [{
         "id": "ppo", "title": "PPO", "description": "Online algorithm.",
         "config_path": "in/config/agent/sb3/ppo.yaml",
-        "required": {"engine": "sb3", "compatible_paradigms": ["online_rl"]},
+        "required": {"entrypoint": "src/usr/algorithms/example/runner.py", "compatible_paradigms": ["online_rl"]},
     }]
     target = tmp_path / "in/config/agent/sb3"
     target.mkdir(parents=True)
-    (target / "ppo.yaml").write_text("engine: sb3\ncompatible_paradigms: [online_rl]\n", encoding="utf-8")
+    (target / "ppo.yaml").write_text("entrypoint: src/usr/algorithms/example/runner.py\ncompatible_paradigms: [online_rl]\n", encoding="utf-8")
 
     results = evaluate_component_contracts(parse_test_suite_manifest(manifest), tmp_path)
     assert results[0].passed is True
 
-    (target / "ppo.yaml").write_text("engine: sb3\n", encoding="utf-8")
+    (target / "ppo.yaml").write_text("entrypoint: src/usr/algorithms/example/runner.py\n", encoding="utf-8")
     results = evaluate_component_contracts(parse_test_suite_manifest(manifest), tmp_path)
     assert results[0].passed is False
     assert "compatible_paradigms" in results[0].message

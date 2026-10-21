@@ -3,40 +3,29 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "nesyrl"
+name = "theta-ide"
 version = "0.1.0"
-description = "Neural-Symbolic Reinforcement Learning Framework"
+description = "General-purpose research IDE and modular experiment framework"
 readme = "README.md"
 license = {text = "MIT"}
 requires-python = ">=3.10"
 dependencies = [
     # Core ML
     "torch>=2.0,<3",
-    "torchvision>=0.15,<1",
-    "torchaudio>=2.0,<3",
-    "pytorch-lightning>=2.0,<3",
     "lightning>=2.0,<3",
-    # Attribution, imported by src/usr/models/blendrl/agents/blender_agent.py
-    "captum>=0.7",
     # Config & Sweeps
     "hydra-core>=1.3,<2",
     "hydra-optuna-sweeper<=1.1.2",
     "optuna>=3.0,<5",
     "omegaconf>=2.3,<3",
-    # RL & Environments
-    "gymnasium[atari,accept-rom-license]>=0.28",
-    "stable-baselines3>=2.0",
-    # Logic & Symbolic
-    "lark>=1.1",
-    "igraph>=0.10",
+    # Generic environment adapter used by the framework
+    "gymnasium>=0.28",
     # Data & Visualization
     "numpy>=1.24,<3",
     "pandas>=2.0,<3",
     "matplotlib>=3.7,<4",
     "seaborn>=0.12",
     "scipy>=1.10",
-    # Knee detection, imported by src/usr/methods/cew_utils.py
-    "kneed>=0.8",
     "scikit-learn>=1.2",
     "tqdm>=4.60",
     "tabulate>=0.9",
@@ -66,17 +55,13 @@ gui = [
     "arxiv>=2.1",        # arXiv Papers panel
     "truststore>=0.9",   # HTTPS through the OS certificate store (networks that inspect TLS)
 ]
-atari = [
-    "ocatari",
-    "hackatari @ git+https://github.com/k4ntz/HackAtari.git",
-]
 video = [
     "pygame",
     "vidmaker",
     "opencv-python",
 ]
 all = [
-    "nesyrl[dev,gui,atari,video]",
+    "theta-ide[dev,gui,video]",
 ]
 
 # ── Package discovery ────────────────────────────────────────
@@ -87,8 +72,6 @@ include = [
     "plot", "plot.*",
 ]
 exclude = [
-    "src.usr.models.fyd_repo", "src.usr.models.fyd_repo.*",
-    "src.usr.models.cew_repo", "src.usr.models.cew_repo.*",
 ]
 
 # ── Ruff (linting + formatting) ─────────────────────────────
@@ -96,11 +79,6 @@ exclude = [
 target-version = "py310"
 line-length = 120
 extend-exclude = [
-    "src/usr/models/fyd_repo",
-    "src/usr/models/cew_repo",
-    "src/usr/models/nsfr",
-    "src/usr/environments/nudge",
-    "src/usr/models/neumann",
     "in/envs",
     "venv",
 ]
@@ -129,7 +107,7 @@ ignore = [
 ]
 
 [tool.ruff.lint.isort]
-known-first-party = ["src", "plot", "blendrl", "nsfr", "neumann", "nudge"]
+known-first-party = ["src", "plot"]
 
 # ── Mypy (type checking) ────────────────────────────────────
 [tool.mypy]
@@ -139,8 +117,6 @@ warn_unused_configs = true
 ignore_missing_imports = true
 follow_imports = "silent"
 exclude = [
-    "src/usr/models/fyd_repo",
-    "src/usr/models/cew_repo",
     "in/envs",
     "venv",
 ]
@@ -149,11 +125,6 @@ exclude = [
 [tool.coverage.run]
 source = ["src", "plot"]
 omit = [
-    "src/usr/models/fyd_repo/*",
-    "src/usr/models/cew_repo/*",
-    "src/usr/models/nsfr/*",
-    "src/usr/models/neumann/*",
-    "src/usr/environments/nudge/*",
     "*/test_*",
     "*/conftest.py",
 ]

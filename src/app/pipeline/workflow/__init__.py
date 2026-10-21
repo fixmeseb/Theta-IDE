@@ -1,4 +1,4 @@
-"""Workflow string diagram package for NeSyRL / Theta-IDE."""
+"""Workflow string-diagram package for Theta-IDE."""
 
 from .model import (
     Port,

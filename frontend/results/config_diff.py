@@ -23,7 +23,7 @@ def _cell(value) -> str:
 
 
 class ConfigDiff(QWidget):
-    """Rows are dotted settings (env.name, methods.ppo.lr, …); columns are runs."""
+    """Rows are dotted settings (env.name, methods.<method>.lr, …); columns are runs."""
 
     def __init__(self, parent=None):
         super().__init__(parent)

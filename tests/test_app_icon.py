@@ -24,10 +24,10 @@ def test_windows_app_id_is_set():
 
 
 def test_desktop_entry_matches_the_app():
-    text = app_icon.desktop_entry("/usr/bin/python3", "/home/me/Offline-BlendRL")
+    text = app_icon.desktop_entry("/usr/bin/python3", "/home/me/Theta-IDE")
     lines = dict(line.split("=", 1) for line in text.splitlines()[1:])
     assert text.startswith("[Desktop Entry]\n")
-    assert lines["Exec"] == '"/usr/bin/python3" -m frontend' and lines["Path"] == "/home/me/Offline-BlendRL"
+    assert lines["Exec"] == '"/usr/bin/python3" -m frontend' and lines["Path"] == "/home/me/Theta-IDE"
     assert lines["Icon"] == app_icon.ICON_NAME
     assert lines["StartupWMClass"] == app_icon.DESKTOP_FILE_NAME
 

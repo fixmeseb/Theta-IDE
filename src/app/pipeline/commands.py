@@ -30,7 +30,7 @@ def build_method_overrides(
     """Build Hydra override list from a structured methods: dict entry.
 
     Args:
-        method_name:  Key in the experiment's methods: dict (e.g. 'cql_dnn').
+        method_name:  Key in the experiment's methods mapping.
         method_cfg:   The dict value for that entry. Must contain 'agent' and 'model'.
         dataset_path: Resolved filesystem path to the offline dataset (offline only).
         extra_args:   Additional Hydra overrides forwarded from the CLI.
@@ -156,19 +156,6 @@ def build_method_overrides(
         "architecture",
         "modules",
         "slots",
-        "rules",
-        "ecm_dthr",
-        "fyd",
-        "fyd_top_k",
-        "actor_mode",
-        "blender_mode",
-        "blend_function",
-        "blender",
-        "blender_actor",
-        "neural_actor",
-        "symbolic_actor",
-        "neural",
-        "symbolic",
         "hidden_sizes",
         "activation",
         "dropout",
@@ -177,7 +164,6 @@ def build_method_overrides(
         "dim_feedforward",
         "num_layers",
         "hidden_dim",
-        "blend_q_values",
     }
     # Dynamically expand model keys if base model config is discovered
     try:

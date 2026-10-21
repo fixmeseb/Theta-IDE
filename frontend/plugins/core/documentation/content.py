@@ -34,8 +34,8 @@ ARTICLES: List[DocArticle] = [
 <ul>
   <li><b>Hydra Configuration Layer (<code>in/config/</code>):</b> Declarative, three-tier hierarchical configuration defining environments, agents, models, cluster resources, and experiment recipes.</li>
   <li><b>In-process pipeline services (<code>src/app/services/</code>) &amp; job manager (<code>frontend/job_manager.py</code>):</b> The app composes and validates configs with the pipeline's own code and runs <code>run_pipeline.py</code> as a child process, streaming its output and metrics through Qt signals. There is no server to start.</li>
-  <li><b>PyTorch Lightning Runtime (<code>src/app/train.py</code>):</b> Standardized training driver providing automated checkpointing, device acceleration (CUDA/MPS/CPU), and structured logging. Stable-Baselines3 algorithms run through their own runner (<code>src/usr/algorithms/sb3_runner.py</code>) and log the same way.</li>
-  <li><b>Components from the Theta Hub:</b> A fresh clone ships the framework without algorithms or environments, and with one model, <code>sequential_spec</code> (the one the Visual Model Builder writes). Install them from the <b>Theta Hub</b> (<a href="ide://components">Components</a> tab, globe button). <b>ThetaIDE Basics</b> brings Stable-Baselines3 (A2C, DQN, PPO, SAC), d3rlpy offline baselines (BC, CQL, IQL, TD3+BC), Gymnasium classic control, Atari, and the basic DNN, Dueling ResNet and Nature CNN models; the <b>Deep Learning Basics</b> suite adds MLP, Transformer and LSTM models. You can also write your own (see <a href="authoring_plugins">Authoring Guide</a>).</li>
+  <li><b>Training runtimes:</b> The built-in PyTorch Lightning driver (<code>src/app/train.py</code>) provides automated checkpointing, device acceleration (CUDA/MPS/CPU), and structured logging. Method plugins can declare their own runner entrypoint in each agent profile.</li>
+  <li><b>Components from the Theta Hub:</b> A fresh clone provides the framework and generic IDE features without research algorithms, experiment recipes, trained results, or domain environments. Install the components required by an experiment from the <b>Theta Hub</b> (<a href="ide://components">Components</a> tab, globe button), or create your own with the <a href="authoring_plugins">Authoring Guide</a>. Each component supplies its own dependencies and integration points.</li>
   <li><b>Plugin System:</b> Core plugins (Documentation, TensorBoard, arXiv Papers, Visual Model Builder) ship with the IDE and have no effect when switched off; community plugins install from the Theta Hub.</li>
 </ul>
 
@@ -43,7 +43,7 @@ ARTICLES: List[DocArticle] = [
 
 <h3>Key Workflows</h3>
 <ol>
-  <li><b>Install components:</b> In the <a href="ide://components">Components</a> tab, open the Theta Hub and install <b>ThetaIDE Basics</b>.</li>
+  <li><b>Install components:</b> In the <a href="ide://components">Components</a> tab, open the Theta Hub and install the components required by your experiment.</li>
   <li><b>Configure:</b> Create or open an experiment in the <a href="ide://config">Experiment Config</a> pane: pick a paradigm and an environment, and add methods (an algorithm and a model each). See <a href="managing_experiments">Creating Experiments</a>.</li>
   <li><b>Execute:</b> Press <code>F5</code> to train on your own machine, or submit Slurm batch jobs to an HPC cluster (see <a href="cluster_slurm">Cluster Execution</a>).</li>
   <li><b>Monitor:</b> Watch reward curves, losses and every other logged metric live in the <a href="ide://monitor">Training Monitor</a>.</li>
@@ -79,7 +79,7 @@ ARTICLES: List[DocArticle] = [
   <tr><td><code>src/app/services/</code></td><td>What the IDE calls in-process: <code>config_service</code>, <code>catalog</code>, <code>metrics</code>, <code>job_store</code>, <code>processes</code>, the exporters and the scaffolder.</td></tr>
   <tr><td><code>src/app/telemetry/</code></td><td>One logging API for every engine: <code>run.log()</code> writes <code>metrics.csv</code> and the <code>events.jsonl</code> live feed.</td></tr>
   <tr><td><code>src/app/core/</code></td><td>Registries (models, algorithms, plotters, data modules), the paradigm loader, the Lightning builder, callbacks and checkpoints.</td></tr>
-  <tr><td><code>src/app/train.py</code>, <code>src/usr/algorithms/</code></td><td>Engine scripts: the Lightning driver and the Stable-Baselines3 runner. Other runners arrive with their Hub packages.</td></tr>
+  <tr><td><code>src/app/train.py</code>, component runner entry points</td><td>The built-in Lightning driver and runner entry points provided by installed components.</td></tr>
   <tr><td><code>src/usr/</code>, <code>in/config/</code></td><td>Components and their Hydra configs. Mostly installed from the Theta Hub and not tracked in git.</td></tr>
   <tr><td><code>plot/</code></td><td><code>manager.py</code> runs the plotters an experiment asks for; built-ins live in <code>standard_figures/</code>.</td></tr>
   <tr><td><code>results/</code>, <code>.thetaide/</code></td><td>Run output (logs, plots, checkpoints, TensorBoard, and the job queue's <code>jobs/jobs.db</code>) and the IDE's workspace (settings, run records in <code>runs/</code>, installed plugins and suites, the Hub cache). Neither is tracked.</td></tr>
@@ -102,7 +102,7 @@ ARTICLES: List[DocArticle] = [
         keywords=["install", "setup", "launch", "start", "run", "venv", "pipeline", "windows", "powershell", "gui"],
         html_content=r"""
 <h2>Installing & Launching</h2>
-<p>Theta-IDE runs from the same virtual environment as the training pipeline. Run every command from the <b>repository root</b>. It needs <b>Python 3.10&ndash;3.13</b>: Hydra 1.3 fails on 3.14 as soon as training starts. <code>INSTALL.md</code> in the repository covers extras such as Atari and the CPU-only PyTorch build.</p>
+<p>Theta-IDE runs from the same virtual environment as the training pipeline. Run every command from the <b>repository root</b>. See <code>INSTALL.md</code> for the supported setup and optional interface dependencies.</p>
 
 <h3>1. One-Time Setup</h3>
 <p><b>macOS / Linux:</b></p>
@@ -123,7 +123,7 @@ python -m frontend</code></pre>
 <p>That is the only command. The app composes configs in-process and runs training itself; there is no server to start first. The status bar shows <b>Pipeline ready</b> once the pipeline has loaded.</p>
 
 <h3>3. Install Components</h3>
-<p>A fresh clone has no algorithms or environments, and only the <code>sequential_spec</code> model. In the <a href="ide://components">Components</a> tab, click the globe button to open the <b>Theta Hub</b> and install <b>ThetaIDE Basics</b>. Components are written into <code>in/config/</code> and <code>src/usr/</code> and are not tracked by git. Their configs are named after their package: an experiment uses <code>agent: sb3/ppo</code>, <code>model: basics/dnn</code> and the environment <code>gym_classic_control/cartpole</code>.</p>
+<p>The base IDE does not include research algorithms, experiment recipes, trained results, or domain environments. Open the <b>Theta Hub</b> from the <a href="ide://components">Components</a> tab and install the components required by your experiment. Components are installed into the workspace and can provide their own runners, environments, hooks, dependencies, and configuration.</p>
 
 <h3>Launch Options</h3>
 <table border="1" cellpadding="8" cellspacing="0" style="border-collapse: collapse; width: 100%; border-color: rgba(255,255,255,0.15);">
@@ -282,8 +282,8 @@ python -m frontend</code></pre>
 <h3>6. Components &amp; the Theta Hub (<code>components</code>)</h3>
 <p>Manage the building blocks experiments are made of:</p>
 <ul>
-  <li><b>Components Tree &amp; Viewer:</b> Browse and edit configurations outside experiments: <code>agent</code> profiles, <code>env</code> definitions, <code>model</code> architectures, data loaders, plotters, <code>paradigms</code> and <code>site</code> profiles. Installed components are grouped by package (for example <code>agent/sb3/</code>, <code>model/basics/</code>, <code>env/gym_classic_control/</code>).</li>
-  <li><b>Theta Hub:</b> the globe button opens the Hub in this tab. A row of category tabs (All Components, Experiments, Suites, Algorithms, Models, Environments, Data Loaders, Evaluators, Plotters) filters the list; <b>Sort</b> orders it (installed or uninstalled first, or by name) and <b>Refresh</b> reloads the registry from GitHub. Each card has <b>Install</b> or <b>Uninstall</b>. Suites such as <b>ThetaIDE Basics</b> install a set of components at once. <b>Back to Parameters</b> returns to the tree.</li>
+  <li><b>Components Tree &amp; Viewer:</b> Browse and edit installed component configurations, including agent profiles, environment definitions, model architectures, data loaders, plotters, paradigms and site profiles. Components are grouped by package.</li>
+  <li><b>Theta Hub:</b> the globe button opens the Hub in this tab. Category tabs filter the component catalog; <b>Sort</b> orders the list and <b>Refresh</b> reloads the registry. Each card has <b>Install</b> or <b>Uninstall</b>. A suite can install a curated set of components together. <b>Back to Parameters</b> returns to the tree.</li>
   <li>When uninstalling, the Hub asks whether to keep the component's config files. Set a standing answer in <i>Settings &rarr; Community Plugins &rarr; Theta Hub Preferences</i> (<code>uninstall_configs</code> under <code>[hub]</code>).</li>
 </ul>
 
@@ -786,7 +786,7 @@ class MyPlugin(Plugin):
     <td><b><code>suite</code></b></td>
     <td><code>.thetaide/suites/&lt;id&gt;/</code></td>
     <td>&mdash;</td>
-    <td>Installs a list of other components at once (e.g. ThetaIDE Basics)</td>
+    <td>Installs a curated list of other components at once</td>
   </tr>
 </table>
 <p><b>File &rarr; Scaffold New Component Plugin&hellip;</b> (<code>Ctrl+Shift+P</code>) generates a working starting point for an algorithm, model, environment, data module, evaluator or plotter: its code, its default config and its Hub manifest.</p>
@@ -852,7 +852,7 @@ class MyToolPlugin(Plugin):
 <hr style="border: 0; border-top: 1px solid rgba(255,255,255,0.1); margin: 20px 0;" />
 
 <h3>2. Authoring RL Method Plugins (<code>kind: "method"</code>)</h3>
-<p>Method plugins contribute reinforcement learning algorithms (such as PPO, CQL, IQL, or hybrid agents). They integrate directly into the PyTorch Lightning training driver and Hydra configuration tree.</p>
+<p>Method plugins contribute algorithms and their configuration profiles. A plugin can use the built-in PyTorch Lightning driver or declare a separate runner entrypoint when its framework needs one.</p>
 
 <h4>Directory Structure</h4>
 <pre><code>my_method/
@@ -1077,8 +1077,8 @@ python run_pipeline.py &lt;group&gt;/&lt;experiment&gt; total_timesteps=50000 ev
 # Check that a config composes and validates, without training
 python run_pipeline.py &lt;group&gt;/&lt;experiment&gt; dry_run=true
 
-# A tiny CartPole run that checks your install (needs ThetaIDE Basics)
-python run_pipeline.py theta_validation/online_smoke</code></pre>
+# Replace with an experiment supplied by your installed components
+python run_pipeline.py <group>/<experiment></code></pre>
 <p>Each command-line run writes its results under the recipe's <code>experiment_id</code>, replacing the previous run with that ID; pass <code>experiment_id=&lt;new name&gt;</code> to keep both. Runs launched from the IDE get a unique, timestamped ID. Run <code>python run_pipeline.py --help</code> for the full list of orchestration overrides.</p>
 
 <h3>Common Overrides</h3>
@@ -1401,10 +1401,10 @@ python run_pipeline.py &lt;group&gt;/&lt;tuning_experiment&gt; dash_only=true</c
 </ul>
 
 <h3>2. A run fails because a component or environment is missing</h3>
-<p>Algorithms, models and environments come from the Theta Hub, not from git. Install what the experiment names (most come with <b>ThetaIDE Basics</b>):</p>
+<p>Algorithms, models and environments are supplied by components. Install from the Theta Hub the components named by the experiment:</p>
 <ul>
   <li><code>references missing component(s): &hellip; Install them via the Component Hub</code>: install the listed components from the Hub.</li>
-  <li><code>Paradigm 'online_rl' requires 'env' to satisfy rule 'non_empty', but got None</code>: the group's <code>_base.yaml</code> names an environment that isn't installed, often an old name without its package. Installed environments are named like <code>gym_classic_control/cartpole</code>; fix the <code>- override /env:</code> line, or pick the environment again in the Experiment box.</li>
+  <li>A required environment is missing: install the environment component and select its registered configuration in the experiment.</li>
   <li>Check any experiment without training with <code>python run_pipeline.py &lt;group&gt;/&lt;experiment&gt; dry_run=true</code>.</li>
 </ul>
 

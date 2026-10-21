@@ -50,7 +50,7 @@ def human_size(size: int | None) -> str:
 
 
 def run_relative(artifact: dict, run_key: str) -> str:
-    """'plots/g/e/losses/ppo/x.png' -> 'plots/losses/ppo/x.png': the path inside this run's folders."""
+    """'plots/group/experiment/category/file.png' -> the path inside this run's folders."""
     parts = PurePosixPath(artifact["path"]).parts
     group, experiment_id = run_key.split("/", 1)
     if len(parts) > 3 and parts[1:3] == (group, experiment_id):

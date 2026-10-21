@@ -1,6 +1,6 @@
 # Theta-IDE Component Plugin Authoring Guide
 
-This guide describes how to author, register, package, and distribute research components and plugins for **Theta-IDE**. It details the protocols that allow complex model architectures, reinforcement learning algorithms, custom environments, trajectory samplers, safety evaluators, and complete experiments to integrate seamlessly with the IDE, execution engine, and Community Hub without modifying core code.
+This guide describes how to author, register, package, and distribute research components and plugins for **Theta-IDE**. It details the protocols that let model architectures, algorithms, environments, data tools, evaluators, and complete experiments integrate with the IDE, execution engine, and Community Hub without modifying core code.
 
 ---
 
@@ -280,6 +280,8 @@ Once installed, your components appear immediately in:
 - The pipeline execution engine (`python run_pipeline.py <group>/<exp>`).
 - Built-in registries (`MODEL_REGISTRY`, `AGENT_REGISTRY`, `_COMPONENT_REGISTRY`).
 
+An environment entry point may be a class or factory. Theta-IDE calls it with the configured environment name and supported runtime options. It must return an object implementing `reset()` and `step()`; it does not need to inherit from an IDE environment class.
+
 ---
 
 ## 4. 1-Click Experiment-to-Plugin Exporter
@@ -340,7 +342,7 @@ Any researcher receiving the `.zip` package can install it into their Theta-IDE 
 
 ## 5. Reference Case Study: BlendRL as a Component Plugin
 
-**BlendRL** is the reference implementation of a composite, hybrid neural-symbolic component plugin located in `src/usr/models/blendrl/`.
+**BlendRL** is an illustrative example of a composite, hybrid neural-symbolic component plugin. Its implementation is an independently installable plugin and is not part of the base Theta-IDE checkout.
 
 ### 5.1 Plugin Manifest (`.theta_component.json`)
 
@@ -356,6 +358,8 @@ Any researcher receiving the `.zip` package can install it into their Theta-IDE 
   "compatibility": {"theta": ">=2.0.0"}
 }
 ```
+
+The manifest's `target_path` is an example install location chosen by the plugin author; this directory is not present in the base IDE checkout.
 
 ### 5.2 Implementation Highlights
 

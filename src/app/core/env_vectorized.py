@@ -1,4 +1,4 @@
-"""Vectorized environment base wrapper for NeSyRL benchmark environments."""
+"""Vectorized environment interface and Gymnasium adapter."""
 
 from abc import ABC
 from collections.abc import Sequence
@@ -26,9 +26,6 @@ class VectorizedBaseEnv(ABC):
 
     name: str
     pred2action: dict[str, int] = {}
-
-    def __init__(self, mode: str = "ppo"):
-        self.mode = mode
 
     def reset(self, seed=None) -> torch.Tensor:
         """Reset all environments and return batched observations.
@@ -65,10 +62,38 @@ class VectorizedBaseEnv(ABC):
     def from_name(name: str, **kwargs):
         """Factory to load environment by name.
 
-        1. Checks for local custom benchmark environment in in/envs/<name>/env_vectorized.py.
-        2. Falls back to standard Gymnasium environment (e.g. CartPole-v1, LunarLander-v2, Acrobot-v1).
+        Resolves an installed ``theta.environments`` entry point first, then a
+        Hub-installed environment in ``in/envs/``, and finally a Gymnasium ID.
+        Entry points must be callables that accept the environment name when
+        needed and return an object implementing the vector environment API.
         """
         import os
+        import inspect
+
+        from src.app.core.plugin_discovery import ENVIRONMENT_REGISTRY, discover_entry_points
+
+        providers = {
+            **{key.lower(): value for key, value in discover_entry_points("theta.environments").items()},
+            **ENVIRONMENT_REGISTRY,
+        }
+        provider = providers.get(name.lower()) or providers.get(name.rsplit("/", 1)[-1].lower())
+        if provider is not None:
+            target = provider.__init__ if isinstance(provider, type) else provider
+            try:
+                sig = inspect.signature(target)
+            except (TypeError, ValueError):
+                env = provider(**kwargs)
+            else:
+                accepts_kwargs = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values())
+                accepted = kwargs if accepts_kwargs else {k: v for k, v in kwargs.items() if k in sig.parameters}
+                if "name" in sig.parameters or accepts_kwargs:
+                    accepted["name"] = name
+                env = provider(**accepted)
+            if env is None or not all(callable(getattr(env, method, None)) for method in ("reset", "step")):
+                raise TypeError(
+                    f"Environment provider '{name}' must return an object implementing reset() and step()."
+                )
+            return env
 
         env_path = f"in/envs/{name}/env_vectorized.py"
         if not os.path.exists(env_path) and "/" in name:
@@ -79,7 +104,7 @@ class VectorizedBaseEnv(ABC):
 
         if os.path.exists(env_path):
             env_module = load_module(env_path)
-            cls = getattr(env_module, "VectorizedEnv", None) or getattr(env_module, "VectorizedNudgeEnv", None)
+            cls = getattr(env_module, "VectorizedEnv", None)
             if cls is not None:
                 return cls(name=name, **kwargs)
 
@@ -106,16 +131,14 @@ class StandardGymVectorEnv(VectorizedBaseEnv):
         env_id: str,
         n_envs: int = 1,
         seed: int | None = None,
-        mode: str = "ppo",
         **kwargs,
     ):
-        super().__init__(mode)
         import gymnasium as gym
 
         self.name = env_id
         self.n_envs = max(1, int(n_envs))
         self.seed = seed
-        self.venv = gym.make_vec(env_id, num_envs=self.n_envs, vectorization_mode="sync")
+        self.venv = gym.make_vec(env_id, num_envs=self.n_envs, vectorization_mode="sync", **kwargs)
 
         obs_space = getattr(self.venv, "single_observation_space", None) or getattr(
             self.venv, "observation_space", None
@@ -156,7 +179,3 @@ class StandardGymVectorEnv(VectorizedBaseEnv):
     @n_actions.setter
     def n_actions(self, val: int):
         self._n_actions = int(val)
-
-
-# Backward-compatibility alias
-VectorizedNudgeBaseEnv = VectorizedBaseEnv

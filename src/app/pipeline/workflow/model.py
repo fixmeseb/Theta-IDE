@@ -1,4 +1,4 @@
-"""String diagram workflow model for NeSyRL / Theta-IDE.
+"""String diagram workflow model for Theta-IDE.
 
 Models workflows as monoidal category string diagrams:
 - Objects are typed strings/wires carrying artifacts (Dataset, Checkpoint, ValueEstimator, etc.)
@@ -98,7 +98,7 @@ class WorkflowNode:
     label: str
     category: str = "paradigm"  # "paradigm" | "task" | "experiment" | "transform"
     paradigm: str = "online_rl"  # online_rl, offline_rl, supervised, eval, etc.
-    experiment_ref: str = ""  # e.g. "cartpole/final_cartpole"
+    experiment_ref: str = ""  # e.g. "group/experiment"
     overrides: list[str] = field(default_factory=list)
     pos_x: float = 0.0
     pos_y: float = 0.0

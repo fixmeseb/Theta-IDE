@@ -68,42 +68,42 @@ def _register_test_agents():
 
     @register_agent("ppo")
     class MockPPO(OnlineAgentBase):
-        def get_action_and_value(self, obs, logic_obs=None, action=None):
+        def get_action_and_value(self, obs, action=None):
             pass
 
-        def get_value(self, obs, logic_obs=None):
+        def get_value(self, obs):
             pass
 
     @register_agent("cql")
     class MockCQL(OfflineAgentBase):
-        def get_action_and_value(self, obs, logic_obs=None, action=None):
+        def get_action_and_value(self, obs, action=None):
             pass
 
-        def get_value(self, obs, logic_obs=None):
+        def get_value(self, obs):
             pass
 
     @register_agent("iql")
     class MockIQL(OfflineAgentBase):
-        def get_action_and_value(self, obs, logic_obs=None, action=None):
+        def get_action_and_value(self, obs, action=None):
             pass
 
-        def get_value(self, obs, logic_obs=None):
+        def get_value(self, obs):
             pass
 
     @register_agent("cew")
     class MockCEW(OfflineAgentBase):
-        def get_action_and_value(self, obs, logic_obs=None, action=None):
+        def get_action_and_value(self, obs, action=None):
             pass
 
-        def get_value(self, obs, logic_obs=None):
+        def get_value(self, obs):
             pass
 
     @register_agent("unsupported_algo")
     class MockUnsupported(OfflineAgentBase):
-        def get_action_and_value(self, obs, logic_obs=None, action=None):
+        def get_action_and_value(self, obs, action=None):
             pass
 
-        def get_value(self, obs, logic_obs=None):
+        def get_value(self, obs):
             pass
 
     yield

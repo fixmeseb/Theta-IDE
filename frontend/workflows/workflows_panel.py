@@ -173,8 +173,8 @@ class WorkflowsPanel(QWidget):
         self.palette_list = QListWidget()
         self.palette_list.setSpacing(4)
         items = [
-            ("Online RL (PPO)", "online_rl"),
-            ("Offline RL (IQL/CQL)", "offline_rl"),
+            ("Online RL", "online_rl"),
+            ("Offline RL", "offline_rl"),
             ("Supervised / Prediction", "supervised"),
             ("Model Distillation", "distillation"),
             ("V(s) Feature Augmenter", "feature_augmenter"),
@@ -239,8 +239,8 @@ class WorkflowsPanel(QWidget):
     def _build_add_node_menu(self) -> QMenu:
         menu = QMenu(self)
         items = [
-            ("Online RL (PPO)", "online_rl"),
-            ("Offline RL (IQL/CQL)", "offline_rl"),
+            ("Online RL", "online_rl"),
+            ("Offline RL", "offline_rl"),
             ("Supervised / Prediction", "supervised"),
             ("Model Distillation", "distillation"),
             ("V(s) Feature Augmenter", "feature_augmenter"),
@@ -390,7 +390,7 @@ class WorkflowsPanel(QWidget):
 
         self.inspector_content.addWidget(label("Experiment Config Ref:", "muted"))
         ref_edit = QLineEdit(node.experiment_ref)
-        ref_edit.setPlaceholderText("e.g. cartpole/final_cartpole")
+        ref_edit.setPlaceholderText("e.g. group/experiment")
         ref_edit.textChanged.connect(lambda txt: setattr(node, "experiment_ref", txt))
         self.inspector_content.addWidget(ref_edit)
 

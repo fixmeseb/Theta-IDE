@@ -1,5 +1,7 @@
 # Changes: Environment Setup, M0 Config Integration and M1 Training Monitor
 
+> **Historical implementation log.** This records an earlier ThetaIDE/NeSyRL architecture and dependency setup. Its install commands, project layout, and runtime descriptions are not current Theta-IDE guidance.
+
 Date: 2026-09-28
 
 This document records every change made to set up the project's virtual environments and connect the ThetaIDE desktop frontend to the NeSyRL backend. The integration covers **M0 (experiment configuration)**. In the milestone plan, M0 means a config built in the GUI can be shown to match a hand-written one. Section 7 covers **M1**: launching real training from the GUI and monitoring it live.

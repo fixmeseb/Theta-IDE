@@ -10,9 +10,7 @@ from typing import List, Optional, Tuple
 
 # Mapping of PyPI package names to their canonical Python import module names
 PACKAGE_TO_MODULE_MAP = {
-    "ale-py": "ale_py",
     "gymnasium": "gymnasium",
-    "stable-baselines3": "stable_baselines3",
     "scikit-learn": "sklearn",
     "scikit-image": "skimage",
     "opencv-python": "cv2",
@@ -67,8 +65,6 @@ def check_missing_dependencies(requirements: List[str]) -> List[str]:
         pkg_name, mod_name = parse_package_name(req_clean)
         if not is_module_installed(mod_name):
             missing.append(req_clean)
-        elif "[atari]" in req_clean.lower() and not is_module_installed("ale_py"):
-            missing.append("ale-py>=0.8.1")
     return missing
 
 
