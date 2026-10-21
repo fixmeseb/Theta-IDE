@@ -2,3 +2,6 @@ env_id: CartPole-v1
 n_actions: 2
 obs_dim: 4
 compatible_paradigms: [online_rl]
+# What a run here is judged by: the Monitor headlines it and build_trainer
+# ranks checkpoints on it.
+monitor_metric: eval/reward

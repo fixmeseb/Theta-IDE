@@ -213,18 +213,38 @@ def test_the_supervised_runner_trains_a_classifier():
         assert after > 0.9, f"a separable dataset should be learnable (auc={after:.3f})"
 
 
-def test_the_shipped_group_is_configured_for_this_path():
-    """tabular_classification/ is the worked example, and it has to name the
-    labelled data module or train.py gets the unlabelled one from the env."""
+def test_a_supervised_group_is_configured_for_this_path():
+    """Whatever supervised groups are present must be runnable by this path.
+
+    No experiment group ships in the repo any more: they are Hub components,
+    and CI sees only the fixture workspace. So this checks every supervised
+    group it can find rather than naming one, and says so when there are none
+    instead of asserting against a group that is not there.
+
+    It no longer requires `data_module`. The supervised paradigm declares
+    `default_data_module: SupervisedDataModule`, which carries
+    `npz_delegate = "SupervisedNpzDataModule"`, so a group naming the loader
+    itself is redundant: the bug that assertion guarded is fixed structurally.
+    """
     import yaml
 
-    base = yaml.safe_load((CONFIG / "experiment" / "tabular_classification" / "_base.yaml").read_text())
-    assert base["paradigm"] == "supervised"
-    assert base["data_module"] == "SupervisedNpzDataModule"
-    assert "intervals_count" not in base
-    assert base["eval_episodes"] == 0
-    for spec in base["methods"].values():
-        assert "agent" not in spec
+    bases = sorted((CONFIG / "experiment").glob("*/_base.yaml"))
+    supervised = []
+    for path in bases:
+        raw = yaml.safe_load(path.read_text()) or {}
+        if raw.get("paradigm") == "supervised":
+            supervised.append((path, raw))
+
+    if not supervised:
+        pytest.skip("no supervised group present: they are Hub components now")
+
+    for path, base in supervised:
+        where = path.parent.name
+        assert "intervals_count" not in base, f"{where} uses the key that was renamed to epochs"
+        if "eval_episodes" in base:
+            assert base["eval_episodes"] == 0, f"{where}: supervised has no simulator to roll out in"
+        for name, spec in (base.get("methods") or {}).items():
+            assert "agent" not in spec, f"{where}.{name}: supervised methods name a model, not an agent"
 
 
 def test_the_model_config_names_a_resolvable_lightning_module():
@@ -332,11 +352,23 @@ def test_a_paradigm_declares_the_model_its_runner_can_build():
 
 
 def test_an_existing_group_still_wins_over_the_paradigm_default():
-    from frontend.config_model import ConfigTree, default_method_model
+    """A group that already names an architecture keeps it.
+
+    Built here rather than read from a shipped group: early_prediction used to
+    provide one, and experiment groups are Hub components now, so depending on
+    one made this a test of what ships rather than of the rule.
+    """
+    from frontend.config_model import ConfigTree, ExperimentGroup, default_method_model
 
     tree = ConfigTree.discover()
-    chosen = default_method_model(tree.group("early_prediction"), tree.models, paradigm=tree.paradigms["supervised"])
-    assert chosen in {"lstm", "transformer"}
+    settled = ExperimentGroup(
+        name="already_chosen",
+        paradigm="supervised",
+        has_base=True,
+        base_methods={"early": {"model": "lstm"}},
+    )
+    chosen = default_method_model(settled, tree.models, paradigm=tree.paradigms["supervised"])
+    assert chosen == "lstm", "a group that has settled on an architecture should not be overridden"
 
 
 def test_rl_paradigms_keep_the_dnn_default():
@@ -344,7 +376,11 @@ def test_rl_paradigms_keep_the_dnn_default():
 
     tree = ConfigTree.discover()
     for paradigm in ("online_rl", "offline_rl"):
-        expected = "dnn" if "dnn" in tree.models else default_method_model(None, tree.models, paradigm=tree.paradigms[paradigm])
+        expected = (
+            "dnn"
+            if "dnn" in tree.models
+            else default_method_model(None, tree.models, paradigm=tree.paradigms[paradigm])
+        )
         assert default_method_model(None, tree.models, paradigm=tree.paradigms[paradigm]) == expected
 
 

@@ -1,2 +1,5 @@
 dataset_name: mimic.csv
 compatible_paradigms: [offline_rl]
+# What a run here is judged by: the Monitor headlines it and build_trainer
+# ranks checkpoints on it.
+monitor_metric: eval/reward
