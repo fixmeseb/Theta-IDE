@@ -6,7 +6,9 @@ from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (QAbstractItemView, QHBoxLayout, QHeaderView, QPushButton, QTableWidget,
                              QTableWidgetItem, QVBoxLayout, QWidget)
 
-from .widgets import label
+from .widgets import SpinBox, label
+
+MAX_PARALLEL = 8  # the most the Run up to field offers
 
 FINISHED_MARKS = {"completed": "✓", "failed": "✗", "error": "✗", "cancelled": "■"}
 
@@ -25,7 +27,7 @@ class QueuePanel(QWidget):
     """Shows JobManager.queue_state(). Actions call back into the window, which drives the JobManager."""
 
     def __init__(self, on_move, on_remove, on_open, on_toggle, on_launch=None, on_add=None, on_stop=None,
-                 on_demo=None, parent=None):
+                 on_demo=None, on_parallel=None, parent=None):
         super().__init__(parent)
         self.on_move, self.on_remove, self.on_open, self.on_toggle = on_move, on_remove, on_open, on_toggle
         self.rows = []  # (kind, job) per table row: kind is "active", "queued" or "finished"
@@ -36,8 +38,8 @@ class QueuePanel(QWidget):
         layout.setContentsMargins(18, 18, 18, 18)
         layout.addWidget(label("Job queue", "heading"))
         about = label("Launch the open experiment now, or line experiments up with Add to queue and press "
-                      "Start queue. They train one at a time, in order, on this machine, and keep running if you "
-                      "close ThetaIDE.", "muted")
+                      "Start queue. They train in order on this machine, as many at once as Run up to allows, and "
+                      "keep running if you close ThetaIDE.", "muted")
         about.setWordWrap(True)
         layout.addWidget(about)
 
@@ -57,6 +59,19 @@ class QueuePanel(QWidget):
         state_row = QHBoxLayout()
         self.run_button = self.button("Start queue", lambda: self.on_toggle(not self.running))
         state_row.addWidget(self.run_button)
+        # How many experiments train at once (the queue starts the next one whenever one finishes)
+        self.parallel = SpinBox()
+        self.parallel.setRange(1, MAX_PARALLEL)
+        self.parallel.setFixedWidth(88)  # room for the digit beside the arrows
+        self.parallel.setToolTip("How many experiments train at the same time; queued ones start as others finish")
+        self.parallel_labels = (label("Run up to", "muted"), label("at once", "muted"))
+        state_row.addWidget(self.parallel_labels[0])
+        state_row.addWidget(self.parallel)
+        state_row.addWidget(self.parallel_labels[1])
+        for widget in (self.parallel, *self.parallel_labels):
+            widget.setVisible(on_parallel is not None)
+        if on_parallel is not None:
+            self.parallel.valueChanged.connect(on_parallel)
         self.state = label("", "muted")
         self.state.setWordWrap(True)
         state_row.addWidget(self.state, 1)
@@ -97,6 +112,12 @@ class QueuePanel(QWidget):
         if callback is not None:
             button.clicked.connect(lambda _=False: callback())
         return button
+
+    def set_parallel(self, count):
+        """Show `count` in the Run up to field without reporting it back as a change."""
+        self.parallel.blockSignals(True)
+        self.parallel.setValue(int(count))
+        self.parallel.blockSignals(False)
 
     def set_experiment(self, name, tooltip=""):
         """The experiment Launch now and Add to queue act on (the one open in the Experiment tab)."""
@@ -170,8 +191,9 @@ class QueuePanel(QWidget):
         self.summary.setText(f"{active} running  ·  {self.queued_count} queued")
         self.summary.setToolTip("")
         if self.running:
-            self.state.setText("Queue running: jobs start one after another. "
-                               "It pauses itself when the last one finishes.")
+            at_once = self.parallel.value()
+            pace = "one after another" if at_once == 1 else f"up to {at_once} at a time"
+            self.state.setText(f"Queue running: jobs start {pace}. It pauses itself when the last one finishes.")
         elif self.queued_count:
             self.state.setText(f"Queue paused: {self.queued_count} job{'s' * (self.queued_count != 1)} waiting. "
                                "Press Start queue to begin."

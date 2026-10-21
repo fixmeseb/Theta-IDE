@@ -22,6 +22,7 @@ from omegaconf import DictConfig, OmegaConf
 
 from src.app import telemetry
 from src.app.core.checkpoints import CheckpointSchedule, checkpoint_interval, checkpoint_name
+from src.app.telemetry.selection import selection_from_config
 
 
 class EpisodeRewards:
@@ -104,6 +105,7 @@ def main(cfg: DictConfig):
         sinks=sinks,
         config=OmegaConf.to_container(cfg, resolve=True),
         system_interval=system_interval,
+        metrics=selection_from_config(cfg),
     )
 
     ckpt_dir = Path("results/checkpoints") / group / exp_id / agent_name.replace("/", "_")

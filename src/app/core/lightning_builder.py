@@ -203,7 +203,25 @@ def infer_dynamic_timesteps(cfg):
                 print(f"[Dynamic Config Warning] Failed to dynamically inspect dataset size: {e}")
 
 
+def _record_only(logger_, selection):
+    """Make `logger_` record only the metrics `selection` keeps (telemetry.metrics); rows left empty are dropped."""
+    if selection.everything:
+        return logger_
+    log_metrics = logger_.log_metrics
+
+    def filtered(metrics, step=None):
+        kept = selection.filter(metrics)
+        if kept:
+            log_metrics(kept, step)
+
+    logger_.log_metrics = filtered
+    return logger_
+
+
 def setup_loggers(cfg, base_root):
+    from src.app.telemetry.selection import selection_from_config
+
+    selection = selection_from_config(cfg)
     method_name = get_method_name(cfg)
     group_name = str(
         cfg.get("group", "default_group") if hasattr(cfg, "get") else getattr(cfg, "group", "default_group")
@@ -212,7 +230,7 @@ def setup_loggers(cfg, base_root):
         cfg.get("experiment_id", "default_exp") if hasattr(cfg, "get") else getattr(cfg, "experiment_id", "default_exp")
     )
     log_dir = os.path.join(base_root, "results/logs", group_name, exp_id)
-    loggers = [CSVLogger(log_dir, name=method_name)]
+    loggers = [_record_only(CSVLogger(log_dir, name=method_name), selection)]
 
     use_tb = False
     if "tensorboard" in cfg:
@@ -224,7 +242,7 @@ def setup_loggers(cfg, base_root):
         tb_dir = os.path.join(base_root, "results/tensorboard", group_name, exp_id)
         tb_logger = TensorBoardLogger(tb_dir, name=method_name, default_hp_metric=False)
         _ = tb_logger.experiment
-        loggers.append(tb_logger)
+        loggers.append(_record_only(tb_logger, selection))
     telemetry_logger = _telemetry_logger(cfg, loggers[0], method_name)
     if telemetry_logger is not None:
         loggers.append(telemetry_logger)
@@ -236,6 +254,7 @@ def _telemetry_logger(cfg, csv_logger, method_name):
     version folder. CSVLogger itself stays the metrics.csv writer, so the "csv" sink is left out here."""
     from src.app.telemetry import settings_from_config
     from src.app.telemetry.lightning import ThetaLogger
+    from src.app.telemetry.selection import selection_from_config
 
     sinks, system_interval = settings_from_config(cfg)
     sinks = [s for s in sinks if s != "csv"]
@@ -250,7 +269,7 @@ def _telemetry_logger(cfg, csv_logger, method_name):
         "experiment_id": str(cfg.get("experiment_id", "")),
         "agent": method_name,
     }
-    return ThetaLogger(lambda: csv_logger.log_dir, sinks, config, meta, system_interval)
+    return ThetaLogger(lambda: csv_logger.log_dir, sinks, config, meta, system_interval, selection_from_config(cfg))
 
 
 def build_trainer(cfg, model=None):
@@ -312,7 +331,12 @@ def build_trainer(cfg, model=None):
         logger.debug("Unexpected error registering shutdown signal handlers: %s", e)
 
     is_online = cfg.get("paradigm") == "online_rl"
-    callbacks = [SaveInitialCheckpointCallback(ckpt_dir, cfg), *configured_evaluator_callbacks(cfg)]
+    from src.app.telemetry.selection import selection_from_config
+
+    evaluates = not is_online or selection_from_config(cfg).keeps_section("eval")
+    callbacks = [SaveInitialCheckpointCallback(ckpt_dir, cfg)]
+    if evaluates:
+        callbacks.extend(configured_evaluator_callbacks(cfg))
 
     has_explicit_ckpt = "checkpoint" in cfg and cfg.get("checkpoint") is not None
     ckpt_cfg = cfg.get("checkpoint") if has_explicit_ckpt else None
@@ -356,17 +380,18 @@ def build_trainer(cfg, model=None):
             save_last = default_save_last
             filename = default_filename
 
-        callbacks.append(
-            ModelCheckpoint(
-                dirpath=ckpt_dir,
-                filename=filename,
-                monitor=monitor_metric,
-                mode=monitor_mode,
-                save_top_k=save_top_k,
-                save_last=save_last,
-                enable_version_counter=False,
+        if evaluates or not str(monitor_metric).startswith("eval/"):  # nothing to rank by without evaluation
+            callbacks.append(
+                ModelCheckpoint(
+                    dirpath=ckpt_dir,
+                    filename=filename,
+                    monitor=monitor_metric,
+                    mode=monitor_mode,
+                    save_top_k=save_top_k,
+                    save_last=save_last,
+                    enable_version_counter=False,
+                )
             )
-        )
 
         if not is_online:
             eval_every_n_epochs = (
@@ -389,7 +414,10 @@ def build_trainer(cfg, model=None):
         from src.app.core.callbacks import EnvironmentEvaluatorCallback, PeriodicCheckpointCallback
         from src.app.core.checkpoints import checkpoint_interval
 
-        callbacks.append(EnvironmentEvaluatorCallback(cfg))
+        if evaluates:
+            callbacks.append(EnvironmentEvaluatorCallback(cfg))
+        else:  # telemetry.metrics has no eval/ entry: skip evaluation episodes; finalize_training saves the model
+            print("[Metrics] No eval/ metric is recorded: evaluation episodes are skipped.")
 
         interval = checkpoint_interval(cfg)
         if interval:

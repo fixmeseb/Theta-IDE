@@ -8,6 +8,7 @@
 Which sinks a run writes to is a list of names (see sinks.py), so the destination can change without
 changing any training code. Hydra runs read it from the `telemetry` config key:
     ++telemetry.sinks=[csv,stream]  ++telemetry.system_interval=2   (0 turns system sampling off)
+and `telemetry.metrics` chooses which metrics are recorded (selection.py).
 """
 
 from __future__ import annotations
@@ -23,6 +24,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from .records import is_finite_number, record, scalar
+from .selection import MetricSelection, selection_from_config
 from .sinks import DEFAULT_SINKS, Sink, resolve_sink
 from .system import DEFAULT_INTERVAL, SystemSampler
 
@@ -37,8 +39,10 @@ class Run:
         config: dict[str, Any] | None = None,
         meta: dict[str, Any] | None = None,
         system_interval: float = DEFAULT_INTERVAL,
+        metrics: MetricSelection | None = None,
     ):
         self.version_dir = Path(version_dir)
+        self.metrics = metrics or MetricSelection()  # which metrics log() records
         self.version_dir.mkdir(parents=True, exist_ok=True)
         self.sinks: list[Sink] = [resolve_sink(spec, self.version_dir) for spec in sinks]
         self.summary: dict[str, Any] = {}  # the latest value of every metric, like a WandB run summary
@@ -74,7 +78,7 @@ class Run:
         """One row of metrics. `step` defaults to the previous step + 1, as in ContractLogger."""
         with self._lock:
             self._step = int(step) if step is not None else self._step + 1
-            data = {str(k): scalar(v) for k, v in metrics.items()}
+            data = {str(k): scalar(v) for k, v in self.metrics.filter(metrics).items()}
             if transitions is not None:
                 data["transitions"] = scalar(transitions)
             if epoch is not None:
@@ -172,6 +176,7 @@ def init(
     sinks: Iterable[str | Sink] | None = None,
     config: dict[str, Any] | None = None,
     system_interval: float = DEFAULT_INTERVAL,
+    metrics: MetricSelection | None = None,
 ) -> Run:
     """Start a run in `version_dir`, or in the next version_N folder of group/experiment_id/agent."""
     if version_dir is None:
@@ -179,16 +184,19 @@ def init(
             raise ValueError("telemetry.init needs version_dir, or group, experiment_id and agent")
         version_dir = version_dir_for(group, experiment_id, agent, base_dir)
     meta = {k: v for k, v in (("group", group), ("experiment_id", experiment_id), ("agent", agent)) if v}
-    return Run(version_dir, DEFAULT_SINKS if sinks is None else sinks, config, meta, system_interval)
+    return Run(version_dir, DEFAULT_SINKS if sinks is None else sinks, config, meta, system_interval, metrics)
 
 
 def settings_from_config(cfg: Any) -> tuple[list[str], float]:
-    """(sinks, system_interval) from a run config's `telemetry` key, with the defaults for anything unset."""
+    """(sinks, system_interval) from a run config's `telemetry` key, with the defaults for anything unset.
+
+    A `telemetry.metrics` list without a system/ entry turns system sampling off (nothing would record it).
+    """
     section = cfg.get("telemetry") if hasattr(cfg, "get") else None
     section = section if hasattr(section, "get") else {}
     sinks = section.get("sinks")
     interval = section.get("system_interval")
-    return (
-        [str(s) for s in sinks] if sinks is not None else list(DEFAULT_SINKS),
-        float(interval) if interval is not None else DEFAULT_INTERVAL,
-    )
+    interval = float(interval) if interval is not None else DEFAULT_INTERVAL
+    if not selection_from_config(cfg).keeps_section("system"):
+        interval = 0.0
+    return [str(s) for s in sinks] if sinks is not None else list(DEFAULT_SINKS), interval
