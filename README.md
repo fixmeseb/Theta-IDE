@@ -10,6 +10,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE.md)
 [![Python 3.10–3.13](https://img.shields.io/badge/python-3.10--3.13-blue.svg)](https://www.python.org/downloads/)
 [![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23537094.svg)](https://doi.org/10.5281/zenodo.23537094)
+[![M0 config fidelity](https://img.shields.io/badge/M0%20config%20fidelity-100%25-brightgreen)](m0/README.md)
 
 
 https://github.com/user-attachments/assets/3469954e-a74a-4427-808d-d8af654cc8cb
@@ -138,6 +139,29 @@ python plot/manager.py thetaide/cartpole_ppo_baseline --wipe
 - [Component Plugin Authoring Guide](docs/COMPONENT_PLUGIN_GUIDE.md): writing algorithms, models,
   environments and IDE plugins.
 - [Workflow Guide](docs/WORKFLOW_GUIDE.md): plot styles and plot configuration.
+
+## M0 — the risk-killer eval
+
+ThetaIDE rests on one assumption: **the config the GUI builds is the config the pipeline
+runs.** If those drift, a researcher publishes numbers from an experiment nobody configured.
+This repository has shipped that defect twice, so it is measured on every commit rather than
+trusted.
+
+**Hypothesis.** For every experiment expressible in the GUI, the resolved config equals the
+one from hand-writing the YAML and passing the tunables as CLI overrides.
+Metric: fidelity. Baseline: the hand-written CLI path. Threshold: 1.00.
+
+**Current result: 1.00 across 16 scenarios**, four shapes for each of the four shipped
+paradigms. The eval runs as its own CI job and fails the build below threshold.
+
+```bash
+python m0/eval_config_fidelity.py              # the eval
+python m0/eval_config_fidelity.py --self-test  # the negative control
+```
+
+The negative control corrupts one config on purpose and requires the eval to catch it, so the
+metric is not a number that cannot move. Hypothesis, limitations and how the scenarios are
+built: [`m0/README.md`](m0/README.md).
 
 ## License
 

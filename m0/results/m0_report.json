@@ -1,0 +1,101 @@
+{
+  "hypothesis": "A config built in ThetaIDE's GUI resolves to the same experiment as the equivalent hand-written YAML plus CLI overrides.",
+  "metrics": {
+    "authored_lines_gui_median": 0,
+    "authored_lines_hand_written_median": 11,
+    "boilerplate_reduction": 1.0,
+    "boilerplate_reduction_threshold": 0.9,
+    "fidelity": 1.0,
+    "fidelity_threshold": 1.0,
+    "paradigms": [
+      "offline_rl",
+      "online_rl",
+      "supervised",
+      "unsupervised"
+    ],
+    "scenarios": 16,
+    "scenarios_matching": 16
+  },
+  "scenarios": [
+    {
+      "differences": {},
+      "match": true,
+      "scenario": "offline_rl_plain_short"
+    },
+    {
+      "differences": {},
+      "match": true,
+      "scenario": "offline_rl_plain_long"
+    },
+    {
+      "differences": {},
+      "match": true,
+      "scenario": "offline_rl_model_default"
+    },
+    {
+      "differences": {},
+      "match": true,
+      "scenario": "offline_rl_model_tuned"
+    },
+    {
+      "differences": {},
+      "match": true,
+      "scenario": "online_rl_plain_short"
+    },
+    {
+      "differences": {},
+      "match": true,
+      "scenario": "online_rl_plain_long"
+    },
+    {
+      "differences": {},
+      "match": true,
+      "scenario": "online_rl_model_default"
+    },
+    {
+      "differences": {},
+      "match": true,
+      "scenario": "online_rl_model_tuned"
+    },
+    {
+      "differences": {},
+      "match": true,
+      "scenario": "supervised_plain_short"
+    },
+    {
+      "differences": {},
+      "match": true,
+      "scenario": "supervised_plain_long"
+    },
+    {
+      "differences": {},
+      "match": true,
+      "scenario": "supervised_model_default"
+    },
+    {
+      "differences": {},
+      "match": true,
+      "scenario": "supervised_model_tuned"
+    },
+    {
+      "differences": {},
+      "match": true,
+      "scenario": "unsupervised_plain_short"
+    },
+    {
+      "differences": {},
+      "match": true,
+      "scenario": "unsupervised_plain_long"
+    },
+    {
+      "differences": {},
+      "match": true,
+      "scenario": "unsupervised_model_default"
+    },
+    {
+      "differences": {},
+      "match": true,
+      "scenario": "unsupervised_model_tuned"
+    }
+  ]
+}
