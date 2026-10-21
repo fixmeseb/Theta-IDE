@@ -93,8 +93,6 @@ def get_known_models() -> set[str]:
 
 _MODEL_KEYS = {
     "architecture",
-    "modules",
-    "slots",
     "hidden_sizes",
     "activation",
 }
@@ -298,69 +296,6 @@ def load_model_base_config(model_name: str, config_dir=None) -> dict:
     return {}
 
 
-def resolve_composite_submodel(
-    sub_spec,
-    default_type: str,
-    shared_model_params: dict | None = None,
-    shared_params: dict | None = None,
-) -> dict:
-    """Resolve a constituent sub-model of a composite model.
-
-    Loads base YAML configuration from in/config/model/<type>.yaml, merges shared
-    hyperparameters from methods.params, and applies method-level sub_spec overrides.
-    """
-    ident = None
-    sub_overrides = {}
-
-    if isinstance(sub_spec, str):
-        ident = sub_spec
-    elif isinstance(sub_spec, dict):
-        ident, sub_overrides = _extract_name_and_subparams(
-            sub_spec,
-            name_keys=("name", "type", "architecture", "algo", "base"),
-        )
-    elif sub_spec is not None and hasattr(sub_spec, "items"):
-        sub_dict = dict(sub_spec)
-        ident, sub_overrides = _extract_name_and_subparams(
-            sub_dict,
-            name_keys=("name", "type", "architecture", "algo", "base"),
-        )
-
-    resolved_type = ident or default_type
-
-    # Load base YAML defaults if a matching model config exists
-    base_cfg = load_model_base_config(resolved_type)
-    if not base_cfg and default_type and default_type != resolved_type:
-        fallback_base = load_model_base_config(default_type)
-        if fallback_base:
-            base_cfg = fallback_base
-            if "rules" in fallback_base:
-                sub_overrides["rules"] = resolved_type
-            resolved_type = default_type
-
-    result = dict(base_cfg)
-    result["type"] = resolved_type
-
-    # Ensure the canonical architecture key is preserved.
-    if "architecture" in base_cfg and "architecture" not in result:
-        result["architecture"] = base_cfg["architecture"]
-    if "architecture" not in result and resolved_type:
-        result["architecture"] = resolved_type
-    # Merge shared params: methods.params.model.<arch> or methods.params.<arch>
-    if (
-        shared_model_params
-        and resolved_type in shared_model_params
-        and isinstance(shared_model_params[resolved_type], dict)
-    ):
-        result = deep_merge(result, shared_model_params[resolved_type])
-    if shared_params and resolved_type in shared_params and isinstance(shared_params[resolved_type], dict):
-        result = deep_merge(result, shared_params[resolved_type])
-
-    # Apply method-level overrides
-    result = deep_merge(result, sub_overrides)
-    return result
-
-
 def parse_methods_dict(cfg) -> dict[str, dict]:
     """Parse and normalize the structured methods: dict from Hydra config.
 
@@ -373,9 +308,8 @@ def parse_methods_dict(cfg) -> dict[str, dict]:
       2. Tier 3: Method-Level Declarations & Specific Overrides:
          - Declared inside `methods.<method_name>`.
          - Individual method configurations override shared parameters.
-      3. Composite Models:
-         - Resolves declared sub-models from in/config/model/.
-         - Inherits sub-model base defaults without manual parameter repetition.
+      3. Nested model parameters:
+         - Preserved as declared for the model component to interpret or compose.
 
     Returns:
         dict[str, dict]: Normalized method_name -> method_config mapping.
@@ -545,108 +479,6 @@ def parse_methods_dict(cfg) -> dict[str, dict]:
         agent_params = deep_merge(agent_params, m_agent_sub)
         model_params = deep_merge(model_params, m_model_sub)
 
-        # Generic composite model resolution (driven by model slots / subcomponents)
-        consumed_keys = set()
-        model_cls = None
-        try:
-            from src.app.core.model_registry import get_model_class
-
-            model_cls = get_model_class(m_model_arch)
-        except Exception:
-            pass
-
-        base_model_cfg = load_model_base_config(m_model_arch) or {}
-        is_composite = (
-            (model_cls is not None and hasattr(model_cls, "get_model_slots"))
-            or (isinstance(base_model_cfg, dict) and any(isinstance(v, dict) for v in base_model_cfg.values()))
-            or (isinstance(base_model_cfg, dict) and "slots" in base_model_cfg)
-            or (isinstance(m_model_sub, dict) and any(isinstance(v, dict) for v in m_model_sub.values()))
-            or (isinstance(model_params, dict) and any(isinstance(v, dict) for v in model_params.values()))
-        )
-
-        if is_composite:
-            # Discover slots from CompositeModelProtocol or base model config
-            declared_slots = []
-            if model_cls is not None and hasattr(model_cls, "get_model_slots"):
-                declared_slots = list(model_cls.get_model_slots())
-
-            # Fallback slots from base config dictionary keys or 'slots' list
-            slot_names = [s.name for s in declared_slots]
-            for k, v in base_model_cfg.items():
-                if isinstance(v, dict) and k not in slot_names:
-                    from src.app.core.protocols import ModelSlot
-
-                    def_t = v.get("type", k)
-                    declared_slots.append(ModelSlot(name=k, default=def_t))
-                    slot_names.append(k)
-
-            if isinstance(m_model_sub, dict):
-                for k, v in m_model_sub.items():
-                    if k not in slot_names and isinstance(v, (dict, str)):
-                        from src.app.core.protocols import ModelSlot
-
-                        def_t = v.get("type", k) if isinstance(v, dict) else (str(v) if v else k)
-                        declared_slots.append(ModelSlot(name=k, default=def_t))
-                        slot_names.append(k)
-
-            if isinstance(model_params, dict):
-                for k, v in model_params.items():
-                    if k not in slot_names and isinstance(v, (dict, str)):
-                        from src.app.core.protocols import ModelSlot
-
-                        def_t = v.get("type", k) if isinstance(v, dict) else (str(v) if v else k)
-                        declared_slots.append(ModelSlot(name=k, default=def_t))
-                        slot_names.append(k)
-
-            # 1. Resolve submodels for each declared slot
-            resolved_submodels = []
-            for slot in declared_slots:
-                raw_sub = (
-                    m_model_sub.get(slot.name)
-                    or m_model_sub.get(f"{slot.name}_actor")
-                    or m_dict.get(slot.name)
-                    or m_dict.get(f"{slot.name}_actor")
-                    or model_params.get(slot.name)
-                    or model_params.get(f"{slot.name}_actor")
-                )
-
-                default_type = slot.default or slot.name
-                if isinstance(model_params.get(slot.name), str):
-                    default_type = model_params[slot.name]
-                elif isinstance(model_params.get(slot.name), dict) and model_params[slot.name].get("type"):
-                    default_type = model_params[slot.name]["type"]
-
-                resolved_sub = resolve_composite_submodel(
-                    raw_sub,
-                    default_type=default_type,
-                    shared_model_params=shared_model,
-                    shared_params=shared_params,
-                )
-
-                # Merge any base_model_cfg slot defaults if not already present
-                base_slot_def = base_model_cfg.get(slot.name)
-                if isinstance(base_slot_def, dict):
-                    resolved_sub = deep_merge(base_slot_def, resolved_sub)
-
-                resolved_sub["module_type"] = resolved_sub.get("type", slot.name)
-                model_params[slot.name] = resolved_sub
-                resolved_submodels.append(dict(resolved_sub))
-                consumed_keys.update({slot.name, f"{slot.name}_actor"})
-
-            # 2. Modules synthesis (for composite multi-module models)
-            explicit_modules = m_dict.get("modules") or m_model_sub.get("modules") or model_params.get("modules")
-            if explicit_modules:
-                resolved_modules = explicit_modules
-                model_params["explicit_modules"] = True
-                model_params["modules"] = resolved_modules
-            elif resolved_submodels:
-                resolved_modules = resolved_submodels
-                resolved_mcfg["modules"] = resolved_modules
-
-            consumed_keys.update({slot.name for slot in declared_slots})
-            consumed_keys.update({f"{slot.name}_actor" for slot in declared_slots})
-            consumed_keys.add("modules")
-
         # Support inheriting tuned parameters from a previous Optuna sweep via from_study
         study_ref = m_dict.get("from_study")
         if study_ref:
@@ -687,7 +519,7 @@ def parse_methods_dict(cfg) -> dict[str, dict]:
 
         # Copy non-agent, non-model keys from m_dict (deep-merging if both are dicts)
         for k, v in m_dict.items():
-            if k in ("agent", "model", "tune", "search_space", "from_study") or k in consumed_keys:
+            if k in ("agent", "model", "tune", "search_space", "from_study"):
                 continue
             if k in agent_params:
                 agent_params[k] = (

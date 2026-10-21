@@ -99,11 +99,6 @@ def build_method_overrides(
     merged_model_params = dict(method_cfg.get("model_params", {}))
     merged_model_params.update(model_subparams)
 
-    # For composite models, if modules was auto-synthesized, omit the redundant modules CLI string
-    if not merged_model_params.get("explicit_modules", False):
-        merged_model_params.pop("modules", None)
-    merged_model_params.pop("explicit_modules", None)
-
     _flatten_overrides("model", merged_model_params)
     _flatten_overrides("agent", merged_agent_params)
 
@@ -136,7 +131,6 @@ def build_method_overrides(
         "name",
         "agent_params",
         "model_params",
-        "explicit_modules",
         "style",
         "label",
         "color",
@@ -150,12 +144,8 @@ def build_method_overrides(
         "search_space",
         "from_study",
     }
-    if not method_cfg.get("explicit_modules", False) and not merged_model_params.get("explicit_modules", False):
-        _INTERNAL_KEYS.add("modules")
     _MODEL_KEYS = {
         "architecture",
-        "modules",
-        "slots",
         "hidden_sizes",
         "activation",
         "dropout",

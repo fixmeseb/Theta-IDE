@@ -11,6 +11,8 @@ venv/
 
 # ThetaIDE desktop app: local run records, notes and appearance settings (per user)
 .thetaide/
+# Component YAMLs are moved here while their owning component is uninstalled.
+.thetaide/retained_configs/
 
 # Private planning notes (kept locally, not shared)
 /BACKEND_ASSESSMENT.md

@@ -177,7 +177,7 @@ def test_experiment_plugin_mock_install_and_clean_uninstall(mock_isolated_worksp
     assert meta["kind"] == "experiment"
 
     # Uninstall
-    uninstalled = installer.uninstall_by_metadata(meta, remove_configs=True)
+    uninstalled = installer.uninstall_by_metadata(meta)
     assert uninstalled is True
 
     # Verify files were removed

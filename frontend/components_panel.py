@@ -289,10 +289,10 @@ class ComponentsPanel(QWidget):
         # If it is a managed Hub component with metadata, uninstall via installer
         if is_hub and assets.get("meta") and installer:
             try:
-                installer.uninstall_by_metadata(assets["meta"], remove_configs=True)
+                installer.uninstall_by_metadata(assets["meta"])
                 deleted_count = len(files_to_delete)
-                # The installer removes pristine YAMLs, restores any pre-install
-                # versions, and retains edits. Do not delete those paths again here.
+                # The installer hides owned YAMLs, restores pre-install versions,
+                # and retains edits/copies. Do not delete those paths again here.
                 files_to_delete = []
             except Exception as exc:
                 self.log_fn(f"Installer uninstall notice: {exc}")

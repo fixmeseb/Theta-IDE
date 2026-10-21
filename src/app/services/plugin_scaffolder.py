@@ -2,7 +2,7 @@
 
 Automates the generation of boilerplate code, runtime protocol stubs,
 base configuration profiles, and .theta_component.json manifests for:
-  - Models & Composite Model Architectures
+  - Models
   - RL Algorithms & Agents
   - Environments, Groundings & Simulators
   - DataModules & Trajectory Samplers
@@ -32,7 +32,6 @@ class ScaffoldOptions:
     author: str = "Theta Researcher"
     version: str = "0.1.0"
     description: str = ""
-    is_composite: bool = False  # For models: generates ModelSlot and CompositeModelProtocol
     paradigms: list[str] = field(default_factory=list)  # Supported paradigms (e.g. ['online_rl'])
     output_dir: Path | None = None
 
@@ -113,75 +112,7 @@ class PluginScaffolder:
 
         # 1. Python model implementation
         code_file = target_dir / f"{name}_model.py"
-        if opts.is_composite:
-            code_content = f'''"""Composite {class_name} architecture."""
-from typing import Any, List, Optional
-import torch
-import torch.nn as nn
-
-from src.app.core.model_registry import register_model
-from src.app.core.protocols import (
-    ModelSlot,
-    CompositeModelProtocol,
-    AuxiliaryLossProtocol,
-    OptimizerGroupsProtocol,
-)
-
-
-@register_model("{name}")
-class {class_name}(nn.Module):
-    """Composite model composed of pluggable submodules."""
-
-    @classmethod
-    def get_model_slots(cls) -> List[ModelSlot]:
-        """Declare submodel slots to the GUI and pipeline."""
-        return [
-            ModelSlot(
-                name="encoder",
-                required=True,
-                tags=["neural", "encoder"],
-                description="Representation feature extractor",
-            ),
-            ModelSlot(
-                name="head",
-                required=True,
-                tags=["actor", "head"],
-                description="Policy or Q-value prediction head",
-            ),
-        ]
-
-    def __init__(
-        self,
-        env: Any = None,
-        encoder: Optional[nn.Module] = None,
-        head: Optional[nn.Module] = None,
-        device: str = "cpu",
-        **kwargs: Any,
-    ):
-        super().__init__()
-        self.device = torch.device(device) if isinstance(device, str) else device
-        self.encoder = encoder or nn.Identity()
-        self.head = head or nn.Identity()
-
-    def forward(self, obs: torch.Tensor, **kwargs: Any) -> torch.Tensor:
-        features = self.encoder(obs)
-        return self.head(features)
-
-    def compute_auxiliary_losses(self, batch: Any, output: Any) -> dict[str, torch.Tensor]:
-        """Compute optional auxiliary loss terms."""
-        return {{}}
-
-    def configure_optimizer_groups(
-        self, base_lr: float, weight_decay: float = 0.0, cfg: Any = None
-    ) -> list[dict[str, Any]]:
-        """Return parameter groups with per-submodule learning rates."""
-        return [
-            {{"params": self.encoder.parameters(), "lr": base_lr, "weight_decay": weight_decay}},
-            {{"params": self.head.parameters(), "lr": base_lr, "weight_decay": weight_decay}},
-        ]
-'''
-        else:
-            code_content = f'''"""Custom {class_name} neural architecture."""
+        code_content = f'''"""Custom {class_name} neural architecture."""
 from typing import Any
 import torch
 import torch.nn as nn
@@ -236,18 +167,7 @@ from . import {name}_model  # noqa: F401
         paradigms_yaml = "\n".join(f"  - {p}" for p in paradigms)
         cfg_file = self.workspace_root / "in" / "config" / "model" / f"{name}.yaml"
         cfg_file.parent.mkdir(parents=True, exist_ok=True)
-        if opts.is_composite:
-            cfg_yaml = f"""# Default composite configuration for {name}
-type: {name}
-paradigms:
-{paradigms_yaml}
-encoder:
-  hidden_sizes: [128, 128]
-head:
-  hidden_sizes: [64]
-"""
-        else:
-            cfg_yaml = f"""# Default configuration for {name}
+        cfg_yaml = f"""# Default configuration for {name}
 type: {name}
 paradigms:
 {paradigms_yaml}
@@ -270,29 +190,12 @@ hidden_sizes: [64, 64]
             "compatibility": {"theta": ">=2.0.0"},
             "paradigms": paradigms,
         }
-        if opts.is_composite:
-            meta["parameter_schema"] = {
-                "type": "object",
-                "properties": {
-                    "encoder": {
-                        "type": "string",
-                        "x-theta-domain": "model",
-                        "description": "Feature encoder model component.",
-                    },
-                    "head": {
-                        "type": "string",
-                        "x-theta-domain": "model",
-                        "description": "Prediction head model component.",
-                    },
-                },
+        meta["parameter_schema"] = {
+            "type": "object",
+            "properties": {
+                "hidden_sizes": {"type": "array", "items": {"type": "integer"}, "default": [64, 64]},
             }
-        else:
-            meta["parameter_schema"] = {
-                "type": "object",
-                "properties": {
-                    "hidden_sizes": {"type": "array", "items": {"type": "integer"}, "default": [64, 64]},
-                },
-            }
+        }
         meta_file = target_dir / ".theta_component.json"
         meta_file.write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
         created.append(meta_file)

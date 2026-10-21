@@ -290,7 +290,7 @@ def get_model_candidate_hyperparameters(
     if tree:
         model_params = tree.model_parameters(model_name)
         for k in tree.model_parameter_keys(model_name):
-            if k not in ("architecture", "type", "lightning_module", "name", "slots"):
+            if k not in ("architecture", "type", "lightning_module", "name"):
                 if k not in current_keys and k not in candidates:
                     candidates.append(k)
     return candidates
@@ -328,23 +328,6 @@ def get_method_candidate_hyperparameters(
             candidates.append(k)
 
     return candidates
-
-
-def get_method_candidate_subcomponents(
-    model_name: str | None,
-    tree: ConfigTree | None,
-    current_keys: set[str] | None = None,
-) -> list[str]:
-    """Return available subcomponent names for a composite model that are not yet added."""
-    if not model_name:
-        return []
-    current_keys = current_keys or set()
-    subcomps = tree.model_subcomponents(model_name) if tree else {}
-    if not subcomps and tree:
-        slots = tree.model_slots(model_name)
-        if slots:
-            subcomps = {s: {} for s in slots}
-    return [k for k in subcomps.keys() if k not in current_keys]
 
 
 def discover_datasets(env_name: str | None = None) -> list[str]:
@@ -2459,9 +2442,9 @@ class ConfigViewer(QWidget):
                         # 1. Overridden keys in m_spec
                         _m_raw = m_spec.get("model", "")
                         _m_name = next(iter(_m_raw)) if isinstance(_m_raw, dict) and _m_raw else str(_m_raw or "")
-                        known_model_slots = set(tree.model_slots(_m_name)) if (tree and _m_name in tree.models) else set()
+                        known_model_params = set(tree.model_parameter_keys(_m_name)) if (tree and _m_name in tree.models) else set()
                         for ak, av in list(m_spec.items()):
-                            if ak in ("agent", "model", "base") or ak in known_model_slots:
+                            if ak in ("agent", "model", "base") or ak in known_model_params:
                                 continue
                             if ak in agent_param_keys or (agent_val and ak.startswith(f"{agent_val}_")):
                                 agent_keys_present.add(ak)
@@ -2576,14 +2559,11 @@ class ConfigViewer(QWidget):
                         ms = methods.setdefault(mn, {})
                         if not v:
                             ms.pop("model", None)
-                        elif tree and v in tree.models and tree.models[v].is_composite:
-                            if not isinstance(ms.get("model"), dict):
-                                ms["model"] = v
                         else:
                             ms["model"] = v
-                            prev_slots = tree.model_slots(cur_mn) if (tree and cur_mn in tree.models) else []
-                            for sk in prev_slots:
-                                ms.pop(sk, None)
+                            old_params = tree.model_parameter_keys(cur_mn) if (tree and cur_mn in tree.models) else []
+                            for key in old_params:
+                                ms.pop(key, None)
                         self._mark_dirty()
                         self._render_boxes()
 
@@ -2599,360 +2579,39 @@ class ConfigViewer(QWidget):
                 model_keys_present = set()
                 model_rows = []
                 btn_add_mp = None
-                known_slots = []
-
                 if model_name:
-                    is_composite_model = bool(
-                        tree and model_name in tree.models and tree.models[model_name].is_composite
+                    model_defs = dict(tree.model_parameters(model_name)) if tree else {}
+                    model_keys = set(tree.model_parameter_keys(model_name)) if tree else set(model_defs)
+                    model_keys.update(model_inner.keys() if isinstance(model_inner, dict) else ())
+                    model_keys -= {"architecture", "type", "lightning_module", "name"}
+
+                    model_values = {}
+                    for key in model_keys:
+                        if isinstance(model_inner, dict) and key in model_inner:
+                            model_values[key] = model_inner[key]
+                        elif key in m_spec:
+                            model_values[key] = m_spec[key]
+
+                    model_keys_present = set(model_values)
+                    model_rows = self._render_method_model_parameters(
+                        m_name,
+                        model_name,
+                        model_values,
+                        model_defs,
+                        show_defaults=show_mo_defs,
                     )
-                    composite_param_keys = []
-                    if tree and model_name in tree.models:
-                        composite_param_keys = [
-                            k for k in tree.model_parameter_keys(model_name)
-                            if k not in tree.model_slots(model_name)
-                            and k not in ("architecture", "type", "lightning_module", "name", "slots")
-                        ]
-
-                    if is_composite_model:
-                        for bk in composite_param_keys:
-                            val = None
-                            if isinstance(model_inner, dict) and bk in model_inner:
-                                val = model_inner[bk]
-                            elif bk in m_spec:
-                                val = m_spec[bk]
-                            if val is not None:
-                                model_keys_present.add(bk)
-                                if isinstance(val, dict):
-                                    group_block = IndentedHierarchyBlock(level=2)
-                                    for nk, nv in val.items():
-                                        row_nested = QHBoxLayout()
-                                        schema = tree.model_parameter_schema(model_name, (bk, nk)) if tree else {}
-                                        if isinstance(nv, bool):
-                                            widget_nested = ToggleSlider(checked=nv)
-                                            widget_nested.toggled.connect(lambda v, mn=m_name, pk=bk, ck=nk: self._on_method_nested_param_edited(mn, pk, ck, v))
-                                        elif isinstance(nv, (int, float)):
-                                            widget_nested = number_field(nv)
-                                            widget_nested.setMaximumWidth(NUMBER_FIELD_WIDTH)
-                                            widget_nested.valueChanged.connect(lambda v, mn=m_name, pk=bk, ck=nk: self._on_method_nested_param_edited(mn, pk, ck, v))
-                                        elif isinstance(nv, list):
-                                            widget_nested = QLineEdit(str(list(nv)))
-                                            widget_nested.setMaximumWidth(TEXT_FIELD_WIDTH)
-                                            widget_nested.textChanged.connect(lambda v, mn=m_name, pk=bk, ck=nk: self._on_method_nested_param_edited(mn, pk, ck, _parse_yaml_value(v)))
-                                        else:
-                                            widget_nested = self._schema_widget(
-                                                nv, schema,
-                                                lambda v, mn=m_name, pk=bk, ck=nk: self._on_method_nested_param_edited(mn, pk, ck, v),
-                                            )
-                                        row_nested.addWidget(widget_nested)
-                                        btn_del_nested = _make_subtle_tool_button("close", f"Remove '{nk}'", size=20, icon_size=12)
-                                        btn_del_nested.clicked.connect(lambda _, mn=m_name, pk=bk, ck=nk: self._remove_method_nested_param(mn, pk, ck))
-                                        row_nested.addWidget(btn_del_nested)
-                                        row_nested.addStretch()
-                                        group_block.addRow(str(nk), row_nested)
-                                    row_group = QHBoxLayout()
-                                    btn_del_group = _make_subtle_tool_button("close", f"Remove parameter group '{bk}'", size=20, icon_size=12)
-                                    btn_del_group.clicked.connect(lambda _, mn=m_name, pk=bk: self._remove_method_param(mn, pk))
-                                    row_group.addWidget(btn_del_group)
-                                    row_group.addStretch()
-                                    model_rows.append((str(bk), row_group))
-                                    model_rows.append(("", group_block))
-                                    continue
-                                row_bp = QHBoxLayout()
-                                if isinstance(val, bool):
-                                    cb_bp = ToggleSlider(checked=val)
-                                    cb_bp.toggled.connect(lambda v, mn=m_name, pk=bk: self._on_method_param_edited(mn, pk, v))
-                                    row_bp.addWidget(cb_bp)
-                                elif isinstance(val, (int, float)):
-                                    spin_bp = number_field(val)
-                                    spin_bp.setMaximumWidth(NUMBER_FIELD_WIDTH)
-                                    spin_bp.valueChanged.connect(lambda v, mn=m_name, pk=bk: self._on_method_param_edited(mn, pk, v))
-                                    row_bp.addWidget(spin_bp)
-                                else:
-                                    line_bp = QLineEdit(str(val))
-                                    line_bp.setMaximumWidth(TEXT_FIELD_WIDTH)
-                                    line_bp.textChanged.connect(lambda v, mn=m_name, pk=bk: self._on_method_param_edited(mn, pk, v))
-                                    row_bp.addWidget(line_bp)
-                                btn_del_bp = _make_subtle_tool_button("close", f"Remove '{bk}'", size=20, icon_size=12)
-                                btn_del_bp.clicked.connect(lambda _, mn=m_name, pk=bk: self._remove_method_param(mn, pk))
-                                row_bp.addWidget(btn_del_bp)
-                                model_rows.append((str(bk), row_bp))
-
-                        # Determine known subcomponent slot names for this composite model
-                        known_slots = []
-                        if tree and model_name in tree.models:
-                            known_slots = tree.model_slots(model_name)
-
-                        subcomps_present = {}
-                        declared_model_slots = set(tree.model_slots(model_name)) if tree and model_name in tree.models else set()
-                        schema_declares_slots = bool(declared_model_slots and tree and any(
-                            isinstance(value, dict) and value.get("x-theta-domain") == "model"
-                            for value in tree.model_parameter_schema(model_name).get("properties", {}).values()
-                        ))
-                        if isinstance(model_inner, dict):
-                            for sk, sv in model_inner.items():
-                                if sk in known_slots or (isinstance(sv, dict) and not schema_declares_slots):
-                                    subcomps_present[sk] = sv
-                        for sk in known_slots:
-                            if sk in m_spec and sk not in subcomps_present:
-                                subcomps_present[sk] = m_spec[sk]
-
-                        for s_name, s_val in list(subcomps_present.items()):
-                            sub_params = {}
-                            cur_type = ""
-                            if isinstance(s_val, str):
-                                cur_type = s_val
-                            elif isinstance(s_val, dict):
-                                # Detect if a submodel is nested under its configured model key.
-                                nested_model_key = next((k for k in s_val if (tree and k in tree.models)), None)
-                                if nested_model_key:
-                                    cur_type = nested_model_key
-                                    sub_params = s_val[nested_model_key] if isinstance(s_val[nested_model_key], dict) else {}
-                                else:
-                                    cur_type = s_val.get("type", "")
-                                    sub_params = {k: v for k, v in s_val.items() if k not in ("type", "architecture")}
-
-                            choices = tree.model_names if tree else []
-
-                            sub_candidates = []
-                            if tree and cur_type and cur_type in tree.models:
-                                sub_candidates = [k for k in tree.model_parameter_keys(cur_type) if k not in ("architecture", "type")]
-                            elif tree and model_name in tree.models:
-                                # Fall back to candidate keys defined in composite model default slot
-                                slot_def = tree.models[model_name].parameters.get(s_name)
-                                if isinstance(slot_def, dict):
-                                    sub_candidates = list(slot_def.keys())
-                            filtered_sub_cand = [c for c in sub_candidates if c not in sub_params]
-                            btn_add_sub_p = None
-                            if filtered_sub_cand:
-                                btn_add_sub_p = _make_param_adder_button(
-                                    f"Add {s_name} parameter",
-                                    filtered_sub_cand,
-                                    lambda p, mn=m_name, sn=s_name: self._add_method_subcomponent_param(mn, sn, p),
-                                    parent_widget=sub_card
-                                )
-
-                            row_gen = QHBoxLayout()
-                            if choices and (cur_type in choices or cur_type or not sub_params):
-                                combo_gen = ComboBox()
-                                combo_gen.setMaximumWidth(TEXT_FIELD_WIDTH)
-                                combo_gen.setToolTip(f"Select {s_name} module architecture")
-                                combo_gen.addItems(choices)
-                                if cur_type and cur_type not in choices:
-                                    combo_gen.insertItem(0, cur_type)
-                                    try:
-                                        from src.app.pipeline.validation import _model_exists
-                                        if not _model_exists(cur_type):
-                                            combo_gen.setToolTip(f"Missing component: {s_name} module '{cur_type}' is not installed. Install it via Component Hub.")
-                                    except Exception:
-                                        pass
-                                if cur_type:
-                                    combo_gen.setCurrentText(cur_type)
-                                combo_gen.currentTextChanged.connect(
-                                    lambda v, mn=m_name, sn=s_name: self._on_method_subcomponent_type_changed(mn, sn, v)
-                                )
-                                row_gen.addWidget(combo_gen)
-                            elif cur_type:
-                                line_gen = QLineEdit(str(cur_type))
-                                line_gen.setMaximumWidth(TEXT_FIELD_WIDTH)
-                                try:
-                                    from src.app.pipeline.validation import _model_exists
-                                    if not _model_exists(str(cur_type)):
-                                        line_gen.setToolTip(f"Missing component: {s_name} module '{cur_type}' is not installed. Install it via Component Hub.")
-                                except Exception:
-                                    pass
-                                line_gen.textChanged.connect(
-                                    lambda v, mn=m_name, sn=s_name: self._on_method_subcomponent_type_changed(mn, sn, v)
-                                )
-                                row_gen.addWidget(line_gen)
-
-                            btn_del_sc = _make_subtle_tool_button("close", f"Remove '{s_name}' subcomponent", size=20, icon_size=12)
-                            btn_del_sc.clicked.connect(lambda _, mn=m_name, sn=s_name: self._remove_method_subcomponent(mn, sn))
-                            row_gen.addWidget(btn_del_sc)
-                            if btn_add_sub_p:
-                                row_gen.addWidget(btn_add_sub_p)
-
-                            slot_title = f"{s_name.replace('_', ' ').title()} Module"
-                            model_rows.append((slot_title, row_gen))
-
-                            sub_block = IndentedHierarchyBlock(level=2)
-                            sub_rows = []
-                            for sp_k, sp_v in list(sub_params.items()):
-                                sp_row = QHBoxLayout()
-                                sp_line = QLineEdit(str(sp_v if sp_v is not None else ""))
-                                sp_line.setMaximumWidth(TEXT_FIELD_WIDTH)
-                                sp_line.textChanged.connect(
-                                    lambda v, mn=m_name, sn=s_name, pk=sp_k: self._on_method_subcomponent_param_edited(mn, sn, pk, v)
-                                )
-                                sp_row.addWidget(sp_line)
-                                btn_sp_del = _make_subtle_tool_button("close", f"Remove '{sp_k}'", size=20, icon_size=12)
-                                btn_sp_del.clicked.connect(
-                                    lambda _, mn=m_name, sn=s_name, pk=sp_k: self._remove_method_subcomponent_param(mn, sn, pk)
-                                )
-                                sp_row.addWidget(btn_sp_del)
-                                sub_rows.append((str(sp_k), sp_row))
-
-                            if show_mo_defs and tree:
-                                def_sub_dict = {}
-                                if cur_type and cur_type in tree.models:
-                                    def_sub_dict = dict(tree.model_parameters(cur_type))
-                                elif model_name in tree.models:
-                                    slot_template = tree.models[model_name].parameters.get(s_name)
-                                    if isinstance(slot_template, dict):
-                                        def_sub_dict = dict(slot_template)
-                                for dp_k, dp_v in def_sub_dict.items():
-                                    if dp_k not in sub_params and dp_k not in ("architecture", "type", "mode"):
-                                        dp_row = QHBoxLayout()
-                                        dp_line = QLineEdit(str(dp_v if dp_v is not None else ""))
-                                        dp_line.setMaximumWidth(TEXT_FIELD_WIDTH)
-                                        dp_line.textChanged.connect(
-                                            lambda v, mn=m_name, sn=s_name, pk=dp_k: self._on_method_subcomponent_param_edited(mn, sn, pk, v)
-                                        )
-                                        dp_row.addWidget(dp_line)
-                                        lbl_def = QLabel("(default)")
-                                        lbl_def.setStyleSheet("color: #928374; font-size: 11px; font-style: italic;")
-                                        dp_row.addWidget(lbl_def)
-                                        sub_rows.append((str(dp_k), dp_row))
-
-                            if sub_rows:
-                                for sr_lbl, sr_box in sub_rows:
-                                    sr_box.addStretch()
-                                    sub_block.addRow(sr_lbl, sr_box)
-                                model_rows.append(("", sub_block))
-
-                        curr_comp_keys = set()
-                        if isinstance(model_inner, dict):
-                            curr_comp_keys.update(model_inner.keys())
-                        curr_comp_keys.update(m_spec.keys())
-
-                        cand_subcomps = get_method_candidate_subcomponents(model_name, tree, set(subcomps_present.keys()))
-                        cand_comp = cand_subcomps + [k for k in composite_param_keys if k not in curr_comp_keys]
-                        if cand_comp:
-                            btn_add_mp = _make_param_adder_button(
-                                f"Add {model_name} parameter",
-                                cand_comp,
-                                lambda p, mn=m_name: self._add_method_param(mn, p),
-                                parent_widget=sub_card
-                            )
-
-                    else:
-                        model_defs = dict(tree.model_parameters(model_name)) if tree else {}
-                        model_keys_raw = set(model_defs.keys())
-                        if tree:
-                            model_keys_raw.update(tree.model_parameter_keys(model_name))
-                        model_keys = model_keys_raw - {"architecture", "type", "lightning_module"}
-
-                        for mk in list(model_keys):
-                            val = None
-                            if mk in m_spec:
-                                val = m_spec[mk]
-                            elif isinstance(model_inner, dict) and mk in model_inner:
-                                val = model_inner[mk]
-                            if val is not None:
-                                model_keys_present.add(mk)
-                                if isinstance(val, dict):
-                                    sub_block = IndentedHierarchyBlock(level=2)
-                                    hdr_grp = QHBoxLayout()
-                                    hdr_grp.addWidget(label(f"[{mk}]", "muted"))
-                                    hdr_grp.addStretch()
-                                    btn_del_grp = _make_subtle_tool_button("close", f"Remove parameter group '{mk}'", size=20, icon_size=12)
-                                    btn_del_grp.clicked.connect(lambda _, mn=m_name, pk=mk: self._remove_method_param(mn, pk))
-                                    hdr_grp.addWidget(btn_del_grp)
-                                    model_rows.append(("", hdr_grp))
-                                    for nk, nv in val.items():
-                                        row_n = QHBoxLayout()
-                                        if isinstance(nv, bool):
-                                            cb_n = ToggleSlider(checked=nv)
-                                            cb_n.toggled.connect(lambda v, mn=m_name, pk=mk, ck=nk: self._on_method_nested_param_edited(mn, pk, ck, v))
-                                            row_n.addWidget(cb_n)
-                                        elif isinstance(nv, (int, float)):
-                                            spin_n = number_field(nv)
-                                            spin_n.setMaximumWidth(NUMBER_FIELD_WIDTH)
-                                            spin_n.valueChanged.connect(lambda v, mn=m_name, pk=mk, ck=nk: self._on_method_nested_param_edited(mn, pk, ck, v))
-                                            row_n.addWidget(spin_n)
-                                        elif isinstance(nv, list):
-                                            line_n = QLineEdit(str(list(nv)))
-                                            line_n.setMaximumWidth(TEXT_FIELD_WIDTH)
-                                            line_n.textChanged.connect(lambda v, mn=m_name, pk=mk, ck=nk: self._on_method_nested_param_edited(mn, pk, ck, v))
-                                            row_n.addWidget(line_n)
-                                        else:
-                                            param_schema = tree.model_parameter_schema(model_name, (mk, nk)) if tree else {}
-                                            row_n.addWidget(self._schema_widget(
-                                                nv, param_schema,
-                                                lambda v, mn=m_name, pk=mk, ck=nk: self._on_method_nested_param_edited(mn, pk, ck, v),
-                                            ))
-                                        btn_del_nk = _make_subtle_tool_button("close", f"Remove '{nk}'", size=20, icon_size=12)
-                                        btn_del_nk.clicked.connect(lambda _, mn=m_name, pk=mk, ck=nk: self._remove_method_nested_param(mn, pk, ck))
-                                        row_n.addWidget(btn_del_nk)
-                                        row_n.addStretch()
-                                        sub_block.addRow(str(nk), row_n)
-                                    model_rows.append(("", sub_block))
-                                else:
-                                    row_mp = QHBoxLayout()
-                                    if isinstance(val, bool):
-                                        cb_mp = ToggleSlider(checked=val)
-                                        cb_mp.toggled.connect(lambda v, mn=m_name, pk=mk: self._on_method_param_edited(mn, pk, v))
-                                        row_mp.addWidget(cb_mp)
-                                    elif isinstance(val, (int, float)):
-                                        spin_mp = number_field(val)
-                                        spin_mp.setMaximumWidth(NUMBER_FIELD_WIDTH)
-                                        spin_mp.valueChanged.connect(lambda v, mn=m_name, pk=mk: self._on_method_param_edited(mn, pk, v))
-                                        row_mp.addWidget(spin_mp)
-                                    elif isinstance(val, list):
-                                        line_mp = QLineEdit(str(list(val)))
-                                        line_mp.setMaximumWidth(TEXT_FIELD_WIDTH)
-                                        line_mp.textChanged.connect(
-                                            lambda v, mn=m_name, pk=mk: self._on_method_param_edited(mn, pk, v)
-                                        )
-                                        row_mp.addWidget(line_mp)
-                                    else:
-                                        param_schema = tree.model_parameter_schema(model_name, (mk,)) if tree else {}
-                                        row_mp.addWidget(self._schema_widget(
-                                            val, param_schema,
-                                            lambda v, mn=m_name, pk=mk: self._on_method_param_edited(mn, pk, v),
-                                        ))
-                                    btn_del_mp = _make_subtle_tool_button("close", f"Remove '{mk}'", size=20, icon_size=12)
-                                    btn_del_mp.clicked.connect(lambda _, mn=m_name, pk=mk: self._remove_method_param(mn, pk))
-                                    row_mp.addWidget(btn_del_mp)
-                                    model_rows.append((str(mk), row_mp))
-
-                        if show_mo_defs:
-                            for mk in sorted(model_keys):
-                                if mk not in model_keys_present:
-                                    def_val = model_defs.get(mk)
-                                    if def_val is None:
-                                        continue
-                                    row_mp = QHBoxLayout()
-                                    if isinstance(def_val, bool):
-                                        cb_mp = ToggleSlider(checked=def_val)
-                                        cb_mp.toggled.connect(lambda v, mn=m_name, pk=mk: self._on_method_param_edited(mn, pk, v))
-                                        row_mp.addWidget(cb_mp)
-                                    elif isinstance(def_val, (int, float)):
-                                        spin_mp = number_field(def_val)
-                                        spin_mp.setMaximumWidth(NUMBER_FIELD_WIDTH)
-                                        spin_mp.valueChanged.connect(lambda v, mn=m_name, pk=mk: self._on_method_param_edited(mn, pk, v))
-                                        row_mp.addWidget(spin_mp)
-                                    else:
-                                        param_schema = tree.model_parameter_schema(model_name, (mk,)) if tree else {}
-                                        row_mp.addWidget(self._schema_widget(
-                                            def_val, param_schema,
-                                            lambda v, mn=m_name, pk=mk: self._on_method_param_edited(mn, pk, v),
-                                        ))
-                                    lbl_def = QLabel("(default)")
-                                    lbl_def.setStyleSheet("color: #928374; font-size: 11px; font-style: italic;")
-                                    row_mp.addWidget(lbl_def)
-                                    model_rows.append((str(mk), row_mp))
-
-                        curr_model_keys = set(m_spec.keys())
-                        if isinstance(model_inner, dict):
-                            curr_model_keys.update(model_inner.keys())
-                        cand_model = get_model_candidate_hyperparameters(model_name, tree, curr_model_keys)
-                        if cand_model:
-                            btn_add_mp = _make_param_adder_button(
-                                f"Add {model_name} parameter",
-                                cand_model,
-                                lambda p, mn=m_name: self._add_method_param(mn, p),
-                                parent_widget=sub_card
-                            )
+                    candidate_keys = get_model_candidate_hyperparameters(
+                        model_name, tree, model_keys_present
+                    )
+                    if candidate_keys:
+                        btn_add_mp = _make_param_adder_button(
+                            f"Add {model_name} parameter",
+                            candidate_keys,
+                            lambda key, mn=m_name, model=model_name: self._add_method_model_parameter(
+                                mn, model, (key,)
+                            ),
+                            parent_widget=sub_card,
+                        )
 
                     row_mo = QHBoxLayout()
                     row_mo.addWidget(txt_model)
@@ -3067,8 +2726,6 @@ class ConfigViewer(QWidget):
                     train_rows.append(("Discount Factor (γ)", row_g))
 
                 consumed_keys = {"agent", "model", "base", "lr", "batch_size", "gamma"}
-                if known_slots:
-                    consumed_keys.update(known_slots)
                 consumed_keys.update(agent_keys_present)
                 consumed_keys.update(model_keys_present)
 
@@ -4071,20 +3728,53 @@ class ConfigViewer(QWidget):
         if schema.get("x-theta-domain") == "model":
             tree = config_tree()
             choices = tree.model_names if tree else []
-        if not isinstance(choices, list) or not choices:
-            return self._scalar_widget(value, write)
-        combo = ComboBox()
-        combo.setMaximumWidth(TEXT_FIELD_WIDTH)
-        combo.addItem("", None)
-        for choice in choices:
-            combo.addItem(str(choice), choice)
-        index = next((i for i in range(combo.count()) if combo.itemData(i) == value), -1)
-        if index < 0 and value is not None:
-            combo.insertItem(1, str(value), value)
-            index = 1
-        combo.setCurrentIndex(index if index >= 0 else 0)
-        combo.currentIndexChanged.connect(lambda i: write(combo.itemData(i)))
-        return combo
+        if isinstance(choices, list) and choices:
+            combo = ComboBox()
+            combo.setMaximumWidth(TEXT_FIELD_WIDTH)
+            combo.addItem("", None)
+            for choice in choices:
+                combo.addItem(str(choice), choice)
+            index = next((i for i in range(combo.count()) if combo.itemData(i) == value), -1)
+            if index < 0 and value is not None:
+                combo.insertItem(1, str(value), value)
+                index = 1
+            combo.setCurrentIndex(index if index >= 0 else 0)
+            combo.currentIndexChanged.connect(lambda i: write(combo.itemData(i)))
+            return combo
+
+        schema_type = schema.get("type")
+        if schema_type == "string":
+            widget = QLineEdit("" if value is None else str(value))
+            widget.setMaximumWidth(TEXT_FIELD_WIDTH)
+            widget.textChanged.connect(write)
+            return widget
+        if schema_type == "boolean" or isinstance(value, bool):
+            widget = ToggleSlider(checked=bool(value))
+            widget.toggled.connect(write)
+            return widget
+        if schema_type == "integer":
+            widget = SpinBox()
+            widget.setMaximumWidth(NUMBER_FIELD_WIDTH)
+            widget.setRange(int(schema.get("minimum", -2147483648)), int(schema.get("maximum", 2147483647)))
+            widget.setValue(int(value if value is not None else schema.get("default", 0)))
+            widget.valueChanged.connect(write)
+            return widget
+        if schema_type == "number" or isinstance(value, float):
+            widget = DoubleSpinBox()
+            widget.setMaximumWidth(NUMBER_FIELD_WIDTH)
+            widget.setRange(float(schema.get("minimum", -1e12)), float(schema.get("maximum", 1e12)))
+            widget.setValue(float(value if value is not None else schema.get("default", 0.0)))
+            widget.valueChanged.connect(write)
+            return widget
+        if schema_type == "array" or isinstance(value, list):
+            items = value if isinstance(value, list) else schema.get("default", [])
+            widget = QLineEdit(str(list(items)) if isinstance(items, list) else "[]")
+            widget.setMaximumWidth(TEXT_FIELD_WIDTH + 80)
+            widget.setToolTip("YAML list, for example [64, 64]")
+            widget.textChanged.connect(lambda text: write(_parse_yaml_value(text)))
+            return widget
+
+        return self._scalar_widget(value if value is not None else schema.get("default", ""), write)
 
     def _component_parameter_schema(self, path: tuple[str, ...]) -> dict[str, Any]:
         """Look up the active component's declared schema node for a YAML path."""
@@ -4764,35 +4454,146 @@ class ConfigViewer(QWidget):
         m_spec[param_key] = parsed_val
         self._mark_dirty()
 
-    def _on_method_nested_param_edited(self, method_name: str, parent_key: str, child_key: str, value: Any):
-        if self._block_updates:
-            return
+    def _method_model_parameter_root(self, method_name: str, model_name: str, create: bool = False) -> dict:
         methods = self.raw_data.setdefault("methods", {})
         m_spec = methods.setdefault(method_name, {})
-        parsed_val = _parse_yaml_value(value) if isinstance(value, str) else value
-        if isinstance(m_spec.get("model"), dict):
-            model_name = next(iter(m_spec["model"]))
-            m_dict = m_spec["model"].setdefault(model_name, {})
-            if parent_key in m_dict and isinstance(m_dict[parent_key], dict):
-                m_dict[parent_key][child_key] = parsed_val
-                self._mark_dirty()
-                return
-        if parent_key not in m_spec or not isinstance(m_spec[parent_key], dict):
-            m_spec[parent_key] = {}
-        m_spec[parent_key][child_key] = parsed_val
+        model_spec = m_spec.get("model")
+        if isinstance(model_spec, dict) and model_name in model_spec:
+            value = model_spec.get(model_name)
+            if isinstance(value, dict):
+                return value
+            if create:
+                model_spec[model_name] = {}
+                return model_spec[model_name]
+        return m_spec
+
+    def _on_method_model_parameter_edited(
+        self, method_name: str, model_name: str, path: tuple[str, ...], value: Any
+    ):
+        if self._block_updates or not path:
+            return
+        target = self._method_model_parameter_root(method_name, model_name, create=True)
+        for key in path[:-1]:
+            if not isinstance(target.get(key), dict):
+                target[key] = {}
+            target = target[key]
+        tree = config_tree()
+        schema = tree.model_parameter_schema(model_name, path) if tree else {}
+        target[path[-1]] = (
+            value
+            if isinstance(value, str) and schema.get("type") == "string"
+            else _parse_yaml_value(value) if isinstance(value, str) else value
+        )
         self._mark_dirty()
 
-    def _remove_method_nested_param(self, method_name: str, parent_key: str, child_key: str):
-        methods = self.raw_data.get("methods", {})
-        m_spec = methods.get(method_name, {})
-        if isinstance(m_spec.get("model"), dict):
-            for m_dict in m_spec["model"].values():
-                if isinstance(m_dict, dict) and parent_key in m_dict and isinstance(m_dict[parent_key], dict):
-                    m_dict[parent_key].pop(child_key, None)
-        if parent_key in m_spec and isinstance(m_spec[parent_key], dict):
-            m_spec[parent_key].pop(child_key, None)
-        self._mark_dirty()
+    def _remove_method_model_parameter(self, method_name: str, model_name: str, path: tuple[str, ...]):
+        if not path:
+            return
+        target = self._method_model_parameter_root(method_name, model_name)
+        for key in path[:-1]:
+            target = target.get(key, {}) if isinstance(target, dict) else {}
+        if isinstance(target, dict):
+            target.pop(path[-1], None)
+            self._mark_dirty()
+            self._render_boxes()
+
+    def _add_method_model_parameter(self, method_name: str, model_name: str, path: tuple[str, ...]):
+        if not path:
+            return
+        tree = config_tree()
+        default = tree.model_parameters(model_name) if tree else {}
+        found = True
+        for key in path:
+            if isinstance(default, dict) and key in default:
+                default = default[key]
+            else:
+                found = False
+                break
+        if not found:
+            schema = tree.model_parameter_schema(model_name, path) if tree else {}
+            default = schema.get("default")
+        self._on_method_model_parameter_edited(method_name, model_name, path, default)
         self._render_boxes()
+
+    def _render_method_model_parameters(
+        self,
+        method_name: str,
+        model_name: str,
+        values: dict[str, Any],
+        defaults: dict[str, Any],
+        path: tuple[str, ...] = (),
+        level: int = 1,
+        show_defaults: bool = False,
+    ) -> list[tuple[str, Any]]:
+        """Render typed, recursively nested model params from the component schema."""
+        tree = config_tree()
+        schema = tree.model_parameter_schema(model_name, path) if tree else {}
+        schema_properties = schema.get("properties", {}) if isinstance(schema, dict) else {}
+        keys = list(dict.fromkeys([*values.keys(), *defaults.keys(), *schema_properties.keys()]))
+        rows = []
+
+        for key in keys:
+            present = key in values
+            if not present and not show_defaults:
+                continue
+            value = values.get(key, defaults.get(key, schema_properties.get(key, {}).get("default")))
+            param_path = path + (key,)
+            param_schema = tree.model_parameter_schema(model_name, param_path) if tree else {}
+            default_value = defaults.get(key, param_schema.get("default")) if isinstance(param_schema, dict) else defaults.get(key)
+
+            if isinstance(value, dict) or (isinstance(param_schema, dict) and param_schema.get("type") == "object"):
+                child_values = value if isinstance(value, dict) else {}
+                child_defaults = defaults.get(key, {}) if isinstance(defaults.get(key), dict) else {}
+                block = IndentedHierarchyBlock(level=level + 1)
+                child_candidates = list(dict.fromkeys([*child_defaults.keys(), *param_schema.get("properties", {}).keys()]))
+                child_candidates = [candidate for candidate in child_candidates if candidate not in child_values]
+                header = QHBoxLayout()
+                header.addWidget(label(f"[{key}]", "muted"))
+                if child_candidates:
+                    header.addWidget(_make_param_adder_button(
+                        f"Add {key} parameter",
+                        child_candidates,
+                        lambda child, mn=method_name, model=model_name, p=param_path: self._add_method_model_parameter(mn, model, p + (child,)),
+                        parent_widget=self,
+                    ))
+                header.addStretch()
+                delete_group = _make_subtle_tool_button("close", f"Remove '{key}'", size=20, icon_size=12)
+                delete_group.clicked.connect(
+                    lambda _, mn=method_name, model=model_name, p=param_path: self._remove_method_model_parameter(mn, model, p)
+                )
+                header.addWidget(delete_group)
+                block.addRow("", header)
+                for child_label, child_row in self._render_method_model_parameters(
+                    method_name, model_name, child_values, child_defaults, param_path, level + 1, show_defaults
+                ):
+                    if isinstance(child_row, QWidget):
+                        block.addRow(child_row)
+                    else:
+                        child_row.addStretch()
+                        block.addRow(child_label, child_row)
+                rows.append(("", block))
+                continue
+
+            row = QHBoxLayout()
+            widget = self._schema_widget(
+                value,
+                param_schema,
+                lambda edited, mn=method_name, model=model_name, p=param_path: self._on_method_model_parameter_edited(
+                    mn, model, p, edited
+                ),
+            )
+            row.addWidget(widget)
+            delete_value = _make_subtle_tool_button("close", f"Remove '{key}'", size=20, icon_size=12)
+            delete_value.clicked.connect(
+                lambda _, mn=method_name, model=model_name, p=param_path: self._remove_method_model_parameter(mn, model, p)
+            )
+            row.addWidget(delete_value)
+            if not present:
+                row.addWidget(QLabel("(default)"))
+            row.addStretch()
+            rows.append((str(key), row))
+
+        return rows
 
     def _browse_dataset_path(self):
         """Open file dialog to select a dataset file or directory."""
@@ -5033,176 +4834,6 @@ class ConfigViewer(QWidget):
             return 0.01
         return 0.0
 
-    def _resolve_default_subcomponent_param_value(self, method_name: str, subcomp_name: str, param_key: str) -> Any:
-        methods = self.raw_data.get("methods", {})
-        m_spec = methods.get(method_name, {}) if isinstance(methods, dict) else {}
-        tree = config_tree()
-        model_raw = m_spec.get("model")
-        model_name = next(iter(model_raw), None) if isinstance(model_raw, dict) else model_raw
-        sub_dict = {}
-        if isinstance(m_spec.get("model"), dict):
-            for arch_dict in m_spec["model"].values():
-                if isinstance(arch_dict, dict) and subcomp_name in arch_dict:
-                    sub_dict = arch_dict[subcomp_name] if isinstance(arch_dict[subcomp_name], dict) else {}
-                    break
-        if not sub_dict and isinstance(m_spec.get(subcomp_name), dict):
-            sub_dict = m_spec[subcomp_name]
-
-        sub_type = sub_dict.get("type") or sub_dict.get("architecture")
-        if not sub_type:
-            if isinstance(m_spec.get(subcomp_name), str):
-                sub_type = m_spec[subcomp_name]
-            elif tree and model_name and model_name in tree.models:
-                slot_dict = tree.models[model_name].parameters.get(subcomp_name)
-                if isinstance(slot_dict, dict):
-                    sub_type = slot_dict.get("type") or slot_dict.get("architecture") or subcomp_name
-                    if param_key in slot_dict:
-                        return slot_dict[param_key]
-                elif isinstance(slot_dict, str):
-                    sub_type = slot_dict
-
-        if tree and sub_type and sub_type in tree.models:
-            model_params = tree.model_parameters(sub_type)
-            if param_key in model_params:
-                return model_params[param_key]
-
-        return None
-
-    def _add_method_subcomponent(self, method_name: str, subcomp_name: str):
-        methods = self.raw_data.setdefault("methods", {})
-        m_spec = methods.setdefault(method_name, {})
-        tree = config_tree()
-        model_val = m_spec.get("model")
-        model_name = next(iter(model_val)) if isinstance(model_val, dict) else str(model_val or "")
-        if not model_name:
-            return
-
-        tree = config_tree()
-        subcomps = tree.model_subcomponents(model_name) if tree else {}
-        sub_default = dict(subcomps.get(subcomp_name, {}))
-        if not sub_default:
-            sub_default = {}
-
-        if isinstance(m_spec.get("model"), dict):
-            m_spec["model"].setdefault(model_name, {})[subcomp_name] = sub_default
-        else:
-            m_spec[subcomp_name] = sub_default
-
-        self._mark_dirty()
-        self._render_boxes()
-
-    def _remove_method_subcomponent(self, method_name: str, subcomp_name: str):
-        methods = self.raw_data.get("methods", {})
-        m_spec = methods.get(method_name, {})
-        if isinstance(m_spec.get("model"), dict):
-            for arch_dict in m_spec["model"].values():
-                if isinstance(arch_dict, dict):
-                    arch_dict.pop(subcomp_name, None)
-        m_spec.pop(subcomp_name, None)
-        self._mark_dirty()
-        self._render_boxes()
-
-    def _on_method_subcomponent_type_changed(self, method_name: str, subcomp_name: str, new_type: str):
-        if self._block_updates or not new_type:
-            return
-        methods = self.raw_data.setdefault("methods", {})
-        m_spec = methods.setdefault(method_name, {})
-
-        container = None
-        if isinstance(m_spec.get("model"), dict):
-            for arch_dict in m_spec["model"].values():
-                if isinstance(arch_dict, dict) and subcomp_name in arch_dict:
-                    container = arch_dict
-                    break
-        if container is None:
-            if subcomp_name in m_spec:
-                container = m_spec
-            elif isinstance(m_spec.get("model"), dict):
-                model_name = next(iter(m_spec["model"]))
-                container = m_spec["model"].setdefault(model_name, {})
-            else:
-                container = m_spec
-
-        cur_val = container.get(subcomp_name)
-        if isinstance(cur_val, str):
-            container[subcomp_name] = new_type
-            old_submodel = next((k for k in cur_val if (self.tree and k in self.tree.models)), None)
-            if old_submodel:
-                params = cur_val.pop(old_submodel)
-                container[subcomp_name] = {new_type: params if isinstance(params, dict) else {}}
-            elif "type" in cur_val:
-                cur_val["type"] = new_type
-            else:
-                container[subcomp_name] = new_type
-        else:
-            container[subcomp_name] = new_type
-
-        self._mark_dirty()
-        self._render_boxes()
-
-    def _on_method_subcomponent_param_edited(self, method_name: str, subcomp_name: str, key: str, value: Any):
-        if self._block_updates:
-            return
-        methods = self.raw_data.setdefault("methods", {})
-        m_spec = methods.setdefault(method_name, {})
-        target = None
-        if isinstance(m_spec.get("model"), dict):
-            for arch_dict in m_spec["model"].values():
-                if isinstance(arch_dict, dict) and subcomp_name in arch_dict:
-                    if isinstance(arch_dict[subcomp_name], dict):
-                        target = arch_dict[subcomp_name]
-                    elif isinstance(arch_dict[subcomp_name], str):
-                        arch_dict[subcomp_name] = {"type": arch_dict[subcomp_name]}
-                        target = arch_dict[subcomp_name]
-                    break
-        if target is None:
-            if subcomp_name not in m_spec:
-                m_spec[subcomp_name] = {}
-            elif isinstance(m_spec[subcomp_name], str):
-                m_spec[subcomp_name] = {"type": m_spec[subcomp_name]}
-            target = m_spec[subcomp_name]
-
-        if self.tree:
-            for sub_name in self.tree.models:
-                if sub_name in target and isinstance(target[sub_name], dict):
-                    target[sub_name][key] = _parse_yaml_value(value)
-                    self._mark_dirty()
-                    return
-
-        target[key] = _parse_yaml_value(value)
-        self._mark_dirty()
-
-    def _remove_method_subcomponent_param(self, method_name: str, subcomp_name: str, key: str):
-        methods = self.raw_data.get("methods", {})
-        m_spec = methods.get(method_name, {})
-        target = None
-        if isinstance(m_spec.get("model"), dict):
-            for arch_dict in m_spec["model"].values():
-                if isinstance(arch_dict, dict) and subcomp_name in arch_dict and isinstance(arch_dict[subcomp_name], dict):
-                    target = arch_dict[subcomp_name]
-                    break
-        if target is None and subcomp_name in m_spec and isinstance(m_spec[subcomp_name], dict):
-            target = m_spec[subcomp_name]
-        if target is not None:
-            if self.tree:
-                for sub_name in self.tree.models:
-                    if sub_name in target and isinstance(target[sub_name], dict):
-                        target[sub_name].pop(key, None)
-                        self._mark_dirty()
-                        self._render_boxes()
-                        return
-            target.pop(key, None)
-            self._mark_dirty()
-            self._render_boxes()
-
-    def _add_method_subcomponent_param(self, method_name: str, subcomp_name: str, key: str, value: Any = None):
-        if not key:
-            return
-        if value is None or value == "":
-            value = self._resolve_default_subcomponent_param_value(method_name, subcomp_name, key)
-        self._on_method_subcomponent_param_edited(method_name, subcomp_name, key, value)
-        self._render_boxes()
-
     def _remove_method_param(self, method_name, param_key):
         if "methods" in self.raw_data and method_name in self.raw_data["methods"]:
             m_spec = self.raw_data["methods"][method_name]
@@ -5225,8 +4856,8 @@ class ConfigViewer(QWidget):
         elif isinstance(m_spec.get("model"), dict):
             model_name = next(iter(m_spec["model"]), None)
 
-        if self.tree and model_name and param_key in self.tree.model_slots(model_name):
-            self._add_method_subcomponent(method_name, param_key)
+        if self.tree and model_name and param_key in self.tree.model_parameter_keys(model_name):
+            self._add_method_model_parameter(method_name, model_name, (param_key,))
             return
 
         if value is None or value == "":

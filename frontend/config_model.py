@@ -196,34 +196,9 @@ class Model:
             architecture=raw.get("architecture") or path.stem,
             compatible_paradigms=cp,
             parameters={k: v for k, v in raw.items() if k not in ("architecture", "paradigms", "compatible_paradigms", "parameter_schema")},
+            parameter_schema=dict(raw.get("parameter_schema") or {}),
             raw=raw,
         )
-
-    @property
-    def is_composite(self) -> bool:
-        model_domains = any(
-            isinstance(value, dict) and value.get("x-theta-domain") == "model"
-            for value in self.parameter_schema.get("properties", {}).values()
-        )
-        return bool(self.subcomponents) or "slots" in self.parameters or model_domains
-
-    @property
-    def subcomponents(self) -> dict[str, dict[str, Any]]:
-        return {k: dict(v) for k, v in self.parameters.items() if isinstance(v, dict)}
-
-    @property
-    def slots(self) -> list[str]:
-        model_slots = [
-            key for key, value in self.parameter_schema.get("properties", {}).items()
-            if isinstance(value, dict) and value.get("x-theta-domain") == "model"
-        ]
-        if model_slots:
-            return model_slots
-        if "slots" in self.parameters and isinstance(self.parameters["slots"], (list, tuple)):
-            return list(self.parameters["slots"])
-        slots = list(self.subcomponents.keys())
-        return slots
-
 
 @dataclass(frozen=True)
 class Experiment:
@@ -758,21 +733,6 @@ class ConfigTree:
             if key not in keys:
                 keys.append(key)
         return keys
-
-    def model_subcomponents(self, model_name: str | None) -> dict[str, dict[str, Any]]:
-        if not model_name or model_name not in self.models:
-            return {}
-        return {
-            k: dict(v)
-            for k, v in self.models[model_name].parameters.items()
-            if isinstance(v, dict)
-        }
-
-    def model_slots(self, model_name: str | None) -> list[str]:
-        if not model_name or model_name not in self.models:
-            return []
-        return self.models[model_name].slots
-
 
 @dataclass(frozen=True)
 class ExperimentGroup:

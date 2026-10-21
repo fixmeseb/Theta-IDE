@@ -6,7 +6,6 @@ and environments. Models implement these protocols to declare runtime capabiliti
 without hardcoding class checks in base agent loops.
 """
 
-from dataclasses import dataclass, field
 from typing import Any, Callable, Protocol, runtime_checkable
 
 import torch
@@ -52,47 +51,6 @@ class HasModelCallbacks(Protocol):
         ...
 
 
-@dataclass
-class ModelSlot:
-    """Defines a slot for a submodel inside a composite architecture.
-
-    Attributes:
-        name: Unique identifier for the slot (e.g. 'neural', 'symbolic', 'encoder').
-        required: Whether this slot must be filled for the model to instantiate.
-        default: Default model identifier to populate if none is provided.
-        tags: List of semantic tags to filter candidate models in the GUI/registry.
-        description: User-facing explanation of the subcomponent's role.
-    """
-
-    name: str
-    required: bool = True
-    default: str | None = None
-    tags: list[str] = field(default_factory=list)
-    description: str = ""
-
-
-@runtime_checkable
-class CompositeModelProtocol(Protocol):
-    """Protocol for composite models that assemble subcomponents/submodels."""
-
-    @classmethod
-    def get_model_slots(cls) -> list[ModelSlot]:
-        """Declare submodel slots to the GUI and configuration pipeline."""
-        ...
-
-    @classmethod
-    def build_from_config(
-        cls,
-        cfg: dict[str, Any],
-        env: Any,
-        device: torch.device,
-        submodels: dict[str, nn.Module],
-        **kwargs: Any,
-    ) -> nn.Module:
-        """Plugin-owned constructor receiving instantiated child modules."""
-        ...
-
-
 @runtime_checkable
 class EnvironmentWrapperProtocol(Protocol):
     """Protocol for plugins that require environment wrappers or observation adapters."""
@@ -126,7 +84,7 @@ def walk_model_modules(root: Any) -> list[Any]:
 
     Supports:
       - Standalone models (returns [root])
-      - Composite models declaring policy_modules or CompositeModelProtocol
+      - Models exposing policy_modules or get_subcomponents()
       - Standard torch.nn.Module hierarchies
     """
     if root is None:
@@ -147,7 +105,7 @@ def walk_model_modules(root: Any) -> list[Any]:
             for sub_m in policy_modules:
                 _traverse(sub_m)
 
-        # Check subcomponents if object implements CompositeModelProtocol
+        # Discover child modules when a model exposes them for inspection.
         if hasattr(obj, "get_subcomponents") and callable(getattr(obj, "get_subcomponents")):
             try:
                 for sub_m in obj.get_subcomponents().values():

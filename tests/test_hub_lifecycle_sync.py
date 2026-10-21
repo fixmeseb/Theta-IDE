@@ -2,7 +2,7 @@
 
 Verifies:
 1. File Tree Deletion Interception (Option 1): Component discovery and metadata-driven uninstallation.
-2. Config Preservation on Hub Uninstall (Option 3): Keeping vs removing configs, and 'Don't ask again' persistence.
+2. Component configs are hidden on uninstall and restored on reinstall.
 3. Dialog instantiation and choice contracts.
 """
 import os
@@ -13,7 +13,7 @@ import unittest
 from pathlib import Path
 
 os.environ["QT_QPA_PLATFORM"] = "offscreen"
-from PyQt6.QtWidgets import QApplication
+from PyQt6.QtWidgets import QApplication, QLabel
 app = QApplication.instance() or QApplication([])
 
 from frontend.hub.installer import HubInstaller
@@ -104,22 +104,35 @@ class TestHubLifecycleSync(unittest.TestCase):
         meta = self.installer.find_component_for_path(other_dir)
         self.assertIsNone(meta)
 
-    def test_uninstall_preserving_configs(self):
-        """Uninstall with remove_configs=False keeps YAML files in in/config/ (Option 3)."""
-        ok = self.installer.uninstall(self.component, remove_configs=False)
+    def test_uninstall_hides_configs_and_reinstall_restores_them(self):
+        """Uninstall hides configs outside the active tree and reinstall restores them."""
+        ok = self.installer.uninstall(self.component)
         self.assertTrue(ok)
 
         # Source code is removed
         self.assertFalse(self.comp_dir.exists())
 
-        # Configs are preserved!
-        self.assertTrue(self.cfg1.exists())
-        self.assertTrue(self.cfg2.exists())
-        self.assertTrue(self.config_dir.exists())
+        # Active configs are hidden, while user data remains in IDE-local storage.
+        self.assertFalse(self.cfg1.exists())
+        self.assertFalse(self.cfg2.exists())
+        self.assertFalse(self.config_dir.exists())
+        retained1 = self.data_dir / "retained_configs" / "mock-game" / "in/config/env/mock_game/level1.yaml"
+        retained2 = self.data_dir / "retained_configs" / "mock-game" / "in/config/env/mock_game/level2.yaml"
+        self.assertTrue(retained1.is_file())
+        self.assertTrue(retained2.is_file())
+
+        restored_paths = []
+        self.installer._restore_retained_configs("mock-game", restored_paths, {})
+        self.assertEqual(set(restored_paths), {
+            "in/config/env/mock_game/level1.yaml",
+            "in/config/env/mock_game/level2.yaml",
+        })
+        self.assertTrue(self.cfg1.is_file())
+        self.assertTrue(self.cfg2.is_file())
 
     def test_uninstall_removing_configs(self):
-        """Uninstall with remove_configs=True removes both code and configs (Option 3)."""
-        ok = self.installer.uninstall(self.component, remove_configs=True)
+        """Uninstall removes configs from the active tree."""
+        ok = self.installer.uninstall(self.component)
         self.assertTrue(ok)
 
         # Source code is removed
@@ -135,44 +148,18 @@ class TestHubLifecycleSync(unittest.TestCase):
         meta = self.installer.find_component_for_path(self.config_dir)
         self.assertIsNotNone(meta)
 
-        ok = self.installer.uninstall_by_metadata(meta, remove_configs=True)
+        ok = self.installer.uninstall_by_metadata(meta)
         self.assertTrue(ok)
         self.assertFalse(self.comp_dir.exists())
         self.assertFalse(self.config_dir.exists())
 
-    def test_dont_ask_again_settings_preference_persistence(self):
-        """'Don't ask again' preference persists and updates settings.toml (Option 3)."""
-        from frontend.hub.client import HubClient
-        from frontend.settings import SettingsManager
-
-        settings_mgr = SettingsManager(data_dir=self.data_dir)
-        client = HubClient(
-            workspace_dir=self.workspace_dir,
-            data_dir=self.data_dir,
-            settings_manager=settings_mgr,
-        )
-
-        # Default is "ask"
-        self.assertEqual(client.get_uninstall_configs_pref(), "ask")
-
-        # Set to "keep"
-        client.set_uninstall_configs_pref("keep")
-        self.assertEqual(client.get_uninstall_configs_pref(), "keep")
-        self.assertEqual(settings_mgr.hub_uninstall_configs, "keep")
-
-        # Set to "remove"
-        client.set_uninstall_configs_pref("remove")
-        self.assertEqual(client.get_uninstall_configs_pref(), "remove")
-        self.assertEqual(settings_mgr.hub_uninstall_configs, "remove")
-
     def test_dialog_instantiation(self):
-        """Dialogs for Option 1 and Option 3 initialize properly."""
+        """Delete and uninstall dialogs initialize with the new lifecycle text."""
         del_dlg = ComponentDeleteDialog("in/config/env/mock_game", "Mock Game Suite")
         self.assertEqual(del_dlg.choice, "cancel")
 
         uninst_dlg = UninstallComponentDialog("Mock Game Suite")
-        self.assertEqual(uninst_dlg.choice, "cancel")
-        self.assertFalse(uninst_dlg.remember)
+        self.assertIn("restored", " ".join(label.text() for label in uninst_dlg.findChildren(QLabel)))
 
 
 if __name__ == "__main__":

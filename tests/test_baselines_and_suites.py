@@ -132,7 +132,7 @@ def test_suite_installation_and_modular_uninstallation(tmp_path):
     # 4. Modular uninstallation of a single child component (dnn)
     dnn_meta = json.loads((workspace / "src" / "usr" / "models" / "dnn" / ".theta_component.json").read_text(encoding="utf-8"))
     dnn_meta["target_dir"] = str(workspace / "src" / "usr" / "models" / "dnn")
-    uninstalled_dnn = installer.uninstall_by_metadata(dnn_meta, remove_configs=True)
+    uninstalled_dnn = installer.uninstall_by_metadata(dnn_meta)
     assert uninstalled_dnn is True
     assert not (workspace / "src" / "usr" / "models" / "dnn").exists()
     assert not (workspace / "in" / "config" / "model" / "basics" / "dnn.yaml").exists()
@@ -145,7 +145,7 @@ def test_suite_installation_and_modular_uninstallation(tmp_path):
     assert (workspace / "in" / "envs" / "atari").is_dir()
 
     # 5. Full suite uninstallation protects category directories (agent/, model/, env/)
-    uninstalled_suite = installer.uninstall(suite_comp, remove_configs=True)
+    uninstalled_suite = installer.uninstall(suite_comp)
     assert uninstalled_suite is True
     assert (workspace / "in" / "config" / "agent").is_dir()
     assert (workspace / "in" / "config" / "model").is_dir()
@@ -309,7 +309,7 @@ def test_dl_basics_suite_and_mnist_package_install_and_uninstall(tmp_path):
     # 3. Modular uninstallation of mlp
     mlp_meta = json.loads((workspace / "src" / "usr" / "models" / "mlp" / ".theta_component.json").read_text(encoding="utf-8"))
     mlp_meta["target_dir"] = str(workspace / "src" / "usr" / "models" / "mlp")
-    uninstalled_mlp = installer.uninstall_by_metadata(mlp_meta, remove_configs=True)
+    uninstalled_mlp = installer.uninstall_by_metadata(mlp_meta)
     assert uninstalled_mlp is True
     assert not (workspace / "src" / "usr" / "models" / "mlp").exists()
     assert not (workspace / "in" / "config" / "model" / "basics" / "mlp.yaml").exists()

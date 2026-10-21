@@ -90,12 +90,11 @@ def main():
     # Direct CLI component scaffolding
     if raw_experiment in ("scaffold", "new-plugin"):
         if len(extra_args) < 2:
-            print("Usage: python run_pipeline.py scaffold <kind> <name> [--composite] [--author '...'] [--desc '...']")
+            print("Usage: python run_pipeline.py scaffold <kind> <name> [--author '...'] [--desc '...']")
             print("Available kinds: model, agent, env, datamodule, evaluator")
             sys.exit(1)
         kind = extra_args[0].lower()
         name = extra_args[1]
-        is_composite = "--composite" in extra_args
         author = "Theta Researcher"
         desc = ""
         for i, a in enumerate(extra_args):
@@ -107,7 +106,7 @@ def main():
         from src.app.services.plugin_scaffolder import PluginScaffolder, ScaffoldOptions
 
         scaffolder = PluginScaffolder(workspace_root=Path(PROJECT_ROOT))
-        opts = ScaffoldOptions(name=name, kind=kind, is_composite=is_composite, author=author, description=desc)
+        opts = ScaffoldOptions(name=name, kind=kind, author=author, description=desc)
         res = scaffolder.scaffold(opts)
         if res.success:
             print(f"Successfully scaffolded {kind} plugin '{name}' at {res.target_dir}")

@@ -5,7 +5,7 @@ import pytest
 import yaml
 
 from PyQt6.QtWidgets import QApplication
-from frontend.config_viewer import ConfigViewer, config_tree, get_method_candidate_subcomponents
+from frontend.config_viewer import ConfigViewer, config_tree
 
 
 @pytest.fixture(scope="session")
@@ -57,7 +57,7 @@ def test_config_viewer_loads_cql_benchmark(qapp, tmp_path):
     # Test subcomponent addition and editing
     method_name = "cql_blendrl_human_rigid"
     # This method has symbolic, but not neural yet
-    viewer._add_method_subcomponent(method_name, "neural")
+    viewer._add_method_model_parameter(method_name, "blendrl", ("neural",))
     rigid_spec = viewer.raw_data["methods"][method_name]
     if isinstance(rigid_spec.get("model"), dict):
         assert "neural" in rigid_spec["model"]["blendrl"]
@@ -65,7 +65,7 @@ def test_config_viewer_loads_cql_benchmark(qapp, tmp_path):
         assert "neural" in rigid_spec
 
     # Edit parameter on symbolic subcomponent
-    viewer._on_method_subcomponent_param_edited(method_name, "symbolic", "rules", "custom_rules")
+    viewer._on_method_model_parameter_edited(method_name, "blendrl", ("symbolic", "rules"), "custom_rules")
     if isinstance(rigid_spec.get("model"), dict):
         sym_dict = rigid_spec["model"]["blendrl"]["symbolic"]
     else:
@@ -73,7 +73,7 @@ def test_config_viewer_loads_cql_benchmark(qapp, tmp_path):
     assert sym_dict["rules"] == "custom_rules"
 
     # Remove parameter
-    viewer._remove_method_subcomponent_param(method_name, "symbolic", "rules")
+    viewer._remove_method_model_parameter(method_name, "blendrl", ("symbolic", "rules"))
     assert "rules" not in sym_dict
 
     # Save to disk and check YAML
@@ -379,33 +379,39 @@ def test_blendrl_model_block_and_logic_module_rendering(qapp, tmp_path):
     assert "ppo_blendrl_final_cp" in viewer.raw_data["methods"]
     assert viewer.raw_data["methods"]["ppo_blendrl_final_cp"]["model"] == "blendrl"
 
-    # Initially, composite subcomponents (neural, symbolic, blender) are NOT seeded/populated
-    # until the user explicitly adds them via the blendrl param adder
+    # Parameters with declared defaults are not inserted until the user adds them.
     labels = [l.text() for l in viewer.findChildren(QLabel)]
     assert "Neural Architecture" not in labels
     assert "Logic Module (Symbolic)" not in labels
     assert "Blender Mode" not in labels
 
-    # The blendrl adder offers the subcomponents (what feeds its + button's menu)
-    bp_items = get_method_candidate_subcomponents("blendrl", config_tree(), set())
+    # Component-valued parameters are declared by the model schema.
+    model_tree = config_tree()
+    bp_items = {
+        key for key, schema in model_tree.models["blendrl"].parameter_schema.get("properties", {}).items()
+        if isinstance(schema, dict) and schema.get("x-theta-domain")
+    }
     assert "symbolic" in bp_items
     assert "neural" in bp_items
     assert "blender" not in bp_items
 
     # 1. Add symbolic subcomponent via adder
-    viewer._add_method_param("ppo_blendrl_final_cp", "symbolic")
+    viewer._add_method_model_parameter("ppo_blendrl_final_cp", "blendrl", ("symbolic",))
     qapp.processEvents()
 
-    # Now Symbolic Module is rendered
+    # The generic nested parameter editor renders the declared component-valued field.
     labels = [l.text() for l in viewer.findChildren(QLabel)]
-    assert "Symbolic Module" in labels
-    assert "Neural Module" not in labels
-    assert "Blender Module" not in labels
+    assert "[symbolic]" in labels
+    assert "[neural]" not in labels
+    assert "[blender]" not in labels
 
-    # Find the ComboBox for Symbolic Module
+    # The declared model domain is edited with the generic model selector.
     combos = viewer.findChildren(ComboBox)
-    logic_combos = [c for c in combos if "symbolic" in c.toolTip().lower()]
-    assert len(logic_combos) >= 1, "Expected Symbolic Module ComboBox with symbolic tooltip"
+    logic_combos = [
+        c for c in combos
+        if {"nsfr", "neumann", "cew"}.issubset({c.itemText(i) for i in range(c.count())})
+    ]
+    assert len(logic_combos) >= 1, "Expected a model selector for the declared model parameter"
     logic_combo = logic_combos[0]
 
     # Verify choices include nsfr, neumann, cew with default nsfr
@@ -434,63 +440,63 @@ def test_blendrl_model_block_and_logic_module_rendering(qapp, tmp_path):
     )
 
     # 2. Add rule parameter under symbolic
-    viewer._add_method_subcomponent_param("ppo_blendrl_final_cp", "symbolic", "rules", "custom_rules")
+    viewer._on_method_model_parameter_edited("ppo_blendrl_final_cp", "blendrl", ("symbolic", "rules"), "custom_rules")
     sym_spec = viewer.raw_data["methods"]["ppo_blendrl_final_cp"]["symbolic"]
     assert (sym_spec.get("rules") if isinstance(sym_spec, dict) else sym_spec) == "custom_rules"
 
     # Remove rule parameter
-    viewer._remove_method_subcomponent_param("ppo_blendrl_final_cp", "symbolic", "rules")
+    viewer._remove_method_model_parameter("ppo_blendrl_final_cp", "blendrl", ("symbolic", "rules"))
     sym_spec = viewer.raw_data["methods"]["ppo_blendrl_final_cp"]["symbolic"]
     if isinstance(sym_spec, dict):
         assert "rules" not in sym_spec
 
     # 3. Remove symbolic subcomponent
-    viewer._remove_method_subcomponent("ppo_blendrl_final_cp", "symbolic")
+    viewer._remove_method_model_parameter("ppo_blendrl_final_cp", "blendrl", ("symbolic",))
     qapp.processEvents()
 
     labels = [l.text() for l in viewer.findChildren(QLabel)]
-    assert "Symbolic Module" not in labels
+    assert "[symbolic]" not in labels
 
     # Verify symbolic is back in candidate blend parameters
     spec = viewer.raw_data["methods"]["ppo_blendrl_final_cp"]
     present = set((spec.get("model") or {}).keys()) if isinstance(spec.get("model"), dict) else set()
-    assert "symbolic" in get_method_candidate_subcomponents("blendrl", config_tree(), present)
+    assert "symbolic" in set(config_tree().model_parameter_keys("blendrl")) - present
 
     # 4. Add neural subcomponent
-    viewer._add_method_param("ppo_blendrl_final_cp", "neural")
+    viewer._add_method_model_parameter("ppo_blendrl_final_cp", "blendrl", ("neural",))
     qapp.processEvents()
     labels = [l.text() for l in viewer.findChildren(QLabel)]
-    assert "Neural Module" in labels
+    assert "[neural]" in labels
 
     # Add hidden_sizes under neural
-    viewer._add_method_subcomponent_param("ppo_blendrl_final_cp", "neural", "hidden_sizes", [128, 128])
+    viewer._on_method_model_parameter_edited("ppo_blendrl_final_cp", "blendrl", ("neural", "hidden_sizes"), [128, 128])
     neural_spec = viewer.raw_data["methods"]["ppo_blendrl_final_cp"]["neural"]
     assert (neural_spec.get("hidden_sizes") if isinstance(neural_spec, dict) else neural_spec) == [128, 128]
 
     # Remove hidden_sizes
-    viewer._remove_method_subcomponent_param("ppo_blendrl_final_cp", "neural", "hidden_sizes")
+    viewer._remove_method_model_parameter("ppo_blendrl_final_cp", "blendrl", ("neural", "hidden_sizes"))
     neural_spec = viewer.raw_data["methods"]["ppo_blendrl_final_cp"]["neural"]
     if isinstance(neural_spec, dict):
         assert "hidden_sizes" not in neural_spec
 
     # Remove neural
-    viewer._remove_method_subcomponent("ppo_blendrl_final_cp", "neural")
+    viewer._remove_method_model_parameter("ppo_blendrl_final_cp", "blendrl", ("neural",))
     qapp.processEvents()
     labels = [l.text() for l in viewer.findChildren(QLabel)]
-    assert "Neural Module" not in labels
+    assert "[neural]" not in labels
 
     # 5. Add the nested blender configuration group
     viewer._add_method_param("ppo_blendrl_final_cp", "blender")
     qapp.processEvents()
     labels = [l.text() for l in viewer.findChildren(QLabel)]
-    assert "Blender Module" not in labels
+    assert "[blender]" not in labels
     assert any("blender" in text.lower() for text in labels)
 
     # Remove blender
-    viewer._remove_method_subcomponent("ppo_blendrl_final_cp", "blender")
+    viewer._remove_method_model_parameter("ppo_blendrl_final_cp", "blendrl", ("blender",))
     qapp.processEvents()
     labels = [l.text() for l in viewer.findChildren(QLabel)]
-    assert "Blender Module" not in labels
+    assert "[blender]" not in labels
 
 
 def test_blendrl_params_and_rules_editing(qapp, tmp_path):
@@ -511,7 +517,7 @@ def test_blendrl_params_and_rules_editing(qapp, tmp_path):
     assert viewer.raw_data["methods"][method_name]["logic_lr"] == 0.001
 
     # 2. Add rule parameter to Logic Module (symbolic)
-    viewer._add_method_subcomponent_param(method_name, "symbolic", "rules", "variant1")
+    viewer._on_method_model_parameter_edited(method_name, "blendrl", ("symbolic", "rules"), "variant1")
     sym_spec = viewer.raw_data["methods"][method_name]["symbolic"]
     if isinstance(sym_spec, dict):
         assert sym_spec.get("rules") == "variant1"
@@ -519,12 +525,12 @@ def test_blendrl_params_and_rules_editing(qapp, tmp_path):
         assert sym_spec == "variant1"
 
     # Edit rule parameter
-    viewer._on_method_subcomponent_param_edited(method_name, "symbolic", "rules", "custom_rules")
+    viewer._on_method_model_parameter_edited(method_name, "blendrl", ("symbolic", "rules"), "custom_rules")
     sym_spec = viewer.raw_data["methods"][method_name]["symbolic"]
     assert sym_spec["rules"] == "custom_rules"
 
     # 3. Remove rule parameter
-    viewer._remove_method_subcomponent_param(method_name, "symbolic", "rules")
+    viewer._remove_method_model_parameter(method_name, "blendrl", ("symbolic", "rules"))
     assert "rules" not in viewer.raw_data["methods"][method_name]["symbolic"]
 
     # 4. Remove BlendRL parameter
@@ -685,31 +691,38 @@ def test_experiment_methods_start_from_the_group_default_method(qapp, tmp_path):
     assert fresh.raw_data["methods"][added] == {}
 
 
-def test_generic_composite_model_slots_and_discovery(tmp_path):
+def test_model_component_parameter_domains(tmp_path):
     from frontend.config_model import ConfigTree, Model
-    from frontend.config_viewer import config_tree, get_method_candidate_subcomponents
+    from frontend.config_viewer import config_tree
 
     tree = config_tree()
     assert "blendrl" in tree.models
-    assert tree.models["blendrl"].is_composite is True
-    assert set(tree.models["blendrl"].slots) == {"neural", "symbolic"}
-    assert tree.models["dnn"].is_composite is False
-    assert set(tree.model_slots("blendrl")) == {"neural", "symbolic"}
-    assert tree.model_slots("dnn") == []
+    blendrl_domains = {
+        key for key, schema in tree.models["blendrl"].parameter_schema.get("properties", {}).items()
+        if isinstance(schema, dict) and schema.get("x-theta-domain")
+    }
+    assert set(blendrl_domains) == {"neural", "symbolic"}
+    dnn_domains = {
+        key for key, schema in tree.models["dnn"].parameter_schema.get("properties", {}).items()
+        if isinstance(schema, dict) and schema.get("x-theta-domain")
+    }
+    assert dnn_domains == set()
 
-    # Test generic composite model with slots declared in YAML
+    # Child model choices are declared by the model component's parameter schema.
     custom_model_yaml = tmp_path / "custom_composite.yaml"
     custom_model_yaml.write_text(
         "architecture: custom_composite\n"
-        "slots: [backbone, classifier_head]\n"
-        "backbone:\n"
-        "  type: nature_cnn\n"
-        "classifier_head:\n"
-        "  type: standard_mlp\n",
+        "parameter_schema:\n"
+        "  type: object\n"
+        "  properties:\n"
+        "    backbone:\n"
+        "      type: string\n"
+        "      x-theta-domain: model\n"
+        "    classifier_head:\n"
+        "      type: string\n"
+        "      x-theta-domain: model\n",
         encoding="utf-8",
     )
     custom_model = Model.from_file(custom_model_yaml)
-    assert custom_model.is_composite is True
-    assert custom_model.slots == ["backbone", "classifier_head"]
-    assert "backbone" in custom_model.subcomponents
-    assert "classifier_head" in custom_model.subcomponents
+    assert set(custom_model.parameter_schema["properties"]) == {"backbone", "classifier_head"}
+    assert custom_model.parameter_schema["properties"]["backbone"]["x-theta-domain"] == "model"

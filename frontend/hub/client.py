@@ -293,39 +293,11 @@ class HubClient(QObject):
         thread = threading.Thread(target=worker, daemon=True)
         thread.start()
 
-    def get_uninstall_configs_pref(self) -> str:
-        """Get the user preference for handling configuration files during component uninstall."""
-        if self.settings_manager:
-            return str(self.settings_manager.get("hub", "uninstall_configs", default="ask"))
-        settings_file = self.workspace_dir / ".thetaide" / "settings.toml"
-        if settings_file.is_file():
-            try:
-                import tomllib
-                data = tomllib.loads(settings_file.read_text(encoding="utf-8"))
-                return data.get("hub", {}).get("uninstall_configs", "ask")
-            except Exception:
-                pass
-        return "ask"
-
-    def set_uninstall_configs_pref(self, value: str) -> None:
-        """Persist user preference for handling configuration files during component uninstall."""
-        if self.settings_manager:
-            self.settings_manager.set("hub", "uninstall_configs", value)
-            return
-        settings_file = self.workspace_dir / ".thetaide" / "settings.toml"
-        try:
-            from frontend.settings import _parse_toml_file, _write_toml_file
-            data = _parse_toml_file(settings_file)
-            data.setdefault("hub", {})["uninstall_configs"] = value
-            _write_toml_file(settings_file, data)
-        except Exception:
-            pass
-
-    def uninstall_async(self, component: HubComponent, remove_configs: bool = True) -> None:
-        """Uninstall component in a background thread."""
+    def uninstall_async(self, component: HubComponent) -> None:
+        """Uninstall component code and hide its configs in a background thread."""
         def worker():
             try:
-                removed = self.installer.uninstall(component, remove_configs=remove_configs)
+                removed = self.installer.uninstall(component)
                 if removed is False:
                     raise RuntimeError("The installer could not remove this component.")
                 self.refresh_installed_status()

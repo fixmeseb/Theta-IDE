@@ -7,7 +7,7 @@ from pathlib import Path
 import shutil
 import tempfile
 import urllib.request
-from typing import Callable, Optional, Tuple
+from typing import Any, Callable, Dict, Optional, Tuple, Union
 from zipfile import ZipFile
 
 from .models import AuthorInfo, HubComponent, ReleaseInfo
@@ -382,6 +382,14 @@ class HubInstaller:
                         installed_config_paths.append(installed_config_rel)
                         break
 
+            # Restore configs retained during an earlier uninstall. This includes
+            # edits to packaged profiles and user-created copies of those profiles.
+            restored_user_config_paths = self._restore_retained_configs(
+                component.id, installed_config_paths, config_backups
+            )
+            installed_config_paths = list(dict.fromkeys(installed_config_paths))
+            installed_config_rel = installed_config_paths[0] if installed_config_paths else None
+
             # Write component tracking metadata
             existing_pkg_meta = {}
             if (source_dir / ".theta_component.json").is_file():
@@ -405,6 +413,10 @@ class HubInstaller:
                 "sha256": release.sha256,
                 "config_path": installed_config_rel,
                 "config_paths": installed_config_paths,
+                "user_config_paths": sorted(
+                    set(existing_pkg_meta.get("user_config_paths", []))
+                    | set(restored_user_config_paths)
+                ),
                 "config_backups": config_backups,
                 "config_hashes": {
                     rel: digest
@@ -622,6 +634,11 @@ class HubInstaller:
                         if target_path == cfg_full or target_path in cfg_full.parents:
                             data["target_dir"] = comp_dir
                             return data
+                    for cfg_rel in data.get("user_config_paths", []):
+                        cfg_full = (self.workspace_dir / cfg_rel).resolve()
+                        if target_path == cfg_full:
+                            data["target_dir"] = comp_dir
+                            return data
                     if data.get("config_path"):
                         cfg_full = (self.workspace_dir / data["config_path"]).resolve()
                         if target_path == cfg_full or target_path in cfg_full.parents:
@@ -685,6 +702,8 @@ class HubInstaller:
 
                 if isinstance(meta.get("config_paths"), list):
                     meta["config_paths"] = [remap(value) for value in meta["config_paths"]]
+                if isinstance(meta.get("user_config_paths"), list):
+                    meta["user_config_paths"] = [remap(value) for value in meta["user_config_paths"]]
                 if "config_path" in meta:
                     meta["config_path"] = remap(meta["config_path"])
                 if isinstance(meta.get("installed_files"), list):
@@ -731,12 +750,73 @@ class HubInstaller:
         except (OSError, ValueError):
             return
 
+    def _retained_config_dir(self, component_id: str) -> Path:
+        """Return the git-ignored store for configs hidden with an uninstalled component."""
+        return self.data_dir / "retained_configs" / component_id
+
+    def _restore_retained_configs(
+        self, component_id: str, installed_config_paths: list[str], config_backups: dict
+    ) -> list[str]:
+        """Restore a component's hidden YAMLs and return user-created profile paths."""
+        retained_root = self._retained_config_dir(component_id)
+        if not retained_root.is_dir():
+            return []
+
+        installed_paths = set(installed_config_paths)
+        restored_user_paths = []
+        for retained in sorted(retained_root.rglob("*")):
+            if not retained.is_file() or retained.suffix.lower() not in (".yaml", ".yml"):
+                continue
+            relative = retained.relative_to(retained_root).as_posix()
+            if not relative.startswith("in/config/"):
+                continue
+            destination = self.workspace_dir / relative
+            if destination.is_file() and relative not in config_backups:
+                self._backup_existing_config(component_id, destination, config_backups)
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(retained, destination)
+            if relative not in installed_paths:
+                installed_config_paths.append(relative)
+                installed_paths.add(relative)
+                restored_user_paths.append(relative)
+        return restored_user_paths
+
+    def track_user_config(self, component_meta: dict, config_path: Path) -> None:
+        """Associate a copied component profile with its owning installed component."""
+        target_dir = Path(component_meta.get("target_dir", ""))
+        manifest_path = target_dir / ".theta_component.json"
+        if not manifest_path.is_file():
+            return
+        try:
+            relative = Path(config_path).resolve().relative_to(self.workspace_dir.resolve()).as_posix()
+            data = json.loads(manifest_path.read_text(encoding="utf-8"))
+            user_paths = list(data.get("user_config_paths", []))
+            if relative not in user_paths:
+                user_paths.append(relative)
+            config_paths = list(data.get("config_paths", []))
+            if relative not in config_paths:
+                config_paths.append(relative)
+            hashes = dict(data.get("config_hashes", {}))
+            digest = self._sha256_file(Path(config_path))
+            if digest:
+                hashes[relative] = digest
+            data["user_config_paths"] = user_paths
+            data["config_paths"] = config_paths
+            data["config_hashes"] = hashes
+            manifest_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+        except (OSError, ValueError, json.JSONDecodeError):
+            return
+
     def _uninstall_configs(self, meta: dict) -> None:
-        """Remove pristine installed YAMLs, preserve edits, and restore overwritten files."""
-        recorded = meta.get("config_paths") or ([meta["config_path"]] if meta.get("config_path") else [])
+        """Hide component YAMLs and retain edits or pre-install configs for reinstall."""
+        recorded = list(meta.get("config_paths") or ([meta["config_path"]] if meta.get("config_path") else []))
+        for cfg_rel in meta.get("user_config_paths", []):
+            if cfg_rel not in recorded:
+                recorded.append(cfg_rel)
         hashes = meta.get("config_hashes") or {}
         backups = meta.get("config_backups") or {}
         component_id = str(meta.get("id") or "component")
+        user_config_paths = set(meta.get("user_config_paths", []))
         for cfg_rel in recorded:
             current = self.workspace_dir / cfg_rel
             expected = hashes.get(cfg_rel)
@@ -745,30 +825,22 @@ class HubInstaller:
             if isinstance(backup_info, str):
                 backup_info = {"backup": backup_info, "restore_to": cfg_rel}
             backup_path = None
-            restore_to = cfg_rel
             if isinstance(backup_info, dict):
                 backup_path = self.workspace_dir / backup_info.get("backup", "")
-                restore_to = backup_info.get("restore_to") or cfg_rel
 
             # If an install manifest is missing or predates config hashes, treat
-            # the file as user-edited. Preserve it outside the active config tree
-            # so uninstall still removes the component from the editor.
+            # the file as user-edited. User-created copies are retained even when
+            # unchanged from their source profile.
             modified = current.is_file() and (expected is None or actual != expected)
-            if modified:
-                retained = self.data_dir / "retained_configs" / component_id / cfg_rel
+            if current.is_file() and (modified or cfg_rel in user_config_paths):
+                retained = self._retained_config_dir(component_id) / cfg_rel
                 try:
                     retained.parent.mkdir(parents=True, exist_ok=True)
-                    if not retained.exists():
-                        shutil.move(str(current), str(retained))
-                    else:
-                        # Keep both versions when repeated installs have already retained one.
-                        retained = retained.with_name(f"{retained.stem}_{actual[:8]}{retained.suffix}")
-                        shutil.move(str(current), str(retained))
-                    self._prune_empty_config_dirs(current)
+                    shutil.copy2(current, retained)
                 except OSError:
-                    # If preserving the edited YAML fails, leave it in place and do not overwrite it.
+                    # Do not remove a profile if preserving it failed.
                     continue
-            elif current.is_file():
+            if current.is_file():
                 try:
                     current.unlink()
                     self._prune_empty_config_dirs(current)
@@ -776,23 +848,13 @@ class HubInstaller:
                     continue
 
             if backup_path and backup_path.is_file():
-                restore_path = self.workspace_dir / restore_to
-                if restore_path.exists():
-                    # The moved/edited config still occupies the original destination.
-                    retained = self.data_dir / "retained_configs" / component_id / restore_to
-                    try:
-                        retained.parent.mkdir(parents=True, exist_ok=True)
-                        if not retained.exists():
-                            shutil.move(str(restore_path), str(retained))
-                        else:
-                            retained = retained.with_name(f"{retained.stem}_current{retained.suffix}")
-                            shutil.move(str(restore_path), str(retained))
-                        self._prune_empty_config_dirs(restore_path)
-                    except OSError:
-                        continue
+                # The destination belongs to the component config lifecycle. A
+                # pre-install file must not reappear as an orphan after uninstall.
                 try:
-                    restore_path.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(backup_path, restore_path)
+                    retained = self._retained_config_dir(component_id) / cfg_rel
+                    if not retained.exists():
+                        retained.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.copy2(backup_path, retained)
                     backup_path.unlink()
                     self._prune_empty_dirs(backup_path.parent, self.workspace_dir / ".thetaide")
                 except OSError:
@@ -931,6 +993,7 @@ class HubInstaller:
                 "version": child.version,
                 "target_dir": child_dir,
                 "config_paths": child.extra.get("config_paths", []),
+                "user_config_paths": child.extra.get("user_config_paths", []),
                 "config_path": child.extra.get("config_path"),
                 "dependencies": child.extra.get("dependencies", {}),
             }
@@ -947,7 +1010,7 @@ class HubInstaller:
             found.append(metadata)
         return found
 
-    def uninstall_by_metadata(self, meta: Dict[str, Any], remove_configs: bool = True) -> bool:
+    def uninstall_by_metadata(self, meta: Dict[str, Any]) -> bool:
         """Uninstall an installed component given its metadata dict."""
         target_dir = Path(meta["target_dir"])
         recorded_configs = meta.get("config_paths") or ([meta["config_path"]] if meta.get("config_path") else [])
@@ -960,7 +1023,7 @@ class HubInstaller:
             shutil.rmtree(target_dir, ignore_errors=True)
         self._prune_empty_component_dirs(target_dir)
 
-        if remove_configs and recorded_configs:
+        if recorded_configs or meta.get("user_config_paths"):
             self._uninstall_configs(meta)
 
         # Remove installed files deployed by root-relative packages.
@@ -1006,7 +1069,7 @@ class HubInstaller:
             child_comp = self.lookup_component(child_id)
             if child_comp:
                 try:
-                    self.uninstall(child_comp, remove_configs=remove_configs)
+                    self.uninstall(child_comp)
                 except Exception:
                     pass
 
@@ -1014,14 +1077,14 @@ class HubInstaller:
             if child_meta.get("id") == component_id:
                 continue
             try:
-                self.uninstall_by_metadata(child_meta, remove_configs=remove_configs)
+                self.uninstall_by_metadata(child_meta)
             except Exception:
                 pass
 
         return True
 
-    def uninstall(self, component: HubComponent, remove_configs: bool = True) -> bool:
-        """Remove an installed component and optionally its packaged configuration from disk."""
+    def uninstall(self, component: HubComponent) -> bool:
+        """Remove component code and hide its configs until the component is installed again."""
         target_dir = self.resolve_target_dir(component)
         config_path = self.resolve_config_path(component)
         suite_children = self._installed_suite_children(component.id, target_dir)
@@ -1039,6 +1102,9 @@ class HubInstaller:
                     recorded_configs.extend(mdata["config_paths"])
                 elif mdata.get("config_path"):
                     recorded_configs.append(mdata["config_path"])
+                recorded_configs.extend(
+                    path for path in mdata.get("user_config_paths", []) if path not in recorded_configs
+                )
                 if mdata.get("installed_files"):
                     recorded_installed_files.extend(mdata["installed_files"])
                 if mdata.get("installed_components"):
@@ -1094,7 +1160,7 @@ class HubInstaller:
             child_comp = self.lookup_component(child_id)
             if child_comp:
                 try:
-                    self.uninstall(child_comp, remove_configs=remove_configs)
+                    self.uninstall(child_comp)
                 except Exception:
                     pass
 
@@ -1102,25 +1168,24 @@ class HubInstaller:
             if child_meta.get("id") == component.id:
                 continue
             try:
-                self.uninstall_by_metadata(child_meta, remove_configs=remove_configs)
+                self.uninstall_by_metadata(child_meta)
             except Exception:
                 pass
 
-        # Remove only pristine installed YAMLs; edited configs are retained and
-        # pre-install files are restored from their tracked backups.
-        if remove_configs:
-            if recorded_configs:
-                self._uninstall_configs({
-                    "id": component.id,
-                    "config_paths": recorded_configs,
-                    "config_hashes": mdata.get("config_hashes", {}),
-                    "config_backups": mdata.get("config_backups", {}),
-                })
-            elif config_path and config_path.is_file():
-                try:
-                    config_path.unlink()
-                except OSError:
-                    pass
+        # Always hide component profiles; preserve edits in the git-ignored store.
+        config_meta = {
+            "id": component.id,
+            "config_paths": recorded_configs,
+            "user_config_paths": mdata.get("user_config_paths", []),
+            "config_hashes": mdata.get("config_hashes", {}),
+            "config_backups": mdata.get("config_backups", {}),
+        }
+        if recorded_configs:
+            self._uninstall_configs(config_meta)
+        elif config_path and config_path.is_file():
+            self._uninstall_configs({"id": component.id, "config_paths": [
+                config_path.relative_to(self.workspace_dir).as_posix()
+            ]})
 
         component.is_installed = False
         component.installed_version = None

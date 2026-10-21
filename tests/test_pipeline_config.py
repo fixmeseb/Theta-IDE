@@ -229,8 +229,8 @@ class TestParseMethodsDict:
         assert res["cql_custom"]["batch_size"] == 256
         assert res["cql_custom"]["hidden_sizes"] == [1024, 512, 256]
 
-    def test_custom_composite_model_resolves_explicit_submodel_params(self):
-        """Composite parsing uses the supplied config values and needs no installed model defaults."""
+    def test_nested_model_component_params_pass_through_unchanged(self):
+        """Nested component params stay opaque for the model component to resolve."""
         from src.app.pipeline.config import parse_methods_dict
 
         cfg = {
@@ -254,15 +254,11 @@ class TestParseMethodsDict:
         }
         resolved = parse_methods_dict(cfg)["custom_method"]
         assert resolved["model"]["name"] == "custom_composite"
-        assert resolved["model_params"]["encoder"]["architecture"] == "dense_encoder"
-        assert resolved["model_params"]["encoder"]["hidden_sizes"] == [256, 128]
-        assert resolved["model_params"]["encoder"]["dropout"] == 0.1
-        assert resolved["model_params"]["reasoner"]["type"] == "rule_engine"
-        assert resolved["model_params"]["reasoner"]["rules"] == "fixture_rules"
-        assert resolved["model_params"]["reasoner"]["threshold"] == 0.9
+        assert resolved["model_params"]["encoder"] == "dense_encoder"
+        assert resolved["model_params"]["reasoner"] == {"rule_engine": {"threshold": 0.9}}
 
-    def test_custom_composite_methods_merge_shared_slot_defaults(self):
-        """Shared custom parameters apply to multiple methods and local overrides win."""
+    def test_nested_model_params_do_not_infer_child_components(self):
+        """Nested dictionaries are preserved rather than converted to child slots."""
         from src.app.pipeline.config import parse_methods_dict
 
         cfg = {
@@ -285,8 +281,9 @@ class TestParseMethodsDict:
         }
         resolved = parse_methods_dict(cfg)
         assert resolved["first"]["model_params"]["blend_mode_index"] == 1
-        assert resolved["first"]["model_params"]["encoder"]["widths"] == [128, 64]
-        assert resolved["second"]["model_params"]["encoder"]["widths"] == [32]
+        assert resolved["first"]["model_params"]["encoder"] == {"encoder": {}}
+        assert resolved["second"]["model_params"]["encoder"] == {"encoder": {"widths": [32]}}
+        assert "modules" not in resolved["second"]["model_params"]
 
     def test_group_method_resolution(self, monkeypatch):
         """Methods defined in in/config/experiment/<group>/methods/ should resolve automatically."""

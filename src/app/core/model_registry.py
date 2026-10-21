@@ -1,4 +1,4 @@
-"""Model Registry and Factory — Single source of truth for policy and Q-network models.
+"""Model Registry and Factory — Single source of truth for model components.
 
 Models self-register using the @register_model decorator:
     @register_model("my_model")
@@ -95,7 +95,10 @@ def build_model(
     obs_dim: int | None = None,
     **kwargs,
 ) -> nn.Module:
-    """Factory to build any registered model or composite model from configuration.
+    """Instantiate one registered model component from its identifier and parameters.
+
+    Nested component configuration is passed through to the selected model. A model
+    that composes child models resolves those children in its own implementation.
 
     Args:
         model_spec: Model identifier string, DictConfig, or dict.
@@ -116,7 +119,7 @@ def build_model(
         return model_spec.to(device)
 
     # Extract model name and parameters from spec
-    model_name = "mlp"
+    model_name = None
     model_params = {}
 
     if isinstance(model_spec, str):
@@ -143,7 +146,7 @@ def build_model(
             or (
                 list(cfg_dict.keys())[0]
                 if len(cfg_dict) == 1 and isinstance(list(cfg_dict.values())[0], dict)
-                else "mlp"
+                else None
             )
         )
         # If wrapped under model name (e.g. {my_model: {...}})
@@ -174,41 +177,12 @@ def build_model(
                 pass
 
     merged_kwargs = {**model_params, **kwargs}
+    if not isinstance(model_name, str) or not model_name.strip():
+        raise ValueError("Model configuration must declare a model name, architecture, or type.")
     clean_name = model_name.lower().strip()
 
     # Resolve architecture from MODEL_REGISTRY
     cls_or_fn = get_model_class(clean_name)
-
-    # Support CompositeModelProtocol (plugin-owned submodel resolution and factory)
-    if (
-        isinstance(cls_or_fn, type)
-        and hasattr(cls_or_fn, "get_model_slots")
-        and hasattr(cls_or_fn, "build_from_config")
-    ):
-        slots = cls_or_fn.get_model_slots()
-        submodels = {}
-        for slot in slots:
-            slot_val = merged_kwargs.get(slot.name, slot.default)
-            if slot_val is not None:
-                sub_m = build_model(
-                    slot_val,
-                    env=env,
-                    device=device,
-                    n_actions=n_actions,
-                    obs_dim=obs_dim,
-                )
-                submodels[slot.name] = sub_m
-        res = cls_or_fn.build_from_config(
-            merged_kwargs,
-            env=env,
-            device=device,
-            submodels=submodels,
-            n_actions=n_actions,
-            obs_dim=obs_dim,
-        )
-        if isinstance(res, nn.Module):
-            res = res.to(device)
-        return res
 
     call_kwargs = {}
     if obs_dim is not None:

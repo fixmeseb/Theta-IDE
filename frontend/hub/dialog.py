@@ -6,7 +6,6 @@ from typing import Dict, List, Optional
 from PyQt6.QtCore import QEvent, Qt, QUrl, pyqtSignal
 from PyQt6.QtGui import QColor, QDesktopServices
 from PyQt6.QtWidgets import (
-    QCheckBox,
     QComboBox,
     QDialog,
     QFrame,
@@ -273,48 +272,24 @@ class HubComponentCard(QFrame):
         self._prompt_and_uninstall()
 
     def _prompt_and_uninstall(self):
-        has_configs = self.client.installer.has_configs(self.component)
-        if not has_configs:
-            self.btn_action.setText("Uninstalling…")
-            self.client.uninstall_async(self.component, remove_configs=False)
-            return
-
-        pref = self.client.get_uninstall_configs_pref()
-        if pref == "keep":
-            self.btn_action.setText("Uninstalling…")
-            self.client.uninstall_async(self.component, remove_configs=False)
-            return
-        elif pref == "remove":
-            self.btn_action.setText("Uninstalling…")
-            self.client.uninstall_async(self.component, remove_configs=True)
-            return
-
         dlg = UninstallComponentDialog(self.component.name, parent=self)
-        if dlg.exec() != QDialog.DialogCode.Accepted or dlg.choice == "cancel":
+        if dlg.exec() != QDialog.DialogCode.Accepted:
             self.update_action_state()
             return
-
-        if dlg.remember:
-            self.client.set_uninstall_configs_pref(dlg.choice)
-
-        remove_configs = (dlg.choice == "remove")
         self.btn_action.setText("Uninstalling…")
-        self.client.uninstall_async(self.component, remove_configs=remove_configs)
+        self.client.uninstall_async(self.component)
 
     def set_progress(self, percent: int):
         self.progress_bar.setValue(percent)
 
 
 class UninstallComponentDialog(QDialog):
-    """Prompt asking whether to keep or remove configuration files on component uninstall."""
+    """Confirm uninstall; component configs are hidden and restored on reinstall."""
 
     def __init__(self, component_name: str, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Uninstall Component")
         self.setFixedWidth(430)
-        self.choice = "cancel"
-        self.remember = False
-
         layout = QVBoxLayout(self)
         layout.setSpacing(14)
         layout.setContentsMargins(20, 20, 20, 20)
@@ -324,16 +299,12 @@ class UninstallComponentDialog(QDialog):
         layout.addWidget(title)
 
         desc = QLabel(
-            "This component has associated configuration files in <b>in/config/</b>.<br><br>"
-            "Would you like to keep your configuration files or delete them as well?"
+            "Its configuration files will be hidden while the component is uninstalled. "
+            "Your edits and copied profiles will be restored if you install it again."
         )
         desc.setWordWrap(True)
         desc.setStyleSheet(f"color: {theme_color('muted')}; font-size: 12px; line-height: 1.4;")
         layout.addWidget(desc)
-
-        self.chk_remember = QCheckBox("Don't ask again (remember my choice)")
-        self.chk_remember.setStyleSheet(f"color: {theme_color('text')}; font-size: 12px; margin-top: 4px;")
-        layout.addWidget(self.chk_remember)
 
         btn_row = QHBoxLayout()
         btn_row.setSpacing(8)
@@ -344,32 +315,15 @@ class UninstallComponentDialog(QDialog):
 
         btn_row.addStretch()
 
-        btn_keep = QPushButton("Keep Configs")
-        btn_keep.setToolTip("Uninstall component code but preserve your YAML configuration files")
-        btn_keep.clicked.connect(self._on_keep)
-        btn_row.addWidget(btn_keep)
-
-        btn_remove = QPushButton("Remove All")
-        btn_remove.setStyleSheet(f"background-color: {DANGER}; color: {ON_DANGER}; font-weight: bold;")
-        btn_remove.setToolTip("Uninstall component code and delete all associated YAML configurations")
-        btn_remove.clicked.connect(self._on_remove)
-        btn_row.addWidget(btn_remove)
+        btn_uninstall = QPushButton("Uninstall")
+        btn_uninstall.setStyleSheet(f"background-color: {DANGER}; color: {ON_DANGER}; font-weight: bold;")
+        btn_uninstall.clicked.connect(self.accept)
+        btn_row.addWidget(btn_uninstall)
 
         layout.addLayout(btn_row)
 
     def _on_cancel(self):
-        self.choice = "cancel"
         self.reject()
-
-    def _on_keep(self):
-        self.choice = "keep"
-        self.remember = self.chk_remember.isChecked()
-        self.accept()
-
-    def _on_remove(self):
-        self.choice = "remove"
-        self.remember = self.chk_remember.isChecked()
-        self.accept()
 
 
 class HubView(QWidget):
@@ -380,7 +334,7 @@ class HubView(QWidget):
         self,
         client: HubClient,
         initial_kind: str | None = None,
-        mode: str = "components",  # "components" (no plugins, has suites) | "plugins" (only plugins) | "all"
+        mode: str = "components",  # "components" (all package kinds) | "plugins" (only plugins) | "all"
         close_button_text: str = "Back to Parameters",
         parent=None,
     ):
@@ -412,7 +366,7 @@ class HubView(QWidget):
         self.status_label.setStyleSheet(f"color: {theme_color('comment')}; font-size: 11px;")
 
     def _matches_mode(self, comp: HubComponent) -> bool:
-        """Enforce strict separation between UI plugins and modular components."""
+        """Hide package internals while filtering standalone packages by view."""
         # Package-internal components are available to dependency resolution but
         # are installed through their containing package.
         if comp.is_grouped_component or comp.hidden:
@@ -420,8 +374,6 @@ class HubView(QWidget):
 
         if self.mode == "plugins":
             return comp.kind == "plugin"
-        elif self.mode == "components":
-            return comp.kind != "plugin"
         return True
 
     def _build_ui(self):
@@ -437,8 +389,9 @@ class HubView(QWidget):
         if self.mode == "components":
             kind_options = [
                 ("all", "All Components"),
+                ("plugin", "Plugins"),
                 ("experiment", "Experiments"),
-                ("suite", "Suites"),  # Replaces Plugins tab with Suites tab
+                ("suite", "Suites"),
                 ("method", "Algorithms"),
                 ("model", "Models"),
                 ("env", "Environments"),

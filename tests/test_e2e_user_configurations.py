@@ -148,8 +148,8 @@ class TestModelConfigurationAdherence:
         assert "++model.activation=relu" in overrides
         assert "++model.dropout=0.1" in overrides
 
-    def test_composite_model_submodel_slots_forwarded(self):
-        """Composite models (BlendRL) must correctly forward neural, symbolic, and blender slots."""
+    def test_nested_model_parameters_forwarded_without_component_resolution(self):
+        """Nested model parameters remain available for the selected model to interpret."""
         cfg = OmegaConf.create({
             "experiment_name": "mimic/blend_exp",
             "paradigm": "offline_rl",

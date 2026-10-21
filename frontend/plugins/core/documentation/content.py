@@ -284,7 +284,7 @@ python -m frontend</code></pre>
 <ul>
   <li><b>Components Tree &amp; Viewer:</b> Browse and edit installed component configurations, including agent profiles, environment definitions, model architectures, data loaders, plotters, paradigms and site profiles. Components are grouped by package.</li>
   <li><b>Theta Hub:</b> the globe button opens the Hub in this tab. Category tabs filter the component catalog; <b>Sort</b> orders the list and <b>Refresh</b> reloads the registry. Each card has <b>Install</b> or <b>Uninstall</b>. A suite can install a curated set of components together. <b>Back to Parameters</b> returns to the tree.</li>
-  <li>When uninstalling, the Hub asks whether to keep the component's config files. Set a standing answer in <i>Settings &rarr; Community Plugins &rarr; Theta Hub Preferences</i> (<code>uninstall_configs</code> under <code>[hub]</code>).</li>
+  <li>When a component is uninstalled, its configuration files are hidden from the active tree and kept in the ignored <code>.thetaide/retained_configs/</code> store. Reinstalling that component restores its packaged profiles and user-created copies.</li>
 </ul>
 
 <h3>7. Results Browser (<code>results</code>)</h3>
@@ -1275,7 +1275,7 @@ python run_pipeline.py &lt;group&gt;/&lt;tuning_experiment&gt; dash_only=true</c
   </tr>
   <tr><td><b>Appearance</b></td><td>Color theme, display zoom, which sidebar panels are shown, auto-hide sidebar, <b>Experiment Panel Configuration</b> (show resolved defaults, algorithm and model defaults in methods, the visual layer editor), and the Results panel layout</td></tr>
   <tr><td><b>Core Plugins</b></td><td>Turn built-in plugins (Documentation, TensorBoard, arXiv Papers, Visual Model Builder) on or off</td></tr>
-  <tr><td><b>Community Plugins</b></td><td>Install, configure, or remove plugins from the Theta Hub, and <b>Theta Hub Preferences</b> (what to do with a component's configs when uninstalling it)</td></tr>
+  <tr><td><b>Community Plugins</b></td><td>Install, configure, or remove plugins from the Theta Hub</td></tr>
   <tr><td><b>Hotkeys</b></td><td>Action key, terminal precedence, the <code>Action + digit</code> pane mapping, and menu shortcuts</td></tr>
   <tr><td><b>Training Pipeline</b></td><td>The Python environment that composes configs and runs training, with a <b>Check pipeline</b> button</td></tr>
   <tr><td><b>Terminal</b></td><td>The shell the Terminal tab starts, and whether the project venv comes first on PATH</td></tr>
@@ -1300,7 +1300,6 @@ python run_pipeline.py &lt;group&gt;/&lt;tuning_experiment&gt; dash_only=true</c
   <tr><td><code>[sidebar]</code></td><td><code>order</code> and <code>visible</code> pane lists, <code>bins</code>, <code>auto_hide</code></td></tr>
   <tr><td><code>[plugins]</code></td><td><code>enabled</code> and <code>disabled</code> plugin IDs</td></tr>
   <tr><td><code>[components]</code></td><td><code>confirm_delete</code></td></tr>
-  <tr><td><code>[hub]</code></td><td><code>uninstall_configs</code>: <code>"ask"</code>, <code>"keep"</code> or <code>"remove"</code></td></tr>
   <tr><td><code>[hotkeys]</code></td><td><code>enabled</code>, <code>action_key</code>, <code>leader_timeout</code>, <code>terminal_precedence</code>, <code>panes</code></td></tr>
   <tr><td><code>[terminal]</code></td><td><code>shell</code>, <code>cwd</code>, <code>activate_venv</code></td></tr>
   <tr><td><code>[results]</code></td><td><code>layout</code>, <code>hidden_plots</code></td></tr>

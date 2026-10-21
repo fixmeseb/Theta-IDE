@@ -295,19 +295,23 @@ def test_compatible_paradigms_filter_environments(tree):
 
 # ------------------------------------------------ composite & dynamic parameters
 
-def test_composite_model_properties(tree):
+def test_model_parameter_domains(tree):
     if "blendrl" not in tree.models or "dnn" not in tree.models:
         pytest.skip("blendrl or dnn model plugins not installed")
     blendrl = tree.models["blendrl"]
-    assert blendrl.is_composite is True
-    subcomps = blendrl.subcomponents
-    assert "neural" in subcomps
-    assert "symbolic" in subcomps
-    assert "blender" in subcomps
+    blendrl_domains = {
+        key for key, schema in blendrl.parameter_schema.get("properties", {}).items()
+        if isinstance(schema, dict) and schema.get("x-theta-domain")
+    }
+    assert "neural" in blendrl_domains
+    assert "symbolic" in blendrl_domains
 
     dnn = tree.models["dnn"]
-    assert dnn.is_composite is False
-    assert dnn.subcomponents == {}
+    dnn_domains = {
+        key for key, schema in dnn.parameter_schema.get("properties", {}).items()
+        if isinstance(schema, dict) and schema.get("x-theta-domain")
+    }
+    assert dnn_domains == set()
 
 
 def test_tree_agent_and_model_helpers(tree):
@@ -346,18 +350,15 @@ def test_candidate_hyperparameters_filtering(tree):
     assert "blend_q_values" in blend_hypers
 
 
-def test_candidate_subcomponents(tree):
+def test_model_component_domain_parameters_are_schema_declared(tree):
     if "blendrl" not in tree.models or "dnn" not in tree.models:
         pytest.skip("blendrl or dnn model plugins not installed")
-    from frontend.config_viewer import get_method_candidate_subcomponents
-
-    # For blendrl with no existing subcomponents
-    subs = get_method_candidate_subcomponents("blendrl", tree)
-    assert set(subs) == {"neural", "symbolic"}
-
-    # For blendrl with neural already present
-    subs_filtered = get_method_candidate_subcomponents("blendrl", tree, current_keys={"neural"})
-    assert set(subs_filtered) == {"symbolic"}
-
-    # For non-composite dnn
-    assert get_method_candidate_subcomponents("dnn", tree) == []
+    domains = {
+        model_name: {
+            key for key, schema in model.parameter_schema.get("properties", {}).items()
+            if isinstance(schema, dict) and schema.get("x-theta-domain")
+        }
+        for model_name, model in tree.models.items()
+    }
+    assert domains["blendrl"] == {"neural", "symbolic"}
+    assert domains["dnn"] == set()

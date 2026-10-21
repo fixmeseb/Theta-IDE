@@ -253,8 +253,8 @@ class ComponentDeleteDialog(QDialog):
 
         desc = QLabel(
             f"<b>'{rel_path}'</b> is managed by Theta Hub (<b>{comp_name}</b>).<br><br>"
-            f"Uninstalling removes its source code and unchanged bundled YAMLs, keeps edited YAMLs, "
-            f"and restores files that existed before installation. You can also delete only this folder."
+            f"Uninstalling removes its source code and hides its YAMLs. Edits and copied profiles are kept in "
+            f"ignored IDE storage and restored on reinstall. You can also delete only this folder."
         )
         desc.setWordWrap(True)
         desc.setStyleSheet("color: #a89984; font-size: 12px; line-height: 1.4;")
@@ -276,7 +276,7 @@ class ComponentDeleteDialog(QDialog):
 
         btn_uninstall = QPushButton("Uninstall Completely")
         btn_uninstall.setStyleSheet("background-color: #cc241d; color: #ebdbb2; font-weight: bold;")
-        btn_uninstall.setToolTip("Completely uninstalls the component and removes both its source code and configurations")
+        btn_uninstall.setToolTip("Uninstalls the component and hides its configurations until reinstall")
         btn_uninstall.clicked.connect(self._on_uninstall)
         btn_row.addWidget(btn_uninstall)
 
@@ -1707,6 +1707,10 @@ class ConfigTreeWidget(TreeHeaderActions, QWidget):
             return
         try:
             shutil.copy2(source_file, target_file)
+            installer = self._get_installer()
+            owner = installer.find_component_for_path(source_file) if installer else None
+            if owner:
+                installer.track_user_config(owner, target_file)
             self._select_created_component_file(target_file)
         except OSError as exc:
             QMessageBox.critical(self, "Copy Error", f"Could not copy YAML file:\n{exc}")
@@ -2020,7 +2024,7 @@ class ConfigTreeWidget(TreeHeaderActions, QWidget):
             if dlg.exec() != QDialog.DialogCode.Accepted or dlg.choice == "cancel":
                 return
             if dlg.choice == "uninstall":
-                installer.uninstall_by_metadata(comp_meta, remove_configs=True)
+                installer.uninstall_by_metadata(comp_meta)
                 self.dir_deleted.emit(rel_path)
                 self.populate()
                 return

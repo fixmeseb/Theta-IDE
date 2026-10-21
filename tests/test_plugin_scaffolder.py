@@ -20,7 +20,6 @@ def test_scaffold_model_standard(tmp_path):
     opts = ScaffoldOptions(
         name="simple_mlp",
         kind="model",
-        is_composite=False,
         author="Unit Tester",
     )
     res = scaffolder.scaffold(opts)
@@ -30,27 +29,6 @@ def test_scaffold_model_standard(tmp_path):
     assert (res.target_dir / ".theta_component.json").is_file()
     assert (res.target_dir / "pyproject.toml").is_file()
     assert (tmp_path / "in" / "config" / "model" / "simple_mlp.yaml").is_file()
-
-
-def test_scaffold_model_composite(tmp_path):
-    scaffolder = PluginScaffolder(workspace_root=tmp_path)
-    opts = ScaffoldOptions(
-        name="custom_composite",
-        kind="model",
-        is_composite=True,
-    )
-    res = scaffolder.scaffold(opts)
-    assert res.success is True
-    code = (res.target_dir / "custom_composite_model.py").read_text(encoding="utf-8")
-    assert "get_model_slots" in code
-    assert "ModelSlot" in code
-    assert "compute_auxiliary_losses" in code
-    assert "configure_optimizer_groups" in code
-
-    from frontend.config_model import ConfigTree
-    tree = ConfigTree(tmp_path / "in" / "config")
-    assert "custom_composite" in tree.models
-    assert tree.models["custom_composite"].is_composite is True
 
 
 def test_scaffold_agent(tmp_path):

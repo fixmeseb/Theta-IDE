@@ -305,8 +305,8 @@ def test_standard_model_actor_critic_wrapper():
     assert torch.allclose(probs.sum(dim=-1), torch.ones(5))
 
 
-def test_hub_view_mode_separation_and_suites_tab(qapp):
-    """Verify that Component Hub only shows components and has Suites tab, while Plugin Hub only shows plugins."""
+def test_hub_view_modes_include_standalone_plugin_packages(qapp):
+    """Verify Component Hub can manage standalone packages and Plugin Hub stays plugin-only."""
     from frontend.hub.client import HubClient
     from frontend.hub.dialog import HubView
     from frontend.hub.models import HubComponent
@@ -326,7 +326,7 @@ def test_hub_view_mode_separation_and_suites_tab(qapp):
     view_comp = HubView(client=client, mode="components")
     view_comp._populate_cards(client.components)
     comp_kinds = {c.component.kind for c in view_comp.cards.values()}
-    assert "plugin" not in comp_kinds
+    assert "plugin" in comp_kinds
     assert "suite" in comp_kinds
     assert "model" in comp_kinds
     assert "method" in comp_kinds
@@ -335,8 +335,8 @@ def test_hub_view_mode_separation_and_suites_tab(qapp):
     pills_comp = list(view_comp.pills.keys())
     assert "experiment" in pills_comp
     assert "suite" in pills_comp
-    assert "plugin" not in pills_comp
-    assert pills_comp == ["all", "experiment", "suite", "method", "model", "env", "data", "eval", "plot"]
+    assert "plugin" in pills_comp
+    assert pills_comp == ["all", "plugin", "experiment", "suite", "method", "model", "env", "data", "eval", "plot"]
 
     # 2. Community Plugins Hub (mode="plugins")
     view_plug = HubView(client=client, mode="plugins")
