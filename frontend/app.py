@@ -1530,6 +1530,14 @@ class Window(QMainWindow):
                 self.update_launch_state()
                 return
         overrides = self.config_viewer.get_overrides() if hasattr(self, "config_viewer") else config.overrides()
+        # A tab switch or edit starts a new validation request. Keep the launch
+        # controls disabled until that exact config has been composed; otherwise
+        # the previous experiment's valid state can leave Run active while an
+        # invalid recipe is still being checked.
+        self.compose_valid = False
+        self.compose_error = None
+        self.composed_config = None
+        self.update_launch_state()
         self.backend.compose(exp_target, overrides,
                              lambda data, error: self.compose_finished(serial, config, data, error))
 
