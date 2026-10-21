@@ -37,7 +37,9 @@ from .settings import SettingsManager
 from .theme import STYLE, ThemeManager, theme_color
 from .theme_builder import ThemeBuilder
 from .widgets import ToggleSlider, YamlHighlighter, label
-from .app_icon import DESKTOP_FILE_NAME, ICON_PATH, app_icon, install_desktop_entry, set_windows_app_id
+from .about import AboutDialog
+from .app_icon import (DESKTOP_FILE_NAME, ICON_PATH, app_icon, install_desktop_entry, register_windows_app_identity,
+                       set_windows_app_id)
 from .components_panel import ComponentsPanel
 from .config_tree import ConfigTreeWidget
 from .config_model import config_fingerprint
@@ -55,6 +57,7 @@ from .results.panel import ResultsPanel
 from .plots import PlotViewer
 from .plugins import CommandRegistry, ExtensionSlotRegistry, PluginManager
 from .queue_panel import QueuePanel
+from .run_notifier import RunNotifier
 from .sidetabs import SideTabs, svg_icon
 from .terminal import TerminalPanel
 from .titlebar import apply_title_bar
@@ -168,6 +171,7 @@ class Window(QMainWindow):
         self.jobs.job_hardware.connect(self.on_job_hardware)
         self.jobs.queue_changed.connect(self.on_queue_changed)
         self.tray = None  # TrayController, set up by main(): closing while training hides to the tray
+        self.run_notifier = RunNotifier(self)  # a toast (or system notification) and a chime when a run ends
         self._quitting = False  # an explicit Quit (menu, tray, reload) closes for real
         self._shutting_down = False  # set once closeEvent commits to closing
         self.schema = None
@@ -2226,6 +2230,14 @@ class Window(QMainWindow):
         if run is None:
             self.statusBar().showMessage("That job has no run record in this workspace.", 5000)
             return
+        self.view_run(run)
+
+    def view_run(self, run):
+        """Plot `run` in the Plot Viewer (a run-finished toast's View results, the queue's Open)."""
+        if self.isMinimized() or not self.isVisible():
+            self.showNormal()
+        self.raise_()
+        self.activateWindow()
         self.monitor.sidebar.tick(run["id"])
         self.tabs.setCurrentWidget(self.plot_viewer)
 
@@ -2295,6 +2307,7 @@ class Window(QMainWindow):
         if status == "failed":
             self.statusBar().showMessage("Training failed; the console shows the pipeline output.", 10000)
         self.active_runs = [r for r in self.active_runs if r is not run]
+        self.run_notifier.run_finished(run, status)
         self.update_launch_state()
         self.refresh_runs()
         if not run["simulated"] and self.backend_connected:
@@ -2626,6 +2639,7 @@ def main():
         print(f"Installed {entry}\nInstalled {icon}")
         return 0
     set_windows_app_id()  # before any window: the taskbar then shows ThetaIDE's icon, not python.exe's
+    register_windows_app_identity()  # notifications are headed "ThetaIDE" with the logo, not the raw app ID
     if sys.platform == "darwin":
         try:
             import ctypes

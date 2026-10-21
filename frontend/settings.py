@@ -110,6 +110,13 @@ enabled = []
 # Prompt for confirmation when deleting a component from the components panel.
 confirm_delete = true
 
+[notifications]
+# When a run completes, fails or is stopped (Settings -> Training pipeline -> Run notifications).
+# A toast in the window's corner; a system notification instead when ThetaIDE is not in front.
+toast = true
+# A short chime: brighter when a run completes, lower when it fails.
+sound = true
+
 [hub]
 # What to do with configuration files when uninstalling a component from Theta Hub.
 # Options: "ask" (prompt each time), "keep" (preserve configs), "remove" (delete configs)

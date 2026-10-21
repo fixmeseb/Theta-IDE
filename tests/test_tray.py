@@ -145,13 +145,12 @@ def test_stop_all_cancels_running_jobs_and_pauses_the_queue(window, monkeypatch)
     assert cancelled == ["j1"] and window.jobs.queue_running is False
 
 
-def test_finished_run_notifies_only_while_hidden(window, monkeypatch):
-    done = {"job_id": "j1", "experiment_id": "cartpole_long", "status": "completed", "returncode": 0}
-    window.tray._on_job_changed(done)
-    assert window.test_messages == []  # window visible: the monitor already shows it
+def test_a_run_ending_while_hidden_is_a_tray_notification(window, monkeypatch):
+    """RunNotifier (tests/test_run_notifier.py) decides; the tray only carries the message."""
+    monkeypatch.setattr(window.run_notifier, "play", lambda kind: None)
+    window.start_demo()
     training(window, monkeypatch)
-    window.close()
-    window.tray._on_job_changed(done)
-    assert window.test_messages[-1][0] == "cartpole_long finished"
-    window.tray._on_job_changed(dict(done, status="failed", returncode=1))
-    assert window.test_messages[-1] == ("cartpole_long failed", "Training ended with exit code 1.")
+    window.close()  # hidden to the tray
+    window.finish("completed")
+    title, body = window.test_messages[-1]
+    assert title.endswith(" finished") and body.startswith("Completed")

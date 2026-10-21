@@ -45,7 +45,9 @@ class TestSettingsPageScrolling(unittest.TestCase):
     def test_short_page_is_not_padded_to_the_tallest_page(self):
         self.open("hotkeys")      # the tallest page
         self.open("backend")      # a short one
-        content = self.view.page_widgets["backend"].sizeHint().height()
+        page = self.view.page_widgets["backend"]
+        # Its height at the width it is shown at: wrapped text makes that taller than sizeHint()
+        content = page.heightForWidth(page.width()) if page.hasHeightForWidth() else page.sizeHint().height()
         self.assertLessEqual(self.bar.maximum(), max(0, content - self.area.viewport().height()))
 
     def test_scroll_range_matches_the_current_page(self):
