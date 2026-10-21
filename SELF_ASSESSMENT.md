@@ -57,7 +57,7 @@ files, 29% of Python lines in tests. Coverage is measured by CI.
 
 | Criterion | Score | Evidence |
 |---|---|---|
-| README.md: all badges above, all working | **3** | [README](https://github.com/fixmeseb/Theta-IDE#readme) — 9 badges: build, tests, coverage, style, types, pre-commit, licence, Python, DOI. Every URL fetched and returning 200; none is dead |
+| README.md: all badges above, all working | **3** | [README](https://github.com/fixmeseb/Theta-IDE#readme) — 10 badges: build, tests, coverage, style, format, types, pre-commit, licence, Python, DOI. Every URL fetched and returning 200; none is dead |
 | .gitignore | **3** | [`.gitignore`](https://github.com/fixmeseb/Theta-IDE/blob/main/.gitignore) |
 | INSTALL.md | **3** | [`INSTALL.md`](https://github.com/fixmeseb/Theta-IDE/blob/main/INSTALL.md) |
 | LICENSE.md | **3** | [`LICENSE.md`](https://github.com/fixmeseb/Theta-IDE/blob/main/LICENSE.md) — MIT |

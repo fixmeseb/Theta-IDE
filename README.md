@@ -4,6 +4,7 @@
 [![Tests](https://img.shields.io/badge/tests-1365%20passing-brightgreen)](https://github.com/fixmeseb/Theta-IDE/actions/workflows/ci.yml)
 [![Coverage](https://img.shields.io/badge/coverage-70%25-green)](https://github.com/fixmeseb/Theta-IDE/actions/workflows/ci.yml)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+[![Formatter: ruff-format](https://img.shields.io/badge/formatter-ruff--format-261230)](https://github.com/fixmeseb/Theta-IDE/blob/main/.github/workflows/ci.yml)
 [![Types: mypy](https://img.shields.io/badge/types-mypy-blue)](https://github.com/fixmeseb/Theta-IDE/actions/workflows/ci.yml)
 [![pre-commit](https://img.shields.io/badge/pre--commit-enabled-FAB040?logo=pre-commit)](./.pre-commit-config.yaml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE.md)
