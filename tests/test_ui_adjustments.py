@@ -108,14 +108,19 @@ class TestUIAdjustments(unittest.TestCase):
 
         # Plus button with menu exists on method card
         plus_buttons = [btn for btn in self.viewer.findChildren(QToolButton) if btn.menu() is not None]
-        self.assertTrue(len(plus_buttons) >= 1, "Expected at least one plus button with parameter menu")
-        target_btn = next((b for b in plus_buttons if "parameter" in b.toolTip().lower()), plus_buttons[0])
+        usable_buttons = [
+            btn for btn in plus_buttons
+            if any(action.text() and not action.text().startswith("+") for action in btn.menu().actions())
+        ]
+        self.assertTrue(usable_buttons, "Expected a parameter menu with at least one declared option")
+        target_btn = next((b for b in usable_buttons if "parameter" in b.toolTip().lower()), usable_buttons[0])
         initial_keys = set(self.viewer.raw_data.get("methods", {}).get("ppo_dnn", {}).keys())
         actions = target_btn.menu().actions()
         self.assertTrue(len(actions) >= 1)
         chosen_action = next((a for a in actions if a.text() and not a.text().startswith("+")), actions[0])
         chosen_key = chosen_action.text()
         chosen_action.trigger()
+        app.processEvents()
         updated_keys = set(self.viewer.raw_data.get("methods", {}).get("ppo_dnn", {}).keys())
         self.assertIn(chosen_key, updated_keys)
 
