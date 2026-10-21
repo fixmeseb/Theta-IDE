@@ -16,8 +16,8 @@ Figures measured on commit `2a9802d`: 752 commits, 1365 tests, 70% line coverage
 |---|---|---|
 | Many commits (exemplar has 467) | **3** | [752 commits on main](https://github.com/fixmeseb/Theta-IDE/commits/main) — 61% above the exemplar |
 | Commits come from different people | **3** | [Contributors](https://github.com/fixmeseb/Theta-IDE/graphs/contributors) — 6 identities, 5 people |
-| Workload is spread over the whole team | **1** | [Contributors](https://github.com/fixmeseb/Theta-IDE/graphs/contributors). 561 / 59 / 58 / 41 / 31 / 2. The lead has 75% of commits, roughly 8x the next contributor — beyond the "3x more productive" the rubric allows for |
-| Team members work across many parts, not one silo each | **?** | *See note below — needs your judgement* |
+| Workload is spread over the whole team | **1** | Commits after merging duplicate identities: 563 / 72 / 59 / 58 (see table below). The lead holds 74.9%, 9.5x the next contributor, beyond the "3x more productive" the rubric allows for. The other three are within 25% of each other |
+| Team members work across many parts, not one silo each | **3** | Share of each person's file-touches by area (see table below the rubric). Three of four people work substantially across frontend, engine and tests; no one is confined to a silo |
 | Short release cycles: frequent small commits, merged promptly | **3** | [25 pull requests, all merged or closed, none open](https://github.com/fixmeseb/Theta-IDE/pulls?q=is%3Apr) |
 | Whole team uses the same tools: config files in repo, updated by many | **3** | [`pyproject.toml`](https://github.com/fixmeseb/Theta-IDE/blob/main/pyproject.toml) (`[tool.ruff]`, `[tool.mypy]`, `[tool.coverage]`), [`.pre-commit-config.yaml`](https://github.com/fixmeseb/Theta-IDE/blob/main/.pre-commit-config.yaml), [`ci.yml`](https://github.com/fixmeseb/Theta-IDE/blob/main/.github/workflows/ci.yml) |
 | Whole team can run the system on their own machine | **?** | *Demo-time check — only the team can answer* |
@@ -70,16 +70,50 @@ Figures measured on commit `2a9802d`: 752 commits, 1365 tests, 70% line coverage
 
 ---
 
+## Contribution breakdown
+
+Identities merged on GitHub user ID rather than display name: `Tacho2` and
+`CameronEgb` are one person, and `kc` and `ccast44` share ID `322238565`.
+Counting display names instead would undercount Carlos by 31 commits.
+
+| Person | Commits | Share | Lines + | Lines − |
+|---|---:|---:|---:|---:|
+| Cameron | 563 | 74.9% | 261,640 | 203,525 |
+| Carlos | 72 | 9.6% | 16,142 | 5,622 |
+| Karthik | 59 | 7.8% | 10,846 | 833 |
+| Sebastian | 58 | 7.7% | 16,498 | 3,147 |
+| **Total** | **752** | | **305,126** | **213,127** |
+
+Line counts flatter whoever performs large migrations: the deletions are
+mostly the modularization moving models, environments and plotters out to
+Theta-Hub. Commits are the fairer measure of distribution here.
+
+### Where each person worked
+
+Share of that person's file-touches, by area. This is the evidence for the
+"not one silo each" row.
+
+| Person | frontend | src (engine) | tests | plot | configs | docs |
+|---|---:|---:|---:|---:|---:|---:|
+| Cameron | 4% | 14% | 3% | 2% | 25% | 1% |
+| Carlos | 63% | 5% | 21% | 0% | 0% | 5% |
+| Karthik | 30% | 23% | 25% | 3% | 13% | 0% |
+| Sebastian | 36% | 36% | 20% | 1% | 0% | 0% |
+
+Three of the four work substantially across frontend, engine and tests.
+Carlos is frontend-weighted; Cameron sits mostly in configs and packaging,
+which is the Hub work. No one is confined to a single area.
+
 ## Subtotal
 
-33 rows in the rubric. **29 scored here, 4 left for the team** (marked **?**),
-because they depend on a demo, the poster, or a judgement only the team can make.
+33 rows in the rubric. **30 scored here, 3 left for the team** (marked **?**),
+because they depend on the demo, the poster QR, or a judgement only the team
+can make.
 
-**Scored sum: 68 / 87** (76%).
+**Scored sum: 71 / 90** (78%).
 
-Filling the four open rows at their likely values would put the total near
-78 / 99. The gaps below are worth 14 points between them, and most are hours
-of work rather than days.
+The gaps below are worth 14 points between them, and most are hours of work
+rather than days.
 
 ## Known gaps, and what closes them
 
