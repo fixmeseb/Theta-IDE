@@ -345,7 +345,7 @@ class TestHubClientAndInstaller(unittest.TestCase):
         # 4. HubDialog filtering for components mode
         comp_dialog = HubDialog(self.client, mode="components")
         self.assertTrue(comp_dialog._matches_mode(thetalib))
-        self.assertFalse(comp_dialog._matches_mode(plugin_comp))
+        self.assertTrue(comp_dialog._matches_mode(plugin_comp))
         self.assertFalse(comp_dialog._matches_mode(std_fig))
         self.assertFalse(comp_dialog._matches_mode(img_data))
         comp_dialog.close()

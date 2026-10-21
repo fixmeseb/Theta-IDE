@@ -380,43 +380,93 @@ python -m frontend</code></pre>
     ),
     DocArticle(
         id="blendrl_hybrid",
-        title="Plugin Case Study: BlendRL Neurosymbolic Policy",
+        title="BlendRL: Authoring a Composite Model Plugin",
         category="Machine Learning",
-        summary="A case study demonstrating how composite models and first-order logic reasoners integrate into Theta-IDE via the Component Plugin system.",
+        summary="A current, code-oriented example of registering a model plugin that composes neural and symbolic child models.",
         keywords=["blendrl", "symbolic", "nsfr", "neumann", "neural", "prolog", "logic", "hybrid", "plugin", "component"],
         html_content="""
-<h2>Plugin Case Study: BlendRL Neurosymbolic Architecture</h2>
-<p>Theta-IDE is designed to support any machine learning, deep learning, or reinforcement learning architecture. To illustrate how specialized research algorithms integrate into the IDE without core modification, this article examines <b>BlendRL</b> &mdash; a composite model plugin available on the <b>Theta Hub</b>.</p>
+<h2>BlendRL: Authoring a Composite Model Plugin</h2>
+<p>Use BlendRL as an example of a model component that owns its own composition. The model registry constructs one registered model class and passes its configuration to that class. It does not infer child-model slots from keys such as <code>neural</code> or <code>symbolic</code>. The parent plugin decides what those keys mean and builds each child itself.</p>
 
 <div style="background-color: rgba(184, 187, 38, 0.12); border-left: 4px solid #b8bb26; padding: 10px 14px; margin: 12px 0; border-radius: 4px;">
-  <b>Modular Extension in Action:</b> Rather than hardcoding specialized reasoning logic into Theta-IDE, BlendRL is packaged as an installable model and method component. It bridges standard deep neural policies with first-order symbolic logic reasoners (such as NSFR and Neumann) through an adaptive blending module.
+  <b>Status:</b> This is an authoring example, not a claim that a BlendRL implementation ships with a fresh checkout. Start with <b>File &rarr; Scaffold New Component Plugin</b> and choose <code>model</code>, or use the scaffold below as a template for your own registered components.
 </div>
 
-<h3>Composite Architecture Overview</h3>
-<p>As a composite plugin, BlendRL assembles three constituent modules defined in Hydra:</p>
+<h3>1. Let the parent model own composition</h3>
+<p>A parent model can construct child models with <code>build_model()</code>. Each child must be registered in the model registry and return scores with a shape and meaning the parent can combine. Assign child <code>nn.Module</code>s as attributes so PyTorch includes their parameters in the parent model.</p>
+<pre><code>import torch
+import torch.nn as nn
+
+from src.app.core.model_registry import build_model, register_model
+
+
+@register_model("blendrl")
+class BlendRLModel(nn.Module):
+    def __init__(
+        self,
+        obs_dim: int = 4,
+        n_actions: int = 2,
+        neural: dict | str = "basics/dnn",
+        symbolic: dict | str = "my_logic_head",
+        blend_alpha: float = 0.25,
+        env=None,
+        device="cpu",
+        **kwargs,
+    ):
+        super().__init__()
+        self.neural = build_model(
+            neural, env=env, device=device, obs_dim=obs_dim, n_actions=n_actions
+        )
+        self.symbolic = build_model(
+            symbolic, env=env, device=device, obs_dim=obs_dim, n_actions=n_actions
+        )
+        self.blend_alpha = float(blend_alpha)
+        if not 0.0 &lt;= self.blend_alpha &lt;= 1.0:
+            raise ValueError("blend_alpha must be between 0 and 1")
+
+    def forward(self, obs: torch.Tensor, **kwargs) -&gt; torch.Tensor:
+        neural_scores = self.neural(obs, **kwargs)
+        symbolic_scores = self.symbolic(obs, **kwargs)
+        if neural_scores.shape != symbolic_scores.shape:
+            raise ValueError("neural and symbolic model outputs must have the same shape")
+        return torch.lerp(neural_scores, symbolic_scores, self.blend_alpha)</code></pre>
+<p>This example treats the child outputs as compatible scores for illustration. A real logic branch must implement the domain's grounding and reasoning, and the selected training algorithm must accept the parent's output. If it needs extra inputs, define and wire those through the relevant agent, data module, or environment component; arbitrary dataset fields are not passed to a model automatically.</p>
+
+<h3>2. Configure the component</h3>
+<p>The scaffold creates the model package, a default file under <code>in/config/model/</code>, a <code>.theta_component.json</code> manifest, and a <code>pyproject.toml</code> entry point. Add nested child settings to the model's configuration and parameter schema:</p>
+<pre><code># in/config/model/blendrl.yaml
+architecture: blendrl
+blend_alpha: 0.25
+neural:
+  name: basics/dnn
+  hidden_sizes: [128, 128]
+symbolic:
+  name: my_logic_head
+  rules: default</code></pre>
+
+<h3>3. Use it from an experiment</h3>
+<p>A method can select the parent model and provide its nested settings. These values reach the registered <code>BlendRLModel</code> constructor; the parent then resolves the child models:</p>
+<pre><code>methods:
+  cql_blendrl:
+    agent: cql
+    model:
+      name: blendrl
+      blend_alpha: 0.25
+      neural:
+        name: basics/dnn
+        hidden_sizes: [128, 128]
+      symbolic:
+        name: my_logic_head
+        rules: default</code></pre>
+
+<h3>4. Check and package your plugin</h3>
 <ol>
-  <li><b>Neural Encoder (<code>neural</code>):</b> Multi-Layer Perceptrons (MLP), Dueling ResNets, or Transformers that process raw continuous or pixel observations.</li>
-  <li><b>Symbolic Reasoner (<code>symbolic</code>):</b>
-    <ul>
-      <li><b>NSFR (Neural Symbolic Forward Reasoner):</b> Differentiable forward-chaining deduction engine operating on grounded facts and rules.</li>
-      <li><b>Neumann Reasoner:</b> Matrix-based forward reasoner designed for accelerated rule valuation.</li>
-    </ul>
-  </li>
-  <li><b>The Blender (<code>blender</code>):</b> Combines neural logits \\(\\pi_{neural}(a|s)\\) and symbolic valuation scores \\(\\pi_{logic}(a|s)\\):
-    <pre><code>\\pi_{blended}(a|s) = (1 - \\alpha) \\cdot \\pi_{neural}(a|s) + \\alpha \\cdot \\pi_{logic}(a|s)</code></pre>
-    where \\(\\alpha\\) can be fixed, learned, or dynamically gated by symbolic confidence.
-  </li>
+  <li>Confirm the package imports the module that contains <code>@register_model("blendrl")</code>; use <b>File &rarr; Reload Component Code</b> while developing.</li>
+  <li>Install/register the child model components and confirm both child outputs satisfy the contract expected by the parent and chosen agent.</li>
+  <li>Compose an experiment with <code>dry_run=true</code> before launching training.</li>
+  <li>Include the model package, its config, manifest, dependencies, and any child components in the Theta Hub archive.</li>
 </ol>
-
-<h3>Decoupled State Valuation</h3>
-<p>Because native Gym environments do not output logic representations, the BlendRL plugin handles grounding internally:</p>
-<ul>
-  <li>If optional precomputed <code>logic_obs</code> exist in a custom transition dataset, they are utilized directly.</li>
-  <li>Otherwise, the plugin agent's <code>_prepare_logic_obs()</code> automatically grounds raw continuous/discrete state vectors into relational predicates on the fly, evaluating them against domain rules without requiring special environment wrappers.</li>
-</ul>
-
-<h3>Key Takeaway for Component Authors</h3>
-<p>BlendRL serves as a blueprint for researchers building custom models in Theta-IDE: whether developing diffusion-based policies, hierarchical RL agents, or symbolic reasoners, authors can encapsulate their architectures into self-contained plugins that install cleanly through the <b>Theta Hub</b>.</p>
+<p>The same pattern works for ensembles, multi-branch networks, and learned-plus-rule systems: the parent model defines the composition, validates its configuration, and returns the output expected by its consumer.</p>
 """,
     ),
     DocArticle(
@@ -568,12 +618,17 @@ python -m frontend</code></pre>
     agent: sb3/ppo
     model: basics/dueling_resnet
     lr: 1e-4
-  blendrl_hybrid:            # composite model: install BlendRL from the Theta Hub
-    agent: ppo
-    model: blendrl
-    neural: dueling_resnet   # each slot of the composite model
-    symbolic:
-      rules: default</code></pre>
+  blendrl_hybrid:
+    agent: sb3/ppo
+    model:
+      name: blendrl
+      blend_alpha: 0.25
+      neural:
+        name: basics/dnn
+        hidden_sizes: [128, 128]
+      symbolic:
+        name: my_logic_head
+        rules: default</code></pre>
 
 <h3>Environment Keys</h3>
 <p>Environment YAMLs (<code>in/config/env/&lt;package&gt;/&lt;name&gt;.yaml</code>, e.g. <code>env/gym_classic_control/cartpole.yaml</code>) define operational metadata declaratively. A group's <code>_base.yaml</code> picks one with <code>- override /env: gym_classic_control/cartpole</code>.</p>
@@ -906,57 +961,49 @@ agent:
 <hr style="border: 0; border-top: 1px solid rgba(255,255,255,0.1); margin: 20px 0;" />
 
 <h3>3. Authoring Model Architecture Plugins (<code>kind: "model"</code>)</h3>
-<p>Model plugins supply neural network architectures, encoders, or composite models. They register with <code>src.app.core.model_registry</code> and can be used standalone or as constituent sub-modules within larger composite pipelines.</p>
+<p>A model plugin is a registered PyTorch model. It can be a single network or a parent that constructs child models itself. The framework resolves the parent model name and passes its other configuration values to the registered constructor; nested values remain the model author's responsibility. See <a href="blendrl_hybrid">BlendRL: Authoring a Composite Model Plugin</a> for a complete composition example.</p>
 
 <h4>Directory Structure</h4>
-<pre><code>my_transformer/
-├── __init__.py       # Exposes model class and triggers @register_model
-├── model.py          # PyTorch nn.Module implementing protocols
-└── my_transformer.yaml # Default Tier 1 model config (deployed to in/config/model/)</code></pre>
+<pre><code>src/usr/models/my_model/
+├── __init__.py
+├── my_model_model.py       # Defines and registers the nn.Module
+├── .theta_component.json  # Hub metadata and parameter schema
+└── pyproject.toml          # theta.models entry point
+in/config/model/my_model.yaml</code></pre>
+<p><b>File &rarr; Scaffold New Component Plugin&hellip;</b> (<code>Ctrl+Shift+P</code>) generates this starting structure for a model. Its package import must load the module containing the registration decorator.</p>
 
-<h4>Implementing Model Protocols</h4>
-<p>Theta-IDE provides protocols in <code>src.app.core.protocols</code> to allow advanced models to communicate with the training pipeline without hardcoded coupling:</p>
-<ul>
-  <li><b><code>DynamicTopologyProtocol</code>:</b> For models that grow or prune rules/neurons during training (e.g. CEW). Tells the agent when topology changes so optimizers can rebind.</li>
-  <li><b><code>ExtraStateProtocol</code>:</b> For saving/loading non-tensor states (e.g. symbolic rules, cluster prototypes) into checkpoints.</li>
-  <li><b><code>HasModelCallbacks</code>:</b> For models that require dedicated PyTorch Lightning callbacks.</li>
-</ul>
-
-<h4>Python Implementation (<code>model.py</code>)</h4>
-<pre><code>import torch.nn as nn
+<h4>Implementing a Model</h4>
+<p>Register a class with <code>@register_model</code>. The model factory supplies inferred <code>obs_dim</code>, <code>n_actions</code>, <code>device</code>, and <code>env</code> when available, then forwards configured model parameters:</p>
+<pre><code>import torch
+import torch.nn as nn
 from src.app.core.model_registry import register_model
-from src.app.core.protocols import DynamicTopologyProtocol, ExtraStateProtocol
 
-@register_model("decision_transformer", "dt")
-class DecisionTransformer(nn.Module, DynamicTopologyProtocol, ExtraStateProtocol):
-    def __init__(self, obs_dim: int = 4, n_actions: int = 2, hidden_dim: int = 128, **kwargs):
+@register_model("my_model")
+class MyModel(nn.Module):
+    def __init__(self, obs_dim=4, n_actions=2, hidden_sizes=None, **kwargs):
         super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(obs_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, n_actions)
-        )
-        self._changed = False
+        hidden_sizes = hidden_sizes or [64, 64]
+        dims = [obs_dim, *hidden_sizes, n_actions]
+        layers = []
+        for i in range(len(dims) - 1):
+            layers.append(nn.Linear(dims[i], dims[i + 1]))
+            if i < len(dims) - 2:
+                layers.append(nn.ReLU())
+        self.layers = nn.Sequential(*layers)
 
-    def forward(self, x):
-        return self.net(x)
+    def forward(self, obs, **kwargs):
+        return self.layers(obs.float().reshape(obs.shape[0], -1))</code></pre>
+<p>Keep the constructor tolerant of framework-provided keyword arguments, and return the output shape expected by the selected training algorithm. Put defaults in <code>in/config/model/&lt;name&gt;.yaml</code>; expose editable nested parameters through <code>parameter_schema</code> in the component manifest.</p>
 
-    # DynamicTopologyProtocol
-    def has_topology_changed(self) -> bool:
-        return self._changed
-
-    def reset_topology_changed(self) -> None:
-        self._changed = False
-
-    def clone_topology_to(self, target: nn.Module) -> None:
-        target.load_state_dict(self.state_dict())
-
-    # ExtraStateProtocol
-    def extra_state(self) -> dict:
-        return {"custom_metadata": "v1.0"}
-
-    def load_extra_state(self, state: dict) -> None:
-        pass</code></pre>
+<h4>Optional Runtime Hooks</h4>
+<p>Implement an interface from <code>src.app.core.protocols</code> only when the corresponding algorithm or runner consumes it. Available interfaces include:</p>
+<ul>
+  <li><b><code>AuxiliaryLossProtocol</code></b> for named auxiliary losses.</li>
+  <li><b><code>OptimizerGroupsProtocol</code></b> for custom optimizer parameter groups.</li>
+  <li><b><code>DynamicTopologyProtocol</code></b> for models whose parameter topology changes during training.</li>
+  <li><b><code>ExtraStateProtocol</code></b> for checkpoint state that is not part of the model weights.</li>
+  <li><b><code>HasModelCallbacks</code></b> for models that provide Lightning callbacks.</li>
+</ul>
 
 <hr style="border: 0; border-top: 1px solid rgba(255,255,255,0.1); margin: 20px 0;" />
 

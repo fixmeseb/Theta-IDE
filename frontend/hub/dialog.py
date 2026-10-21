@@ -374,8 +374,6 @@ class HubView(QWidget):
 
         if self.mode == "plugins":
             return comp.kind == "plugin"
-        if self.mode == "components":
-            return comp.kind != "plugin"
         return True
 
     def _build_ui(self):
