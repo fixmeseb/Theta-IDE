@@ -1,9 +1,12 @@
 # ThetaIDE
 
 [![CI](https://github.com/fixmeseb/Theta-IDE/actions/workflows/ci.yml/badge.svg)](https://github.com/fixmeseb/Theta-IDE/actions/workflows/ci.yml)
-[![codecov](https://codecov.io/gh/CameronEgb/Offline-BlendRL/branch/main/graph/badge.svg)](https://codecov.io/gh/CameronEgb/Offline-BlendRL)
+[![Tests](https://img.shields.io/badge/tests-1365%20passing-brightgreen)](https://github.com/fixmeseb/Theta-IDE/actions/workflows/ci.yml)
+[![Coverage](https://img.shields.io/badge/coverage-70%25-green)](https://github.com/fixmeseb/Theta-IDE/actions/workflows/ci.yml)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE)
+[![Types: mypy](https://img.shields.io/badge/types-mypy-blue)](https://github.com/fixmeseb/Theta-IDE/actions/workflows/ci.yml)
+[![pre-commit](https://img.shields.io/badge/pre--commit-enabled-FAB040?logo=pre-commit)](./.pre-commit-config.yaml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](./LICENSE.md)
 [![Python 3.10–3.13](https://img.shields.io/badge/python-3.10--3.13-blue.svg)](https://www.python.org/downloads/)
 
 
@@ -136,4 +139,14 @@ python plot/manager.py thetaide/cartpole_ppo_baseline --wipe
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT. See [LICENSE.md](LICENSE.md).
+
+ThetaIDE depends on PyQt6, which is GPL-3.0-only, so a *distributed* build
+carries obligations the MIT licence alone does not cover. Every dependency and
+its licence is listed in [THIRD_PARTY_LIBRARIES.md](THIRD_PARTY_LIBRARIES.md).
+
+## Contributing
+
+Coding standards and how to extend the system are in
+[CONTRIBUTING.md](CONTRIBUTING.md). Participation is governed by our
+[Code of Conduct](CODE-OF-CONDUCT.md).
