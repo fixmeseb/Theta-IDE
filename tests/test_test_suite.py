@@ -2,7 +2,6 @@
 
 import json
 import hashlib
-from pathlib import Path
 from zipfile import ZipFile
 
 import pytest
@@ -15,13 +14,13 @@ from src.app.services.test_suite import (
     parse_test_suite_manifest,
 )
 from frontend.hub.installer import HubInstaller
-from frontend.hub.models import HubComponent, ReleaseInfo
+from frontend.hub.models import HubComponent
 
 
 def _manifest():
     return {
-        "id": "theta-validation-suite",
-        "name": "Theta Validation Suite",
+        "id": "suite-fixture",
+        "name": "Install Test Fixture",
         "kind": "suite",
         "version": "1.0.0",
         "test_suite": {
@@ -29,11 +28,11 @@ def _manifest():
             "cases": [
                 {
                     "id": "online-smoke", "title": "Online smoke recipe", "description": "A complete online RL recipe must be runnable.",
-                    "experiment": "theta_validation/online_smoke", "expectation": "runnable", "execution": "run",
+                    "experiment": "suite_fixture/online_smoke", "expectation": "runnable", "execution": "run",
                 },
                 {
                     "id": "missing-method", "title": "Missing method is blocked", "description": "A training recipe without a method must not launch.",
-                    "experiment": "theta_validation/missing_method", "expectation": "blocked",
+                    "experiment": "suite_fixture/missing_method", "expectation": "blocked",
                     "execution": "preflight", "blocked_reason": "The online-RL contract requires a method.",
                     "expected_error": "methods",
                 },
@@ -56,8 +55,8 @@ def test_suite_evaluator_accepts_expected_block_and_rejects_wrong_outcome():
     suite = parse_test_suite_manifest(_manifest())
 
     reports = {
-        "theta_validation/online_smoke": {"valid": True},
-        "theta_validation/missing_method": {"valid": False, "errors": [{"message": "methods are required"}]},
+        "suite_fixture/online_smoke": {"valid": True},
+        "suite_fixture/missing_method": {"valid": False, "errors": [{"message": "methods are required"}]},
     }
     results = evaluate_test_suite(suite, reports.__getitem__, lambda _: {"success": True})
     assert all(result.passed for result in results)
@@ -106,14 +105,28 @@ def test_runnable_case_requires_real_execution_contract():
 
 
 def test_downloadable_suite_installs_components_and_experiment_group(tmp_path):
-    source = Path(__file__).parent / "fixtures" / "theta_validation_suite"
-    archive = tmp_path / "theta-validation-suite.zip"
+    source = tmp_path / "suite-source"
+    source.mkdir()
+    manifest = _manifest()
+    manifest["dependencies"] = {"components": ["basic_suite"]}
+    manifest["config_paths"] = [
+        "in/config/experiment/suite_fixture/_base.yaml",
+        "in/config/experiment/suite_fixture/online_smoke.yaml",
+        "in/config/experiment/suite_fixture/missing_method.yaml",
+    ]
+    (source / ".theta_component.json").write_text(json.dumps(manifest), encoding="utf-8")
+    experiment_dir = source / "in/config/experiment/suite_fixture"
+    experiment_dir.mkdir(parents=True)
+    (experiment_dir / "_base.yaml").write_text("paradigm: online_rl\n", encoding="utf-8")
+    (experiment_dir / "online_smoke.yaml").write_text("methods: {}\n", encoding="utf-8")
+    (experiment_dir / "missing_method.yaml").write_text("methods: {}\n", encoding="utf-8")
+
+    archive = tmp_path / "suite-fixture.zip"
     with ZipFile(archive, "w") as zf:
         for path in source.rglob("*"):
             if path.is_file():
                 zf.write(path, path.relative_to(source).as_posix())
 
-    manifest = json.loads((source / ".theta_component.json").read_text(encoding="utf-8"))
     component = HubComponent.from_dict({
         **manifest,
         "releases": {
@@ -131,10 +144,9 @@ def test_downloadable_suite_installs_components_and_experiment_group(tmp_path):
     installed_manifest = workspace / ".thetaide" / "suites" / component.id / ".theta_component.json"
     installed_suite = load_test_suite_manifest(installed_manifest)
     assert [case.experiment for case in installed_suite.cases] == [
-        "theta_validation/online_smoke", "theta_validation/missing_method",
-        "theta_validation/missing_model", "theta_validation/incompatible_agent",
+        "suite_fixture/online_smoke", "suite_fixture/missing_method",
     ]
     assert installed_suite.cases[0].execution == "run"
     assert json.loads(installed_manifest.read_text(encoding="utf-8"))["dependencies"]["components"] == ["basic_suite"]
-    assert (workspace / "in/config/experiment/theta_validation/online_smoke.yaml").is_file()
-    assert (workspace / "in/config/experiment/theta_validation/missing_method.yaml").is_file()
+    assert (workspace / "in/config/experiment/suite_fixture/online_smoke.yaml").is_file()
+    assert (workspace / "in/config/experiment/suite_fixture/missing_method.yaml").is_file()
