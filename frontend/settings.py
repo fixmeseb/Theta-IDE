@@ -71,11 +71,6 @@ show_method_model_defaults = false
 # Show all default parameters across methods and experiments
 show_all_default_params = false
 
-[editor]
-# Enable interactive visual block editor for network layers (hidden_sizes, hidden_dims).
-visual_layer_editor = true
-
-
 [sidebar]
 # Canonical panel IDs, in left-to-right display order.
 order = [
@@ -450,15 +445,6 @@ class SettingsManager(QObject):
     @show_all_default_params.setter
     def show_all_default_params(self, val: bool) -> None:
         self.set("appearance", "show_all_default_params", bool(val))
-
-    @property
-    def visual_layer_editor(self) -> bool:
-        return bool(self.get("editor", "visual_layer_editor", default=True))
-
-    @visual_layer_editor.setter
-    def visual_layer_editor(self, val: bool) -> None:
-        self.set("editor", "visual_layer_editor", bool(val))
-
 
     @property
     def sidebar_order(self) -> list[str]:

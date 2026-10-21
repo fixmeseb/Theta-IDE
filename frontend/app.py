@@ -815,6 +815,12 @@ class Window(QMainWindow):
             manifest = self.plugin_manager.manifests.get(plugin_id)
             name = manifest.name if manifest else plugin_id
             self.statusBar().showMessage(f"Deactivated plugin: {name}", 4000)
+
+        # Extension slots update live, but rebuild the open config editor too
+        # so plugin contributions are immediately reflected in its method rows.
+        viewer = getattr(self, "config_viewer", None)
+        if viewer is not None and hasattr(viewer, "_render_boxes"):
+            viewer._render_boxes()
         self.save_layout()
 
     def _clear_layout(self, layout):
